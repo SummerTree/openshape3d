@@ -18,12 +18,6 @@ struct ToolPaletteView: View {
                 sketchButton("circle", label: "Circle", tool: .circle)
             }
             Divider().frame(width: 40)
-            section("Solids") {
-                toolButton("cube", label: "Box", spec: .box(width: 4, depth: 4, height: 4))
-                toolButton("cylinder", label: "Cylinder", spec: .cylinder(radius: 2, height: 4))
-                toolButton("circle.fill", label: "Sphere", spec: .sphere(radius: 2))
-            }
-            Divider().frame(width: 40)
             section("Combine") {
                 booleanButton("plus.square.on.square", label: "Union", kind: .union)
                 booleanButton("minus.square", label: "Subtract", kind: .subtract)
@@ -53,25 +47,6 @@ struct ToolPaletteView: View {
                 .foregroundStyle(.secondary)
             content()
         }
-    }
-
-    private func toolButton(_ systemImage: String, label: String, spec: PrimitiveSpec) -> some View {
-        let isArmed: Bool = {
-            if case .placingPrimitive(let current) = viewModel.mode {
-                return current == spec
-            }
-            return false
-        }()
-        return Button {
-            viewModel.armPrimitive(spec)
-        } label: {
-            paletteIcon(systemImage, label: label)
-                .foregroundStyle(isArmed ? Color.orange : Color.primary)
-        }
-        .background(
-            RoundedRectangle(cornerRadius: 10)
-                .fill(isArmed ? Color.orange.opacity(0.15) : Color.clear)
-        )
     }
 
     private func booleanButton(_ systemImage: String, label: String, kind: BooleanKind) -> some View {

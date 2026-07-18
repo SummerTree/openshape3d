@@ -115,6 +115,9 @@ final class EditorViewModel {
             if !batch.segments.isEmpty {
                 scene.sketchLines.append(batch)
             }
+            // Closed regions get a fill — the Shapr3D affordance that a
+            // profile can be pulled into 3D.
+            scene.profileFills.append(contentsOf: fillBatches(for: sketch))
         }
         if case .sketching(let activeID, _) = mode,
            let sketch = session.document.sketches.first(where: { $0.id == activeID }),
@@ -180,16 +183,31 @@ final class EditorViewModel {
         session.perform(TransformBodiesCommand(before: before, after: after))
     }
 
-    // MARK: - Toolbar actions
+    // MARK: - Profile fills (cached per sketch content)
 
-    func armPrimitive(_ spec: PrimitiveSpec) {
-        if case .placingPrimitive(let current) = mode, current == spec {
-            mode = .idle // second tap disarms
-        } else {
-            mode = .placingPrimitive(spec)
-            selection.removeAll()
+    private var fillCache: [SketchID: (entities: [SketchEntity], batches: [SketchFillBatch])] = [:]
+
+    private func fillBatches(for sketch: Sketch) -> [SketchFillBatch] {
+        if let cached = fillCache[sketch.id], cached.entities == sketch.entities {
+            return cached.batches
         }
+        let profiles = ProfileDetector.detectProfiles(in: sketch)
+        var batches: [SketchFillBatch] = []
+        let fillColor = SIMD4<Float>(0.36, 0.58, 0.92, 0.28)
+        for profile in profiles {
+            let holes = ProfileDetector.holes(of: profile, among: profiles)
+            let triangles = SketchTessellator.fillTriangles(
+                for: profile, holes: holes, on: sketch.plane
+            )
+            if !triangles.isEmpty {
+                batches.append(SketchFillBatch(triangles: triangles, color: fillColor))
+            }
+        }
+        fillCache[sketch.id] = (sketch.entities, batches)
+        return batches
     }
+
+    // MARK: - Toolbar actions
 
     func deleteSelection() {
         guard !selection.isEmpty else { return }
@@ -234,8 +252,6 @@ final class EditorViewModel {
 
     private func handleTap(ray: Ray) {
         switch mode {
-        case .placingPrimitive(let spec):
-            placePrimitive(spec, ray: ray)
         case .idle, .editingPrimitive, .selected:
             selectBody(ray: ray)
         case .extruding:
@@ -245,29 +261,6 @@ final class EditorViewModel {
         default:
             break
         }
-    }
-
-    private func placePrimitive(_ spec: PrimitiveSpec, ray: Ray) {
-        guard let t = ray.intersect(planePoint: .zero, planeNormal: SIMD3(0, 1, 0)) else {
-            return
-        }
-        let point = ray.point(at: t)
-        var document = session.document
-        var transform = Transform3D.identity
-        transform.translation = SIMD3(Double(point.x), 0, Double(point.z))
-
-        let body = Body(
-            name: document.uniqueBodyName(base: spec.displayName),
-            transform: transform,
-            primitive: spec,
-            euclidMesh: .primitive(spec),
-            revision: document.nextRevision()
-        )
-        // nextRevision mutated a copy; hand the revision bump to the session
-        // through the command path instead.
-        session.perform(AddBodyCommand(body: body))
-        selection = [body.id]
-        mode = .editingPrimitive(body.id)
     }
 
     private func selectBody(ray: Ray) {
@@ -404,11 +397,16 @@ final class EditorViewModel {
     var extrudeContext: ExtrudeContext?
     private var extrudeDragAnchor: Float?
     private var extrudeDragStartDistance: Double = 0
+    /// True when the extrude came from a direct pull on a filled profile —
+    /// Shapr3D push/pull semantics: releasing the drag commits the body.
+    private var commitExtrudeOnRelease = false
     /// Stable identity for the preview drawable so GPU buffers cache by revision.
     private let extrudePreviewID = BodyID()
 
-    /// Try to start extruding from a tap that missed all bodies.
-    private func tryStartExtrude(ray: Ray) -> Bool {
+    /// The profile (with holes) under the ray, across all sketches.
+    private func profileHit(
+        ray: Ray
+    ) -> (profile: Profile, holes: [Profile], plane: SketchPlane, sketchID: SketchID)? {
         for sketch in session.document.sketches {
             let plane = sketch.plane
             let planePoint = SIMD3<Float>(Float(plane.origin.x), Float(plane.origin.y), Float(plane.origin.z))
@@ -423,21 +421,67 @@ final class EditorViewModel {
             guard let innermost = candidates.first else { continue }
             let all = ProfileDetector.detectProfiles(in: sketch)
             let holes = ProfileDetector.holes(of: innermost, among: all)
-
-            selection.removeAll()
-            var context = ExtrudeContext(
-                profile: innermost,
-                holes: holes,
-                plane: plane,
-                sketchID: sketch.id,
-                distance: 2
-            )
-            rebuildExtrudePreview(&context)
-            extrudeContext = context
-            mode = .extruding
-            return true
+            return (innermost, holes, plane, sketch.id)
         }
-        return false
+        return nil
+    }
+
+    /// Tap on a filled profile "jumps right into the Extrude command"
+    /// (Shapr3D): opens the numeric extrude with a default pull.
+    private func tryStartExtrude(ray: Ray) -> Bool {
+        guard let hit = profileHit(ray: ray) else { return false }
+        selection.removeAll()
+        var context = ExtrudeContext(
+            profile: hit.profile,
+            holes: hit.holes,
+            plane: hit.plane,
+            sketchID: hit.sketchID,
+            distance: 2
+        )
+        rebuildExtrudePreview(&context)
+        extrudeContext = context
+        mode = .extruding
+        return true
+    }
+
+    /// Drag starting on a filled profile pulls it into 3D directly
+    /// (push/pull). Committing happens on release.
+    func beginFillPull(ray: Ray) -> Bool {
+        guard HitTester.pickBody(ray: ray, in: scene) == nil,
+              let hit = profileHit(ray: ray)
+        else { return false }
+
+        selection.removeAll()
+        var context = ExtrudeContext(
+            profile: hit.profile,
+            holes: hit.holes,
+            plane: hit.plane,
+            sketchID: hit.sketchID,
+            distance: 0
+        )
+        rebuildExtrudePreview(&context)
+        extrudeContext = context
+        mode = .extruding
+
+        // Anchor the drag on the pull axis (profile centroid, plane normal).
+        // Near head-on views (looking straight down the axis) have no stable
+        // axis anchor — the screen-space fallback in updateExtrudeDrag covers
+        // that, so a nil anchor is fine.
+        let centroid = hit.profile.centroid
+        let world = hit.plane.toWorld(centroid)
+        let n = hit.plane.normal
+        let axisOrigin = SIMD3<Float>(Float(world.x), Float(world.y), Float(world.z))
+        let axisDirection = SIMD3<Float>(Float(n.x), Float(n.y), Float(n.z))
+        if abs(simd_dot(ray.direction, axisDirection)) < 0.95 {
+            extrudeDragAnchor = LineMath.closestParamOnLine(
+                origin: axisOrigin, direction: axisDirection, to: ray
+            )
+        } else {
+            extrudeDragAnchor = nil
+        }
+        extrudeDragStartDistance = 0
+        commitExtrudeOnRelease = true
+        return true
     }
 
     private func rebuildExtrudePreview(_ context: inout ExtrudeContext) {
@@ -477,17 +521,26 @@ final class EditorViewModel {
             cancelExtrude()
             return
         }
+        // Re-center the pivot at the profile centroid so the move gizmo
+        // appears on the body rather than at the world origin.
+        let centroidWorld = context.plane.toWorld(context.profile.centroid)
+        var transform = Transform3D.identity
+        transform.translation = centroidWorld
+        let localMesh = preview.euclidMesh().translated(
+            by: Vector(-centroidWorld.x, -centroidWorld.y, -centroidWorld.z)
+        )
+
         let name = session.document.uniqueBodyName(base: "Extrude")
         let body = Body(
             name: name,
-            transform: .identity,
+            transform: transform,
             primitive: nil,
-            euclidMesh: preview.euclidMesh(),
+            euclidMesh: localMesh,
             revision: preview.meshRevision
         )
         session.perform(AddBodyCommand(body: body, title: "Extrude"))
         extrudeContext = nil
-        mode = .idle
+        mode = .selected(body.id)
         selection = [body.id]
         session.save()
     }
@@ -508,25 +561,36 @@ final class EditorViewModel {
         let n = context.plane.normal
         let axisOrigin = SIMD3<Float>(Float(world.x), Float(world.y), Float(world.z))
         let axisDirection = SIMD3<Float>(Float(n.x), Float(n.y), Float(n.z))
-        guard let param = LineMath.closestParamOnLine(
-            origin: axisOrigin, direction: axisDirection, to: ray
-        ) else { return false }
-        extrudeDragAnchor = param
+        if abs(simd_dot(ray.direction, axisDirection)) < 0.95 {
+            extrudeDragAnchor = LineMath.closestParamOnLine(
+                origin: axisOrigin, direction: axisDirection, to: ray
+            )
+        } else {
+            extrudeDragAnchor = nil // head-on: screen-space fallback
+        }
         extrudeDragStartDistance = context.distance
         return true
     }
 
-    func updateExtrudeDrag(ray: Ray) {
-        guard let anchor = extrudeDragAnchor, let context = extrudeContext else { return }
-        let centroid = context.profile.centroid
-        let world = context.plane.toWorld(centroid)
-        let n = context.plane.normal
-        let axisOrigin = SIMD3<Float>(Float(world.x), Float(world.y), Float(world.z))
-        let axisDirection = SIMD3<Float>(Float(n.x), Float(n.y), Float(n.z))
-        guard let param = LineMath.closestParamOnLine(
-            origin: axisOrigin, direction: axisDirection, to: ray
-        ) else { return }
-        let raw = extrudeDragStartDistance + Double(param - anchor)
+    /// `screenDeltaWorld`: cumulative drag distance since `.began` converted
+    /// to world units by the viewport (positive = screen-up). Used when the
+    /// camera looks straight down the pull axis.
+    func updateExtrudeDrag(ray: Ray, screenDeltaWorld: Double) {
+        guard let context = extrudeContext else { return }
+        let raw: Double
+        if let anchor = extrudeDragAnchor {
+            let centroid = context.profile.centroid
+            let world = context.plane.toWorld(centroid)
+            let n = context.plane.normal
+            let axisOrigin = SIMD3<Float>(Float(world.x), Float(world.y), Float(world.z))
+            let axisDirection = SIMD3<Float>(Float(n.x), Float(n.y), Float(n.z))
+            guard let param = LineMath.closestParamOnLine(
+                origin: axisOrigin, direction: axisDirection, to: ray
+            ) else { return }
+            raw = extrudeDragStartDistance + Double(param - anchor)
+        } else {
+            raw = extrudeDragStartDistance + screenDeltaWorld
+        }
         // Snap to 0.5 steps, like the sketch grid.
         let snapped = (raw / 0.5).rounded() * 0.5
         setExtrudeDistance(abs(raw - snapped) < 0.15 ? snapped : raw)
@@ -534,6 +598,16 @@ final class EditorViewModel {
 
     func endExtrudeDrag() {
         extrudeDragAnchor = nil
+        if commitExtrudeOnRelease {
+            commitExtrudeOnRelease = false
+            // Push/pull: releasing the drag creates the body. A negligible
+            // pull cancels instead of leaving a zero-thickness solid.
+            if let context = extrudeContext, abs(context.distance) > 0.05 {
+                commitExtrude()
+            } else {
+                cancelExtrude()
+            }
+        }
     }
 
     // MARK: - Sketch mode

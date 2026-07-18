@@ -96,7 +96,7 @@ struct EditorView: View {
             .overlay(alignment: .top) {
                 if viewModel.mode.isSketching {
                     statusPill(icon: "pencil.and.outline", text: "Sketching on ground plane") {
-                        Button("Finish Sketch") {
+                        Button("Exit Sketching") {
                             viewModel.finishSketch()
                         }
                         .buttonStyle(.borderedProminent)

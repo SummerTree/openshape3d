@@ -2,9 +2,10 @@
 //  GizmoFlowUITests.swift
 //  openshape3dUITests
 //
-//  Verifies the move gizmo: place a box, drag the Y arrow upward, and confirm
-//  a second undoable command exists (place + move). If the drag had orbited
-//  the camera instead of claiming the gizmo, only one undo would exist.
+//  Verifies the move gizmo: launch with a seeded selected box, drag the
+//  Y arrow upward, and confirm a second undoable command exists (seed add +
+//  move). If the drag had orbited the camera instead of claiming the gizmo,
+//  only one undo would exist.
 //
 
 import XCTest
@@ -17,26 +18,23 @@ final class GizmoFlowUITests: XCTestCase {
 
     func testGizmoDragCreatesUndoableMove() throws {
         let app = XCUIApplication()
-        app.launchEnvironment["OS3D_AUTO_OPEN"] = "1"
+        app.launchEnvironment["OS3D_FRESH"] = "1"
+        app.launchEnvironment["OS3D_DEBUG_SEED"] = "1"
         app.launch()
 
-        // Place a box at a known viewport spot.
-        let boxButton = app.buttons.containing(.staticText, identifier: "Box").firstMatch
-        XCTAssertTrue(boxButton.waitForExistence(timeout: 10))
-        boxButton.tap()
+        let rectButton = app.buttons.containing(.staticText, identifier: "Rect").firstMatch
+        XCTAssertTrue(rectButton.waitForExistence(timeout: 10))
+        sleep(1) // camera fit settles
 
+        // The seeded box is selected with its pivot at the world origin. The
+        // camera frames the box, so the pivot projects below screen center
+        // and the green Y arrow rises from it: drag along it, upward.
         let window = app.windows.firstMatch
-        let placePoint = window.coordinate(withNormalizedOffset: CGVector(dx: 0.6, dy: 0.5))
-        placePoint.tap()
-        XCTAssertTrue(app.buttons["Done"].waitForExistence(timeout: 5))
-
-        // The gizmo sits at the placed pivot. Its green Y arrow always points
-        // straight up on screen: press just above the pivot and drag upward.
-        let arrowStart = window.coordinate(withNormalizedOffset: CGVector(dx: 0.6, dy: 0.455))
-        let arrowEnd = window.coordinate(withNormalizedOffset: CGVector(dx: 0.6, dy: 0.33))
+        let arrowStart = window.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.66))
+        let arrowEnd = window.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.45))
         arrowStart.press(forDuration: 0.1, thenDragTo: arrowEnd)
 
-        // Two commands should now be undoable: Add and Move.
+        // Two commands should now be undoable: seed Add and Move.
         let undo = app.buttons["Undo"]
         XCTAssertTrue(undo.isEnabled)
         undo.tap()

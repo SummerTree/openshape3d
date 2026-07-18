@@ -8,9 +8,35 @@
 
 import Foundation
 import simd
+import Euclid
 
 nonisolated enum SketchTessellator {
     static let circleSegments = 64
+
+    /// Triangulated fill for a closed profile (holes cut out), as world-space
+    /// triangles for the viewport overlay. This is the Shapr3D "fill color"
+    /// affordance showing a region can be pulled into 3D.
+    static func fillTriangles(
+        for profile: Profile,
+        holes: [Profile],
+        on plane: SketchPlane
+    ) -> [SIMD3<Float>] {
+        var paths = [KernelOps.closedPath(for: profile)]
+        paths.append(contentsOf: holes.map { KernelOps.closedPath(for: $0) })
+        let mesh = Euclid.Mesh.fill(paths).triangulate()
+        let transform = KernelOps.planeToWorld(plane)
+
+        var out: [SIMD3<Float>] = []
+        for polygon in mesh.polygons {
+            // fill() creates front and back faces; keep the front (+z) only.
+            guard polygon.plane.normal.z > 0 else { continue }
+            for vertex in polygon.vertices {
+                let world = vertex.position.transformed(by: transform)
+                out.append(SIMD3(Float(world.x), Float(world.y), Float(world.z)))
+            }
+        }
+        return out
+    }
 
     static func segments(for entities: [SketchEntity], on plane: SketchPlane) -> [SIMD3<Float>] {
         var out: [SIMD3<Float>] = []

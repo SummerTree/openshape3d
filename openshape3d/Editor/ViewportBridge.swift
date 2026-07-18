@@ -33,6 +33,13 @@ struct SketchLineBatch {
     var color: SIMD4<Float>
 }
 
+/// Translucent triangles filling closed sketch profiles (Shapr3D-style fill).
+struct SketchFillBatch {
+    /// Triangle list: 3 vertices per triangle, world space.
+    var triangles: [SIMD3<Float>]
+    var color: SIMD4<Float>
+}
+
 struct ViewportScene {
     var bodies: [BodyDrawable] = []
     /// Move gizmo, when a body is selected. `scale` is finalized by the
@@ -40,6 +47,8 @@ struct ViewportScene {
     var gizmo: GizmoState?
     /// Sketch overlay lines, drawn after the grid with edge depth bias.
     var sketchLines: [SketchLineBatch] = []
+    /// Closed-profile fills, drawn between the grid and the sketch lines.
+    var profileFills: [SketchFillBatch] = []
 
     /// World-space AABB of all bodies, for fit-view. Nil when empty.
     var worldBounds: (min: SIMD3<Float>, max: SIMD3<Float>)? {

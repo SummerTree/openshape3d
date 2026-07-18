@@ -2,8 +2,9 @@
 //  ExtrudeFlowUITests.swift
 //  openshape3dUITests
 //
-//  The core Shapr3D loop end-to-end: sketch a rectangle, finish, tap inside
-//  the profile, and pull it into a solid.
+//  The core Shapr3D loop end-to-end: sketch a rectangle base, exit sketching,
+//  then turn the filled profile into a solid — both by tapping it (numeric
+//  extrude) and by pulling it directly (push/pull, commits on release).
 //
 
 import XCTest
@@ -14,12 +15,7 @@ final class ExtrudeFlowUITests: XCTestCase {
         continueAfterFailure = false
     }
 
-    func testSketchThenExtrudeMakesBody() throws {
-        let app = XCUIApplication()
-        app.launchEnvironment["OS3D_FRESH"] = "1" // brand-new design
-        app.launch()
-
-        // Draw a rectangle in sketch mode.
+    private func drawRectangle(in app: XCUIApplication) {
         let rectButton = app.buttons.containing(.staticText, identifier: "Rect").firstMatch
         XCTAssertTrue(rectButton.waitForExistence(timeout: 10))
         rectButton.tap()
@@ -31,26 +27,55 @@ final class ExtrudeFlowUITests: XCTestCase {
         let end = window.coordinate(withNormalizedOffset: CGVector(dx: 0.65, dy: 0.60))
         start.press(forDuration: 0.15, thenDragTo: end)
 
-        app.buttons["Finish Sketch"].tap()
+        app.buttons["Exit Sketching"].tap()
+    }
 
-        // Tap inside the rectangle → extrude mode with preview + bar.
-        let inside = window.coordinate(withNormalizedOffset: CGVector(dx: 0.53, dy: 0.51))
-        inside.tap()
+    func testTapProfileThenExtrudeButton() throws {
+        let app = XCUIApplication()
+        app.launchEnvironment["OS3D_FRESH"] = "1"
+        app.launch()
+
+        drawRectangle(in: app)
+
+        // Tap inside the filled profile → jumps into the Extrude command.
+        let window = app.windows.firstMatch
+        window.coordinate(withNormalizedOffset: CGVector(dx: 0.53, dy: 0.51)).tap()
         XCTAssertTrue(app.staticTexts["Extrude"].waitForExistence(timeout: 5),
-                      "Tapping inside a closed profile should start extruding")
-
-        // Pull upward to increase the distance, then commit.
-        let pullStart = window.coordinate(withNormalizedOffset: CGVector(dx: 0.53, dy: 0.45))
-        let pullEnd = window.coordinate(withNormalizedOffset: CGVector(dx: 0.53, dy: 0.30))
-        pullStart.press(forDuration: 0.1, thenDragTo: pullEnd)
+                      "Tapping a filled profile should start extruding")
 
         app.buttons["Extrude"].firstMatch.tap()
 
-        // Commit selects the new body: the Delete tool lights up.
+        // Commit selects the new body: Delete lights up, extrude bar dismisses.
         let deleteButton = app.buttons.containing(.staticText, identifier: "Delete").firstMatch
         XCTAssertTrue(deleteButton.waitForExistence(timeout: 3))
-        XCTAssertTrue(deleteButton.isEnabled,
-                      "The extruded body should be selected after commit")
-        XCTAssertFalse(app.staticTexts["Extrude"].exists, "Extrude bar should dismiss")
+        XCTAssertTrue(deleteButton.isEnabled)
+        XCTAssertFalse(app.staticTexts["Extrude"].exists)
+    }
+
+    func testPullProfileCreatesBodyOnRelease() throws {
+        let app = XCUIApplication()
+        app.launchEnvironment["OS3D_FRESH"] = "1"
+        app.launch()
+
+        drawRectangle(in: app)
+
+        // Push/pull: drag upward starting inside the fill. In the head-on
+        // view the screen-space fallback drives the distance. Release commits.
+        let window = app.windows.firstMatch
+        let pullStart = window.coordinate(withNormalizedOffset: CGVector(dx: 0.53, dy: 0.51))
+        let pullEnd = window.coordinate(withNormalizedOffset: CGVector(dx: 0.53, dy: 0.30))
+        pullStart.press(forDuration: 0.15, thenDragTo: pullEnd)
+
+        // Two undoable commands now: the sketch entity and the extrude.
+        let deleteButton = app.buttons.containing(.staticText, identifier: "Delete").firstMatch
+        XCTAssertTrue(deleteButton.waitForExistence(timeout: 3))
+        XCTAssertTrue(deleteButton.isEnabled, "Pulled body should be selected")
+
+        let undo = app.buttons["Undo"]
+        XCTAssertTrue(undo.isEnabled)
+        undo.tap() // undo extrude
+        XCTAssertTrue(undo.isEnabled, "Sketch command should remain")
+        undo.tap() // undo sketch entity
+        XCTAssertFalse(undo.isEnabled)
     }
 }

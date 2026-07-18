@@ -79,6 +79,16 @@ final class ViewportCoordinator: NSObject, ViewportGestureDelegate, ViewportCame
     // MARK: - ViewportGestureDelegate
 
     private var gizmoDrag: GizmoDragSession?
+    private var dragStartPoint: CGPoint = .zero
+
+    /// World units per screen point at the camera target depth — converts
+    /// screen drags for the head-on pull fallback.
+    private var worldPerPoint: Double {
+        guard let renderer, let view, view.bounds.height > 0 else { return 0.01 }
+        let camera = renderer.camera
+        return Double(2 * camera.distance * tan(camera.fovY * 0.5))
+            / Double(view.bounds.height)
+    }
 
     func gestureTapped(at point: CGPoint) {
         guard let ray = ray(at: point) else { return }
@@ -91,6 +101,7 @@ final class ViewportCoordinator: NSObject, ViewportGestureDelegate, ViewportCame
 
     func gestureDragBegan(at point: CGPoint) -> Bool {
         guard let ray = ray(at: point) else { return false }
+        dragStartPoint = point
 
         // Sketch mode: one-finger drags draw.
         if viewModel.mode.isSketching {
@@ -102,20 +113,24 @@ final class ViewportCoordinator: NSObject, ViewportGestureDelegate, ViewportCame
             return viewModel.beginExtrudeDrag(ray: ray)
         }
 
-        // Otherwise offer the drag to the gizmo.
-        guard let renderer, let origin = viewModel.gizmoOrigin else { return false }
-        let gizmo = GizmoState(
-            origin: origin,
-            scale: renderer.gizmoScale(origin: origin),
-            highlighted: nil
-        )
-        guard let part = GizmoGeometry.hitTest(ray: ray, gizmo: gizmo),
-              let session = GizmoDragSession(part: part, gizmo: gizmo, ray: ray)
-        else { return false }
-        gizmoDrag = session
-        viewModel.gizmoHighlight = part
-        viewModel.beginMove()
-        return true
+        // Offer the drag to the gizmo when a body is selected.
+        if let renderer, let origin = viewModel.gizmoOrigin {
+            let gizmo = GizmoState(
+                origin: origin,
+                scale: renderer.gizmoScale(origin: origin),
+                highlighted: nil
+            )
+            if let part = GizmoGeometry.hitTest(ray: ray, gizmo: gizmo),
+               let session = GizmoDragSession(part: part, gizmo: gizmo, ray: ray) {
+                gizmoDrag = session
+                viewModel.gizmoHighlight = part
+                viewModel.beginMove()
+                return true
+            }
+        }
+
+        // Shapr3D push/pull: a drag starting on a filled profile extrudes it.
+        return viewModel.beginFillPull(ray: ray)
     }
 
     func gestureDragChanged(at point: CGPoint) {
@@ -126,7 +141,8 @@ final class ViewportCoordinator: NSObject, ViewportGestureDelegate, ViewportCame
             return
         }
         if case .extruding = viewModel.mode {
-            viewModel.updateExtrudeDrag(ray: ray)
+            let screenDelta = Double(dragStartPoint.y - point.y) * worldPerPoint
+            viewModel.updateExtrudeDrag(ray: ray, screenDeltaWorld: screenDelta)
             sceneDidChange()
             return
         }

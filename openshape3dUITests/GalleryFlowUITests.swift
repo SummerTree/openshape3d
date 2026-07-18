@@ -19,9 +19,9 @@ final class GalleryFlowUITests: XCTestCase {
         app.launchEnvironment["OS3D_AUTO_OPEN"] = "1"
         app.launch()
 
-        // In the editor (auto-opened). Place a box so there's something to render.
-        let boxButton = app.buttons.containing(.staticText, identifier: "Box").firstMatch
-        XCTAssertTrue(boxButton.waitForExistence(timeout: 10))
+        // In the editor (auto-opened).
+        let rectButton = app.buttons.containing(.staticText, identifier: "Rect").firstMatch
+        XCTAssertTrue(rectButton.waitForExistence(timeout: 10))
 
         // Navigate back to the gallery — triggers thumbnail capture + save.
         // The back button carries the previous screen's title.
@@ -29,7 +29,7 @@ final class GalleryFlowUITests: XCTestCase {
         XCTAssertTrue(backButton.waitForExistence(timeout: 5), "Back button should exist")
         backButton.tap()
 
-        XCTAssertTrue(boxButton.waitForNonExistence(timeout: 5),
+        XCTAssertTrue(rectButton.waitForNonExistence(timeout: 5),
                       "Editor chrome should be gone after popping to the gallery")
         XCTAssertFalse(app.staticTexts["No Designs"].exists,
                        "Existing designs should be listed")

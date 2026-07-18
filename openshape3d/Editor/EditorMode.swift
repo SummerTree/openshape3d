@@ -13,9 +13,7 @@ enum SketchTool: String, CaseIterable {
 
 enum EditorMode: Equatable {
     case idle
-    /// A primitive tool is armed; tapping the ground places it.
-    case placingPrimitive(PrimitiveSpec)
-    /// A primitive body is selected with editable dimensions.
+    /// A legacy primitive body is selected with editable dimensions.
     case editingPrimitive(BodyID)
     /// A (non-primitive) body is selected; move gizmo shown.
     case selected(BodyID)

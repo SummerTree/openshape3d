@@ -139,6 +139,30 @@ final class Renderer: NSObject, MTKViewDelegate {
         encoder.setDepthStencilState(pipelines.depthReadOnly)
         encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
 
+        // 4b. Closed-profile fills (edge pipeline reused for its depth bias so
+        // fills win against coplanar body faces; blended, no depth write)
+        if !scene.profileFills.isEmpty {
+            encoder.setRenderPipelineState(pipelines.edge)
+            encoder.setDepthStencilState(pipelines.depthReadOnly)
+            for batch in scene.profileFills where !batch.triangles.isEmpty {
+                var body = BodyUniforms()
+                body.modelMatrix = matrix_identity_float4x4
+                body.baseColor = batch.color
+                let length = batch.triangles.count * MemoryLayout<SIMD3<Float>>.stride
+                guard let buffer = batch.triangles.withUnsafeBytes({ raw in
+                    context.device.makeBuffer(bytes: raw.baseAddress!, length: length,
+                                              options: .storageModeShared)
+                }) else { continue }
+                encoder.setVertexBuffer(buffer, offset: 0, index: Int(BufferIndexPositions.rawValue))
+                encoder.setVertexBytes(&body, length: MemoryLayout<BodyUniforms>.stride,
+                                       index: Int(BufferIndexBodyUniforms.rawValue))
+                encoder.setFragmentBytes(&body, length: MemoryLayout<BodyUniforms>.stride,
+                                         index: Int(BufferIndexBodyUniforms.rawValue))
+                encoder.drawPrimitives(type: .triangle, vertexStart: 0,
+                                       vertexCount: batch.triangles.count)
+            }
+        }
+
         // 5. Sketch overlay lines (edge pipeline: depth-biased line list)
         if !scene.sketchLines.isEmpty {
             encoder.setRenderPipelineState(pipelines.edge)

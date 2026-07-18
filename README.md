@@ -7,13 +7,14 @@ built with SwiftUI, a **custom Metal renderer**, and the MIT-licensed
 ![Platform](https://img.shields.io/badge/platform-iPadOS%20%7C%20iOS-blue)
 ![Swift](https://img.shields.io/badge/Swift-5-orange)
 
-## Features (v0.1)
+## Features (v0.2)
 
-- **Sketch → Extrude** — the signature CAD loop: draw lines, rectangles, and
-  circles on the ground plane (with grid + endpoint snapping), tap a closed
-  profile, and pull it into a solid. Nested profiles become holes.
-- **Primitives** — place boxes, cylinders, and spheres with editable
-  dimensions.
+- **Sketch → Extrude, the Shapr3D way** — every body starts as a sketch:
+  draw lines, rectangles, and circles on the ground plane (grid + endpoint
+  snapping). Closed profiles show a fill color; tap a fill to jump into the
+  Extrude command with numeric input, or just drag it to push/pull the
+  profile into a solid. Nested profiles become holes. A cube is a rectangle
+  pulled up; a cylinder is a circle pulled up.
 - **Booleans** — union, subtract, and intersect bodies (computed off the main
   thread, cancellable).
 - **Direct manipulation** — tap to select, move with a full XYZ arrow +
@@ -78,6 +79,8 @@ real flows (place → edit → move → sketch → extrude → subtract).
 ## Roadmap
 
 - Sketch on body faces and offset planes
+- Revolve (spheres, shafts, bottles), face push/pull on existing bodies
+- Extrude boolean badge (join/cut while pulling into a body)
 - Arcs, splines, fillets/chamfers
 - Rotate/scale gizmos
 - Apple Pencil–specific input (draw with Pencil, orbit with finger) and hover

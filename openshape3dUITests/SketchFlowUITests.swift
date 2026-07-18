@@ -39,8 +39,8 @@ final class SketchFlowUITests: XCTestCase {
         let undo = app.buttons["Undo"]
         XCTAssertTrue(undo.isEnabled, "Drawing a rectangle should push an undoable command")
 
-        app.buttons["Finish Sketch"].tap()
+        app.buttons["Exit Sketching"].tap()
         XCTAssertFalse(app.staticTexts["Sketching on ground plane"].exists,
-                       "Finishing should dismiss the sketch status bar")
+                       "Exiting should dismiss the sketch status bar")
     }
 }
