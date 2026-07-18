@@ -6,6 +6,11 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		7F70435B300C1217003471DC /* Euclid in Frameworks */ = {isa = PBXBuildFile; productRef = 7F7043F1300C0ED8003471DC /* Euclid */; };
+		7F70435C300C1217003471DC /* Euclid in Frameworks */ = {isa = PBXBuildFile; productRef = 7F7043F2300C0ED8003471DC /* Euclid */; };
+/* End PBXBuildFile section */
+
 /* Begin PBXContainerItemProxy section */
 		7F704323300C0ED7003471DC /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
@@ -52,6 +57,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				7F70435B300C1217003471DC /* Euclid in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -59,6 +65,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				7F70435C300C1217003471DC /* Euclid in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -112,6 +119,7 @@
 			);
 			name = openshape3d;
 			packageProductDependencies = (
+				7F7043F1300C0ED8003471DC /* Euclid */,
 			);
 			productName = openshape3d;
 			productReference = 7F704313300C0ED6003471DC /* openshape3d.app */;
@@ -135,6 +143,7 @@
 			);
 			name = openshape3dTests;
 			packageProductDependencies = (
+				7F7043F2300C0ED8003471DC /* Euclid */,
 			);
 			productName = openshape3dTests;
 			productReference = 7F704322300C0ED7003471DC /* openshape3dTests.xctest */;
@@ -195,6 +204,9 @@
 			);
 			mainGroup = 7F70430A300C0ED6003471DC;
 			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				7F7043F0300C0ED8003471DC /* XCRemoteSwiftPackageReference "Euclid" */,
+			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 7F704314300C0ED6003471DC /* Products */;
 			projectDirPath = "";
@@ -422,6 +434,7 @@
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
 				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
 				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_OBJC_BRIDGING_HEADER = openshape3d/Shaders/ShaderTypes.h;
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2,7";
@@ -466,6 +479,7 @@
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
 				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
 				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_OBJC_BRIDGING_HEADER = openshape3d/Shaders/ShaderTypes.h;
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2,7";
@@ -615,6 +629,30 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		7F7043F0300C0ED8003471DC /* XCRemoteSwiftPackageReference "Euclid" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/nicklockwood/Euclid";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 0.7.0;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		7F7043F1300C0ED8003471DC /* Euclid */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 7F7043F0300C0ED8003471DC /* XCRemoteSwiftPackageReference "Euclid" */;
+			productName = Euclid;
+		};
+		7F7043F2300C0ED8003471DC /* Euclid */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 7F7043F0300C0ED8003471DC /* XCRemoteSwiftPackageReference "Euclid" */;
+			productName = Euclid;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = 7F70430B300C0ED6003471DC /* Project object */;
 }

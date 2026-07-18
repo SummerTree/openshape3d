@@ -2,8 +2,6 @@
 //  openshape3dApp.swift
 //  openshape3d
 //
-//  Created by jclaan on 7/18/26.
-//
 
 import SwiftUI
 import SwiftData
@@ -12,7 +10,9 @@ import SwiftData
 struct openshape3dApp: App {
     var sharedModelContainer: ModelContainer = {
         let schema = Schema([
-            Item.self,
+            Project.self,
+            PersistedBody.self,
+            PersistedSketch.self,
         ])
         let modelConfiguration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: false)
 
@@ -25,7 +25,7 @@ struct openshape3dApp: App {
 
     var body: some Scene {
         WindowGroup {
-            ContentView()
+            ProjectGalleryView()
         }
         .modelContainer(sharedModelContainer)
     }
