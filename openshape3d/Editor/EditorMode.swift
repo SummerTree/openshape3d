@@ -15,8 +15,10 @@ enum EditorMode: Equatable {
     case idle
     /// A legacy primitive body is selected with editable dimensions.
     case editingPrimitive(BodyID)
-    /// A (non-primitive) body is selected; move gizmo shown.
+    /// A whole body is selected (double-tap); move gizmo shown.
     case selected(BodyID)
+    /// A planar face is selected (single tap on a body); push/pull it.
+    case faceSelected(BodyID)
     /// Sketching on a plane with the given tool.
     case sketching(SketchID, tool: SketchTool)
     /// Pulling a profile into a solid.

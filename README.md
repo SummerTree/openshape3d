@@ -12,14 +12,18 @@ built with SwiftUI, a **custom Metal renderer**, and the MIT-licensed
 - **Sketch → Extrude, the Shapr3D way** — every body starts as a sketch:
   draw lines, rectangles, and circles on the ground plane (grid + endpoint
   snapping). Closed profiles show a fill color; tap a fill to jump into the
-  Extrude command with numeric input, or just drag it to push/pull the
-  profile into a solid. Nested profiles become holes. A cube is a rectangle
-  pulled up; a cylinder is a circle pulled up.
-- **Booleans** — union, subtract, and intersect bodies (computed off the main
-  thread, cancellable).
-- **Direct manipulation** — tap to select, move with a full XYZ arrow +
-  plane-handle gizmo, Shapr3D-style navigation (one finger orbits, two fingers
-  pan, pinch zooms — camera never locks up, even mid-tool).
+  Extrude command with numeric input, or drag it to push/pull the profile
+  with a dynamic preview and pull arrow, then complete the tool by tapping
+  empty space. Nested profiles become holes. A cube is a rectangle pulled up.
+- **Face push/pull with automatic booleans** — tap a body to select the
+  planar face under your finger (double-tap selects the whole body). Drag
+  the face to extrude it: pulling away adds material (union), pushing into
+  the body cuts (subtract) — exactly Shapr3D's automatic boolean rules.
+- **Booleans** — explicit union, subtract, and intersect between bodies
+  (computed off the main thread, cancellable).
+- **Direct manipulation** — move bodies with a full XYZ arrow + plane-handle
+  gizmo, Shapr3D-style navigation (one finger orbits, two fingers pan, pinch
+  zooms — camera never locks up, even mid-tool).
 - **Undo/redo** — command-based history for every operation.
 - **Projects** — a gallery of designs persisted with SwiftData, including
   rendered thumbnails.

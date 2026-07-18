@@ -78,6 +78,30 @@ struct TransformBodiesCommand: DocumentCommand {
     }
 }
 
+/// Swap a body's geometry/transform for a new version (face extrude,
+/// push/pull results). Value snapshots both ways.
+struct ReplaceBodyCommand: DocumentCommand {
+    let title: String
+    let before: Body
+    let after: Body
+
+    func apply(to document: inout DesignDocument) {
+        if let index = document.bodyIndex(of: before.id) {
+            var updated = after
+            updated.meshRevision = document.nextRevision()
+            document.bodies[index] = updated
+        }
+    }
+
+    func revert(in document: inout DesignDocument) {
+        if let index = document.bodyIndex(of: before.id) {
+            var restored = before
+            restored.meshRevision = document.nextRevision()
+            document.bodies[index] = restored
+        }
+    }
+}
+
 /// Replace the target body's geometry with the boolean result and consume the
 /// tool body. Both originals are snapshotted for undo.
 struct BooleanCommand: DocumentCommand {

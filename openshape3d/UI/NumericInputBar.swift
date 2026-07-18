@@ -16,7 +16,7 @@ struct NumericInputBar: View {
     @FocusState private var focusedField: Int?
 
     var body: some View {
-        if case .extruding = viewModel.mode, let context = viewModel.extrudeContext {
+        if let context = viewModel.extrudeContext {
             extrudeBar(context)
         } else if let body = viewModel.editingPrimitiveBody, let spec = body.primitive {
             HStack(spacing: 16) {

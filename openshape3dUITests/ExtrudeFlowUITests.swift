@@ -13,6 +13,7 @@ final class ExtrudeFlowUITests: XCTestCase {
 
     override func setUpWithError() throws {
         continueAfterFailure = false
+        XCUIDevice.shared.orientation = .portrait
     }
 
     private func drawRectangle(in app: XCUIApplication) {
@@ -60,11 +61,16 @@ final class ExtrudeFlowUITests: XCTestCase {
         drawRectangle(in: app)
 
         // Push/pull: drag upward starting inside the fill. In the head-on
-        // view the screen-space fallback drives the distance. Release commits.
+        // view the screen-space fallback drives the distance. Releasing keeps
+        // the dynamic preview (Shapr3D); completing the tool commits.
         let window = app.windows.firstMatch
         let pullStart = window.coordinate(withNormalizedOffset: CGVector(dx: 0.53, dy: 0.51))
         let pullEnd = window.coordinate(withNormalizedOffset: CGVector(dx: 0.53, dy: 0.30))
         pullStart.press(forDuration: 0.15, thenDragTo: pullEnd)
+
+        XCTAssertTrue(app.staticTexts["Extrude"].waitForExistence(timeout: 3),
+                      "Releasing the pull keeps the Extrude tool active")
+        app.buttons["Extrude"].firstMatch.tap()
 
         // Two undoable commands now: the sketch entity and the extrude.
         let deleteButton = app.buttons.containing(.staticText, identifier: "Delete").firstMatch

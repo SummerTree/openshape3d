@@ -90,27 +90,39 @@ final class ViewportCoordinator: NSObject, ViewportGestureDelegate, ViewportCame
             / Double(view.bounds.height)
     }
 
+    private var pullActive = false
+
     func gestureTapped(at point: CGPoint) {
         guard let ray = ray(at: point) else { return }
         viewModel.handle(.tap(ray: ray))
     }
 
     func gestureDoubleTapped(at point: CGPoint) {
-        viewModel.handle(.doubleTap)
+        guard let ray = ray(at: point) else { return }
+        viewModel.handle(.doubleTap(ray: ray))
     }
 
     func gestureDragBegan(at point: CGPoint) -> Bool {
         guard let ray = ray(at: point) else { return false }
         dragStartPoint = point
+        pullActive = false
 
         // Sketch mode: one-finger drags draw.
         if viewModel.mode.isSketching {
             return viewModel.beginSketchStroke(ray: ray)
         }
 
-        // Extruding: drags pull the profile along the plane normal.
+        // Extruding: drags adjust the pull along the plane normal.
         if case .extruding = viewModel.mode {
-            return viewModel.beginExtrudeDrag(ray: ray)
+            pullActive = viewModel.beginExtrudeDrag(ray: ray)
+            return pullActive
+        }
+
+        // Face selected: dragging the face pushes/pulls it.
+        if case .faceSelected = viewModel.mode {
+            pullActive = viewModel.beginFacePull(ray: ray)
+            if pullActive { return true }
+            // Fall through — drags off the face orbit.
         }
 
         // Offer the drag to the gizmo when a body is selected.
@@ -130,7 +142,8 @@ final class ViewportCoordinator: NSObject, ViewportGestureDelegate, ViewportCame
         }
 
         // Shapr3D push/pull: a drag starting on a filled profile extrudes it.
-        return viewModel.beginFillPull(ray: ray)
+        pullActive = viewModel.beginFillPull(ray: ray)
+        return pullActive
     }
 
     func gestureDragChanged(at point: CGPoint) {
@@ -140,7 +153,7 @@ final class ViewportCoordinator: NSObject, ViewportGestureDelegate, ViewportCame
             sceneDidChange()
             return
         }
-        if case .extruding = viewModel.mode {
+        if pullActive {
             let screenDelta = Double(dragStartPoint.y - point.y) * worldPerPoint
             viewModel.updateExtrudeDrag(ray: ray, screenDeltaWorld: screenDelta)
             sceneDidChange()
@@ -159,7 +172,8 @@ final class ViewportCoordinator: NSObject, ViewportGestureDelegate, ViewportCame
             sceneDidChange()
             return
         }
-        if case .extruding = viewModel.mode {
+        if pullActive {
+            pullActive = false
             viewModel.endExtrudeDrag()
             sceneDidChange()
             return

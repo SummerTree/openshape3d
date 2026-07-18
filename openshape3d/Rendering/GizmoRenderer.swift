@@ -109,6 +109,46 @@ final class GizmoRenderer {
         }
     }
 
+    /// Single accent arrow along `direction` — the extrude pull affordance.
+    func drawPullArrow(
+        encoder: MTLRenderCommandEncoder,
+        pipelines: PipelineStore,
+        frame: inout FrameUniforms,
+        arrow: PullArrowState,
+        scale: Float
+    ) {
+        guard let vertexBuffer, let yPart = parts.first(where: { $0.part == .yAxis }) else {
+            return
+        }
+
+        // Rotate the +Y arrow onto the pull direction.
+        let rotation = simd_quatf(from: SIMD3(0, 1, 0), to: simd_normalize(arrow.direction))
+        var model = simd_float4x4(rotation)
+        model.columns.0 *= scale
+        model.columns.1 *= scale
+        model.columns.2 *= scale
+        model.columns.3 = SIMD4(arrow.origin, 1)
+
+        encoder.setRenderPipelineState(pipelines.unlitColor)
+        encoder.setDepthStencilState(pipelines.depthReadWrite)
+        encoder.setVertexBuffer(vertexBuffer, offset: 0, index: Int(BufferIndexPositions.rawValue))
+        encoder.setVertexBytes(&frame, length: MemoryLayout<FrameUniforms>.stride,
+                               index: Int(BufferIndexFrameUniforms.rawValue))
+
+        var body = BodyUniforms()
+        body.modelMatrix = model
+        body.baseColor = frame.accentColor
+        encoder.setVertexBytes(&body, length: MemoryLayout<BodyUniforms>.stride,
+                               index: Int(BufferIndexBodyUniforms.rawValue))
+        encoder.setFragmentBytes(&body, length: MemoryLayout<BodyUniforms>.stride,
+                                 index: Int(BufferIndexBodyUniforms.rawValue))
+        encoder.drawPrimitives(
+            type: .triangle,
+            vertexStart: yPart.vertexRange.lowerBound,
+            vertexCount: yPart.vertexRange.count
+        )
+    }
+
     // MARK: - Mesh generation (gizmo-local space, unit length arrows)
 
     private func appendArrow(along axis: SIMD3<Float>, into vertices: inout [SIMD3<Float>]) {

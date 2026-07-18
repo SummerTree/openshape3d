@@ -46,9 +46,9 @@ final class Renderer: NSObject, MTKViewDelegate {
             let commandBuffer = context.commandQueue.makeCommandBuffer()
         else { return }
 
-        // With a gizmo, the frame ends in a second overlay pass (cleared
-        // depth). Keep the MSAA color texture around and resolve at the end.
-        let hasGizmo = scene.gizmo != nil
+        // With a gizmo or pull arrow, the frame ends in a second overlay pass
+        // (cleared depth). Keep the MSAA color texture and resolve at the end.
+        let hasGizmo = scene.gizmo != nil || scene.pullArrow != nil
         let msaaColor = descriptor.colorAttachments[0].texture
         let resolveTarget = descriptor.colorAttachments[0].resolveTexture
         if hasGizmo {
@@ -70,10 +70,8 @@ final class Renderer: NSObject, MTKViewDelegate {
         encodeScene(encoder: encoder, frame: &frame)
         encoder.endEncoding()
 
-        // 6. Gizmo overlay pass: depth cleared so it draws on top of the model.
-        if hasGizmo, var gizmo = scene.gizmo, let msaaColor {
-            gizmo.scale = gizmoScale(origin: gizmo.origin)
-
+        // 6. Overlay pass: depth cleared so gizmo/pull arrow draw on top.
+        if hasGizmo, let msaaColor {
             let overlay = MTLRenderPassDescriptor()
             overlay.colorAttachments[0].texture = msaaColor
             overlay.colorAttachments[0].loadAction = .load
@@ -90,12 +88,24 @@ final class Renderer: NSObject, MTKViewDelegate {
 
             if let overlayEncoder = commandBuffer.makeRenderCommandEncoder(descriptor: overlay) {
                 gizmoRenderer.prepare(device: context.device)
-                gizmoRenderer.draw(
-                    encoder: overlayEncoder,
-                    pipelines: context.pipelines,
-                    frame: &frame,
-                    gizmo: gizmo
-                )
+                if var gizmo = scene.gizmo {
+                    gizmo.scale = gizmoScale(origin: gizmo.origin)
+                    gizmoRenderer.draw(
+                        encoder: overlayEncoder,
+                        pipelines: context.pipelines,
+                        frame: &frame,
+                        gizmo: gizmo
+                    )
+                }
+                if let arrow = scene.pullArrow {
+                    gizmoRenderer.drawPullArrow(
+                        encoder: overlayEncoder,
+                        pipelines: context.pipelines,
+                        frame: &frame,
+                        arrow: arrow,
+                        scale: gizmoScale(origin: arrow.origin)
+                    )
+                }
                 overlayEncoder.endEncoding()
             }
         }

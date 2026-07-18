@@ -15,7 +15,7 @@ import Euclid
 
 enum ViewportEvent {
     case tap(ray: Ray)
-    case doubleTap
+    case doubleTap(ray: Ray)
 }
 
 /// Camera operations the view model can request from the viewport.
@@ -86,8 +86,8 @@ final class EditorViewModel {
         }
         var scene = ViewportScene(bodies: drawables)
 
-        // Extrude preview: translucent accent body.
-        if case .extruding = mode, let preview = extrudeContext?.preview {
+        // Extrude preview (profile or face push/pull): translucent accent body.
+        if let preview = extrudeContext?.preview {
             scene.bodies.append(BodyDrawable(
                 id: preview.id,
                 renderMesh: preview.render,
@@ -98,6 +98,39 @@ final class EditorViewModel {
                 selectionState: SelectionStatePreview.rawValue,
                 isTranslucent: true
             ))
+        }
+
+        // Selected-face highlight (Shapr3D: tap selects a face).
+        if case .faceSelected(let bodyID) = mode,
+           let context = extrudeContext,
+           let body = session.document.body(with: bodyID) {
+            let matrix = body.transform.matrixFloat
+            var triangles: [SIMD3<Float>] = []
+            for t in context.faceTriangles where t < body.render.triangleCount {
+                for k in 0..<3 {
+                    let index = Int(body.render.indices[t * 3 + k])
+                    let world = matrix * SIMD4(body.render.positions[index], 1)
+                    triangles.append(SIMD3(world.x, world.y, world.z))
+                }
+            }
+            if !triangles.isEmpty {
+                scene.profileFills.append(SketchFillBatch(
+                    triangles: triangles,
+                    color: SIMD4(0.98, 0.55, 0.12, 0.35)
+                ))
+            }
+        }
+
+        // Pull arrow — "these arrows are the interface for creating an
+        // extrude" (Shapr3D tutorial). Sits at the moving cap of the pull.
+        if let context = extrudeContext {
+            let centroid = context.plane.toWorld(context.profile.centroid)
+            let n = context.plane.normal
+            let tip = centroid + n * context.distance
+            scene.pullArrow = PullArrowState(
+                origin: SIMD3(Float(tip.x), Float(tip.y), Float(tip.z)),
+                direction: SIMD3(Float(n.x), Float(n.y), Float(n.z))
+            )
         }
 
         if let origin = gizmoOrigin {
@@ -130,8 +163,15 @@ final class EditorViewModel {
         return scene
     }
 
-    /// Gizmo attach point: the selected body's pivot.
+    /// Gizmo attach point: the selected body's pivot. Whole-body selections
+    /// only — face selections use the pull arrow instead.
     var gizmoOrigin: SIMD3<Float>? {
+        switch mode {
+        case .selected, .editingPrimitive:
+            break
+        default:
+            return nil
+        }
         guard selection.count == 1, let id = selection.first,
               let body = session.document.body(with: id)
         else { return nil }
@@ -227,6 +267,8 @@ final class EditorViewModel {
     }
 
     private func sanitizeAfterHistoryChange() {
+        // Face/extrude contexts reference geometry that may have changed.
+        cancelExtrude()
         // Selection/mode may reference bodies that no longer exist.
         let liveIDs = Set(session.document.bodies.map(\.id))
         selection = selection.intersection(liveIDs)
@@ -245,16 +287,21 @@ final class EditorViewModel {
         switch event {
         case .tap(let ray):
             handleTap(ray: ray)
-        case .doubleTap:
-            cameraControl?.fitScene()
+        case .doubleTap(let ray):
+            handleDoubleTap(ray: ray)
         }
+    }
+
+    func fitView() {
+        cameraControl?.fitScene()
     }
 
     private func handleTap(ray: Ray) {
         switch mode {
-        case .idle, .editingPrimitive, .selected:
-            selectBody(ray: ray)
+        case .idle, .editingPrimitive, .selected, .faceSelected:
+            selectFaceOrBody(ray: ray)
         case .extruding:
+            // "Select an empty area of the grid to complete the tool."
             commitExtrude()
         case .pickingBooleanTool(let kind, let targetID):
             handleBooleanToolTap(kind: kind, targetID: targetID, ray: ray)
@@ -263,17 +310,64 @@ final class EditorViewModel {
         }
     }
 
-    private func selectBody(ray: Ray) {
+    /// Shapr3D: double-tap selects the whole body; on empty space, fit view.
+    private func handleDoubleTap(ray: Ray) {
         if let hit = HitTester.pickBody(ray: ray, in: scene) {
+            cancelExtrude()
             selection = [hit.bodyID]
             if let body = session.document.body(with: hit.bodyID), body.primitive != nil {
                 mode = .editingPrimitive(hit.bodyID)
             } else {
                 mode = .selected(hit.bodyID)
             }
+        } else {
+            cameraControl?.fitScene()
+        }
+    }
+
+    /// Shapr3D: a single tap on a body selects the planar face under it.
+    private func selectFaceOrBody(ray: Ray) {
+        if let hit = HitTester.pickBody(ray: ray, in: scene) {
+            cancelExtrude()
+            selection = [hit.bodyID]
+            let face = session.document.body(with: hit.bodyID).flatMap {
+                FaceTopology.planarFace(in: $0.render, seedTriangle: hit.triangleIndex)
+            }
+            guard let body = session.document.body(with: hit.bodyID), let face else {
+                // Curved or unrecognized region → whole body.
+                mode = .selected(hit.bodyID)
+                return
+            }
+
+            // Face basis → world space (uniform scale + rotation + translation).
+            let transform = body.transform
+            let originWorld = transform.applying(to: face.origin)
+            let xWorld = transform.rotation.act(face.basisX)
+            let yWorld = transform.rotation.act(face.basisY)
+            let plane = SketchPlane(origin: originWorld, xAxis: xWorld, yAxis: yWorld)
+            let scale = transform.scale
+            let profile = Profile(
+                loop: face.outline.map { $0 * scale },
+                kind: .polygonal,
+                sourceEntityIDs: []
+            )
+            let holes = face.holes.map {
+                Profile(loop: $0.map { $0 * scale }, kind: .polygonal, sourceEntityIDs: [])
+            }
+            extrudeContext = ExtrudeContext(
+                profile: profile,
+                holes: holes,
+                plane: plane,
+                sketchID: nil,
+                sourceBody: body.id,
+                faceTriangles: face.triangles,
+                distance: 0
+            )
+            mode = .faceSelected(body.id)
         } else if tryStartExtrude(ray: ray) {
             // Tapped inside a closed sketch profile → extrude it.
         } else {
+            cancelExtrude()
             selection.removeAll()
             mode = .idle
         }
@@ -312,6 +406,7 @@ final class EditorViewModel {
 
     func armBoolean(_ kind: BooleanKind) {
         guard selection.count == 1, let target = selection.first else { return }
+        cancelExtrude()
         mode = .pickingBooleanTool(kind, target: target)
     }
 
@@ -388,7 +483,12 @@ final class EditorViewModel {
         var profile: Profile
         var holes: [Profile]
         var plane: SketchPlane
-        var sketchID: SketchID
+        /// Sketch that produced the profile (nil for face extrudes).
+        var sketchID: SketchID?
+        /// The body whose face is being pushed/pulled (nil for sketch profiles).
+        var sourceBody: BodyID?
+        /// Face triangles for the selection highlight (face extrudes).
+        var faceTriangles: [Int] = []
         var distance: Double
         var previewRevision: UInt64 = 1
         var preview: Body?
@@ -397,9 +497,6 @@ final class EditorViewModel {
     var extrudeContext: ExtrudeContext?
     private var extrudeDragAnchor: Float?
     private var extrudeDragStartDistance: Double = 0
-    /// True when the extrude came from a direct pull on a filled profile —
-    /// Shapr3D push/pull semantics: releasing the drag commits the body.
-    private var commitExtrudeOnRelease = false
     /// Stable identity for the preview drawable so GPU buffers cache by revision.
     private let extrudePreviewID = BodyID()
 
@@ -480,8 +577,18 @@ final class EditorViewModel {
             extrudeDragAnchor = nil
         }
         extrudeDragStartDistance = 0
-        commitExtrudeOnRelease = true
         return true
+    }
+
+    /// Drag starting on the selected face pulls it (push/pull on bodies).
+    func beginFacePull(ray: Ray) -> Bool {
+        guard case .faceSelected(let bodyID) = mode,
+              let context = extrudeContext,
+              let hit = HitTester.pickBody(ray: ray, in: scene),
+              hit.bodyID == bodyID,
+              context.faceTriangles.contains(hit.triangleIndex)
+        else { return false }
+        return beginExtrudeDrag(ray: ray)
     }
 
     private func rebuildExtrudePreview(_ context: inout ExtrudeContext) {
@@ -521,8 +628,68 @@ final class EditorViewModel {
             cancelExtrude()
             return
         }
-        // Re-center the pivot at the profile centroid so the move gizmo
-        // appears on the body rather than at the world origin.
+
+        // Automatic boolean (Shapr3D Extrude): pulled away from a body →
+        // union; pushed into a body → subtract; touching nothing → new body.
+        let n = context.plane.normal
+        let sign: Double = context.distance >= 0 ? 1 : -1
+        let sampleWorld = context.plane.toWorld(context.profile.centroid) + n * sign * 0.01
+        let sample = Vector(sampleWorld.x, sampleWorld.y, sampleWorld.z)
+
+        // Slightly overlapped tool so coplanar seams merge cleanly.
+        let overlapTool = KernelOps.extrude(
+            profile: context.profile,
+            holes: context.holes,
+            in: context.plane,
+            distance: context.distance + sign * 0.002
+        ).translated(by: Vector(-n.x * sign * 0.001, -n.y * sign * 0.001, -n.z * sign * 0.001))
+
+        let candidates: [Body]
+        if let source = context.sourceBody {
+            candidates = session.document.body(with: source).map { [$0] } ?? []
+        } else {
+            candidates = session.document.bodies
+        }
+
+        for target in candidates {
+            let worldTarget = target.euclidMesh().transformed(by: target.transform.euclid)
+            let pushesIn = worldTarget.intersects(sample)
+            let touches = pushesIn
+                || context.sourceBody == target.id
+                || !worldTarget.intersection(overlapTool).polygons.isEmpty
+            guard touches else { continue }
+
+            let merged = pushesIn
+                ? worldTarget.subtracting(overlapTool).makeWatertight()
+                : worldTarget.union(overlapTool).makeWatertight()
+            guard !merged.polygons.isEmpty else {
+                errorMessage = "The cut removed the entire body."
+                cancelExtrude()
+                return
+            }
+
+            // Preserve the pivot; rotation/scale bake into the mesh.
+            let pivot = target.transform.translation
+            var transform = Transform3D.identity
+            transform.translation = pivot
+            let localMesh = merged.translated(by: Vector(-pivot.x, -pivot.y, -pivot.z))
+            let after = Body(
+                id: target.id,
+                name: target.name,
+                transform: transform,
+                primitive: nil,
+                euclidMesh: localMesh,
+                revision: 0 // assigned by the command
+            )
+            session.perform(ReplaceBodyCommand(title: "Extrude", before: target, after: after))
+            extrudeContext = nil
+            mode = .selected(target.id)
+            selection = [target.id]
+            session.save()
+            return
+        }
+
+        // New stand-alone body, pivot at the profile centroid.
         let centroidWorld = context.plane.toWorld(context.profile.centroid)
         var transform = Transform3D.identity
         transform.translation = centroidWorld
@@ -547,8 +714,12 @@ final class EditorViewModel {
 
     func cancelExtrude() {
         extrudeContext = nil
-        if case .extruding = mode {
+        extrudeDragAnchor = nil
+        switch mode {
+        case .extruding, .faceSelected:
             mode = .idle
+        default:
+            break
         }
     }
 
@@ -597,17 +768,10 @@ final class EditorViewModel {
     }
 
     func endExtrudeDrag() {
+        // Shapr3D: releasing the drag keeps the dynamic preview so you can
+        // refine the value; commit by tapping empty space or the Extrude
+        // button ("select an empty area of the grid to complete the tool").
         extrudeDragAnchor = nil
-        if commitExtrudeOnRelease {
-            commitExtrudeOnRelease = false
-            // Push/pull: releasing the drag creates the body. A negligible
-            // pull cancels instead of leaving a zero-thickness solid.
-            if let context = extrudeContext, abs(context.distance) > 0.05 {
-                commitExtrude()
-            } else {
-                cancelExtrude()
-            }
-        }
     }
 
     // MARK: - Sketch mode

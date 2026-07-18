@@ -13,6 +13,7 @@ final class BooleanFlowUITests: XCTestCase {
 
     override func setUpWithError() throws {
         continueAfterFailure = false
+        XCUIDevice.shared.orientation = .portrait
     }
 
     /// Draws a rectangle between two normalized points and extrudes it via

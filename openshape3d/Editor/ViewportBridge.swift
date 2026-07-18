@@ -40,6 +40,13 @@ struct SketchFillBatch {
     var color: SIMD4<Float>
 }
 
+/// The extrude pull arrow ("the arrows are the interface for creating an
+/// extrude"). Drawn in the overlay pass at the pull cap.
+struct PullArrowState: Equatable {
+    var origin: SIMD3<Float>
+    var direction: SIMD3<Float> // unit
+}
+
 struct ViewportScene {
     var bodies: [BodyDrawable] = []
     /// Move gizmo, when a body is selected. `scale` is finalized by the
@@ -49,6 +56,8 @@ struct ViewportScene {
     var sketchLines: [SketchLineBatch] = []
     /// Closed-profile fills, drawn between the grid and the sketch lines.
     var profileFills: [SketchFillBatch] = []
+    /// Extrude pull arrow, drawn in the overlay pass.
+    var pullArrow: PullArrowState?
 
     /// World-space AABB of all bodies, for fit-view. Nil when empty.
     var worldBounds: (min: SIMD3<Float>, max: SIMD3<Float>)? {

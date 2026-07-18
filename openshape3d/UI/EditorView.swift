@@ -112,6 +112,16 @@ struct EditorView: View {
                         }
                         .controlSize(.small)
                     }
+                } else if case .faceSelected = viewModel.mode {
+                    statusPill(
+                        icon: "square.3.layers.3d.top.filled",
+                        text: "Face selected — drag it to push or pull"
+                    ) {
+                        Button("Done") {
+                            viewModel.commitExtrude()
+                        }
+                        .controlSize(.small)
+                    }
                 }
             }
             .overlay {
@@ -147,7 +157,7 @@ struct EditorView: View {
                     .disabled(!viewModel.session.undoStack.canRedo)
 
                     Button {
-                        viewModel.handle(.doubleTap)
+                        viewModel.fitView()
                     } label: {
                         Label("Fit View", systemImage: "arrow.up.left.and.arrow.down.right")
                     }

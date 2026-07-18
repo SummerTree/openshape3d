@@ -14,6 +14,7 @@ final class GizmoFlowUITests: XCTestCase {
 
     override func setUpWithError() throws {
         continueAfterFailure = false
+        XCUIDevice.shared.orientation = .portrait
     }
 
     func testGizmoDragCreatesUndoableMove() throws {

@@ -13,6 +13,8 @@ nonisolated struct PickHit {
     var bodyID: BodyID
     var distance: Float
     var worldPoint: SIMD3<Float>
+    /// Index of the hit triangle in the body's RenderMesh (face picking).
+    var triangleIndex: Int
 }
 
 nonisolated enum HitTester {
@@ -28,6 +30,7 @@ nonisolated enum HitTester {
             let mesh = drawable.renderMesh
             var triangle = 0
             while triangle < mesh.triangleCount {
+                let index = triangle
                 let i0 = Int(mesh.indices[triangle * 3])
                 let i1 = Int(mesh.indices[triangle * 3 + 1])
                 let i2 = Int(mesh.indices[triangle * 3 + 2])
@@ -43,7 +46,12 @@ nonisolated enum HitTester {
                     let worldPoint = SIMD3(world4.x, world4.y, world4.z)
                     let distance = simd_length(worldPoint - ray.origin)
                     if best == nil || distance < best!.distance {
-                        best = PickHit(bodyID: drawable.id, distance: distance, worldPoint: worldPoint)
+                        best = PickHit(
+                            bodyID: drawable.id,
+                            distance: distance,
+                            worldPoint: worldPoint,
+                            triangleIndex: index
+                        )
                     }
                 }
             }
