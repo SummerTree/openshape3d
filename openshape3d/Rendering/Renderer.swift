@@ -52,6 +52,10 @@ final class Renderer: NSObject, MTKViewDelegate {
         let msaaColor = descriptor.colorAttachments[0].texture
         let resolveTarget = descriptor.colorAttachments[0].resolveTexture
         if hasGizmo {
+            // A pass with a resolveTexture attached must use a resolving store
+            // action (Metal validation asserts otherwise) — detach it here and
+            // resolve in the overlay pass instead.
+            descriptor.colorAttachments[0].resolveTexture = nil
             descriptor.colorAttachments[0].storeAction = .store
             descriptor.depthAttachment.storeAction = .dontCare
         }
