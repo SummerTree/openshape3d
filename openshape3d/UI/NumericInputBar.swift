@@ -456,7 +456,48 @@ struct NumericInputBar: View {
         .shadow(color: .black.opacity(0.15), radius: 10, y: 3)
     }
 
+    /// Radial push/pull on a cylinder edits the diameter (Shapr3D Offset Face).
+    private func diameterBar(_ context: EditorViewModel.ToolContext, radius: Double) -> some View {
+        HStack(spacing: 16) {
+            Text("Diameter")
+                .font(.headline)
+            HStack(spacing: 6) {
+                Text("⌀")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize()
+                TextField(
+                    "Diameter",
+                    value: Binding(
+                        get: { 2 * (radius + (viewModel.toolContext?.distance ?? 0)) },
+                        set: { viewModel.setExtrudeDistance($0 / 2 - radius) }
+                    ),
+                    format: .number.precision(.fractionLength(0...2))
+                )
+                .keyboardType(.numbersAndPunctuation)
+                .textFieldStyle(.roundedBorder)
+                .frame(width: 100)
+                .onSubmit { viewModel.commitTool() }
+            }
+            Spacer()
+            Button("Cancel") { viewModel.cancelTool() }
+            Button("Apply") { viewModel.commitTool() }
+                .buttonStyle(.borderedProminent)
+        }
+        .padding(.horizontal, 20)
+        .padding(.vertical, 12)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16))
+        .shadow(color: .black.opacity(0.15), radius: 10, y: 3)
+    }
+
     private func extrudeBar(_ context: EditorViewModel.ToolContext) -> some View {
+        if let cyl = context.cylinderFace {
+            return AnyView(diameterBar(context, radius: cyl.radius))
+        }
+        return AnyView(extrudeBarBody(context))
+    }
+
+    private func extrudeBarBody(_ context: EditorViewModel.ToolContext) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 16) {
                 Text("Extrude")

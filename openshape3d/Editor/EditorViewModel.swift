@@ -2161,10 +2161,25 @@ final class EditorViewModel {
         if let hit = bodyHit {
             cancelTool()
             selection = [hit.bodyID]
-            let face = session.document.body(with: hit.bodyID).flatMap {
-                FaceTopology.planarFace(in: $0.render, seedTriangle: hit.triangleIndex)
+            guard let body = session.document.body(with: hit.bodyID) else {
+                mode = .selected(hit.bodyID)
+                return
             }
-            guard let body = session.document.body(with: hit.bodyID), let face else {
+
+            // Curved side surface? A plain cylinder's wall push/pulls radially
+            // (edits the diameter); other curved surfaces just select the body,
+            // so a single tessellation facet can never be extruded into a tab.
+            if let cyl = FaceTopology.cylindricalFace(in: body.render, seedTriangle: hit.triangleIndex) {
+                if cyl.matchesWholeBody {
+                    beginCylinderRadial(body: body, cylinder: cyl, hit: hit)
+                } else {
+                    mode = .selected(hit.bodyID) // curved but compound → whole body
+                }
+                return
+            }
+
+            let face = FaceTopology.planarFace(in: body.render, seedTriangle: hit.triangleIndex)
+            guard let face else {
                 // Curved or unrecognized region → whole body.
                 mode = .selected(hit.bodyID)
                 return
@@ -2570,6 +2585,9 @@ final class EditorViewModel {
         var sourceBody: BodyID?
         /// Face triangles for the selection highlight (face extrudes).
         var faceTriangles: [Int] = []
+        /// Set when pushing/pulling a body's cylindrical side: distance is a
+        /// RADIAL delta (grows/shrinks the radius), not an axial extrusion.
+        var cylinderFace: FaceTopology.CylindricalFace?
         var kind: Kind
         /// Extra fills added while extruding (multi-profile: union of prisms).
         var extraProfiles: [(profile: Profile, holes: [Profile])] = []
@@ -2594,6 +2612,7 @@ final class EditorViewModel {
         /// extrude). These need a coincident-wall-safe truncation, not a
         /// same-cross-section boolean.
         var isFaceOperation: Bool { sourceBody != nil && !faceTriangles.isEmpty }
+        var isCylinderRadial: Bool { cylinderFace != nil }
 
         var distance: Double? {
             switch kind {
@@ -3047,10 +3066,70 @@ final class EditorViewModel {
     /// - outward pull (distance > 0) unions a flush prism (union tolerates the
     ///   coincident side walls, merging them into one continuous wall).
     /// Returns nil when the source body is gone or the result is empty.
+    /// Enter radial push/pull on a plain cylinder: the pull arrow points
+    /// radially outward at the tap point, and dragging edits the radius.
+    private func beginCylinderRadial(
+        body: Body, cylinder cyl: FaceTopology.CylindricalFace, hit: PickHit
+    ) {
+        let transform = body.transform
+        let worldAxisDir = simd_normalize(transform.rotation.act(cyl.axisDir))
+        let worldAxisPoint = transform.applying(to: cyl.axisPoint)
+        let hitWorld = SIMD3<Double>(Double(hit.worldPoint.x), Double(hit.worldPoint.y), Double(hit.worldPoint.z))
+        let along = simd_dot(hitWorld - worldAxisPoint, worldAxisDir)
+        let onAxis = worldAxisPoint + worldAxisDir * along
+        var radialWorld = hitWorld - onAxis
+        radialWorld = simd_length(radialWorld) < 1e-9 ? SIMD3(1, 0, 0) : simd_normalize(radialWorld)
+
+        // Plane whose normal is the outward radial: pull arrow points outward.
+        let xAxis = worldAxisDir
+        var yAxis = simd_cross(radialWorld, worldAxisDir)
+        yAxis = simd_length(yAxis) < 1e-9
+            ? simd_normalize(simd_cross(radialWorld, SIMD3(0, 1, 0)))
+            : simd_normalize(yAxis)
+        var plane = SketchPlane(origin: hitWorld, xAxis: xAxis, yAxis: yAxis)
+        if simd_dot(plane.normal, radialWorld) < 0 {
+            plane = SketchPlane(origin: hitWorld, xAxis: xAxis, yAxis: -yAxis)
+        }
+
+        // A tiny profile centred at the plane origin anchors the pull arrow.
+        let tiny: [SIMD2<Double>] = [
+            SIMD2(-0.001, -0.001), SIMD2(0.001, -0.001),
+            SIMD2(0.001, 0.001), SIMD2(-0.001, 0.001),
+        ]
+        toolContext = ToolContext(
+            profile: Profile(loop: tiny, kind: .polygonal, sourceEntityIDs: []),
+            holes: [],
+            plane: plane,
+            sketchID: nil,
+            sourceBody: body.id,
+            faceTriangles: cyl.triangles,
+            cylinderFace: cyl,
+            kind: .extrude(distance: 0)
+        )
+        mode = .faceSelected(body.id)
+    }
+
     private func faceModifiedMesh(_ context: ToolContext, distance: Double) -> Euclid.Mesh? {
         guard let sourceID = context.sourceBody,
               let source = session.document.body(with: sourceID)
         else { return nil }
+
+        // Cylindrical side push/pull: rebuild the whole cylinder at the new
+        // radius (distance is the radial delta). Local params → world via the
+        // body transform.
+        if let cyl = context.cylinderFace {
+            let newRadius = cyl.radius + distance / max(source.transform.scale, 1e-6)
+            guard newRadius > 1e-3 else { return nil }
+            let grown = KernelOps.cylinderAlongAxis(
+                baseCenter: cyl.baseCenter,
+                axisDir: cyl.axisDir,
+                radius: newRadius,
+                height: cyl.height,
+                slices: 48
+            )
+            return grown.transformed(by: source.transform.euclid)
+        }
+
         let worldBody = source.euclidMesh().transformed(by: source.transform.euclid)
         let n = context.plane.normal
 

@@ -9,6 +9,29 @@ import Foundation
 import simd
 import Euclid
 
+nonisolated extension KernelOps {
+    /// A cylinder along an arbitrary axis, base at `baseCenter`, extending
+    /// `height` along `axisDir`. Used to radially grow/shrink a body that is a
+    /// plain cylinder (curved-face push/pull).
+    static func cylinderAlongAxis(
+        baseCenter: SIMD3<Double>,
+        axisDir: SIMD3<Double>,
+        radius: Double,
+        height: Double,
+        slices: Int = 48
+    ) -> Euclid.Mesh {
+        // Euclid cylinder is centred at the origin along +Y; shift base to y=0.
+        let cyl = Euclid.Mesh.cylinder(radius: radius, height: height, slices: slices)
+            .translated(by: Vector(0, height / 2, 0))
+        let rotation = Rotation(simd_quatd(from: SIMD3(0, 1, 0), to: simd_normalize(axisDir)))
+        let transform = Euclid.Transform(
+            rotation: rotation,
+            translation: Vector(baseCenter.x, baseCenter.y, baseCenter.z)
+        )
+        return cyl.transformed(by: transform)
+    }
+}
+
 /// Axis of revolution: a 2D line (point + direction) in sketch-plane
 /// coordinates.
 nonisolated struct RevolveAxis: Equatable, Sendable {

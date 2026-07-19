@@ -267,4 +267,220 @@ nonisolated enum FaceTopology {
             holes: holes
         )
     }
+
+    // MARK: - Cylindrical surface recognition (curved face push/pull)
+
+    /// A cylindrical side surface fitted from a smooth run of facets, in
+    /// body-local coordinates. Push/pull on this surface edits the radius.
+    nonisolated struct CylindricalFace {
+        var triangles: [Int]          // side facets (for the selection highlight)
+        var axisPoint: SIMD3<Double>  // a point on the axis
+        var axisDir: SIMD3<Double>    // unit axis
+        var radius: Double
+        var minT: Double              // axial extent: min/max of (vertex · axisDir)
+        var maxT: Double
+        var segments: Int             // side-facet columns ≈ the circle tessellation
+        /// True when the whole body IS this cylinder (a rebuilt cylinder of the
+        /// fitted params matches the mesh) — only then is a radial grow safe.
+        var matchesWholeBody: Bool
+
+        var diameter: Double { radius * 2 }
+        var height: Double { maxT - minT }
+        /// Base cap centre (min end of the axis).
+        var baseCenter: SIMD3<Double> {
+            let mid = (axisPoint - axisDir * simd_dot(axisPoint, axisDir))
+            return mid + axisDir * minT
+        }
+    }
+
+    private static let smoothDihedralCos: Float = 0.72 // ~44°: joins tessellated
+                                                       // wall facets, stops at rims
+
+    /// Recognize the curved cylindrical surface under `seedTriangle`, or nil if
+    /// the region is planar or not a clean cylinder.
+    static func cylindricalFace(in mesh: RenderMesh, seedTriangle: Int) -> CylindricalFace? {
+        guard seedTriangle >= 0, seedTriangle < mesh.triangleCount else { return nil }
+
+        func tri(_ t: Int) -> (SIMD3<Float>, SIMD3<Float>, SIMD3<Float>) {
+            (mesh.positions[Int(mesh.indices[t * 3])],
+             mesh.positions[Int(mesh.indices[t * 3 + 1])],
+             mesh.positions[Int(mesh.indices[t * 3 + 2])])
+        }
+        func normal(_ t: Int) -> SIMD3<Float>? {
+            let (a, b, c) = tri(t)
+            let x = simd_cross(b - a, c - a)
+            let len = simd_length(x)
+            return len > 1e-12 ? x / len : nil
+        }
+        guard let seedN = normal(seedTriangle) else { return nil }
+
+        var edgeTriangles = [EdgeKey: [Int]]()
+        for t in 0..<mesh.triangleCount {
+            let (a, b, c) = tri(t)
+            edgeTriangles[EdgeKey(a, b), default: []].append(t)
+            edgeTriangles[EdgeKey(b, c), default: []].append(t)
+            edgeTriangles[EdgeKey(c, a), default: []].append(t)
+        }
+
+        // Flood-fill the smooth surface: neighbours join across soft edges.
+        var surface = Set<Int>()
+        var queue = [seedTriangle]
+        var maxDot: Float = 1 // how flat is it? (1 = all coplanar = a real plane)
+        while let t = queue.popLast() {
+            guard !surface.contains(t), let nt = normal(t) else { continue }
+            surface.insert(t)
+            maxDot = min(maxDot, simd_dot(nt, seedN))
+            let (a, b, c) = tri(t)
+            for edge in [EdgeKey(a, b), EdgeKey(b, c), EdgeKey(c, a)] {
+                for nb in edgeTriangles[edge] ?? [] where !surface.contains(nb) {
+                    if let nn = normal(nb), let nt2 = normal(t),
+                       simd_dot(nn, nt2) > smoothDihedralCos {
+                        queue.append(nb)
+                    }
+                }
+            }
+        }
+        // A genuinely planar patch (all facets coplanar) isn't a cylinder.
+        guard surface.count >= 6, maxDot < normalTolerance else { return nil }
+
+        // Collect surface vertices and normals.
+        var verts: [SIMD3<Double>] = []
+        var norms: [SIMD3<Double>] = []
+        var seen = Set<PositionKey>()
+        for t in surface {
+            guard let nt = normal(t) else { continue }
+            let nd = SIMD3<Double>(Double(nt.x), Double(nt.y), Double(nt.z))
+            let (a, b, c) = tri(t)
+            for p in [a, b, c] {
+                let key = PositionKey(p)
+                if seen.insert(key).inserted {
+                    verts.append(SIMD3(Double(p.x), Double(p.y), Double(p.z)))
+                }
+            }
+            norms.append(nd)
+        }
+        guard verts.count >= 6 else { return nil }
+
+        // Axis = eigenvector of Σ nᵢnᵢᵀ with the SMALLEST eigenvalue (the one
+        // direction all radial normals are perpendicular to).
+        var m = simd_double3x3(0)
+        for n in norms { m += outer(n, n) }
+        guard let axisDir0 = smallestEigenvector(m) else { return nil }
+        let axisDir = simd_normalize(axisDir0)
+        // Reject if normals aren't actually perpendicular to the axis.
+        let axialLeak = norms.map { abs(simd_dot($0, axisDir)) }.reduce(0, +) / Double(norms.count)
+        guard axialLeak < 0.12 else { return nil }
+
+        // Axis point (centroid) and radius (mean distance to the axis line).
+        var centroid = SIMD3<Double>.zero
+        for v in verts { centroid += v }
+        centroid /= Double(verts.count)
+        func distToAxis(_ v: SIMD3<Double>) -> Double {
+            let d = v - centroid
+            let along = simd_dot(d, axisDir)
+            return simd_length(d - axisDir * along)
+        }
+        let radii = verts.map(distToAxis)
+        let radius = radii.reduce(0, +) / Double(radii.count)
+        guard radius > 1e-4 else { return nil }
+        // Fit quality: radial spread must be tight relative to the radius.
+        let spread = sqrt(radii.map { ($0 - radius) * ($0 - radius) }.reduce(0, +) / Double(radii.count))
+        guard spread < radius * 0.06 else { return nil }
+
+        let ts = verts.map { simd_dot($0, axisDir) }
+        let minT = ts.min() ?? 0
+        let maxT = ts.max() ?? 0
+        guard maxT - minT > 1e-4 else { return nil }
+
+        // Whole-body check: does a rebuilt cylinder of these params match?
+        let matches = rebuiltCylinderMatches(
+            mesh: mesh, axisPoint: centroid, axisDir: axisDir,
+            radius: radius, minT: minT, maxT: maxT
+        )
+
+        return CylindricalFace(
+            triangles: Array(surface).sorted(),
+            axisPoint: centroid, axisDir: axisDir, radius: radius,
+            minT: minT, maxT: maxT,
+            segments: max(surface.count / 2, 12),
+            matchesWholeBody: matches
+        )
+    }
+
+    /// A rebuilt cylinder matches the body when the mesh's volume is (nearly)
+    /// the full analytic cylinder volume — the safe signal that the body is a
+    /// plain cylinder we can rebuild. A pocket/notch removes volume and fails.
+    private static func rebuiltCylinderMatches(
+        mesh: RenderMesh, axisPoint: SIMD3<Double>, axisDir: SIMD3<Double>,
+        radius: Double, minT: Double, maxT: Double
+    ) -> Bool {
+        // Bounds sanity: two cross-axis extents ≈ diameter, one ≈ height.
+        let aabb = mesh.localAABB
+        let dims = [Double(aabb.max.x - aabb.min.x),
+                    Double(aabb.max.y - aabb.min.y),
+                    Double(aabb.max.z - aabb.min.z)].sorted()
+        let height = maxT - minT
+        let diameter = radius * 2
+        let nearDia = dims.filter { abs($0 - diameter) < diameter * 0.08 }.count
+        let hasHeight = dims.contains { abs($0 - height) < max(height * 0.1, 1e-3) }
+        guard nearDia >= 2, hasHeight else { return false }
+
+        // Volume: a tessellated cylinder is ~0.997× the analytic volume; a
+        // notch/pocket removes materially more. 0.95 leaves tessellation margin.
+        let analytic = Double.pi * radius * radius * height
+        guard analytic > 1e-9 else { return false }
+        return meshVolume(mesh) / analytic > 0.95
+    }
+
+    /// Signed-tetrahedron volume of a triangle mesh (Double).
+    private static func meshVolume(_ mesh: RenderMesh) -> Double {
+        var v = 0.0
+        var t = 0
+        while t < mesh.triangleCount {
+            let a = mesh.positions[Int(mesh.indices[t * 3])]
+            let b = mesh.positions[Int(mesh.indices[t * 3 + 1])]
+            let c = mesh.positions[Int(mesh.indices[t * 3 + 2])]
+            let ad = SIMD3<Double>(Double(a.x), Double(a.y), Double(a.z))
+            let bd = SIMD3<Double>(Double(b.x), Double(b.y), Double(b.z))
+            let cd = SIMD3<Double>(Double(c.x), Double(c.y), Double(c.z))
+            v += simd_dot(ad, simd_cross(bd, cd)) / 6
+            t += 1
+        }
+        return abs(v)
+    }
+
+    // MARK: - Small linear-algebra helpers
+
+    private static func outer(_ a: SIMD3<Double>, _ b: SIMD3<Double>) -> simd_double3x3 {
+        simd_double3x3(columns: (a * b.x, a * b.y, a * b.z))
+    }
+
+    /// Eigenvector for the smallest eigenvalue of a symmetric 3×3 matrix, via
+    /// cyclic Jacobi rotations.
+    private static func smallestEigenvector(_ input: simd_double3x3) -> SIMD3<Double>? {
+        var a = input
+        var v = matrix_identity_double3x3
+        for _ in 0..<24 {
+            // Largest off-diagonal.
+            let a01 = abs(a[1][0]), a02 = abs(a[2][0]), a12 = abs(a[2][1])
+            var p = 0, q = 1, maxv = a01
+            if a02 > maxv { p = 0; q = 2; maxv = a02 }
+            if a12 > maxv { p = 1; q = 2; maxv = a12 }
+            if maxv < 1e-14 { break }
+            let app = a[p][p], aqq = a[q][q], apq = a[q][p]
+            let phi = 0.5 * atan2(2 * apq, aqq - app)
+            let c = cos(phi), s = sin(phi)
+            var j = matrix_identity_double3x3
+            j[p][p] = c; j[q][q] = c; j[q][p] = s; j[p][q] = -s
+            a = j.transpose * a * j
+            v = v * j
+        }
+        let eig = [a[0][0], a[1][1], a[2][2]]
+        var minIdx = 0
+        if eig[1] < eig[minIdx] { minIdx = 1 }
+        if eig[2] < eig[minIdx] { minIdx = 2 }
+        let col = v.columns
+        let e = [col.0, col.1, col.2][minIdx]
+        return simd_length(e) > 1e-9 ? e : nil
+    }
 }
