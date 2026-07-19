@@ -24,6 +24,9 @@ protocol ViewportGestureDelegate: AnyObject {
     func gestureDragBegan(at point: CGPoint) -> Bool
     func gestureDragChanged(at point: CGPoint)
     func gestureDragEnded(at point: CGPoint)
+    /// Long-press (plan §B13, spec §8.3): Select Through popup listing every
+    /// body under the point through depth.
+    func gestureLongPressed(at point: CGPoint)
 }
 
 final class ViewportGestureController: NSObject {
@@ -72,6 +75,13 @@ final class ViewportGestureController: NSObject {
         let tap = UITapGestureRecognizer(target: self, action: #selector(handleTap(_:)))
         tap.require(toFail: doubleTap)
         view.addGestureRecognizer(tap)
+
+        // Long-press = Select Through (spec §8.3). A held-still touch fires
+        // before the pan's movement threshold, so drags stay unaffected.
+        let longPress = UILongPressGestureRecognizer(
+            target: self, action: #selector(handleLongPress(_:))
+        )
+        view.addGestureRecognizer(longPress)
     }
 
     private func redraw() {
@@ -158,6 +168,11 @@ final class ViewportGestureController: NSObject {
     @objc private func handleDoubleTap(_ gesture: UITapGestureRecognizer) {
         guard let view else { return }
         delegate?.gestureDoubleTapped(at: gesture.location(in: view))
+    }
+
+    @objc private func handleLongPress(_ gesture: UILongPressGestureRecognizer) {
+        guard let view, gesture.state == .began else { return }
+        delegate?.gestureLongPressed(at: gesture.location(in: view))
     }
 }
 

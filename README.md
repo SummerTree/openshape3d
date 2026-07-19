@@ -7,7 +7,7 @@ built with SwiftUI, a **custom Metal renderer**, and the MIT-licensed
 ![Platform](https://img.shields.io/badge/platform-iPadOS%20%7C%20iOS-blue)
 ![Swift](https://img.shields.io/badge/Swift-5-orange)
 
-## Features (v0.4)
+## Features (v0.5)
 
 - **Sketch planes** — pick a world plane (XY/YZ/ZX tiles at the origin), tap
   any planar body face to sketch on it, or pull an **offset construction
@@ -74,14 +74,37 @@ built with SwiftUI, a **custom Metal renderer**, and the MIT-licensed
   **orthographic** projection toggle. Shapr3D-style navigation (one finger
   orbits, two fingers pan, pinch zooms — camera never locks up, even
   mid-tool).
-- **Items panel** — bodies, sketches, and construction planes with type
-  icons, visibility eye, inline rename, delete, tap-to-select, and Zoom To;
-  extruding auto-hides the consumed sketch.
+- **Section View** — pick a world or construction plane; the model clips
+  live against it with a drag arrow to move the cut and Flip / Section Off
+  badges. **Isolate** hides everything but the selection.
+- **Display modes** — Shaded, Shaded (No Edges), Wireframe (hidden lines
+  stay hidden via a depth prepass), and X-Ray, plus a Show Hidden Edges
+  pass; bodies stay selectable in every mode.
+- **Select mode** — marquee selection with Shapr3D's window/crossing
+  semantics (left→right solid = fully inside, right→left dashed = touched),
+  Bodies/Sketches filter chips, a multi-selection info bar, and one-command
+  Delete. **Select Through**: long-press lists every body under the point
+  by depth.
+- **Materials (visualization-lite)** — a Material sheet on the selection
+  with presets (Steel, Aluminum, Brass, plastics, Rubber, Wood), custom
+  color + metallic/roughness sliders, persisted per body and undoable;
+  optional ground blob shadows.
+- **Insert Image** — place PNG/JPEG reference pictures from Photos or Files
+  on any plane (auto-sized, aspect preserved); move with the gizmo, tune
+  opacity/size in the image bar, manage in Items.
+- **Symbols** — capture selected sketch entities as a named symbol and
+  stamp instances anywhere with tap-to-place; symbols list/rename in Items.
+- **Items panel** — bodies, sketches, construction planes, images, and
+  symbols with type icons, visibility eye, inline rename, delete,
+  tap-to-select, and Zoom To; extruding auto-hides the consumed sketch.
 - **Measure** — a selection info bar (face area, body volume, bounding box,
   sketch-entity length/radius) plus a two-point distance mode with X/Y/Z
   deltas over sketch and body snap points.
-- **Import/Export** — STL import (binary + ASCII, welded into a solid mesh
-  body that booleans like any other); STL, OBJ, and 3MF export; **PNG
+- **Import/Export** — import STL (binary + ASCII, welded into a solid mesh
+  body that booleans like any other), DXF (entities land in a ground-plane
+  sketch), and images; export STL, OBJ, 3MF, **GLB**, **USDZ** (where the
+  platform supports it, with an **AR Preview** via Quick Look), and sketch
+  **DXF** — OBJ/GLB offer a separate-file-per-body option; **PNG
   screenshot** with resolution, transparent-background, and grid options.
 - **Undo/redo** — command-based history for every operation.
 - **Projects** — a gallery of designs persisted with SwiftData, including
@@ -96,9 +119,12 @@ Kernel/       Geometry: Euclid bridge, profiles, extrude, booleans, STL,
 Model/        DesignDocument (value type), undoable commands, SwiftData
               persistence with a compact binary mesh format ("OS3D").
 Rendering/    Custom Metal renderer: MTKView (on-demand drawing), Blinn-Phong
-              "CAD look" shading, procedural anti-aliased grid, feature edges
-              with vertex-shader depth bias, MSAA 4x, gizmo overlay pass,
-              turntable camera + animator, offscreen thumbnail capture.
+              "CAD look" shading with per-body material factors, procedural
+              anti-aliased grid, feature edges with vertex-shader depth bias,
+              MSAA 4x, display-mode pipelines (wireframe/x-ray/hidden edges),
+              section clip plane, textured image quads, ground blob shadows,
+              gizmo overlay pass, turntable camera + animator, offscreen
+              thumbnail capture.
 Interaction/  Gesture arbitration, CPU ray-cast picking (AABB + Möller–
               Trumbore), gizmo drag math.
 Editor/       EditorViewModel — the mode state machine tying UI, kernel, and
@@ -139,14 +165,14 @@ real flows (place → edit → move → sketch → extrude → subtract).
 
 ## Roadmap
 
-- Offset edge UI (kernel done), insert image, section view (Phase B, cont.)
+- Offset edge UI (kernel done), section caps + interference highlighting
 - Splines, constraints and dimensions (2D solver — Phase C)
 - Parametric history sidebar with editable steps (Phase D)
 - Fillets/chamfers, shell, STEP/IGES via a B-rep kernel (Phase E)
-- Display modes, area select, keyboard shortcuts
+- Keyboard shortcuts + Command Search, face/edge selection filters
+- PBR visualization space (environments, per-face materials, capture)
 - Fat-line edge rendering, dark mode viewport theme
-- GLB/USDZ export, DXF import/export
-- Assembly-style grouping, materials
+- Assembly-style grouping (Items folders), SVG/DXF drawing export
 
 See `docs/SHAPR3D_PARITY_SPEC.md` for the feature-by-feature status audit and
 `docs/IMPLEMENTATION_PLAN.md` for phase sequencing.

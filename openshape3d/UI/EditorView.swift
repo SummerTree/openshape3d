@@ -6,17 +6,23 @@
 import SwiftUI
 import SwiftData
 import UniformTypeIdentifiers
+import CoreTransferable
+import PhotosUI
 
 /// Minimal FileDocument wrapper so `.fileExporter` can save any export
-/// payload (STL/OBJ/3MF/PNG); the concrete type travels with the data.
+/// payload (STL/OBJ/3MF/GLB/DXF/USDZ/PNG); the concrete type travels with
+/// the data.
 struct ExportDocument: FileDocument {
     static let stlType = UTType(filenameExtension: "stl") ?? .data
     static let objType = UTType("public.geometry-definition-format")
         ?? UTType(filenameExtension: "obj") ?? .data
     static let threeMFType = UTType("org.3mf.model")
         ?? UTType(filenameExtension: "3mf") ?? .data
+    static let glbType = UTType(filenameExtension: "glb") ?? .data
+    static let dxfType = UTType(filenameExtension: "dxf") ?? .data
+    static let usdzType = UTType.usdz
     static var readableContentTypes: [UTType] {
-        [stlType, objType, threeMFType, .png, .data]
+        [stlType, objType, threeMFType, glbType, dxfType, usdzType, .png, .data]
     }
 
     var data: Data
@@ -38,6 +44,55 @@ struct ExportDocument: FileDocument {
 
     func fileWrapper(configuration: WriteConfiguration) throws -> FileWrapper {
         FileWrapper(regularFileWithContents: data)
+    }
+}
+
+/// Transferable wrapper so `.fileExporter(items:)` writes each per-body
+/// temp file under its own name (plan §B14 "Separate File per Body").
+struct ExportFileItem: Transferable {
+    let url: URL
+
+    static var transferRepresentation: some TransferRepresentation {
+        FileRepresentation(exportedContentType: .item) { item in
+            SentTransferredFile(item.url)
+        }
+    }
+}
+
+/// Export options for the mesh formats where a per-body split is supported
+/// (plan §B14): OBJ and GLB can emit one file per body.
+struct MeshExportOptionsSheet: View {
+    /// User-facing format name ("OBJ" / "GLB") for the title.
+    let formatName: String
+    /// Called with the per-body choice when Export is confirmed.
+    let onExport: (Bool) -> Void
+
+    @State private var perBodyFiles = false
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Toggle("Separate File per Body", isOn: $perBodyFiles)
+                    .accessibilityIdentifier("ExportPerBodyToggle")
+            }
+            .navigationTitle("\(formatName) Export")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                        .accessibilityIdentifier("MeshExportCancel")
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Export") {
+                        onExport(perBodyFiles)
+                        dismiss()
+                    }
+                    .accessibilityIdentifier("MeshExportConfirm")
+                }
+            }
+        }
+        .presentationDetents([.medium])
     }
 }
 
@@ -93,6 +148,19 @@ struct ScreenshotOptionsSheet: View {
     }
 }
 
+/// User-facing labels for the Display menu (spec §16.4: "active shader
+/// labeled") — UI naming stays out of the render contract.
+extension DisplayMode {
+    var displayLabel: String {
+        switch self {
+        case .shaded: return "Shaded"
+        case .shadedNoEdges: return "Shaded (No Edges)"
+        case .wireframe: return "Wireframe"
+        case .xray: return "X-Ray"
+        }
+    }
+}
+
 /// Modeling editor: full-bleed Metal viewport with floating tool chrome.
 struct EditorView: View {
     let project: Project
@@ -104,9 +172,35 @@ struct EditorView: View {
     @State private var showItemsPanel = false
     @State private var showImporter = false
     @State private var showScreenshotOptions = false
+    /// Insert Image (plan §B10): Photos picker + image file importer.
+    @State private var showPhotoPicker = false
+    @State private var photoPickerItem: PhotosPickerItem?
+    @State private var showImageImporter = false
     /// Screenshot captured by the options sheet; promoted to `exportDocument`
     /// once the sheet has dismissed (two presentations can't overlap).
     @State private var pendingScreenshot: Data?
+
+    /// Mesh export options (plan §B14): which format's sheet is up.
+    private enum MeshExportFormat: String, Identifiable {
+        case obj = "OBJ"
+        case glb = "GLB"
+        var id: String { rawValue }
+    }
+    @State private var meshExportFormat: MeshExportFormat?
+    /// Payloads produced inside the mesh options sheet; promoted once the
+    /// sheet has dismissed (two presentations can't overlap), single-file
+    /// into `exportDocument`, per-body into `exportItems`.
+    @State private var pendingExport: ExportDocument?
+    @State private var pendingExportItems: [ExportFileItem]?
+    /// Per-body temp files currently offered by `.fileExporter(items:)`.
+    @State private var exportItems: [ExportFileItem]?
+    /// DXF import (plan §B14): entities land in a ground-plane sketch.
+    @State private var showDXFImporter = false
+
+    /// Draft name for the Make Symbol prompt (plan §B16).
+    @State private var symbolNameDraft = ""
+    /// Temp USDZ shown by the AR preview sheet (plan §B14).
+    @State private var arPreviewURL: URL?
 
     var body: some View {
         Group {
@@ -202,10 +296,248 @@ struct EditorView: View {
         .padding(.top, 8)
     }
 
+    /// Marquee rectangle over the viewport (plan §B13, spec §8.2). Standard
+    /// visual cue: solid border = window (L→R drag, fully-inside selects),
+    /// dashed = crossing (R→L, touched selects). Screen points come straight
+    /// from the gesture, so the path ignores the safe area to line up with
+    /// the full-bleed Metal view.
     @ViewBuilder
-    private func editorContent(_ viewModel: EditorViewModel) -> some View {
+    private func marqueeOverlay(_ viewModel: EditorViewModel) -> some View {
+        if let marquee = viewModel.marqueeState {
+            let rect = CGRect(
+                x: min(marquee.start.x, marquee.current.x),
+                y: min(marquee.start.y, marquee.current.y),
+                width: abs(marquee.current.x - marquee.start.x),
+                height: abs(marquee.current.y - marquee.start.y)
+            )
+            Path { $0.addRect(rect) }
+                .fill(Color.blue.opacity(0.08))
+                .overlay(
+                    Path { $0.addRect(rect) }
+                        .stroke(
+                            Color.blue,
+                            style: StrokeStyle(
+                                lineWidth: 1.5,
+                                dash: marquee.isWindow ? [] : [6, 4]
+                            )
+                        )
+                )
+                .allowsHitTesting(false)
+                .ignoresSafeArea()
+                .accessibilityIdentifier("MarqueeOverlay")
+        }
+    }
+
+    /// Select-mode pill (plan §B13): filter chips (Bodies | Sketches) + Done.
+    private func selectModePill(_ viewModel: EditorViewModel) -> some View {
+        statusPill(
+            icon: "cursorarrow.and.square.on.square.dashed",
+            text: "Drag to select"
+        ) {
+            Button("Bodies") {
+                viewModel.toggleAreaSelectBodies()
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+            .tint(viewModel.areaSelectIncludesBodies ? Color.blue : Color.secondary)
+            .accessibilityIdentifier("SelectFilterBodies")
+            Button("Sketches") {
+                viewModel.toggleAreaSelectSketches()
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+            .tint(viewModel.areaSelectIncludesSketches ? Color.blue : Color.secondary)
+            .accessibilityIdentifier("SelectFilterSketches")
+            Button("Done") {
+                viewModel.exitSelectMode()
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.small)
+            .keyboardShortcut(.cancelAction)
+            .accessibilityIdentifier("SelectModeDone")
+        }
+    }
+
+    /// Writes per-body payloads into a fresh temp folder and returns exporter
+    /// items named "<body>.<ext>"; nil (with a user-facing error) on failure.
+    private func perBodyExportItems(
+        _ payloads: [(name: String, data: Data)]?,
+        fileExtension: String,
+        viewModel: EditorViewModel
+    ) -> [ExportFileItem]? {
+        guard let payloads else { return nil }
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("os3d-perbody-\(UUID().uuidString)", isDirectory: true)
+        do {
+            try FileManager.default.createDirectory(
+                at: directory, withIntermediateDirectories: true
+            )
+            return try payloads.map { payload in
+                let stem = payload.name.replacingOccurrences(of: "/", with: "-")
+                let url = directory
+                    .appendingPathComponent(stem.isEmpty ? "Body" : stem)
+                    .appendingPathExtension(fileExtension)
+                try payload.data.write(to: url)
+                return ExportFileItem(url: url)
+            }
+        } catch {
+            viewModel.errorMessage = "Export failed — please try again."
+            return nil
+        }
+    }
+
+    /// Mesh options sheet confirm (plan §B14): stages the chosen OBJ/GLB
+    /// payload for the exporter that presents once the sheet dismisses.
+    private func stageMeshExport(
+        _ format: MeshExportFormat, perBody: Bool, viewModel: EditorViewModel
+    ) {
+        switch (format, perBody) {
+        case (.obj, false):
+            if let data = viewModel.exportOBJ() {
+                pendingExport = ExportDocument(
+                    data: data, contentType: ExportDocument.objType, fileExtension: "obj"
+                )
+            }
+        case (.obj, true):
+            pendingExportItems = perBodyExportItems(
+                viewModel.exportOBJPerBody(), fileExtension: "obj", viewModel: viewModel
+            )
+        case (.glb, false):
+            if let data = viewModel.exportGLB() {
+                pendingExport = ExportDocument(
+                    data: data, contentType: ExportDocument.glbType, fileExtension: "glb"
+                )
+            }
+        case (.glb, true):
+            pendingExportItems = perBodyExportItems(
+                viewModel.exportGLBPerBody(), fileExtension: "glb", viewModel: viewModel
+            )
+        }
+    }
+
+    /// AR Preview (plan §B14): exports a temp USDZ and presents Quick Look.
+    private func presentARPreview(_ viewModel: EditorViewModel) {
+        guard let data = viewModel.exportUSDZ() else { return }
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("os3d-ar-preview-\(UUID().uuidString)")
+            .appendingPathExtension("usdz")
+        do {
+            try data.write(to: url)
+            arPreviewURL = url
+        } catch {
+            viewModel.errorMessage = "Couldn't prepare the AR preview — please try again."
+        }
+    }
+
+    /// Toolbar Import menu (STL/DXF files, inserted images).
+    private func importMenu(_ viewModel: EditorViewModel) -> some View {
+        Menu {
+            Button("STL File…") {
+                showImporter = true
+            }
+            // DXF import (plan §B14): entities join a ground-plane
+            // sketch as one undo step.
+            Button("DXF File…") {
+                showDXFImporter = true
+            }
+            .accessibilityIdentifier("ImportDXF")
+            Divider()
+            // Insert Image (plan §B10, spec §6.3): the picked
+            // picture waits for a plane tap (ground by default).
+            Button("Image from Photos…") {
+                showPhotoPicker = true
+            }
+            .accessibilityIdentifier("InsertImagePhotos")
+            Button("Image from Files…") {
+                showImageImporter = true
+            }
+            .accessibilityIdentifier("InsertImageFiles")
+        } label: {
+            Label("Import", systemImage: "square.and.arrow.down")
+        }
+        .accessibilityIdentifier("ImportMenu")
+    }
+
+    /// Toolbar Export menu (spec §12, plan §B14): mesh formats, sketch DXF,
+    /// screenshot, and — where ModelIO can write USDZ — USDZ + AR Preview.
+    private func exportMenu(_ viewModel: EditorViewModel) -> some View {
+        Menu {
+            Button("STL") {
+                if let data = viewModel.exportSTL() {
+                    exportDocument = ExportDocument(
+                        data: data,
+                        contentType: ExportDocument.stlType,
+                        fileExtension: "stl"
+                    )
+                }
+            }
+            // OBJ and GLB open an options sheet (plan §B14): both
+            // support the "Separate File per Body" split.
+            Button("OBJ") {
+                meshExportFormat = .obj
+            }
+            Button("GLB") {
+                meshExportFormat = .glb
+            }
+            Button("3MF") {
+                if let data = viewModel.exportThreeMF() {
+                    exportDocument = ExportDocument(
+                        data: data,
+                        contentType: ExportDocument.threeMFType,
+                        fileExtension: "3mf"
+                    )
+                }
+            }
+            // USDZ only where ModelIO can actually write it
+            // (never faked — some simulators can't).
+            if USDZExporter.isSupported {
+                Button("USDZ") {
+                    if let data = viewModel.exportUSDZ() {
+                        exportDocument = ExportDocument(
+                            data: data,
+                            contentType: ExportDocument.usdzType,
+                            fileExtension: "usdz"
+                        )
+                    }
+                }
+            }
+            // DXF of the active/ground sketch (plan §B14).
+            Button("DXF") {
+                if let data = viewModel.exportDXF() {
+                    exportDocument = ExportDocument(
+                        data: data,
+                        contentType: ExportDocument.dxfType,
+                        fileExtension: "dxf"
+                    )
+                }
+            }
+            Divider()
+            Button("PNG Screenshot…") {
+                showScreenshotOptions = true
+            }
+            if USDZExporter.isSupported {
+                Button {
+                    presentARPreview(viewModel)
+                } label: {
+                    Label("AR Preview", systemImage: "arkit")
+                }
+                .accessibilityIdentifier("ARPreviewButton")
+            }
+        } label: {
+            Label("Export", systemImage: "square.and.arrow.up")
+        }
+        .accessibilityIdentifier("ExportMenu")
+    }
+
+    /// Viewport + floating chrome + toolbar; the presentation modifiers
+    /// (importers, exporters, sheets, alerts) attach in `editorContent`.
+    /// Split keeps each expression type-checkable in reasonable time.
+    private func viewportChrome(_ viewModel: EditorViewModel) -> some View {
         ViewportView(viewModel: viewModel)
             .ignoresSafeArea()
+            .overlay {
+                marqueeOverlay(viewModel)
+            }
             .overlay(alignment: .leading) {
                 ToolPaletteView(viewModel: viewModel)
                     .padding(.leading, 14)
@@ -265,10 +597,51 @@ struct EditorView: View {
                     .accessibilityIdentifier("SketchCopyBadge")
                     .padding(.trailing, 16)
                     .padding(.bottom, 96)
+                } else if viewModel.sectionState != nil {
+                    // Section badges (spec §16.1): Flip switches the visible
+                    // side; Off restores the full model.
+                    HStack(spacing: 8) {
+                        Button {
+                            viewModel.flipSection()
+                        } label: {
+                            Label("Flip", systemImage: "arrow.left.arrow.right")
+                                .font(.subheadline.weight(.semibold))
+                        }
+                        .accessibilityIdentifier("SectionFlip")
+                        Button {
+                            viewModel.endSection()
+                        } label: {
+                            Label("Section Off", systemImage: "xmark")
+                                .font(.subheadline.weight(.semibold))
+                        }
+                        .accessibilityIdentifier("SectionOff")
+                    }
+                    .buttonStyle(.bordered)
+                    .tint(Color.secondary)
+                    .background(.regularMaterial, in: Capsule())
+                    .padding(.trailing, 16)
+                    .padding(.bottom, 96)
                 }
             }
             .overlay(alignment: .top) {
-                if viewModel.mode.isSketching {
+                if viewModel.selectModeActive {
+                    selectModePill(viewModel)
+                } else if viewModel.mode.isSketching, let symbol = viewModel.pendingSymbol {
+                    // Insert Symbol armed (plan §B16): each tap stamps an
+                    // instance; Done (or Esc) exits placement.
+                    statusPill(
+                        icon: "rectangle.stack",
+                        text: "Tap to place \"\(symbol.name)\""
+                    ) {
+                        Button("Done") {
+                            viewModel.cancelInsertSymbol()
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.small)
+                        .keyboardShortcut(.cancelAction)
+                        .accessibilityIdentifier("InsertSymbolDone")
+                    }
+                } else if viewModel.mode.isSketching {
                     statusPill(icon: "pencil.and.outline", text: sketchStatusText(viewModel)) {
                         // Shown when the camera drifted >10° off head-on.
                         if viewModel.lookAtSketchAvailable {
@@ -291,6 +664,28 @@ struct EditorView: View {
                     ) {
                         Button("Cancel") {
                             viewModel.cancelPlanePicking()
+                        }
+                        .controlSize(.small)
+                        .keyboardShortcut(.cancelAction)
+                    }
+                } else if case .pickingSectionPlane = viewModel.mode {
+                    statusPill(
+                        icon: "square.split.diagonal.2x2",
+                        text: "Choose a section plane"
+                    ) {
+                        Button("Cancel") {
+                            viewModel.cancelSectionPlanePick()
+                        }
+                        .controlSize(.small)
+                        .keyboardShortcut(.cancelAction)
+                    }
+                } else if case .pickingImagePlane = viewModel.mode {
+                    statusPill(
+                        icon: "photo",
+                        text: "Tap a plane for the image"
+                    ) {
+                        Button("Cancel") {
+                            viewModel.cancelImagePlanePick()
                         }
                         .controlSize(.small)
                         .keyboardShortcut(.cancelAction)
@@ -471,7 +866,8 @@ struct EditorView: View {
                         Label("Fit View", systemImage: "arrow.up.left.and.arrow.down.right")
                     }
 
-                    // Views popover (spec §7.3): standard views + projection.
+                    // Views popover (spec §7.3): standard views + projection,
+                    // plus Display modes / Isolate / Section (spec §16).
                     Menu {
                         ForEach(StandardView.allCases) { standard in
                             Button(standard.rawValue) {
@@ -483,6 +879,59 @@ struct EditorView: View {
                             get: { viewModel.orthographicEnabled },
                             set: { viewModel.setOrthographic($0) }
                         ))
+                        Divider()
+                        // Display modes (spec §16.4); the submenu label names
+                        // the active shader.
+                        Menu {
+                            Picker("Display", selection: Binding(
+                                get: { viewModel.displayMode },
+                                set: { viewModel.displayMode = $0 }
+                            )) {
+                                ForEach(DisplayMode.allCases, id: \.self) { mode in
+                                    Text(mode.displayLabel).tag(mode)
+                                }
+                            }
+                            Divider()
+                            Toggle("Show Hidden Edges", isOn: Binding(
+                                get: { viewModel.showHiddenEdges },
+                                set: { viewModel.showHiddenEdges = $0 }
+                            ))
+                        } label: {
+                            Label(
+                                "Display: \(viewModel.displayMode.displayLabel)",
+                                systemImage: "cube.transparent"
+                            )
+                        }
+                        // Ground blob shadows (visualization v1, plan §B15).
+                        Toggle("Ground Shadow", isOn: Binding(
+                            get: { viewModel.groundShadowEnabled },
+                            set: { viewModel.groundShadowEnabled = $0 }
+                        ))
+                        // Isolate (spec §16.2): hide everything but the
+                        // selection; exiting restores.
+                        if viewModel.isIsolateActive {
+                            Button("Exit Isolate") {
+                                viewModel.exitIsolate()
+                            }
+                        } else {
+                            Button("Isolate") {
+                                viewModel.enterIsolate()
+                            }
+                            .disabled(viewModel.selection.isEmpty)
+                        }
+                        // Section View (spec §16.1).
+                        if viewModel.sectionState != nil {
+                            Button("Flip Section") {
+                                viewModel.flipSection()
+                            }
+                            Button("Section Off") {
+                                viewModel.endSection()
+                            }
+                        } else {
+                            Button("Section") {
+                                viewModel.beginSectionPlanePick()
+                            }
+                        }
                     } label: {
                         Label("Views", systemImage: "square.stack.3d.up")
                     }
@@ -495,53 +944,16 @@ struct EditorView: View {
                     }
                     .accessibilityIdentifier("ItemsButton")
 
-                    Menu {
-                        Button("STL File…") {
-                            showImporter = true
-                        }
-                    } label: {
-                        Label("Import", systemImage: "square.and.arrow.down")
-                    }
-                    .accessibilityIdentifier("ImportMenu")
+                    importMenu(viewModel)
 
-                    Menu {
-                        Button("STL") {
-                            if let data = viewModel.exportSTL() {
-                                exportDocument = ExportDocument(
-                                    data: data,
-                                    contentType: ExportDocument.stlType,
-                                    fileExtension: "stl"
-                                )
-                            }
-                        }
-                        Button("OBJ") {
-                            if let data = viewModel.exportOBJ() {
-                                exportDocument = ExportDocument(
-                                    data: data,
-                                    contentType: ExportDocument.objType,
-                                    fileExtension: "obj"
-                                )
-                            }
-                        }
-                        Button("3MF") {
-                            if let data = viewModel.exportThreeMF() {
-                                exportDocument = ExportDocument(
-                                    data: data,
-                                    contentType: ExportDocument.threeMFType,
-                                    fileExtension: "3mf"
-                                )
-                            }
-                        }
-                        Divider()
-                        Button("PNG Screenshot…") {
-                            showScreenshotOptions = true
-                        }
-                    } label: {
-                        Label("Export", systemImage: "square.and.arrow.up")
-                    }
-                    .accessibilityIdentifier("ExportMenu")
+                    exportMenu(viewModel)
                 }
             }
+    }
+
+    @ViewBuilder
+    private func editorContent(_ viewModel: EditorViewModel) -> some View {
+        viewportChrome(viewModel)
             .fileImporter(
                 isPresented: $showImporter,
                 allowedContentTypes: [ExportDocument.stlType]
@@ -557,6 +969,60 @@ struct EditorView: View {
                         return
                     }
                     viewModel.importSTL(data: data, fileName: url.lastPathComponent)
+                case .failure:
+                    viewModel.errorMessage = "Import failed — please try again."
+                }
+            }
+            .fileImporter(
+                isPresented: $showDXFImporter,
+                allowedContentTypes: [ExportDocument.dxfType]
+            ) { result in
+                switch result {
+                case .success(let url):
+                    let accessing = url.startAccessingSecurityScopedResource()
+                    defer {
+                        if accessing { url.stopAccessingSecurityScopedResource() }
+                    }
+                    guard let data = try? Data(contentsOf: url) else {
+                        viewModel.errorMessage = "Couldn't read the selected file."
+                        return
+                    }
+                    viewModel.importDXF(data: data, fileName: url.lastPathComponent)
+                case .failure:
+                    viewModel.errorMessage = "Import failed — please try again."
+                }
+            }
+            .photosPicker(
+                isPresented: $showPhotoPicker,
+                selection: $photoPickerItem,
+                matching: .images
+            )
+            .onChange(of: photoPickerItem) { _, item in
+                guard let item else { return }
+                photoPickerItem = nil
+                Task {
+                    if let data = try? await item.loadTransferable(type: Data.self) {
+                        viewModel.beginInsertImage(data: data)
+                    } else {
+                        viewModel.errorMessage = "Couldn't read the selected image."
+                    }
+                }
+            }
+            .fileImporter(
+                isPresented: $showImageImporter,
+                allowedContentTypes: [.png, .jpeg, .image]
+            ) { result in
+                switch result {
+                case .success(let url):
+                    let accessing = url.startAccessingSecurityScopedResource()
+                    defer {
+                        if accessing { url.stopAccessingSecurityScopedResource() }
+                    }
+                    guard let data = try? Data(contentsOf: url) else {
+                        viewModel.errorMessage = "Couldn't read the selected image."
+                        return
+                    }
+                    viewModel.beginInsertImage(data: data)
                 case .failure:
                     viewModel.errorMessage = "Import failed — please try again."
                 }
@@ -581,12 +1047,61 @@ struct EditorView: View {
                     )
                 }
             }
+            .sheet(
+                item: $meshExportFormat,
+                onDismiss: {
+                    // Promote whichever payload the sheet staged; the
+                    // exporter can only present after the sheet is gone.
+                    if let staged = pendingExport {
+                        pendingExport = nil
+                        exportDocument = staged
+                    } else if let staged = pendingExportItems {
+                        pendingExportItems = nil
+                        exportItems = staged
+                    }
+                }
+            ) { format in
+                MeshExportOptionsSheet(formatName: format.rawValue) { perBody in
+                    stageMeshExport(format, perBody: perBody, viewModel: viewModel)
+                }
+            }
+            .fileExporter(
+                isPresented: Binding(
+                    get: { exportItems != nil },
+                    set: { if !$0 { exportItems = nil } }
+                ),
+                items: exportItems ?? []
+            ) { result in
+                exportItems = nil
+                if case .failure = result {
+                    viewModel.errorMessage = "Export failed — please try again."
+                }
+            }
+            .sheet(isPresented: Binding(
+                get: { arPreviewURL != nil },
+                set: { if !$0 { arPreviewURL = nil } }
+            )) {
+                if let url = arPreviewURL {
+                    ARQuickLookView(url: url)
+                        .ignoresSafeArea()
+                }
+            }
             .sheet(isPresented: Binding(
                 get: { viewModel.textPlacement != nil },
                 set: { if !$0 { viewModel.textPlacement = nil } }
             )) {
                 TextToolSheet { content, height, fontName in
                     viewModel.commitText(content: content, height: height, fontName: fontName)
+                }
+            }
+            .sheet(isPresented: Binding(
+                get: { viewModel.showMaterialSheet },
+                set: { viewModel.showMaterialSheet = $0 }
+            )) {
+                // Body material assignment (plan §B15): one undoable
+                // SetMaterialCommand over the whole selection.
+                MaterialSheet(initial: viewModel.materialForSelection) { spec in
+                    viewModel.applyMaterial(spec)
                 }
             }
             .fileExporter(
@@ -602,6 +1117,45 @@ struct EditorView: View {
                 if case .failure = result {
                     viewModel.errorMessage = "Export failed — please try again."
                 }
+            }
+            .confirmationDialog(
+                "Select Through",
+                isPresented: Binding(
+                    get: { viewModel.selectThroughCandidates != nil },
+                    set: { if !$0 { viewModel.selectThroughCandidates = nil } }
+                ),
+                titleVisibility: .visible
+            ) {
+                // Long-press hit list, front→back (plan §B13, spec §8.3):
+                // choosing an occluded body selects it (Select Through).
+                ForEach(viewModel.selectThroughCandidates ?? []) { candidate in
+                    Button(candidate.name) {
+                        viewModel.chooseSelectThrough(candidate.id)
+                    }
+                }
+                Button("Cancel", role: .cancel) {
+                    viewModel.selectThroughCandidates = nil
+                }
+            }
+            .alert(
+                "Make Symbol",
+                isPresented: Binding(
+                    get: { viewModel.showMakeSymbolPrompt },
+                    set: { viewModel.showMakeSymbolPrompt = $0 }
+                )
+            ) {
+                // Name prompt (plan §B16): the selected sketch entities
+                // become a reusable symbol in the document.
+                TextField("Name", text: $symbolNameDraft)
+                Button("Create") {
+                    viewModel.makeSymbol(named: symbolNameDraft)
+                    symbolNameDraft = ""
+                }
+                Button("Cancel", role: .cancel) {
+                    symbolNameDraft = ""
+                }
+            } message: {
+                Text("Save the selected sketch entities as a reusable symbol.")
             }
             .alert(
                 "Something Went Wrong",

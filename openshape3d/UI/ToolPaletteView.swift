@@ -36,6 +36,8 @@ struct ToolPaletteView: View {
                 sketchButton("scissors", label: "Trim", tool: .trim)
                 sketchButton("textformat", label: "Text", tool: .text)
                 sketchButton("square.on.square.dashed", label: "Project", tool: .project)
+                makeSymbolButton
+                insertSymbolMenu
             }
             Divider().frame(width: 40)
             section("Combine") {
@@ -75,7 +77,9 @@ struct ToolPaletteView: View {
             }
             Divider().frame(width: 40)
             section("Edit") {
+                selectButton
                 measureButton
+                materialButton
                 constructionButton
                 Button {
                     viewModel.deleteSelection()
@@ -85,8 +89,9 @@ struct ToolPaletteView: View {
                 .disabled(
                     viewModel.mode.isSketching
                         ? viewModel.selectedSketchEntityIDs.isEmpty
-                        : viewModel.selection.isEmpty
+                        : viewModel.selection.isEmpty && viewModel.selectedImage == nil
                 )
+                .accessibilityIdentifier("DeleteButton")
             }
         }
         .padding(.vertical, 16)
@@ -248,6 +253,21 @@ struct ToolPaletteView: View {
         .accessibilityIdentifier("PatternButton")
     }
 
+    /// Select mode (plan §B13, spec §8.2): marquee drags + additive taps.
+    private var selectButton: some View {
+        Button {
+            viewModel.toggleSelectMode()
+        } label: {
+            paletteIcon("cursorarrow.and.square.on.square.dashed", label: "Select")
+                .foregroundStyle(viewModel.selectModeActive ? Color.blue : Color.primary)
+        }
+        .background(
+            RoundedRectangle(cornerRadius: 10)
+                .fill(viewModel.selectModeActive ? Color.blue.opacity(0.15) : Color.clear)
+        )
+        .accessibilityIdentifier("SelectModeButton")
+    }
+
     /// Point-to-point Measure tool (spec §16.3): toggles measuring mode.
     private var measureButton: some View {
         let isMeasuring: Bool = {
@@ -267,6 +287,18 @@ struct ToolPaletteView: View {
         .accessibilityIdentifier("MeasureButton")
     }
 
+    /// Material sheet (plan §B15): assign a preset/custom appearance to the
+    /// selected body or multi-selection.
+    private var materialButton: some View {
+        Button {
+            viewModel.showMaterialSheet = true
+        } label: {
+            paletteIcon("paintpalette", label: "Material")
+        }
+        .disabled(viewModel.selection.isEmpty)
+        .accessibilityIdentifier("MaterialButton")
+    }
+
     /// Make Construction / Make Regular (plan §B9, spec §3.3): bulk toggle
     /// on the selected sketch entities.
     private var constructionButton: some View {
@@ -283,6 +315,40 @@ struct ToolPaletteView: View {
                 .fill(isOn ? Color.blue.opacity(0.15) : Color.clear)
         )
         .accessibilityIdentifier("ConstructionButton")
+    }
+
+    /// Make Symbol (plan §B16, spec §1.16): capture the selected sketch
+    /// entities as a named reusable group (name prompt lives in EditorView).
+    private var makeSymbolButton: some View {
+        Button {
+            viewModel.showMakeSymbolPrompt = true
+        } label: {
+            paletteIcon("rectangle.stack.badge.plus", label: "Symbol")
+        }
+        .disabled(!viewModel.canMakeSymbol)
+        .accessibilityIdentifier("MakeSymbolButton")
+    }
+
+    /// Insert Symbol (plan §B16): lists the document's symbols; choosing one
+    /// arms tap-to-place until Done/Esc exits.
+    private var insertSymbolMenu: some View {
+        let armed = viewModel.pendingSymbolID != nil
+        return Menu {
+            ForEach(viewModel.session.document.symbols) { symbol in
+                Button(symbol.name) {
+                    viewModel.beginInsertSymbol(symbol.id)
+                }
+            }
+        } label: {
+            paletteIcon("rectangle.stack", label: "Insert")
+                .foregroundStyle(armed ? Color.blue : Color.primary)
+        }
+        .disabled(!viewModel.mode.isSketching || viewModel.session.document.symbols.isEmpty)
+        .background(
+            RoundedRectangle(cornerRadius: 10)
+                .fill(armed ? Color.blue.opacity(0.15) : Color.clear)
+        )
+        .accessibilityIdentifier("InsertSymbolMenu")
     }
 
     private func sketchButton(_ systemImage: String, label: String, tool: SketchTool) -> some View {

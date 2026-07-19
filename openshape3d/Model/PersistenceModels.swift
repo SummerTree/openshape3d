@@ -22,6 +22,12 @@ final class Project {
     @Relationship(deleteRule: .cascade, inverse: \PersistedPlane.project)
     var planes: [PersistedPlane] = []
 
+    @Relationship(deleteRule: .cascade, inverse: \PersistedImage.project)
+    var images: [PersistedImage] = []
+
+    @Relationship(deleteRule: .cascade, inverse: \PersistedSymbol.project)
+    var symbols: [PersistedSymbol] = []
+
     init(name: String) {
         self.name = name
         self.createdAt = Date()
@@ -41,6 +47,9 @@ final class PersistedBody {
     @Attribute(.externalStorage) var meshData: Data = Data()
     /// Items Manager visibility (spec §11). Defaulted so pre-A8 stores migrate.
     var isHidden: Bool = false
+    /// JSON-encoded BodyMaterialSpec (plan §B15); nil (pre-B15 stores) keeps
+    /// the legacy default look.
+    var materialData: Data?
     var project: Project?
 
     init(bodyID: UUID, name: String, transformData: Data, primitiveData: Data?, meshData: Data) {
@@ -62,6 +71,36 @@ final class PersistedSketch {
     init(sketchID: UUID, sketchData: Data) {
         self.sketchID = sketchID
         self.sketchData = sketchData
+    }
+}
+
+@Model
+final class PersistedImage {
+    @Attribute(.unique) var imageID: UUID = UUID()
+    /// JSON-encoded InsertedImage with the picture blob stripped (tiny);
+    /// reassembled with `imageData` on load.
+    var infoData: Data = Data()
+    /// Original PNG/JPEG bytes exactly as picked.
+    @Attribute(.externalStorage) var imageData: Data = Data()
+    var project: Project?
+
+    init(imageID: UUID, infoData: Data, imageData: Data) {
+        self.imageID = imageID
+        self.infoData = infoData
+        self.imageData = imageData
+    }
+}
+
+@Model
+final class PersistedSymbol {
+    @Attribute(.unique) var symbolID: UUID = UUID()
+    /// JSON-encoded Symbol (entities in symbol-local coordinates).
+    @Attribute(.externalStorage) var symbolData: Data = Data()
+    var project: Project?
+
+    init(symbolID: UUID, symbolData: Data) {
+        self.symbolID = symbolID
+        self.symbolData = symbolData
     }
 }
 

@@ -3,7 +3,8 @@
 //  openshape3d
 //
 //  Items Manager v1 (spec §11): trailing sidebar listing bodies, sketches,
-//  and construction planes with visibility, rename, Zoom to, and delete.
+//  inserted images, and construction planes with visibility, rename, Zoom to,
+//  and delete.
 //
 
 import SwiftUI
@@ -55,6 +56,26 @@ struct ItemsPanelView: View {
                     )
                 }
 
+                sectionHeader("Images")
+                if document.images.isEmpty {
+                    emptyRow("No images yet")
+                }
+                ForEach(document.images) { image in
+                    ItemRowView(
+                        icon: "photo",
+                        name: image.name,
+                        isHidden: image.isHidden,
+                        renameable: true,
+                        onSelect: { viewModel.selectImageItem(image.id) },
+                        onToggleVisibility: {
+                            viewModel.setImageHidden(image.id, hidden: !image.isHidden)
+                        },
+                        onRename: { viewModel.renameImage(image.id, to: $0) },
+                        onZoom: { viewModel.zoomToImage(image.id) },
+                        onDelete: { viewModel.deleteImage(image.id) }
+                    )
+                }
+
                 sectionHeader("Planes")
                 if document.planes.isEmpty {
                     emptyRow("No planes yet")
@@ -72,6 +93,28 @@ struct ItemsPanelView: View {
                         onRename: { _ in },
                         onZoom: { viewModel.zoomToItem(.plane(plane.id)) },
                         onDelete: { viewModel.deleteItem(.plane(plane.id)) }
+                    )
+                }
+
+                sectionHeader("Symbols")
+                if document.symbols.isEmpty {
+                    emptyRow("No symbols yet")
+                }
+                // Symbols (plan §B16, spec §1.16): reusable sketch groups.
+                // Not scene items, so no visibility eye or Zoom to.
+                ForEach(document.symbols) { symbol in
+                    ItemRowView(
+                        icon: "rectangle.stack",
+                        name: symbol.name,
+                        isHidden: false,
+                        renameable: true,
+                        showsVisibility: false,
+                        showsZoom: false,
+                        onSelect: {},
+                        onToggleVisibility: {},
+                        onRename: { viewModel.renameSymbol(symbol.id, to: $0) },
+                        onZoom: {},
+                        onDelete: { viewModel.deleteSymbol(symbol.id) }
                     )
                 }
             }
@@ -108,6 +151,9 @@ private struct ItemRowView: View {
     let name: String
     let isHidden: Bool
     let renameable: Bool
+    /// Symbols aren't scene items: no eye toggle or Zoom for them.
+    var showsVisibility = true
+    var showsZoom = true
     let onSelect: () -> Void
     let onToggleVisibility: () -> Void
     let onRename: (String) -> Void
@@ -134,23 +180,27 @@ private struct ItemRowView: View {
                     .foregroundStyle(isHidden ? Color.secondary : Color.primary)
             }
             Spacer(minLength: 4)
-            Button(action: onToggleVisibility) {
-                Image(systemName: isHidden ? "eye.slash" : "eye")
-                    .font(.system(size: 14))
-                    .foregroundStyle(isHidden ? Color.secondary : Color.primary)
+            if showsVisibility {
+                Button(action: onToggleVisibility) {
+                    Image(systemName: isHidden ? "eye.slash" : "eye")
+                        .font(.system(size: 14))
+                        .foregroundStyle(isHidden ? Color.secondary : Color.primary)
+                }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("ItemEye-\(name)")
             }
-            .buttonStyle(.plain)
-            .accessibilityIdentifier("ItemEye-\(name)")
         }
         .padding(.vertical, 7)
         .padding(.horizontal, 8)
         .contentShape(Rectangle())
         .onTapGesture(perform: onSelect)
         .contextMenu {
-            Button {
-                onZoom()
-            } label: {
-                Label("Zoom to", systemImage: "arrow.up.left.and.arrow.down.right")
+            if showsZoom {
+                Button {
+                    onZoom()
+                } label: {
+                    Label("Zoom to", systemImage: "arrow.up.left.and.arrow.down.right")
+                }
             }
             Button(role: .destructive) {
                 onDelete()

@@ -17,6 +17,7 @@ typedef enum {
     BufferIndexNormals = 1,
     BufferIndexFrameUniforms = 2,
     BufferIndexBodyUniforms = 3,
+    BufferIndexTexcoords = 4,
 } BufferIndex;
 
 typedef enum {
@@ -37,8 +38,10 @@ typedef struct {
     vector_float4 accentColor;         // selection highlight
     vector_float4 gridParams;          // x: minor spacing, y: major every N, z: fade distance, w: unused
     vector_float4 gridCenter;          // xyz: world position the grid quad is centered on
+    vector_float4 clipPlane;           // section view: xyz unit normal, w offset;
+                                       // fragments with dot(p, xyz) + w < 0 are discarded
     float edgeDepthBiasNDC;
-    float _pad0;
+    float clipEnabled;                 // 0 = section view off (default)
     float _pad1;
     float _pad2;
 } FrameUniforms;
@@ -47,7 +50,9 @@ typedef struct {
     matrix_float4x4 modelMatrix;       // uniform scale + rotation + translation
     vector_float4 baseColor;
     unsigned int selectionState;       // SelectionState
-    unsigned int _pad[3];
+    float metallic;                    // 0 (default) = dielectric, white highlight
+    float roughness;                   // 0 (default) = legacy fixed highlight; >0 mapped
+    unsigned int _pad0;
 } BodyUniforms;
 
 #endif /* ShaderTypes_h */

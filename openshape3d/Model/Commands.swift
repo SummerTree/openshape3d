@@ -337,16 +337,32 @@ enum DocumentItemRef: Hashable {
 
 struct SetItemVisibilityCommand: DocumentCommand {
     let title: String
-    let item: DocumentItemRef
+    /// Body/sketch/plane target; nil when the target is an inserted image.
+    let item: DocumentItemRef?
+    /// Inserted-image target (plan §B10). Images sit outside DocumentItemRef
+    /// so the exhaustive switches over it across the app stay untouched.
+    let imageID: InsertedImageID?
     let isHidden: Bool
 
     init(item: DocumentItemRef, isHidden: Bool) {
         self.item = item
+        self.imageID = nil
+        self.isHidden = isHidden
+        self.title = isHidden ? "Hide" : "Show"
+    }
+
+    init(imageID: InsertedImageID, isHidden: Bool) {
+        self.item = nil
+        self.imageID = imageID
         self.isHidden = isHidden
         self.title = isHidden ? "Hide" : "Show"
     }
 
     private func setHidden(_ hidden: Bool, in document: inout DesignDocument) {
+        if let imageID, let index = document.imageIndex(of: imageID) {
+            document.images[index].isHidden = hidden
+        }
+        guard let item else { return }
         switch item {
         case .body(let id):
             if let index = document.bodyIndex(of: id) {
@@ -374,11 +390,32 @@ struct SetItemVisibilityCommand: DocumentCommand {
 
 struct RenameItemCommand: DocumentCommand {
     let title = "Rename"
-    let item: DocumentItemRef
+    /// Body/sketch/plane target; nil when the target is an inserted image.
+    let item: DocumentItemRef?
+    /// Inserted-image target (plan §B10), mirroring SetItemVisibilityCommand.
+    let imageID: InsertedImageID?
     let before: String
     let after: String
 
+    init(item: DocumentItemRef, before: String, after: String) {
+        self.item = item
+        self.imageID = nil
+        self.before = before
+        self.after = after
+    }
+
+    init(imageID: InsertedImageID, before: String, after: String) {
+        self.item = nil
+        self.imageID = imageID
+        self.before = before
+        self.after = after
+    }
+
     private func setName(_ name: String, in document: inout DesignDocument) {
+        if let imageID, let index = document.imageIndex(of: imageID) {
+            document.images[index].name = name
+        }
+        guard let item else { return }
         switch item {
         case .body(let id):
             if let index = document.bodyIndex(of: id) {
@@ -399,6 +436,27 @@ struct RenameItemCommand: DocumentCommand {
 
     func revert(in document: inout DesignDocument) {
         setName(before, in: &document)
+    }
+}
+
+/// DXF import (plan §B14): creates the target sketch when no ground-plane
+/// sketch exists yet, composed with AddSketchEntitiesCommand in one
+/// CompositeCommand so the whole import is a single undo step.
+struct AddSketchCommand: DocumentCommand {
+    let title: String
+    let sketch: Sketch
+
+    init(sketch: Sketch, title: String = "Add Sketch") {
+        self.sketch = sketch
+        self.title = title
+    }
+
+    func apply(to document: inout DesignDocument) {
+        document.sketches.append(sketch)
+    }
+
+    func revert(in document: inout DesignDocument) {
+        document.sketches.removeAll { $0.id == sketch.id }
     }
 }
 
@@ -489,5 +547,168 @@ struct ResizePrimitiveCommand: DocumentCommand {
 
     func revert(in document: inout DesignDocument) {
         rebuild(&document, spec: beforeSpec)
+    }
+}
+
+// MARK: - Materials (plan §B15)
+
+/// Assigns one material to a set of bodies (Material sheet Apply). Per-body
+/// before-snapshots restore mixed prior materials on undo.
+struct SetMaterialCommand: DocumentCommand {
+    let title = "Material"
+    /// Prior material per body (nil value = legacy default look).
+    let before: [BodyID: BodyMaterialSpec?]
+    /// The material applied to every targeted body.
+    let after: BodyMaterialSpec?
+
+    init(bodyIDs: Set<BodyID>, material: BodyMaterialSpec?, document: DesignDocument) {
+        var snapshots: [BodyID: BodyMaterialSpec?] = [:]
+        for body in document.bodies where bodyIDs.contains(body.id) {
+            snapshots[body.id] = body.material
+        }
+        self.before = snapshots
+        self.after = material
+    }
+
+    func apply(to document: inout DesignDocument) {
+        for id in before.keys {
+            if let index = document.bodyIndex(of: id) {
+                document.bodies[index].material = after
+            }
+        }
+    }
+
+    func revert(in document: inout DesignDocument) {
+        for (id, material) in before {
+            if let index = document.bodyIndex(of: id) {
+                document.bodies[index].material = material
+            }
+        }
+    }
+}
+
+// MARK: - Inserted images (plan §B10)
+
+struct AddImageCommand: DocumentCommand {
+    let title = "Insert Image"
+    let image: InsertedImage
+
+    func apply(to document: inout DesignDocument) {
+        document.images.append(image)
+    }
+
+    func revert(in document: inout DesignDocument) {
+        document.images.removeAll { $0.id == image.id }
+    }
+}
+
+/// Gizmo move/resize and opacity-slider edits. Full value snapshots both ways
+/// so `session.amend` coalesces a live drag into one undo step (same pattern
+/// as UpdateSketchEntityCommand).
+struct UpdateImageCommand: DocumentCommand {
+    let title: String
+    let before: InsertedImage
+    let after: InsertedImage
+
+    init(before: InsertedImage, after: InsertedImage, title: String = "Edit Image") {
+        self.before = before
+        self.after = after
+        self.title = title
+    }
+
+    private func replace(_ image: InsertedImage, in document: inout DesignDocument) {
+        if let index = document.imageIndex(of: before.id) {
+            document.images[index] = image
+        }
+    }
+
+    func apply(to document: inout DesignDocument) {
+        replace(after, in: &document)
+    }
+
+    func revert(in document: inout DesignDocument) {
+        replace(before, in: &document)
+    }
+}
+
+struct RemoveImageCommand: DocumentCommand {
+    let title = "Delete"
+    let index: Int
+    let image: InsertedImage
+
+    init?(id: InsertedImageID, document: DesignDocument) {
+        guard let index = document.imageIndex(of: id) else { return nil }
+        self.index = index
+        self.image = document.images[index]
+    }
+
+    func apply(to document: inout DesignDocument) {
+        document.images.removeAll { $0.id == image.id }
+    }
+
+    func revert(in document: inout DesignDocument) {
+        document.images.insert(image, at: min(index, document.images.count))
+    }
+}
+
+// MARK: - Symbols (plan §B16, spec §1.16)
+
+struct AddSymbolCommand: DocumentCommand {
+    let title = "Create Symbol"
+    let symbol: Symbol
+
+    func apply(to document: inout DesignDocument) {
+        document.symbols.append(symbol)
+    }
+
+    func revert(in document: inout DesignDocument) {
+        document.symbols.removeAll { $0.id == symbol.id }
+    }
+}
+
+struct RenameSymbolCommand: DocumentCommand {
+    let title = "Rename"
+    let symbolID: SymbolID
+    let before: String
+    let after: String
+
+    init?(id: SymbolID, to name: String, document: DesignDocument) {
+        guard let symbol = document.symbols.first(where: { $0.id == id }) else { return nil }
+        self.symbolID = id
+        self.before = symbol.name
+        self.after = name
+    }
+
+    private func setName(_ name: String, in document: inout DesignDocument) {
+        guard let index = document.symbols.firstIndex(where: { $0.id == symbolID }) else { return }
+        document.symbols[index].name = name
+    }
+
+    func apply(to document: inout DesignDocument) {
+        setName(after, in: &document)
+    }
+
+    func revert(in document: inout DesignDocument) {
+        setName(before, in: &document)
+    }
+}
+
+struct RemoveSymbolCommand: DocumentCommand {
+    let title = "Delete"
+    let index: Int
+    let symbol: Symbol
+
+    init?(id: SymbolID, document: DesignDocument) {
+        guard let index = document.symbols.firstIndex(where: { $0.id == id }) else { return nil }
+        self.index = index
+        self.symbol = document.symbols[index]
+    }
+
+    func apply(to document: inout DesignDocument) {
+        document.symbols.removeAll { $0.id == symbol.id }
+    }
+
+    func revert(in document: inout DesignDocument) {
+        document.symbols.insert(symbol, at: min(index, document.symbols.count))
     }
 }

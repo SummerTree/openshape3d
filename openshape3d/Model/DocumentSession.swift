@@ -89,6 +89,9 @@ final class DocumentSession {
                 revision: loaded.nextRevision()
             )
             body.isHidden = persisted.isHidden
+            body.material = persisted.materialData.flatMap {
+                try? JSONDecoder().decode(BodyMaterialSpec.self, from: $0)
+            }
             loaded.bodies.append(body)
         }
         for persisted in project.sketches {
@@ -99,6 +102,17 @@ final class DocumentSession {
         for persisted in project.planes {
             if let plane = try? JSONDecoder().decode(ConstructionPlane.self, from: persisted.planeData) {
                 loaded.planes.append(plane)
+            }
+        }
+        for persisted in project.images {
+            if var image = try? JSONDecoder().decode(InsertedImage.self, from: persisted.infoData) {
+                image.imageData = persisted.imageData
+                loaded.images.append(image)
+            }
+        }
+        for persisted in project.symbols {
+            if let symbol = try? JSONDecoder().decode(Symbol.self, from: persisted.symbolData) {
+                loaded.symbols.append(symbol)
             }
         }
         document = loaded
@@ -130,6 +144,7 @@ final class DocumentSession {
             let transformData = (try? JSONEncoder().encode(body.transform)) ?? Data()
             let primitiveData = body.primitive.flatMap { try? JSONEncoder().encode($0) }
             let meshData = MeshBlob.encode(body.render)
+            let materialData = body.material.flatMap { try? JSONEncoder().encode($0) }
 
             if let persisted = persistedByID[body.id.raw] {
                 persisted.name = body.name
@@ -137,6 +152,7 @@ final class DocumentSession {
                 persisted.primitiveData = primitiveData
                 persisted.meshData = meshData
                 persisted.isHidden = body.isHidden
+                persisted.materialData = materialData
             } else {
                 let persisted = PersistedBody(
                     bodyID: body.id.raw,
@@ -146,6 +162,7 @@ final class DocumentSession {
                     meshData: meshData
                 )
                 persisted.isHidden = body.isHidden
+                persisted.materialData = materialData
                 persisted.project = project
                 modelContext.insert(persisted)
             }
@@ -191,6 +208,52 @@ final class DocumentSession {
             }
         }
         for persisted in project.planes where !livePlaneIDs.contains(persisted.planeID) {
+            modelContext.delete(persisted)
+        }
+
+        var persistedImageByID = [UUID: PersistedImage]()
+        for persisted in project.images {
+            persistedImageByID[persisted.imageID] = persisted
+        }
+        var liveImageIDs = Set<UUID>()
+        for image in document.images {
+            liveImageIDs.insert(image.id.raw)
+            // Blob lives in the externalStorage column; strip it from the JSON.
+            var info = image
+            info.imageData = Data()
+            let infoData = (try? JSONEncoder().encode(info)) ?? Data()
+            if let persisted = persistedImageByID[image.id.raw] {
+                persisted.infoData = infoData
+                persisted.imageData = image.imageData
+            } else {
+                let persisted = PersistedImage(
+                    imageID: image.id.raw, infoData: infoData, imageData: image.imageData
+                )
+                persisted.project = project
+                modelContext.insert(persisted)
+            }
+        }
+        for persisted in project.images where !liveImageIDs.contains(persisted.imageID) {
+            modelContext.delete(persisted)
+        }
+
+        var persistedSymbolByID = [UUID: PersistedSymbol]()
+        for persisted in project.symbols {
+            persistedSymbolByID[persisted.symbolID] = persisted
+        }
+        var liveSymbolIDs = Set<UUID>()
+        for symbol in document.symbols {
+            liveSymbolIDs.insert(symbol.id.raw)
+            let data = (try? JSONEncoder().encode(symbol)) ?? Data()
+            if let persisted = persistedSymbolByID[symbol.id.raw] {
+                persisted.symbolData = data
+            } else {
+                let persisted = PersistedSymbol(symbolID: symbol.id.raw, symbolData: data)
+                persisted.project = project
+                modelContext.insert(persisted)
+            }
+        }
+        for persisted in project.symbols where !liveSymbolIDs.contains(persisted.symbolID) {
             modelContext.delete(persisted)
         }
 

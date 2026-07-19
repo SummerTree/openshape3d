@@ -10,6 +10,14 @@
 import Foundation
 import simd
 
+/// Visualization-lite material (plan §B15): nil on a BodyDrawable keeps the
+/// legacy shaded look exactly (metallic 0, legacy fixed highlight).
+struct BodyMaterial: Equatable {
+    var baseColor: SIMD4<Float>
+    var metallic: Float = 0
+    var roughness: Float = 0
+}
+
 /// Everything the renderer needs to draw one body.
 struct BodyDrawable: Identifiable {
     let id: BodyID
@@ -21,6 +29,9 @@ struct BodyDrawable: Identifiable {
     var baseColor: SIMD4<Float>
     var selectionState: UInt32 = 0 // SelectionState raw value
     var isTranslucent: Bool = false
+    /// Optional appearance override; when set its baseColor/metallic/roughness
+    /// replace `baseColor` and the default shading response.
+    var material: BodyMaterial?
 }
 
 /// A snapshot of what the viewport should draw. Value type, rebuilt cheaply
@@ -38,6 +49,55 @@ struct SketchFillBatch {
     /// Triangle list: 3 vertices per triangle, world space.
     var triangles: [SIMD3<Float>]
     var color: SIMD4<Float>
+}
+
+/// Viewport display mode (spec §16.4). `.shaded` is the pre-mode renderer
+/// exactly: lit fill + feature edges.
+enum DisplayMode: String, CaseIterable, Equatable {
+    /// Lit fill + feature edges (default).
+    case shaded
+    /// Lit fill only.
+    case shadedNoEdges
+    /// Feature edges over a depth-only prepass — hidden lines stay hidden,
+    /// no fill.
+    case wireframe
+    /// Translucent fill (depth read, no write) + feature edges.
+    case xray
+}
+
+/// Section view clip plane (spec §16.1). Fragments on the side the normal
+/// points AWAY from — dot(p - point, normal) < 0 — are discarded in the lit,
+/// edge, fill, and sketch-line shaders. Cut faces are left open (no caps).
+struct SectionPlaneState: Equatable {
+    var point: SIMD3<Float>
+    var normal: SIMD3<Float>
+    var enabled: Bool = true
+
+    /// Shader-ready plane: xyz unit normal, w offset (dot(p, xyz) + w >= 0
+    /// is kept). Zero when the normal is degenerate.
+    var clipVector: SIMD4<Float> {
+        let length = simd_length(normal)
+        guard length > 1e-6 else { return .zero }
+        let n = normal / length
+        return SIMD4(n, -simd_dot(n, point))
+    }
+}
+
+/// A reference image placed in the world (Insert Image, plan §B10). `origin`
+/// is the quad CENTER; xAxis/yAxis are unit world directions spanning
+/// width × height. Nonisolated so the texture cache can stay actor-free.
+nonisolated struct ImageQuadDrawable: Identifiable, Sendable {
+    let id: UUID
+    var origin: SIMD3<Float>
+    var xAxis: SIMD3<Float>
+    var yAxis: SIMD3<Float>
+    var width: Float
+    var height: Float
+    var opacity: Float = 1
+    /// Encoded image bytes (PNG/JPEG). Decoded into an MTLTexture keyed by
+    /// (id, textureRevision) — bump the revision to force a reload.
+    var textureData: Data
+    var textureRevision: UInt64 = 0
 }
 
 /// The extrude pull arrow ("the arrows are the interface for creating an
@@ -64,6 +124,17 @@ struct ViewportScene {
     /// Plane picker tiles (origin planes + construction planes) shown while a
     /// sketch tool waits for a plane; drawn in the overlay pass.
     var planePickers: [PlanePickerTile] = []
+    /// Section view (spec §16.1); nil (or `enabled == false`) clips nothing.
+    var sectionPlane: SectionPlaneState?
+    /// Display mode (spec §16.4); `.shaded` matches the pre-mode output.
+    var displayMode: DisplayMode = .shaded
+    /// Extra low-alpha edge pass with a reversed depth test (spec §16.4
+    /// "Show Hidden Edges").
+    var showHiddenEdges: Bool = false
+    /// Reference images, drawn after the grid and before profile fills.
+    var imageQuads: [ImageQuadDrawable] = []
+    /// Cheap planar blob shadows under body AABBs (visualization v1).
+    var groundShadow: Bool = false
 
     /// World-space AABB of all bodies, for fit-view. Nil when empty.
     var worldBounds: (min: SIMD3<Float>, max: SIMD3<Float>)? {

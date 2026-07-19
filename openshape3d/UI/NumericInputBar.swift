@@ -27,6 +27,8 @@ struct NumericInputBar: View {
             rotateAxisBar
         } else if viewModel.mode == .patterning, let state = viewModel.patternState {
             patternBar(state)
+        } else if let image = viewModel.selectedImage {
+            imageBar(image)
         } else if let context = viewModel.toolContext, viewModel.mode != .pickingRevolveAxis {
             switch context.kind {
             case .extrude:
@@ -333,6 +335,77 @@ struct NumericInputBar: View {
             }
             .buttonStyle(.borderedProminent)
             .accessibilityIdentifier("PatternApply")
+        }
+        .padding(.horizontal, 20)
+        .padding(.vertical, 12)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16))
+        .shadow(color: .black.opacity(0.15), radius: 10, y: 3)
+    }
+
+    /// Selected inserted image (plan §B10): size field (max dimension, aspect
+    /// preserved), opacity slider, and delete — all through UpdateImageCommand.
+    private func imageBar(_ image: InsertedImage) -> some View {
+        HStack(spacing: 16) {
+            Text(image.name)
+                .font(.headline)
+                .lineLimit(1)
+
+            HStack(spacing: 6) {
+                Text("Size")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize()
+                TextField(
+                    "Size",
+                    value: Binding(
+                        get: {
+                            viewModel.selectedImage.map { max($0.width, $0.height) }
+                                ?? max(image.width, image.height)
+                        },
+                        set: { viewModel.setImageMaxDimension($0) }
+                    ),
+                    format: .number.precision(.fractionLength(0...2))
+                )
+                .keyboardType(.numbersAndPunctuation)
+                .textFieldStyle(.roundedBorder)
+                .frame(width: 80)
+                .accessibilityIdentifier("ImageSizeField")
+            }
+
+            HStack(spacing: 6) {
+                Text("Opacity")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize()
+                Slider(
+                    value: Binding(
+                        get: { viewModel.selectedImage?.opacity ?? image.opacity },
+                        set: { viewModel.setImageOpacity($0) }
+                    ),
+                    in: 0...1,
+                    onEditingChanged: { editing in
+                        if editing {
+                            viewModel.beginImageInteraction()
+                        } else {
+                            viewModel.endImageInteraction()
+                        }
+                    }
+                )
+                .frame(width: 140)
+                .accessibilityIdentifier("ImageOpacitySlider")
+            }
+
+            Spacer()
+
+            Button("Delete", role: .destructive) {
+                viewModel.deleteImage(image.id)
+            }
+            .accessibilityIdentifier("ImageDelete")
+            Button("Done") {
+                viewModel.selectedImageID = nil
+            }
+            .buttonStyle(.borderedProminent)
+            .accessibilityIdentifier("ImageDone")
         }
         .padding(.horizontal, 20)
         .padding(.vertical, 12)

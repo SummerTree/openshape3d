@@ -125,6 +125,9 @@ nonisolated struct Body: Identifiable, Sendable {
     /// Items Manager visibility (spec §11): hidden bodies stay in the
     /// document but are skipped by the viewport scene.
     var isHidden: Bool = false
+    /// Visualization-lite appearance (plan §B15); nil keeps the legacy
+    /// default look exactly.
+    var material: BodyMaterialSpec?
     /// Euclid source mesh, if this body was just built/booleaned in-session.
     /// Nil after loading from disk; use `euclidMesh()` which rebuilds on demand.
     var euclid: Euclid.Mesh?

@@ -12,6 +12,7 @@ import SwiftData
 import Observation
 import simd
 import Euclid
+import ImageIO
 
 enum ViewportEvent {
     case tap(ray: Ray)
@@ -41,6 +42,12 @@ final class EditorViewModel {
     let session: DocumentSession
     var mode: EditorMode = .idle
     var selection: Set<BodyID> = []
+
+    /// Multi-select chip (plan §B13, spec §8.1): while on, viewport taps
+    /// toggle whole bodies in and out of `selection` instead of replacing
+    /// it, and area selects add instead of replace. Boolean tool picking
+    /// has its own always-additive tap flow and is unaffected.
+    var selectionAdditive = false
 
     weak var cameraControl: (any ViewportCameraControl)?
 
@@ -86,6 +93,86 @@ final class EditorViewModel {
     /// 3MF of the whole document, or nil when empty.
     func exportThreeMF() -> Data? {
         exportableBodies().map { ThreeMFExporter.threeMF(bodies: $0) }
+    }
+
+    /// GLB of the whole document, or nil when empty.
+    func exportGLB() -> Data? {
+        exportableBodies().map { GLBExporter.glb(bodies: $0) }
+    }
+
+    /// USDZ of the whole document (plan §B14); nil when the design is empty
+    /// or ModelIO on this platform cannot write USDZ (the UI hides the
+    /// entries via `USDZExporter.isSupported`, so this error is a fallback).
+    func exportUSDZ() -> Data? {
+        guard let bodies = exportableBodies() else { return nil }
+        guard let data = USDZExporter.usdz(bodies: bodies) else {
+            errorMessage = "Couldn't export USDZ on this device."
+            return nil
+        }
+        return data
+    }
+
+    /// Per-body OBJ payloads for the "Separate File per Body" export option
+    /// (plan §B14); nil (with a user-facing error) when the design is empty.
+    func exportOBJPerBody() -> [(name: String, data: Data)]? {
+        exportableBodies().map { bodies in
+            bodies.map { ($0.name, Data(OBJExporter.obj(bodies: [$0]).utf8)) }
+        }
+    }
+
+    /// Per-body GLB payloads, mirroring `exportOBJPerBody`.
+    func exportGLBPerBody() -> [(name: String, data: Data)]? {
+        exportableBodies().map { bodies in
+            bodies.map { ($0.name, GLBExporter.glb(bodies: [$0])) }
+        }
+    }
+
+    /// DXF of the active sketch while sketching, else of the ground-plane
+    /// sketch (plan §B14, spec §12); nil (with a user-facing error) when
+    /// neither has entities.
+    func exportDXF() -> Data? {
+        let sketch = activeSketch
+            ?? session.document.sketches.first { $0.plane.isCoincident(with: .ground) }
+        guard let sketch, !sketch.entities.isEmpty else {
+            errorMessage = "Nothing to export — draw a sketch on the ground plane first."
+            return nil
+        }
+        return Data(DXFKit.exportSketch(entities: sketch.entities, plane: sketch.plane).utf8)
+    }
+
+    /// DXF import (plan §B14, spec §12.1): parsed entities land in the
+    /// ground-plane sketch — reused when one exists (unhiding it if an
+    /// extrude auto-hid it), created otherwise — as ONE CompositeCommand so
+    /// a single undo removes everything the import added.
+    func importDXF(data: Data, fileName: String) {
+        let entities = DXFKit.importDXF(data)
+        guard !entities.isEmpty else {
+            errorMessage = "Couldn't import “\(fileName)” — no supported DXF entities found."
+            return
+        }
+        cancelTransientPicks()
+        if case .sketching = mode { finishSketch() }
+        var commands: [DocumentCommand] = []
+        let sketch: Sketch
+        if let existing = session.document.sketches.first(where: {
+            $0.plane.isCoincident(with: .ground)
+        }) {
+            sketch = existing
+            if existing.isHidden {
+                commands.append(SetItemVisibilityCommand(
+                    item: .sketch(existing.id), isHidden: false
+                ))
+            }
+        } else {
+            sketch = Sketch(name: session.document.uniqueSketchName(), plane: .ground)
+            commands.append(AddSketchCommand(sketch: sketch))
+        }
+        commands.append(AddSketchEntitiesCommand(
+            sketchID: sketch.id, entities: entities, title: "Import DXF"
+        ))
+        session.perform(CompositeCommand(title: "Import DXF", commands: commands))
+        mode = .idle
+        cameraControl?.moveCameraHeadOn(to: sketch.plane)
     }
 
     /// Screenshot PNG at the requested size, or nil (with a user-facing
@@ -148,7 +235,10 @@ final class EditorViewModel {
     var scene: ViewportScene {
         _ = session.changeCount // establish observation dependency
         var drawables: [BodyDrawable] = []
-        for body in session.document.bodies where !body.isHidden {
+        // Isolate (spec §16.2): a transient override hides everything outside
+        // the isolated set without touching persisted visibility.
+        for body in session.document.bodies
+        where !body.isHidden && (isolatedBodyIDs?.contains(body.id) ?? true) {
             var selectionState = SelectionStateNone.rawValue
             if selection.contains(body.id) {
                 selectionState = SelectionStateSelected.rawValue
@@ -160,7 +250,17 @@ final class EditorViewModel {
                 meshRevision: body.meshRevision,
                 modelMatrix: body.transform.matrixFloat,
                 baseColor: SIMD4(0.72, 0.74, 0.78, 1),
-                selectionState: selectionState
+                selectionState: selectionState,
+                material: body.material.map {
+                    BodyMaterial(
+                        baseColor: SIMD4(
+                            Float($0.baseColor.x), Float($0.baseColor.y),
+                            Float($0.baseColor.z), Float($0.baseColor.w)
+                        ),
+                        metallic: Float($0.metallic),
+                        roughness: Float($0.roughness)
+                    )
+                }
             ))
         }
         var scene = ViewportScene(bodies: drawables)
@@ -366,13 +466,80 @@ final class EditorViewModel {
             )
         }
 
-        // Plane pickers while a sketch tool waits for its plane, or while the
-        // Split tool waits for a cutter plane.
+        // Inserted reference images (plan §B10): textured quads, plus an
+        // accent outline around the selected one.
+        for image in session.document.images where !image.isHidden {
+            let plane = image.plane
+            let origin = SIMD3<Float>(
+                Float(plane.origin.x), Float(plane.origin.y), Float(plane.origin.z)
+            )
+            scene.imageQuads.append(ImageQuadDrawable(
+                id: image.id.raw,
+                origin: origin,
+                xAxis: SIMD3(Float(plane.xAxis.x), Float(plane.xAxis.y), Float(plane.xAxis.z)),
+                yAxis: SIMD3(Float(plane.yAxis.x), Float(plane.yAxis.y), Float(plane.yAxis.z)),
+                width: Float(image.width),
+                height: Float(image.height),
+                opacity: Float(image.opacity),
+                textureData: image.imageData
+            ))
+            if image.id == selectedImageID {
+                let hw = image.width / 2
+                let hh = image.height / 2
+                let corners = [
+                    SIMD2(-hw, -hh), SIMD2(hw, -hh), SIMD2(hw, hh), SIMD2(-hw, hh),
+                ].map { (corner: SIMD2<Double>) -> SIMD3<Float> in
+                    let world = plane.toWorld(corner)
+                    return SIMD3(Float(world.x), Float(world.y), Float(world.z))
+                }
+                scene.sketchLines.append(SketchLineBatch(
+                    segments: [corners[0], corners[1], corners[1], corners[2],
+                               corners[2], corners[3], corners[3], corners[0]],
+                    color: SIMD4(0.98, 0.55, 0.12, 1)
+                ))
+            }
+        }
+
+        // Plane pickers while a sketch tool waits for its plane, while the
+        // Split tool waits for a cutter plane, while Section View waits for
+        // its plane, or while Insert Image waits for its target plane.
         switch mode {
-        case .pickingSketchPlane, .pickingSplitCutter:
+        case .pickingSketchPlane, .pickingSplitCutter, .pickingSectionPlane, .pickingImagePlane:
             scene.planePickers = PlanePicking.worldTiles + constructionPlaneTiles
         default:
             break
+        }
+
+        // Display mode + Section View (spec §16, plan §B11/§B12).
+        scene.displayMode = displayMode
+        scene.showHiddenEdges = showHiddenEdges
+        scene.groundShadow = groundShadowEnabled
+        if let section = sectionState {
+            let plane = section.plane
+            let n = simd_normalize(section.basePlane.normal)
+            let keep = section.flipped ? -n : n
+            scene.sectionPlane = SectionPlaneState(
+                point: SIMD3(Float(plane.origin.x), Float(plane.origin.y), Float(plane.origin.z)),
+                normal: SIMD3(Float(keep.x), Float(keep.y), Float(keep.z))
+            )
+            // The plane rectangle, nudged a hair to the kept side so its own
+            // fill/border survive the clip test in the sketch shaders.
+            var quadPlane = plane
+            quadPlane.origin += keep * 1e-3
+            appendPlaneQuad(
+                quadPlane, size: section.size,
+                fill: SIMD4(0.98, 0.55, 0.12, 0.10),
+                border: SIMD4(0.98, 0.55, 0.12, 0.85),
+                into: &scene
+            )
+            // Pull arrow moves the plane along its normal (offset-plane drag
+            // pattern); an active profile tool keeps its own arrow.
+            if toolContext == nil {
+                scene.pullArrow = PullArrowState(
+                    origin: SIMD3(Float(plane.origin.x), Float(plane.origin.y), Float(plane.origin.z)),
+                    direction: SIMD3(Float(n.x), Float(n.y), Float(n.z))
+                )
+            }
         }
 
         // Measure/Translate/Align picks: cross markers at each picked point
@@ -450,20 +617,31 @@ final class EditorViewModel {
         }
     }
 
-    /// Gizmo attach point: the selected body's pivot. Whole-body selections
-    /// only — face selections use the pull arrow instead.
+    /// Gizmo attach point: a single selected body's pivot, or the shared
+    /// centroid of pivots for multi-selections (plan §B13). Whole-body
+    /// selections only — face selections use the pull arrow instead. A
+    /// selected inserted image (plan §B10) attaches the gizmo at its center.
     var gizmoOrigin: SIMD3<Float>? {
+        if let image = selectedImage {
+            let center = image.plane.origin
+            return SIMD3(Float(center.x), Float(center.y), Float(center.z))
+        }
         switch mode {
         case .selected, .editingPrimitive:
             break
         default:
             return nil
         }
-        guard selection.count == 1, let id = selection.first,
-              let body = session.document.body(with: id)
-        else { return nil }
-        let t = body.transform.translation
-        return SIMD3(Float(t.x), Float(t.y), Float(t.z))
+        var sum = SIMD3<Double>.zero
+        var count = 0
+        for id in selection {
+            guard let body = session.document.body(with: id) else { continue }
+            sum += body.transform.translation
+            count += 1
+        }
+        guard count > 0 else { return nil }
+        let centroid = sum / Double(count)
+        return SIMD3(Float(centroid.x), Float(centroid.y), Float(centroid.z))
     }
 
     // MARK: - Move drags (gizmo)
@@ -475,6 +653,17 @@ final class EditorViewModel {
     var copyOnDrag = false
 
     func beginMove() {
+        // Selected inserted image (plan §B10): the gizmo drags it in-plane.
+        if selectedImage != nil {
+            axisEntryPart = nil
+            scaleEntryActive = false
+            if copyOnDrag {
+                copyOnDrag = false
+                duplicateSelectedImageForDrag()
+            }
+            beginImageInteraction()
+            return
+        }
         guard !selection.isEmpty else { return }
         axisEntryPart = nil
         scaleEntryActive = false
@@ -519,6 +708,10 @@ final class EditorViewModel {
     }
 
     func updateMove(delta: SIMD3<Float>) {
+        if imageInteractionBaseline != nil {
+            updateImageMove(delta: delta)
+            return
+        }
         guard let moveBefore else { return }
         let worldDelta = SIMD3<Double>(Double(delta.x), Double(delta.y), Double(delta.z))
         session.preview { document in
@@ -555,6 +748,10 @@ final class EditorViewModel {
     }
 
     func endMove() {
+        if imageInteractionBaseline != nil {
+            endImageInteraction()
+            return
+        }
         guard let before = moveBefore else { return }
         moveBefore = nil
         var after = [BodyID: Transform3D]()
@@ -592,6 +789,17 @@ final class EditorViewModel {
         guard abs(distance) > 1e-9 else { return }
         let a = part.axisDirection
         let axis = SIMD3(Double(a.x), Double(a.y), Double(a.z))
+        // Selected image (plan §B10): exact in-plane move along the axis.
+        if let image = selectedImage {
+            let plane = image.plane
+            let delta = axis * distance
+            var after = image
+            after.plane.origin = plane.origin
+                + plane.xAxis * simd_dot(delta, plane.xAxis)
+                + plane.yAxis * simd_dot(delta, plane.yAxis)
+            commitImageEdit(after, title: "Move Image")
+            return
+        }
         var before = [BodyID: Transform3D]()
         var after = [BodyID: Transform3D]()
         for id in selection {
@@ -913,6 +1121,8 @@ final class EditorViewModel {
         cancelPattern()
         cancelSplitCutterPick()
         cancelBooleanPicking()
+        cancelSectionPlanePick()
+        cancelImagePlanePick()
     }
 
     /// Translate: first tap picks the source snap point, second the
@@ -1040,35 +1250,46 @@ final class EditorViewModel {
         return options
     }
 
-    /// Mirror the selected body across `plane` into a new body.
+    /// Mirror every selected body across `plane` into new bodies (one undo
+    /// step for multi-selections, plan §B13).
     func mirrorSelection(across plane: SketchPlane) {
         cancelTransientPicks()
-        guard selection.count == 1, let id = selection.first,
-              let body = session.document.body(with: id)
-        else { return }
-        let world = body.euclidMesh().transformed(by: body.transform.euclid)
-        let mirrored = KernelOps.mirror(mesh: world, across: plane)
-        guard !mirrored.polygons.isEmpty else {
+        guard !selection.isEmpty else { return }
+        let n = simd_normalize(plane.normal)
+        var document = session.document // local: unique names as we go
+        var commands: [DocumentCommand] = []
+        var ids: Set<BodyID> = []
+        for id in selection {
+            guard let body = session.document.body(with: id) else { continue }
+            let world = body.euclidMesh().transformed(by: body.transform.euclid)
+            let mirrored = KernelOps.mirror(mesh: world, across: plane)
+            guard !mirrored.polygons.isEmpty else { continue }
+            // Pivot of the copy: the original pivot reflected across the plane.
+            let t = body.transform.translation
+            let pivot = t - 2 * simd_dot(t - plane.origin, n) * n
+            var transform = Transform3D.identity
+            transform.translation = pivot
+            let localMesh = mirrored.translated(by: Vector(-pivot.x, -pivot.y, -pivot.z))
+            let copy = Body(
+                name: document.uniqueBodyName(base: body.name),
+                transform: transform,
+                primitive: nil,
+                euclidMesh: localMesh,
+                revision: body.meshRevision
+            )
+            document.bodies.append(copy) // keeps the next name unique
+            commands.append(AddBodyCommand(body: copy, title: "Mirror"))
+            ids.insert(copy.id)
+        }
+        guard !commands.isEmpty else {
             errorMessage = "Mirror produced no geometry."
             return
         }
-        // Pivot of the copy: the original pivot reflected across the plane.
-        let n = simd_normalize(plane.normal)
-        let t = body.transform.translation
-        let pivot = t - 2 * simd_dot(t - plane.origin, n) * n
-        var transform = Transform3D.identity
-        transform.translation = pivot
-        let localMesh = mirrored.translated(by: Vector(-pivot.x, -pivot.y, -pivot.z))
-        let copy = Body(
-            name: session.document.uniqueBodyName(base: body.name),
-            transform: transform,
-            primitive: nil,
-            euclidMesh: localMesh,
-            revision: body.meshRevision
-        )
-        session.perform(AddBodyCommand(body: copy, title: "Mirror"))
-        selection = [copy.id]
-        mode = .selected(copy.id)
+        session.perform(commands.count == 1
+            ? commands[0]
+            : CompositeCommand(title: "Mirror", commands: commands))
+        selection = ids
+        updateModeForSelection()
         session.save()
     }
 
@@ -1449,6 +1670,10 @@ final class EditorViewModel {
             selectedSketchEntityIDs.removeAll()
             return
         }
+        if let image = selectedImage {
+            deleteImage(image.id)
+            return
+        }
         guard !selection.isEmpty else { return }
         // Revert any transient preview first (the rotate preview mutates
         // transforms outside undo) so the delete captures clean state.
@@ -1484,6 +1709,18 @@ final class EditorViewModel {
         // Selection/mode may reference bodies that no longer exist.
         let liveIDs = Set(session.document.bodies.map(\.id))
         selection = selection.intersection(liveIDs)
+        // The selected image (and any pending drag baseline) may be undone away.
+        imageInteractionBaseline = nil
+        imageInteractionPerformed = false
+        if let imageID = selectedImageID, session.document.imageIndex(of: imageID) == nil {
+            selectedImageID = nil
+        }
+        // Isolation over undone-away bodies would blank the scene — drop the
+        // dead ids, and the whole override once nothing is left isolated.
+        if let isolated = isolatedBodyIDs {
+            let alive = isolated.intersection(liveIDs)
+            isolatedBodyIDs = alive.isEmpty ? nil : alive
+        }
         switch mode {
         case .editingPrimitive(let id) where !liveIDs.contains(id),
              .selected(let id) where !liveIDs.contains(id),
@@ -1558,6 +1795,196 @@ final class EditorViewModel {
         cameraControl?.moveCameraHeadOn(to: plane)
     }
 
+    // MARK: - Display modes & Isolate (spec §16.2/§16.4, plan §B12)
+
+    /// Viewport shading mode; mirrored into the scene every rebuild. Not
+    /// persisted — a reopened design starts Shaded, like Shapr3D.
+    var displayMode: DisplayMode = .shaded
+
+    /// Extra low-alpha edge pass with a reversed depth test (spec §16.4).
+    var showHiddenEdges = false
+
+    /// Ground blob shadows (plan §B15); mirrored into the scene every
+    /// rebuild. Not persisted, like the display mode.
+    var groundShadowEnabled = false
+
+    // MARK: - Materials (plan §B15)
+
+    /// Material sheet presentation flag (Material palette action).
+    var showMaterialSheet = false
+
+    /// The material the sheet opens on: the first selected body's, or the
+    /// document default.
+    var materialForSelection: BodyMaterialSpec {
+        for body in session.document.bodies where selection.contains(body.id) {
+            return body.material ?? .default
+        }
+        return .default
+    }
+
+    /// Material sheet Apply: one undo step over the whole selection.
+    func applyMaterial(_ spec: BodyMaterialSpec) {
+        guard !selection.isEmpty else { return }
+        session.perform(SetMaterialCommand(
+            bodyIDs: selection, material: spec.clamped, document: session.document
+        ))
+    }
+
+    /// Isolate (spec §16.2): while non-nil, only these bodies render; exit
+    /// restores everything. A transient view-model override — persisted
+    /// per-item visibility (SetItemVisibility) is untouched.
+    private(set) var isolatedBodyIDs: Set<BodyID>?
+
+    var isIsolateActive: Bool { isolatedBodyIDs != nil }
+
+    /// Hide everything except the current selection.
+    func enterIsolate() {
+        guard !selection.isEmpty else { return }
+        isolatedBodyIDs = selection
+    }
+
+    func exitIsolate() {
+        isolatedBodyIDs = nil
+    }
+
+    // MARK: - Section View (spec §16.1, plan §B11)
+
+    /// Section plane: the picked plane plus a pull offset along its normal.
+    /// Not persisted; Section Off restores the full model.
+    struct SectionState: Equatable {
+        var basePlane: SketchPlane
+        /// Pull-arrow travel along the (unflipped) base-plane normal.
+        var offset: Double = 0
+        /// Flip badge: keep the other side instead.
+        var flipped = false
+        /// On-screen plane rectangle size (sized to the scene at pick time).
+        var size: Double = 8
+
+        /// The base plane shifted by the current offset.
+        var plane: SketchPlane {
+            var plane = basePlane
+            plane.origin += simd_normalize(basePlane.normal) * offset
+            return plane
+        }
+    }
+
+    private(set) var sectionState: SectionState?
+    /// Axis param where the section-arrow drag grabbed (nil = screen-space
+    /// fallback), and the offset when it began — the offset-plane pattern.
+    private var sectionDragAnchor: Float?
+    private var sectionDragStartOffset: Double = 0
+
+    /// "Section" in the Views menu: show the plane tiles; the next tap on a
+    /// tile or a planar face becomes the section plane.
+    func beginSectionPlanePick() {
+        cancelTool()
+        cancelTransientPicks()
+        selection.removeAll()
+        mode = .pickingSectionPlane
+    }
+
+    func cancelSectionPlanePick() {
+        if case .pickingSectionPlane = mode {
+            mode = .idle
+        }
+    }
+
+    /// Flip badge: switch which side of the plane stays visible.
+    func flipSection() {
+        sectionState?.flipped.toggle()
+    }
+
+    /// Section off: restore the full model.
+    func endSection() {
+        sectionState = nil
+        sectionDragAnchor = nil
+        cancelSectionPlanePick()
+    }
+
+    /// Tap routing while Section View waits for its plane: a world or
+    /// construction plane tile, or a planar body face (spec §16.1).
+    private func handleSectionPlanePick(ray: Ray) {
+        let tiles = PlanePicking.worldTiles + constructionPlaneTiles
+        let tileHit = PlanePicking.pick(ray: ray, tiles: tiles)
+        let bodyHit = HitTester.pickBody(ray: ray, in: scene)
+
+        let picked: SketchPlane?
+        if let tileHit, bodyHit == nil || tileHit.distance <= bodyHit!.distance + 1e-3 {
+            picked = tileHit.tile.plane
+        } else if let bodyHit {
+            picked = worldFacePlane(bodyID: bodyHit.bodyID, triangleIndex: bodyHit.triangleIndex)
+        } else {
+            picked = nil
+        }
+        // Taps that miss keep the picker armed (Cancel dismisses it).
+        guard let plane = picked else { return }
+
+        // Rectangle sized to cover the model from wherever the plane sits.
+        var size = 8.0
+        if let bounds = scene.worldBounds {
+            size = max(size, Double(simd_length(bounds.max - bounds.min)) * 1.4)
+        }
+        sectionState = SectionState(basePlane: plane, size: size)
+        mode = .idle
+    }
+
+    /// A drag starting near the section pull arrow moves the plane along its
+    /// normal; anywhere else orbits. Claim test mirrors the extrude anchor
+    /// math with a screen-space tolerance around the arrow's axis.
+    func beginSectionDrag(ray: Ray) -> Bool {
+        guard let section = sectionState, toolContext == nil else { return false }
+        let plane = section.plane
+        let n = simd_normalize(section.basePlane.normal)
+        let axisOrigin = SIMD3<Float>(
+            Float(plane.origin.x), Float(plane.origin.y), Float(plane.origin.z)
+        )
+        let axisDirection = SIMD3<Float>(Float(n.x), Float(n.y), Float(n.z))
+        // Head-on views have no stable axis anchor and the arrow points at
+        // the camera — let the drag orbit instead.
+        guard abs(simd_dot(ray.direction, axisDirection)) < 0.95,
+              let param = LineMath.closestParamOnLine(
+                  origin: axisOrigin, direction: axisDirection, to: ray
+              )
+        else { return false }
+        let closest = axisOrigin + axisDirection * param
+        let along = max(simd_dot(closest - ray.origin, ray.direction), 0)
+        let gap = simd_length(ray.origin + ray.direction * along - closest)
+        // Forgiving grab: within ~36pt of the axis, ~220pt of the origin.
+        guard gap <= Float(36 * worldPerPoint),
+              abs(param) <= Float(220 * worldPerPoint)
+        else { return false }
+        sectionDragAnchor = param
+        sectionDragStartOffset = section.offset
+        return true
+    }
+
+    func updateSectionDrag(ray: Ray, screenDeltaWorld: Double) {
+        guard var section = sectionState else { return }
+        let n = simd_normalize(section.basePlane.normal)
+        let originAtStart = section.basePlane.origin + n * sectionDragStartOffset
+        let axisOrigin = SIMD3<Float>(
+            Float(originAtStart.x), Float(originAtStart.y), Float(originAtStart.z)
+        )
+        let axisDirection = SIMD3<Float>(Float(n.x), Float(n.y), Float(n.z))
+        let raw: Double
+        if let anchor = sectionDragAnchor,
+           let param = LineMath.closestParamOnLine(
+               origin: axisOrigin, direction: axisDirection, to: ray
+           ) {
+            raw = sectionDragStartOffset + Double(param - anchor)
+        } else {
+            raw = sectionDragStartOffset + screenDeltaWorld
+        }
+        // Snap to 0.5 steps, like the extrude pull.
+        let snapped = (raw / 0.5).rounded() * 0.5
+        section.offset = abs(raw - snapped) < 0.15 ? snapped : raw
+        sectionState = section
+    }
+
+    func endSectionDrag() {
+        sectionDragAnchor = nil
+    }
+
     private func handleTap(ray: Ray) {
         // Any viewport tap dismisses pending gizmo numeric entry.
         axisEntryPart = nil
@@ -1603,6 +2030,10 @@ final class EditorViewModel {
             handleSketchTap(ray: ray, tool: tool)
         case .measuring:
             handleMeasureTap(ray: ray)
+        case .pickingSectionPlane:
+            handleSectionPlanePick(ray: ray)
+        case .pickingImagePlane:
+            handleImagePlanePick(ray: ray)
         }
     }
 
@@ -1639,6 +2070,16 @@ final class EditorViewModel {
     private func selectFaceOrBody(ray: Ray) {
         let bodyHit = HitTester.pickBody(ray: ray, in: scene)
 
+        // Multi-select chip (plan §B13, spec §8.1): additive taps toggle
+        // whole bodies in and out of the selection; an empty tap keeps the
+        // selection (Shift-click convention) instead of clearing it.
+        if selectionAdditive {
+            if let hit = bodyHit {
+                toggleSelection(of: hit.bodyID)
+            }
+            return
+        }
+
         if bodyHit == nil, case .faceSelected = mode, let context = toolContext,
            let distance = context.distance, abs(distance) > 1e-4 {
             // Spec §4.1/§18: tapping empty grid commits a nonzero face pull
@@ -1651,9 +2092,23 @@ final class EditorViewModel {
         // sketched ON a face stays tappable for extrude.
         if let fill = profileHit(ray: ray),
            bodyHit == nil || fill.distance <= bodyHit!.distance * 1.001 + 1e-2 {
+            selectedImageID = nil
             startExtrude(with: fill)
             return
         }
+
+        // Inserted images (plan §B10): nearer than any body hit → select the
+        // image (gizmo + image bar). Fills stay on top so tracing sketches
+        // drawn OVER an image remain extrudable.
+        if let imageHit = imageHit(ray: ray),
+           bodyHit == nil || imageHit.distance < bodyHit!.distance {
+            cancelTool()
+            selection.removeAll()
+            mode = .idle
+            selectedImageID = imageHit.id
+            return
+        }
+        selectedImageID = nil
 
         if let hit = bodyHit {
             cancelTool()
@@ -1706,6 +2161,236 @@ final class EditorViewModel {
         cancelTool()
         selection.removeAll()
         mode = .idle
+    }
+
+    // MARK: - Multi-select & area select (plan §B13, spec §8.1–8.2)
+
+    /// Additive tap/Shift-click: toggle a body's membership in the
+    /// selection; the mode follows the resulting selection.
+    func toggleSelection(of id: BodyID) {
+        cancelTool()
+        if selection.contains(id) {
+            selection.remove(id)
+        } else {
+            selection.insert(id)
+        }
+        updateModeForSelection(anchor: id)
+    }
+
+    /// Point `mode` at the current `selection` after a multi-select change:
+    /// none → idle, a single primitive → its dimension editor, anything
+    /// else → selected (the gizmo shows at the shared centroid).
+    private func updateModeForSelection(anchor: BodyID? = nil) {
+        guard !selection.isEmpty else {
+            mode = .idle
+            return
+        }
+        let id = anchor.flatMap { selection.contains($0) ? $0 : nil } ?? selection.first!
+        if selection.count == 1, session.document.body(with: id)?.primitive != nil {
+            mode = .editingPrimitive(id)
+        } else {
+            mode = .selected(id)
+        }
+    }
+
+    /// Route a finished marquee drag through AreaSelect and apply the
+    /// result: bodies land in `selection`, sketch entities in
+    /// `selectedSketchEntityIDs`. Screen coordinates and the world→screen
+    /// projection come from the viewport; drag direction picks window
+    /// (left→right) vs crossing (right→left) semantics.
+    func performAreaSelect(
+        dragStart: SIMD2<Double>,
+        dragEnd: SIMD2<Double>,
+        filter: AreaSelect.Filter = .bodiesAndSketchEntities,
+        project: (SIMD3<Float>) -> SIMD2<Double>?
+    ) {
+        // Only from the passive modes — active tools keep their taps/drags.
+        switch mode {
+        case .idle, .selected, .editingPrimitive, .faceSelected:
+            break
+        default:
+            return
+        }
+        var candidates: [AreaSelectCandidate] = []
+        for body in session.document.bodies {
+            let matrix = body.transform.matrixFloat
+            let points = body.render.positions.map { position -> SIMD3<Float> in
+                let world = matrix * SIMD4(position, 1)
+                return SIMD3(world.x, world.y, world.z)
+            }
+            candidates.append(AreaSelectCandidate(
+                item: .body(body.id), points: points, isHidden: body.isHidden
+            ))
+        }
+        if filter == .bodiesAndSketchEntities {
+            for sketch in session.document.sketches {
+                for entity in sketch.entities {
+                    candidates.append(AreaSelectCandidate(
+                        item: .sketchEntity(entity.id),
+                        points: SketchTessellator.segments(for: [entity], on: sketch.plane),
+                        isHidden: sketch.isHidden
+                    ))
+                }
+            }
+        }
+        let items = AreaSelect.select(
+            candidates: candidates,
+            dragStart: dragStart,
+            dragEnd: dragEnd,
+            filter: filter,
+            project: project
+        )
+        var bodies: Set<BodyID> = []
+        var entities: Set<UUID> = []
+        for item in items {
+            switch item {
+            case .body(let id):
+                bodies.insert(id)
+            case .sketchEntity(let id):
+                entities.insert(id)
+            }
+        }
+        cancelTool()
+        if selectionAdditive {
+            selection.formUnion(bodies)
+            selectedSketchEntityIDs.formUnion(entities)
+        } else {
+            selection = bodies
+            selectedSketchEntityIDs = entities
+        }
+        updateModeForSelection()
+    }
+
+    // MARK: - Select mode (plan §B13 UI, spec §8.2)
+
+    /// Palette "Select" toggle: while on, one-finger viewport drags draw a
+    /// marquee (window/crossing by drag direction) instead of orbiting, and
+    /// taps toggle bodies additively (`selectionAdditive`).
+    private(set) var selectModeActive = false
+
+    /// Marquee filter chips (spec §8.2's B/F/E keys reduced to
+    /// Bodies | Sketches for v1). At least one kind always stays on.
+    private(set) var areaSelectIncludesBodies = true
+    private(set) var areaSelectIncludesSketches = true
+
+    var areaSelectFilter: AreaSelect.Filter {
+        switch (areaSelectIncludesBodies, areaSelectIncludesSketches) {
+        case (true, false): return .bodiesOnly
+        case (false, true): return .sketchEntitiesOnly
+        default: return .bodiesAndSketchEntities
+        }
+    }
+
+    func toggleAreaSelectBodies() {
+        guard !areaSelectIncludesBodies || areaSelectIncludesSketches else { return }
+        areaSelectIncludesBodies.toggle()
+    }
+
+    func toggleAreaSelectSketches() {
+        guard !areaSelectIncludesSketches || areaSelectIncludesBodies else { return }
+        areaSelectIncludesSketches.toggle()
+    }
+
+    func toggleSelectMode() {
+        if selectModeActive {
+            exitSelectMode()
+            return
+        }
+        if case .sketching = mode { finishSketch() }
+        cancelTransientPicks()
+        selectModeActive = true
+        selectionAdditive = true
+    }
+
+    func exitSelectMode() {
+        selectModeActive = false
+        selectionAdditive = false
+        marqueeState = nil
+    }
+
+    /// Live marquee rectangle for the SwiftUI overlay; screen points in
+    /// viewport coordinates. Drag direction picks the semantics and the
+    /// standard visual cue: left→right window (solid border), right→left
+    /// crossing (dashed).
+    struct MarqueeState {
+        var start: SIMD2<Double>
+        var current: SIMD2<Double>
+        var isWindow: Bool { current.x >= start.x }
+    }
+
+    private(set) var marqueeState: MarqueeState?
+
+    /// Claim a one-finger drag as a marquee (select mode, passive modes
+    /// only). Returning false lets the drag orbit the camera instead.
+    func beginMarquee(at point: SIMD2<Double>) -> Bool {
+        guard selectModeActive else { return false }
+        switch mode {
+        case .idle, .selected, .editingPrimitive, .faceSelected:
+            break
+        default:
+            return false
+        }
+        marqueeState = MarqueeState(start: point, current: point)
+        return true
+    }
+
+    func updateMarquee(to point: SIMD2<Double>) {
+        marqueeState?.current = point
+    }
+
+    /// Finish the marquee: run AreaSelect over the current drawables with
+    /// the chip filter. `project` is the renderer camera's world→screen map.
+    func endMarquee(project: (SIMD3<Float>) -> SIMD2<Double>?) {
+        guard let marquee = marqueeState else { return }
+        marqueeState = nil
+        performAreaSelect(
+            dragStart: marquee.start,
+            dragEnd: marquee.current,
+            filter: areaSelectFilter,
+            project: project
+        )
+    }
+
+    // MARK: - Select Through (plan §B13, spec §8.3)
+
+    struct SelectThroughCandidate: Identifiable {
+        let id: BodyID
+        let name: String
+    }
+
+    /// Long-press hit list (front→back); non-nil presents the popup menu.
+    var selectThroughCandidates: [SelectThroughCandidate]?
+
+    /// Long-press: list every body under the screen point through depth
+    /// (`pickAllBodies`) so occluded bodies stay selectable. No-op while an
+    /// active tool owns viewport input.
+    func presentSelectThrough(ray: Ray) {
+        switch mode {
+        case .idle, .selected, .editingPrimitive, .faceSelected:
+            break
+        default:
+            return
+        }
+        let candidates = HitTester.pickAllBodies(ray: ray, in: scene).compactMap { hit in
+            session.document.body(with: hit.bodyID).map {
+                SelectThroughCandidate(id: $0.id, name: $0.name)
+            }
+        }
+        guard !candidates.isEmpty else { return }
+        selectThroughCandidates = candidates
+    }
+
+    /// Popup choice: select that body (additively while in select mode).
+    func chooseSelectThrough(_ id: BodyID) {
+        selectThroughCandidates = nil
+        guard session.document.body(with: id) != nil else { return }
+        cancelTool()
+        if selectionAdditive {
+            selection.insert(id)
+        } else {
+            selection = [id]
+        }
+        updateModeForSelection(anchor: id)
     }
 
     // MARK: - Primitive dimension editing
@@ -1931,6 +2616,8 @@ final class EditorViewModel {
         if case .rotatingAroundAxis = mode { return false }
         if case .translating = mode { return false }
         if case .aligning = mode { return false }
+        if case .pickingSectionPlane = mode { return false }
+        if case .pickingImagePlane = mode { return false }
         guard HitTester.pickBody(ray: ray, in: scene) == nil,
               let hit = profileHit(ray: ray)
         else { return false }
@@ -3163,6 +3850,12 @@ final class EditorViewModel {
             projectTappedBody(ray: ray)
             return
         }
+        if pendingSymbolID != nil {
+            // Insert Symbol armed (plan §B16): the tap stamps an instance.
+            clearChain()
+            placePendingSymbol(ray: ray)
+            return
+        }
         clearChain() // a tap ends line chaining
         if pendingArc != nil {
             // Tap elsewhere finalizes the bulge-adjustable pending arc.
@@ -3308,6 +4001,7 @@ final class EditorViewModel {
             return
         }
         cancelTransientPicks()
+        selectedImageID = nil
         // Sketch-on-face: a selected planar face IS the sketch plane
         // (spec §2.3); read it before cancelTool clears the context.
         if case .faceSelected = mode, let plane = toolContext?.plane {
@@ -3395,6 +4089,7 @@ final class EditorViewModel {
         commitPendingArc()
         clearChain()
         textPlacement = nil
+        pendingSymbolID = nil
         pendingEntity = nil
         sketchStrokeStart = nil
         adjustingArcBulge = false
@@ -3435,6 +4130,9 @@ final class EditorViewModel {
         sketchEntityDrag = nil
         if tool == .trim || tool == .text || tool == .project {
             return false // These tools work by taps; unclaimed drags orbit.
+        }
+        if pendingSymbolID != nil {
+            return false // Insert Symbol places by taps; drags orbit.
         }
 
         // A drag starting on the pending arc's midpoint adjusts its bulge.
@@ -3688,6 +4386,83 @@ final class EditorViewModel {
         ))
     }
 
+    // MARK: - Symbols (plan §B16, spec §1.16)
+
+    /// Presents the Make Symbol name prompt (palette button; alert lives in
+    /// EditorView).
+    var showMakeSymbolPrompt = false
+
+    /// Armed Insert Symbol: while non-nil, each sketch tap stamps an instance
+    /// of this symbol at the tapped plane point until Done/Esc exits.
+    var pendingSymbolID: SymbolID?
+
+    var pendingSymbol: Symbol? {
+        guard let id = pendingSymbolID else { return nil }
+        return session.document.symbols.first { $0.id == id }
+    }
+
+    var canMakeSymbol: Bool {
+        mode.isSketching && !selectedSketchEntityIDs.isEmpty
+    }
+
+    /// Capture the selected sketch entities as a named reusable symbol
+    /// (SymbolKit normalizes them about their centroid; one undo step).
+    func makeSymbol(named name: String) {
+        guard let sketch = activeSketch else { return }
+        let entities = sketch.entities.filter { selectedSketchEntityIDs.contains($0.id) }
+        guard !entities.isEmpty else { return }
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        let symbol = SymbolKit.capture(
+            name: trimmed.isEmpty ? session.document.uniqueSymbolName() : trimmed,
+            entities: entities
+        )
+        session.perform(AddSymbolCommand(symbol: symbol))
+    }
+
+    /// Arm tap-to-place for the symbol (sketching only).
+    func beginInsertSymbol(_ id: SymbolID) {
+        guard mode.isSketching else { return }
+        clearChain()
+        pendingEntity = nil
+        selectedSketchEntityIDs.removeAll()
+        pendingSymbolID = id
+    }
+
+    func cancelInsertSymbol() {
+        pendingSymbolID = nil
+    }
+
+    /// Armed tap: stamp one instance at the tapped (snapped) plane point —
+    /// fresh IDs, one undoable command per placement.
+    private func placePendingSymbol(ray: Ray) {
+        guard case .sketching(let sketchID, _) = mode,
+              let symbol = pendingSymbol,
+              let point = sketchPoint(from: ray)
+        else { return }
+        session.perform(AddSketchEntitiesCommand(
+            sketchID: sketchID,
+            entities: SymbolKit.instantiate(symbol, at: point),
+            title: "Insert Symbol"
+        ))
+    }
+
+    /// Items panel rename (no-ops on empty/unchanged names, like items).
+    func renameSymbol(_ id: SymbolID, to newName: String) {
+        let trimmed = newName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty,
+              let command = RenameSymbolCommand(id: id, to: trimmed, document: session.document),
+              command.before != trimmed
+        else { return }
+        session.perform(command)
+    }
+
+    /// Items panel delete (undoable; disarms a pending placement of it).
+    func deleteSymbol(_ id: SymbolID) {
+        if pendingSymbolID == id { pendingSymbolID = nil }
+        guard let command = RemoveSymbolCommand(id: id, document: session.document) else { return }
+        session.perform(command)
+    }
+
     // MARK: - Make Construction / Make Regular (plan §B9, spec §3.3)
 
     /// True when every selected sketch entity is construction geometry
@@ -3803,6 +4578,19 @@ final class EditorViewModel {
                 MeasurementRow(label: "Perimeter", value: Self.formatted(perimeter, unit: "mm")),
             ]
         case .selected(let id), .editingPrimitive(let id):
+            if selection.count > 1 {
+                // Multi-selection (plan §B13): count + combined world bounds.
+                let bodies = selection.compactMap { session.document.body(with: $0) }
+                guard let box = MeasureKit.boundingBox(bodies: bodies) else { return [] }
+                let size = box.max - box.min
+                return [
+                    MeasurementRow(label: "Selected", value: "\(bodies.count) bodies"),
+                    MeasurementRow(
+                        label: "Bounds",
+                        value: String(format: "%.2f × %.2f × %.2f mm", size.x, size.y, size.z)
+                    ),
+                ]
+            }
             guard let body = session.document.body(with: id),
                   let box = MeasureKit.boundingBox(bodies: [body])
             else { return [] }
@@ -3840,6 +4628,271 @@ final class EditorViewModel {
         String(format: "%.2f %@", value, unit)
     }
 
+    // MARK: - Insert Image (plan §B10, spec §6.3)
+
+    /// Selected inserted image; shows the gizmo + image bar while idle.
+    var selectedImageID: InsertedImageID?
+
+    /// Picked image bytes awaiting a plane tap (`.pickingImagePlane`).
+    var pendingImageData: Data?
+
+    /// New images size to this max dimension (mm), preserving aspect.
+    nonisolated static let insertedImageMaxDimension = 50.0
+
+    /// The selected image, while the editor is idle (other modes hide the
+    /// image gizmo/bar without dropping the selection).
+    var selectedImage: InsertedImage? {
+        guard mode == .idle, let id = selectedImageID else { return nil }
+        _ = session.changeCount
+        return session.document.images.first { $0.id == id }
+    }
+
+    /// Arm the plane pick for freshly picked image bytes (Photos or Files).
+    func beginInsertImage(data: Data) {
+        cancelTransientPicks()
+        cancelTool()
+        if case .sketching = mode { finishSketch() }
+        selection.removeAll()
+        selectedImageID = nil
+        pendingImageData = data
+        mode = .pickingImagePlane
+    }
+
+    func cancelImagePlanePick() {
+        pendingImageData = nil
+        if case .pickingImagePlane = mode {
+            mode = .idle
+        }
+    }
+
+    /// Tap routing while the image plane tiles are up: a tile hosts the
+    /// image; anywhere else defaults to the ground plane.
+    private func handleImagePlanePick(ray: Ray) {
+        guard let data = pendingImageData else {
+            mode = .idle
+            return
+        }
+        let tiles = PlanePicking.worldTiles + constructionPlaneTiles
+        let plane = PlanePicking.pick(ray: ray, tiles: tiles)?.tile.plane ?? .ground
+        pendingImageData = nil
+        insertImage(data: data, on: plane)
+    }
+
+    /// Width × height (mm) for a picture of the given pixel size, scaled so
+    /// the larger side is `maxDimension` with aspect preserved.
+    nonisolated static func insertedImageSize(
+        pixelWidth: Double, pixelHeight: Double,
+        maxDimension: Double = EditorViewModel.insertedImageMaxDimension
+    ) -> (width: Double, height: Double) {
+        guard pixelWidth > 0, pixelHeight > 0 else {
+            return (maxDimension, maxDimension)
+        }
+        let scale = maxDimension / max(pixelWidth, pixelHeight)
+        return (pixelWidth * scale, pixelHeight * scale)
+    }
+
+    /// Pixel size decoded from the encoded bytes (ImageIO), or nil when the
+    /// bytes are not a decodable picture.
+    nonisolated static func imagePixelSize(of data: Data) -> (width: Double, height: Double)? {
+        guard let source = CGImageSourceCreateWithData(data as CFData, nil),
+              let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil)
+                as? [CFString: Any],
+              let width = properties[kCGImagePropertyPixelWidth] as? Double,
+              let height = properties[kCGImagePropertyPixelHeight] as? Double
+        else { return nil }
+        return (width, height)
+    }
+
+    /// Place the picture on `plane` as an InsertedImage (~50 mm max
+    /// dimension, aspect preserved) and select it.
+    func insertImage(data: Data, on plane: SketchPlane) {
+        guard let pixels = Self.imagePixelSize(of: data) else {
+            mode = .idle
+            errorMessage = "Couldn't read the selected image."
+            return
+        }
+        let size = Self.insertedImageSize(pixelWidth: pixels.width, pixelHeight: pixels.height)
+        let image = InsertedImage(
+            name: session.document.uniqueImageName(),
+            plane: plane,
+            width: size.width,
+            height: size.height,
+            imageData: data
+        )
+        session.perform(AddImageCommand(image: image))
+        session.save()
+        selectedImageID = image.id
+        mode = .idle
+        cameraControl?.fitTo(bounds: Self.imageBounds(image))
+    }
+
+    /// World AABB of an image quad (zoom-to and post-insert framing).
+    nonisolated static func imageBounds(
+        _ image: InsertedImage
+    ) -> (min: SIMD3<Float>, max: SIMD3<Float>) {
+        let hw = image.width / 2
+        let hh = image.height / 2
+        let corners = [
+            SIMD2(-hw, -hh), SIMD2(hw, -hh), SIMD2(hw, hh), SIMD2(-hw, hh),
+        ].map { image.plane.toWorld($0) }
+        var lo = SIMD3<Float>(Float(corners[0].x), Float(corners[0].y), Float(corners[0].z))
+        var hi = lo
+        for corner in corners {
+            let p = SIMD3<Float>(Float(corner.x), Float(corner.y), Float(corner.z))
+            lo = simd_min(lo, p)
+            hi = simd_max(hi, p)
+        }
+        return (lo, hi)
+    }
+
+    /// Nearest visible image quad under the ray (tap routing).
+    private func imageHit(ray: Ray) -> (id: InsertedImageID, distance: Float)? {
+        var best: (id: InsertedImageID, distance: Float)?
+        for image in session.document.images where !image.isHidden {
+            let plane = image.plane
+            let origin = SIMD3<Float>(
+                Float(plane.origin.x), Float(plane.origin.y), Float(plane.origin.z)
+            )
+            let n = plane.normal
+            let normal = SIMD3<Float>(Float(n.x), Float(n.y), Float(n.z))
+            guard let t = ray.intersect(planePoint: origin, planeNormal: normal) else {
+                continue
+            }
+            let world = ray.point(at: t)
+            let local = plane.toLocal(SIMD3(Double(world.x), Double(world.y), Double(world.z)))
+            guard abs(local.x) <= image.width / 2, abs(local.y) <= image.height / 2 else {
+                continue
+            }
+            if best == nil || t < best!.distance {
+                best = (image.id, t)
+            }
+        }
+        return best
+    }
+
+    // MARK: Image editing (gizmo drag, size, opacity — UpdateImageCommand)
+
+    /// Image snapshot at the start of a coalesced interaction (gizmo drag or
+    /// opacity-slider scrub); the whole interaction is one undo step.
+    private var imageInteractionBaseline: InsertedImage?
+    /// True once the interaction pushed its command (later edits amend it).
+    private var imageInteractionPerformed = false
+
+    func beginImageInteraction() {
+        imageInteractionBaseline = selectedImage
+        imageInteractionPerformed = false
+    }
+
+    func endImageInteraction() {
+        guard imageInteractionBaseline != nil else { return }
+        imageInteractionBaseline = nil
+        imageInteractionPerformed = false
+        session.save()
+    }
+
+    /// Route an edited snapshot through UpdateImageCommand: inside an
+    /// interaction the first change performs and the rest amend-coalesce;
+    /// outside (typed field edits) each change is its own undo step.
+    private func commitImageEdit(_ after: InsertedImage, title: String) {
+        if let baseline = imageInteractionBaseline {
+            guard after != baseline else { return }
+            let command = UpdateImageCommand(before: baseline, after: after, title: title)
+            if imageInteractionPerformed {
+                session.amend(command)
+            } else {
+                session.perform(command)
+                imageInteractionPerformed = true
+            }
+        } else if let current = selectedImage, after != current {
+            session.perform(UpdateImageCommand(before: current, after: after, title: title))
+            session.save()
+        }
+    }
+
+    /// Gizmo drag: translate in-plane by the world delta's in-plane component.
+    private func updateImageMove(delta: SIMD3<Float>) {
+        guard let baseline = imageInteractionBaseline else { return }
+        let worldDelta = SIMD3<Double>(Double(delta.x), Double(delta.y), Double(delta.z))
+        let plane = baseline.plane
+        let du = simd_dot(worldDelta, plane.xAxis)
+        let dv = simd_dot(worldDelta, plane.yAxis)
+        var after = baseline
+        after.plane.origin = plane.origin + plane.xAxis * du + plane.yAxis * dv
+        commitImageEdit(after, title: "Move Image")
+    }
+
+    /// Copy badge on an image (spec §5.1 convention): the drag moves a clone.
+    private func duplicateSelectedImageForDrag() {
+        guard let image = selectedImage else { return }
+        let clone = InsertedImage(
+            name: session.document.uniqueImageName(),
+            plane: image.plane,
+            width: image.width,
+            height: image.height,
+            opacity: image.opacity,
+            imageData: image.imageData
+        )
+        session.perform(AddImageCommand(image: clone))
+        selectedImageID = clone.id
+    }
+
+    /// Opacity slider (0…1); wrap scrubs in begin/endImageInteraction.
+    func setImageOpacity(_ value: Double) {
+        guard var after = imageInteractionBaseline ?? selectedImage else { return }
+        after.opacity = min(max(value, 0), 1)
+        commitImageEdit(after, title: "Image Opacity")
+    }
+
+    /// Size field: rescale so the larger side is `value` mm, keeping aspect.
+    func setImageMaxDimension(_ value: Double) {
+        guard let current = selectedImage, value > 0.01 else { return }
+        let size = Self.insertedImageSize(
+            pixelWidth: current.width, pixelHeight: current.height, maxDimension: value
+        )
+        var after = current
+        after.width = size.width
+        after.height = size.height
+        commitImageEdit(after, title: "Resize Image")
+    }
+
+    /// Row tap in the Items panel: select the image (idle-mode gizmo + bar).
+    func selectImageItem(_ id: InsertedImageID) {
+        guard session.document.imageIndex(of: id) != nil else { return }
+        if case .sketching = mode { finishSketch() }
+        cancelTransientPicks()
+        cancelTool()
+        selection.removeAll()
+        selectedImageID = id
+        mode = .idle
+    }
+
+    func setImageHidden(_ id: InsertedImageID, hidden: Bool) {
+        session.perform(SetItemVisibilityCommand(imageID: id, isHidden: hidden))
+    }
+
+    func renameImage(_ id: InsertedImageID, to newName: String) {
+        let trimmed = newName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let current = session.document.images.first(where: { $0.id == id })?.name,
+              !trimmed.isEmpty, trimmed != current
+        else { return }
+        session.perform(RenameItemCommand(imageID: id, before: current, after: trimmed))
+    }
+
+    func deleteImage(_ id: InsertedImageID) {
+        guard let command = RemoveImageCommand(id: id, document: session.document) else { return }
+        endImageInteraction()
+        session.perform(command)
+        if selectedImageID == id {
+            selectedImageID = nil
+        }
+        session.save()
+    }
+
+    func zoomToImage(_ id: InsertedImageID) {
+        guard let image = session.document.images.first(where: { $0.id == id }) else { return }
+        cameraControl?.fitTo(bounds: Self.imageBounds(image))
+    }
+
     // MARK: - Items Manager (spec §11)
 
     /// Body row tap: select the body (primitive rows open dimension editing).
@@ -3848,6 +4901,7 @@ final class EditorViewModel {
         if case .sketching = mode { finishSketch() }
         cancelTransientPicks()
         cancelTool()
+        selectedImageID = nil
         selection = [id]
         mode = body.primitive != nil ? .editingPrimitive(id) : .selected(id)
     }
@@ -3860,6 +4914,7 @@ final class EditorViewModel {
         if case .sketching = mode { finishSketch() }
         cancelTransientPicks()
         cancelTool()
+        selectedImageID = nil
         selection.removeAll()
         mode = .sketching(id, tool: .line)
         cameraControl?.moveCameraHeadOn(to: sketch.plane)
@@ -3960,20 +5015,38 @@ final class EditorViewModel {
         return (lo, hi)
     }
 
+    /// 32×24 four-quadrant test PNG for the OS3D_DEBUG_SEED_IMAGE hook —
+    /// generated bytes, decodable by ImageIO, tiny enough to inline.
+    nonisolated static let debugSeedImagePNG = Data(base64Encoded: [
+        "iVBORw0KGgoAAAANSUhEUgAAACAAAAAYCAIAAAAUMWhjAAAANElEQVR42mN4VqFBEtKoeEYSYhi1",
+        "YNSCUQtGLSDCAo0tUSShDydsSEKjFoxaMGrBqAVEIABHmai9SdsP8AAAAABJRU5ErkJggg==",
+    ].joined()) ?? Data()
+
     /// Debug hook (OS3D_DEBUG_SEED): seed and select a box so automated
     /// screenshots can exercise selection/gizmo states.
     func debugSeedIfRequested() {
+        // OS3D_DEBUG_SEED_IMAGE (plan §B10 UI tests): seed a reference image
+        // on the ground plane so the insert flow is testable without the
+        // Photos/Files pickers. Left unselected — tests exercise tap-select.
+        if ProcessInfo.processInfo.environment["OS3D_DEBUG_SEED_IMAGE"] != nil,
+           session.document.images.isEmpty {
+            insertImage(data: Self.debugSeedImagePNG, on: .ground)
+            selectedImageID = nil
+        }
         guard ProcessInfo.processInfo.environment["OS3D_DEBUG_SEED"] != nil,
               session.document.bodies.isEmpty
         else { return }
         var document = session.document
-        let body = Body(
+        var body = Body(
             name: document.uniqueBodyName(base: "Box"),
             transform: .identity,
             primitive: .box(width: 4, depth: 4, height: 4),
             euclidMesh: .primitive(.box(width: 4, depth: 4, height: 4)),
             revision: document.nextRevision()
         )
+        // Seeded screenshots carry the default material explicitly (plan
+        // §B15) — value-identical to the legacy look.
+        body.material = .default
         session.perform(AddBodyCommand(body: body))
         selection = [body.id]
         mode = .editingPrimitive(body.id)

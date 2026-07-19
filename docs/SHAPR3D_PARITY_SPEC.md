@@ -326,7 +326,16 @@ the palette Delete removes the selection as one undoable
 
 **Spec:** A special sketch object: a collection of sketch elements holding
 their relative shape, placed and reused as a unit.
-**Status:** ❌ not implemented.
+**Status:** 🟡 partial — palette "Symbol" captures the selected sketch
+entities as a named symbol (name prompt; entities are normalized about the
+group centroid, `SymbolKit.capture`), and "Insert" lists the document's
+symbols — choosing one arms tap-to-place, each tap stamping one transformed
+instance into the sketch as a single undoable command
+(`SymbolKit.instantiate` → `AddSketchEntitiesCommand`). Symbols persist and
+list/rename/delete in the
+Items Manager. Missing: rotate/scale during placement, editing a symbol
+definition after capture, rigid instances under constraint edits (no
+solver).
 **Feasibility:** [mesh-kernel OK] (grouping/instancing is app code); keeping
 instances rigid under constraint edits [needs constraint solver]
 
@@ -1093,7 +1102,16 @@ tracing; align to a plane; calibrate scale against a dimensioned sketch line
 using Move + Scale with a re-anchored center. Formats: PNG, JPG, single-page
 PDF, TIFF, BMP, ICO, RAW, GIF (static). Images can also be splitting tools for
 Split Body.
-**Status:** ❌ not implemented.
+**Status:** 🟡 partial — toolbar Import → "Image from Photos…" / "Image from
+Files…" (PNG/JPEG): the picked picture arms a plane pick (world/construction
+tiles; anywhere else defaults to ground) and lands as a textured quad sized
+to ~50 mm max dimension with aspect preserved (`InsertedImage`, persisted).
+Tapping the quad selects it: move gizmo plus an image bar with an Opacity
+slider, size field (aspect-preserving), Done and Delete; images list in the
+Items Manager with rename/visibility/delete and full undo
+(`Add/Update/RemoveImageCommand`). Missing: rotation on the plane, camera
+capture, PDF/TIFF/BMP/ICO/RAW/GIF, calibrate-against-dimension flow, and
+images as Split Body cutters.
 **Feasibility:** [mesh-kernel OK] (textured quad + renderer work)
 
 ### 6.4 Insert File (import into project)
@@ -1204,10 +1222,11 @@ horizon level" navigation toggle (Staircase tutorial).
 (Top/Bottom/Front/Back/Right/Left) plus Isometric (`StandardView`,
 `applyStandardView`, animated through `CameraAnimator`) and an
 **Orthographic** projection toggle (`CameraProjection.orthographic` branch
-in `TurntableCamera.projectionMatrix`). Missing: saved views, Nearest Ortho
-View, grid-position setting, the FOV slider (toggle only), Appearance tab
-(2-finger rotation, hidden edges, shaders, surface analysis), view
-shortcuts.
+in `TurntableCamera.projectionMatrix`); the same menu hosts the Display
+shader submenu + Show Hidden Edges (§16.4), Ground Shadow (§14), Isolate
+(§16.2), and Section (§16.1) entries. Missing: saved views, Nearest Ortho
+View, grid-position setting, the FOV slider (toggle only), 2-finger
+rotation option, surface analysis, view shortcuts.
 **Feasibility:** [mesh-kernel OK]
 
 ### 7.4 Grid & units
@@ -1259,7 +1278,15 @@ jump-into-sketch-on-tap from 3D.
 active, Tab cycles selection filters, or keys B (bodies) / F (faces) /
 E (edges); after a drag-select Tab reveals a slider to limit the selection.
 Long-tap then drag = area select on touch.
-**Status:** ❌ not implemented.
+**Status:** 🟡 partial — a palette Select mode: one-finger drags draw the
+marquee (camera orbit is suspended), left→right = window (solid rect, fully
+inside only), right→left = crossing (dashed rect, touched selects) —
+`AreaSelect` implements the membership rules over projected mesh vertices /
+tessellated sketch points, skipping hidden items. The status pill carries
+Bodies/Sketches filter chips; the resulting multi-selection shows a count +
+combined-bounds info bar, palette Delete removes it in one command. Missing:
+faces/edges filters (B/F/E), Tab filter cycling, the post-drag limit slider,
+and long-tap-drag entry without the mode.
 **Feasibility:** [mesh-kernel OK]
 
 ### 8.3 Overlapping-item disambiguation & Select Through
@@ -1269,7 +1296,11 @@ them by name (hover highlights orange, parent sketch gets a thicker blue
 outline). "Select Through This Point" (context menu or Cmd+Shift+S) lists
 everything under the screen point through depth — faces, bodies, sketch
 profiles — for occluded selection; Shift + select-through adds to selection.
-**Status:** ❌ not implemented (`HitTester.pickBody` returns nearest hit only).
+**Status:** 🟡 partial — long-press in the viewport opens a "Select Through"
+popup listing every body under the point sorted by depth
+(`HitTester.pickAllBodies`); choosing one by name selects it and dismisses.
+Missing: faces/sketch profiles in the list, hover highlighting, additive
+Shift + select-through, Cmd+Shift+S.
 **Feasibility:** [mesh-kernel OK]
 
 ### 8.4 Keyboard shortcuts, hotkeys, Command Search
@@ -1433,14 +1464,15 @@ organize, nested folders. "Reveal in Items" from the modeling space highlights
 the item's row. Three-dots menu: Show Hidden Items, Invert All Item
 Visibility. Names are shared with History (rename in one place updates both).
 **Status:** 🟡 partial — an Items panel (toolbar "Items" button,
-`ItemsPanelView`) lists bodies, sketches, and construction planes with type
-icons; per row: visibility eye (`SetItemVisibilityCommand`), inline rename
-(`RenameItemCommand`), delete, tap-to-select, and Zoom To (camera fit to the
-item's AABB). Extrude auto-hides the consumed sketch, and re-opening a
-hidden sketch for editing un-hides it. `isHidden` persists. Missing:
-folders, filter dropdown, multi-select, image rows/opacity, Reveal in
-Items, Show Hidden Items / Invert Visibility menu, shared names with
-History (no history engine).
+`ItemsPanelView`) lists bodies, sketches, construction planes, **images**,
+and **symbols** with type icons; per row: visibility eye
+(`SetItemVisibilityCommand`), inline rename (`RenameItemCommand`), delete,
+tap-to-select, and Zoom To (camera fit to the item's AABB). Extrude
+auto-hides the consumed sketch, and re-opening a hidden sketch for editing
+un-hides it. `isHidden` persists. Missing: folders, filter dropdown,
+multi-select, per-row image opacity percentage (opacity edits live in the
+image bar), Reveal in Items, Show Hidden Items / Invert Visibility menu,
+shared names with History (no history engine).
 **Feasibility:** [mesh-kernel OK]
 
 ---
@@ -1460,11 +1492,14 @@ Import Planar Curves as Sketches. .shapr imports keep editable per-feature
 history; all other formats arrive as a single Import history step. STEP
 assembly hierarchy → nested folders. Mesh rules: booleans work only on closed
 mesh bodies; any boolean involving a mesh yields a mesh.
-**Status:** 🟡 partial — STL import only: toolbar Import menu → file picker →
-binary or ASCII STL parsed and welded into a solid mesh body
-(`STLImporter` → `EuclidBridge` weld path → `AddBodyCommand`); imported
-bodies boolean like any native body (everything is a mesh here). Missing:
-every other format, unit options UI, import preferences, assembly folders.
+**Status:** 🟡 partial — toolbar Import menu: STL (binary or ASCII, parsed
+and welded into a solid mesh body — `STLImporter` → `EuclidBridge` weld path
+→ `AddBodyCommand`; imported bodies boolean like any native body since
+everything is a mesh here), DXF (R12/R2000-common subset — LINE, CIRCLE,
+ARC, LW/POLYLINE — landing in a ground-plane sketch as one undo step,
+`DXFKit.importDXF`), and reference images (PNG/JPEG via Photos or
+Files, §6.3). Missing: every other format, unit options UI, import
+preferences, assembly folders.
 **Feasibility:** STL/OBJ/3MF/DXF [mesh-kernel OK]; STEP/IGES
 [needs B-rep kernel] (OpenCASCADE); X_T/X_B, SLDPRT/SLDASM, CATIA/NX/Creo/
 Solid Edge/JT — commercial-licensed formats, see IMPLEMENTATION_PLAN;
@@ -1485,12 +1520,17 @@ unitless so the unit is declared at export). Favorite formats (star) persist;
 batch export multiple formats; isolated parts exportable in any type except
 .shapr. Screenshot tool: grid on/off, transparency, body edges, item chooser,
 resolution Actual/Double/FullHD/4K/8K, remembers settings, clipboard shortcut.
-**Status:** 🟡 partial — STL (binary, `STLExporter`), OBJ (`OBJExporter`),
-and 3MF (`ThreeMFExporter`, zip + XML) export of the design via the toolbar
-Export menu (1 unit = 1 mm), plus a **PNG screenshot** entry with an options
-sheet: resolution multiplier, transparent background, and grid on/off
-(offscreen renderer capture). Missing: all other formats, unit options,
-hidden-item filtering, per-item files, favorites/batch, slicer hand-off.
+**Status:** 🟡 partial — toolbar Export menu (1 unit = 1 mm): STL (binary,
+`STLExporter`), OBJ (`OBJExporter`), 3MF (`ThreeMFExporter`, zip + XML),
+**GLB** (`GLBExporter`, glTF 2.0 binary, one node/mesh per body), **USDZ**
+via ModelIO where the platform can write it (`USDZExporter`; the menu entry
+is hidden elsewhere, never faked), and **DXF** of the active/ground sketch
+(`DXFKit`, R12 ASCII). OBJ and GLB open an options sheet with a "Separate
+File per Body" split (per-item files). Plus a **PNG screenshot** entry with
+an options sheet: resolution multiplier, transparent background, and grid
+on/off (offscreen renderer capture). Missing: SHAPR/X_T/STEP/IGES, DWG/SVG/
+PDF, unit options, hidden-item filtering, vertex colors, favorites/batch,
+slicer hand-off.
 **Feasibility:** OBJ/3MF/GLB/USDZ/PNG [mesh-kernel OK]; STEP/IGES
 [needs B-rep kernel]; X_T/X_B commercial; DWG via licensed libs (DXF/SVG
 [mesh-kernel OK])
@@ -1557,7 +1597,10 @@ Augmented Reality"): camera placement, move/scale gestures, Object tab,
 shutter capture to gallery. Published-Version links open in AR on phones (QR
 hand-off from desktop). Third-party via USDZ (Quick Look) or 3MF (no
 materials). Vision Pro immersive review is Enterprise-only.
-**Status:** ❌ not implemented.
+**Status:** 🟡 partial — "AR Preview" in the Export menu writes a temp USDZ
+and presents it in QuickLook's AR viewer (`ARQuickLookView`), on platforms
+where ModelIO can write USDZ (entry hidden elsewhere). Missing: in-app AR
+placement/capture UI, shared-link AR, Vision Pro.
 **Feasibility:** USDZ + QuickLook AR [mesh-kernel OK] (ModelIO/RealityKit);
 shared-link AR [platform/service]
 
@@ -1596,8 +1639,16 @@ View, Aperture, Blur Intensity (depth of field). **Sharing:** Capture tool
 (clean high-res image, no grid/UI), textured USDZ export, AR button,
 Generative Render (AI enhancement of a capture; prompt → Generate → Save;
 plan-gated, daily limit, requires Sync).
-**Status:** ❌ not implemented — single Blinn-Phong "CAD look" only; no
-materials, spaces, or environments.
+**Status:** 🟡 partial (visualization-lite, no separate space) — a palette
+Material button on the selected body/multi-selection opens a Material sheet:
+a small preset library (Steel, Aluminum, Brass, Plastic Matte/Gloss, Rubber,
+Wood) plus a custom color picker and metallic/roughness sliders, applied per
+body as one undoable `SetMaterialCommand` and persisted
+(`BodyMaterialSpec`); the renderer blends the metallic/roughness factors
+into its Blinn-Phong shading, and a Views-menu **Ground Shadow** toggle
+draws cheap planar blob shadows. Missing: a real PBR/IBL pipeline,
+environments, per-FACE materials, decals, emission/glow, DoF, Capture,
+material search/library breadth, Generative Render.
 **Feasibility:** PBR space, materials, decals, environments, DoF, capture
 [mesh-kernel OK] (pure Metal renderer work); the material *library content*
 itself is an asset-sourcing problem; Generative Render [platform/service]
@@ -1656,7 +1707,14 @@ overlapping/interpenetrating bodies render RED while sectioned, and
 scrubbing the plane across the model serves as a collision-verification
 pass — the red disappears once clearance is achieved (Interference
 analysis; Wall Clock pt 2). Saved Views can store a section.
-**Status:** ❌ not implemented.
+**Status:** 🟡 partial — Views → Section arms a plane pick (world +
+construction plane tiles); the chosen plane clips the lit, edge, fill, and
+sketch-line shaders (`SectionPlaneState` → per-fragment discard), with a
+drag arrow to move the plane along its normal and Flip / Section Off
+badges (also mirrored in the Views menu). Cut faces are left OPEN (no cap
+fills), interior back faces render shaded. Missing: caps with per-body
+section colors, rotate/tilt handles, 2D Section View, Section Only,
+interference highlighting, sketch-on-datum while sectioned, Saved Views.
 **Feasibility:** [mesh-kernel OK] (clip plane + cap rendering in the Metal
 renderer)
 
@@ -1664,7 +1722,10 @@ renderer)
 
 **Spec:** Select item(s) → Isolate hides everything else; toggle off to
 restore. Also filters History to the isolated items.
-**Status:** ❌ not implemented.
+**Status:** 🟡 partial — Views → Isolate hides everything but the current
+selection (per-item hidden override, no document mutation); Exit Isolate
+restores the previous visibility. Missing: History filtering (no history
+engine).
 **Feasibility:** [mesh-kernel OK]
 
 ### 16.3 Measure
@@ -1696,9 +1757,14 @@ measurements, row-hover highlighting.
 shadows). Surface Analysis: Zebra (continuity, Direction H/V, Scale),
 Curvature Map (color gradient, Scale). Options: Show Edges, Show Hidden Edges
 (see and select occluded edges).
-**Status:** 🟡 partial — one fixed mode ≈ "Shaded + Show Edges" (Blinn-Phong +
-feature-edge pass with depth bias, MSAA 4x). No mode switching, no X-Ray/
-wireframe/analysis/hidden-edges.
+**Status:** 🟡 partial — a Views → Display submenu (labeled with the active
+shader) switches between **Shaded** (lit fill + feature edges, the
+default), **Shaded (No Edges)**, **Wireframe** (feature edges over a
+depth-only prepass so hidden lines stay hidden), and **X-Ray** (translucent
+fill, depth-read/no-write), plus a **Show Hidden Edges** toggle (extra
+low-alpha edge pass with a reversed depth test — occluded edges render
+faintly). Bodies stay selectable in every mode. Missing: Visualized mode,
+Zebra/Curvature surface analysis.
 **Feasibility:** [mesh-kernel OK]
 
 ---
@@ -1765,31 +1831,32 @@ running totals, unit suffixes, labels on gizmo arrows and sketch elements.
 
 | Area | ✅ | 🟡 | ❌ |
 |---|---|---|---|
-| Sketch menu (17) | 2 (Trim, Delete) | 7 (Line, Rectangle, Circle, Arc, Ellipse, Polygon, Move/Rotate) | 8 |
+| Sketch menu (17) | 2 (Trim, Delete) | 13 (Line, Arc, Rectangle, Circle, Ellipse, Polygon, Offset Edge, Move/Rotate, Pattern, Text, Project, Symbol, Helix) | 2 (auto pen mode, Spline) |
 | Sketch controls (7) | 0 | 3 (planes, snapping, notable points) | 4 |
-| Constraints (14: menu, settings, 11 types, make-construction) | 0 | 0 | 14 |
-| Tools menu (16) | 0 | 6 (Extrude, Offset Face, Union, Subtract, Intersect, Revolve) | 10 |
-| Transform (7) | 0 | 3 (Move/Rotate gizmo, Scale, Mirror) | 4 |
-| Insert/Construct (6) | 0 | 1 (Offset construction plane) | 5 |
+| Constraints (14: menu, settings, 11 types, make-construction) | 1 (Make Construction) | 0 | 13 |
+| Tools menu (16) | 0 | 9 (Extrude, Offset Face, Loft, Union, Subtract, Intersect, Split, Revolve, Sweep) | 7 |
+| Transform (7) | 0 | 7 (all: gizmo, Translate, Rotate Around Axis, Scale, Align, Mirror, Pattern) | 0 |
+| Insert/Construct (6) | 0 | 2 (Offset construction plane, Insert Image) | 4 |
 | Navigation & views (5) | 0 | 4 (camera, Orientation Cube, views panel, grid) | 1 (peripherals) |
-| Selection & gestures (4) | 0 | 1 | 3 |
+| Selection & gestures (4) | 0 | 3 (core selection, area select, Select Through) | 1 (keyboard/Command Search) |
 | Adaptive UI (2) | 0 | 2 | 0 |
 | History & parametrics (3) | 0 | 2 (direct modeling, Undo/Redo) | 1 |
 | Items Manager (1) | 0 | 1 | 0 |
-| Import/Export (2) | 0 | 2 (STL import; STL/OBJ/3MF/PNG export) | 0 |
-| Projects/Sync/Collab (5) | 0 | 1 (local gallery) | 4 |
-| Visualization (1) | 0 | 0 | 1 |
+| Import/Export (2) | 0 | 2 (STL/DXF/image import; STL/OBJ/3MF/GLB/USDZ/DXF/PNG export) | 0 |
+| Projects/Sync/Collab (5) | 0 | 2 (local gallery, AR Quick Look preview) | 3 |
+| Visualization (1) | 0 | 1 (materials-lite, ground shadow) | 0 |
 | Drawings (1) | 0 | 0 | 1 |
-| Modes & display (4) | 0 | 2 (Measure, display modes) | 2 |
+| Modes & display (4) | 0 | 4 (Section, Isolate, Measure, display modes) | 0 |
 | Settings (1) | 0 | 0 | 1 |
 | Numeric input (1) | 0 | 1 | 0 |
-| **Total (97)** | **2** | **36** | **59** |
+| **Total (97)** | **3** | **56** | **38** |
 
 (Counting caveats: §4.2's 🟡 rides the same code path as §4.1 — one behavior
 counted under two Tools-menu entries; §9.1 remains a borderline partial,
 flagged in its status note.)
 
 The center of gravity of the gap: (a) the constraint solver, (b) the history
-engine, (c) B-rep-only surface operations (fillet/chamfer/shell/offset), and
-(d) the remaining geometry breadth (splines, sweep, loft, split, patterns,
-text). See `IMPLEMENTATION_PLAN.md` for sequencing.
+engine, (c) B-rep-only surface operations (fillet/chamfer/shell/offset-face/
+replace-face), and (d) the remaining breadth: splines, construction axes,
+keyboard shortcuts + Command Search, drawings, settings, and the
+sync/sharing services. See `IMPLEMENTATION_PLAN.md` for sequencing.

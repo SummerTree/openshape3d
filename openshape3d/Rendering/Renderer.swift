@@ -20,6 +20,7 @@ final class Renderer: NSObject, MTKViewDelegate {
     var scene = ViewportScene()
 
     private let cache = GPUResourceCache()
+    private let quadTextures = ImageQuadTextureCache()
     private let gizmoRenderer = GizmoRenderer()
     private let orientationCubeRenderer = OrientationCubeRenderer()
     private var viewportSize = CGSize(width: 1, height: 1)
@@ -64,10 +65,15 @@ final class Renderer: NSObject, MTKViewDelegate {
         }
 
         cache.sync(with: scene, device: context.device)
+        quadTextures.sync(quads: scene.imageQuads, device: context.device)
 
         var frame = makeFrameUniforms()
         encodeScene(encoder: encoder, frame: &frame)
         encoder.endEncoding()
+
+        // Overlays are never sectioned (they use the unclipped flat-color
+        // fragment shader, but keep the uniforms honest too).
+        frame.clipEnabled = 0
 
         // 6. Overlay pass: depth cleared so overlays draw on top.
         if let msaaColor {
@@ -142,6 +148,7 @@ final class Renderer: NSObject, MTKViewDelegate {
         drawGrid: Bool = true
     ) {
         let pipelines = context.pipelines
+        let mode = scene.displayMode
 
         // 1. Background gradient
         if drawBackground {
@@ -152,20 +159,49 @@ final class Renderer: NSObject, MTKViewDelegate {
             encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
         }
 
-        // 2. Opaque bodies
+        // Frame uniforms for both stages up front; the fragment binding feeds
+        // the section clip test in the edge/fill/sketch shaders.
         encoder.setVertexBytes(&frame, length: MemoryLayout<FrameUniforms>.stride,
                                index: Int(BufferIndexFrameUniforms.rawValue))
-        encoder.setRenderPipelineState(pipelines.lit)
-        encoder.setDepthStencilState(pipelines.depthReadWrite)
-        for drawable in scene.bodies where !drawable.isTranslucent {
-            drawBody(drawable, encoder: encoder, pipeline: pipelines.lit)
+        encoder.setFragmentBytes(&frame, length: MemoryLayout<FrameUniforms>.stride,
+                                 index: Int(BufferIndexFrameUniforms.rawValue))
+
+        // 1b. Ground blob shadows, before any body fragments land.
+        if scene.groundShadow {
+            drawGroundShadows(encoder: encoder)
         }
 
-        // 3. Feature edges
-        encoder.setRenderPipelineState(pipelines.edge)
-        encoder.setDepthStencilState(pipelines.depthReadOnly)
-        for drawable in scene.bodies where !drawable.isTranslucent {
-            drawEdges(drawable, encoder: encoder)
+        // 2. Opaque bodies. Wireframe swaps the fill for a depth-only prepass
+        // so hidden lines stay hidden; x-ray defers every body to the
+        // translucent pass (6).
+        switch mode {
+        case .shaded, .shadedNoEdges:
+            encoder.setDepthStencilState(pipelines.depthReadWrite)
+            for drawable in scene.bodies where !drawable.isTranslucent {
+                drawBody(drawable, encoder: encoder, pipeline: pipelines.lit)
+            }
+        case .wireframe:
+            encoder.setDepthStencilState(pipelines.depthReadWrite)
+            for drawable in scene.bodies where !drawable.isTranslucent {
+                drawBody(drawable, encoder: encoder, pipeline: pipelines.depthOnly)
+            }
+        case .xray:
+            break
+        }
+
+        // 3. Feature edges (+ optional hidden-edge pass, reversed depth test)
+        if mode != .shadedNoEdges {
+            encoder.setRenderPipelineState(pipelines.edge)
+            encoder.setDepthStencilState(pipelines.depthReadOnly)
+            for drawable in scene.bodies where !drawable.isTranslucent {
+                drawEdges(drawable, encoder: encoder)
+            }
+            if scene.showHiddenEdges {
+                encoder.setDepthStencilState(pipelines.depthGreaterReadOnly)
+                for drawable in scene.bodies where !drawable.isTranslucent {
+                    drawEdges(drawable, encoder: encoder, alphaScale: 0.25)
+                }
+            }
         }
 
         // 4. Ground grid (blended, depth read only)
@@ -173,6 +209,11 @@ final class Renderer: NSObject, MTKViewDelegate {
             encoder.setRenderPipelineState(pipelines.grid)
             encoder.setDepthStencilState(pipelines.depthReadOnly)
             encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
+        }
+
+        // 4a. Image quads (Insert Image): blended, depth read, no depth write.
+        if !scene.imageQuads.isEmpty {
+            drawImageQuads(encoder: encoder)
         }
 
         // 4b. Closed-profile fills (edge pipeline reused for its depth bias so
@@ -221,10 +262,116 @@ final class Renderer: NSObject, MTKViewDelegate {
             }
         }
 
-        // 6. Translucent bodies (previews) last
-        for drawable in scene.bodies where drawable.isTranslucent {
+        // 6. Translucent bodies (previews) last; in x-ray every body renders
+        // here at a fixed low alpha (depth read, no write).
+        for drawable in scene.bodies where drawable.isTranslucent || mode == .xray {
             encoder.setDepthStencilState(pipelines.depthReadOnly)
-            drawBody(drawable, encoder: encoder, pipeline: pipelines.litBlended)
+            let xrayAlpha: Float? = (mode == .xray && !drawable.isTranslucent) ? 0.35 : nil
+            drawBody(drawable, encoder: encoder, pipeline: pipelines.litBlended,
+                     alphaOverride: xrayAlpha)
+        }
+    }
+
+    /// Insert-Image reference quads: textured, blended, both windings so the
+    /// image reads from either side (mirrored from the back, like paper).
+    private func drawImageQuads(encoder: MTLRenderCommandEncoder) {
+        encoder.setRenderPipelineState(context.pipelines.texturedQuad)
+        encoder.setDepthStencilState(context.pipelines.depthReadOnly)
+        for quad in scene.imageQuads {
+            guard let texture = quadTextures.texture(for: quad.id) else { continue }
+            let hx = quad.xAxis * (quad.width * 0.5)
+            let hy = quad.yAxis * (quad.height * 0.5)
+            let c0 = quad.origin - hx - hy // bottom-left
+            let c1 = quad.origin + hx - hy // bottom-right
+            let c2 = quad.origin + hx + hy // top-right
+            let c3 = quad.origin - hx + hy // top-left
+            let positions: [SIMD3<Float>] = [
+                c0, c1, c2, c0, c2, c3,
+                c0, c2, c1, c0, c3, c2,
+            ]
+            // Image v runs top-down: v=0 at the top edge (c3/c2).
+            let u0 = SIMD2<Float>(0, 1), u1 = SIMD2<Float>(1, 1)
+            let u2 = SIMD2<Float>(1, 0), u3 = SIMD2<Float>(0, 0)
+            let uvs: [SIMD2<Float>] = [
+                u0, u1, u2, u0, u2, u3,
+                u0, u2, u1, u0, u3, u2,
+            ]
+
+            var body = BodyUniforms()
+            body.modelMatrix = matrix_identity_float4x4
+            body.baseColor = SIMD4(1, 1, 1, max(0, min(1, quad.opacity)))
+            positions.withUnsafeBytes { raw in
+                encoder.setVertexBytes(raw.baseAddress!, length: raw.count,
+                                       index: Int(BufferIndexPositions.rawValue))
+            }
+            uvs.withUnsafeBytes { raw in
+                encoder.setVertexBytes(raw.baseAddress!, length: raw.count,
+                                       index: Int(BufferIndexTexcoords.rawValue))
+            }
+            encoder.setFragmentBytes(&body, length: MemoryLayout<BodyUniforms>.stride,
+                                     index: Int(BufferIndexBodyUniforms.rawValue))
+            encoder.setFragmentTexture(texture, index: 0)
+            encoder.drawPrimitives(type: .triangle, vertexStart: 0,
+                                   vertexCount: positions.count)
+        }
+    }
+
+    /// Cheap planar blob shadows (visualization v1): one soft dark ellipse on
+    /// the ground plane under each opaque body's AABB, fading as the body
+    /// lifts off the ground.
+    private func drawGroundShadows(encoder: MTLRenderCommandEncoder) {
+        encoder.setRenderPipelineState(context.pipelines.blobShadow)
+        encoder.setDepthStencilState(context.pipelines.depthReadOnly)
+        for drawable in scene.bodies where !drawable.isTranslucent {
+            let aabb = drawable.renderMesh.localAABB
+            var lo = SIMD3<Float>(.greatestFiniteMagnitude, .greatestFiniteMagnitude,
+                                  .greatestFiniteMagnitude)
+            var hi = -lo
+            for i in 0..<8 {
+                let corner = SIMD3<Float>(
+                    (i & 1) == 0 ? aabb.min.x : aabb.max.x,
+                    (i & 2) == 0 ? aabb.min.y : aabb.max.y,
+                    (i & 4) == 0 ? aabb.min.z : aabb.max.z
+                )
+                let world4 = drawable.modelMatrix * SIMD4(corner, 1)
+                let world = SIMD3(world4.x, world4.y, world4.z)
+                lo = simd_min(lo, world)
+                hi = simd_max(hi, world)
+            }
+            let rx = max((hi.x - lo.x) * 0.5, 1e-3) * 1.25
+            let rz = max((hi.z - lo.z) * 0.5, 1e-3) * 1.25
+            let cx = (lo.x + hi.x) * 0.5
+            let cz = (lo.z + hi.z) * 0.5
+            let lift = max(lo.y, 0)
+            let footprint = max(rx, rz)
+            // Slight lift above y=0 to dodge z-fighting with coplanar faces.
+            let y: Float = 0.002
+            let c0 = SIMD3<Float>(cx - rx, y, cz - rz)
+            let c1 = SIMD3<Float>(cx + rx, y, cz - rz)
+            let c2 = SIMD3<Float>(cx + rx, y, cz + rz)
+            let c3 = SIMD3<Float>(cx - rx, y, cz + rz)
+            let positions: [SIMD3<Float>] = [c0, c1, c2, c0, c2, c3]
+            let uvs: [SIMD2<Float>] = [
+                SIMD2(0, 0), SIMD2(1, 0), SIMD2(1, 1),
+                SIMD2(0, 0), SIMD2(1, 1), SIMD2(0, 1),
+            ]
+
+            var body = BodyUniforms()
+            body.modelMatrix = matrix_identity_float4x4
+            let strength: Float = 0.30 / (1 + lift / max(footprint, 1e-3))
+            body.baseColor = SIMD4(0.05, 0.06, 0.08, strength)
+            positions.withUnsafeBytes { raw in
+                encoder.setVertexBytes(raw.baseAddress!, length: raw.count,
+                                       index: Int(BufferIndexPositions.rawValue))
+            }
+            uvs.withUnsafeBytes { raw in
+                encoder.setVertexBytes(raw.baseAddress!, length: raw.count,
+                                       index: Int(BufferIndexTexcoords.rawValue))
+            }
+            encoder.setFragmentBytes(&body, length: MemoryLayout<BodyUniforms>.stride,
+                                     index: Int(BufferIndexBodyUniforms.rawValue))
+            encoder.drawPrimitives(type: .triangle, vertexStart: 0,
+                                   vertexCount: positions.count)
         }
     }
 
@@ -292,6 +439,7 @@ final class Renderer: NSObject, MTKViewDelegate {
         }
 
         cache.sync(with: scene, device: context.device)
+        quadTextures.sync(quads: scene.imageQuads, device: context.device)
         var frame = makeFrameUniforms(viewportSize: CGSize(width: width, height: height))
         encodeScene(
             encoder: encoder,
@@ -339,11 +487,15 @@ final class Renderer: NSObject, MTKViewDelegate {
     private func drawBody(
         _ drawable: BodyDrawable,
         encoder: MTLRenderCommandEncoder,
-        pipeline: MTLRenderPipelineState
+        pipeline: MTLRenderPipelineState,
+        alphaOverride: Float? = nil
     ) {
         guard let resources = cache.resources(for: drawable.id) else { return }
         encoder.setRenderPipelineState(pipeline)
         var body = makeBodyUniforms(drawable)
+        if let alphaOverride {
+            body.baseColor.w = alphaOverride
+        }
         encoder.setVertexBuffer(resources.positionBuffer, offset: 0,
                                 index: Int(BufferIndexPositions.rawValue))
         encoder.setVertexBuffer(resources.normalBuffer, offset: 0,
@@ -364,7 +516,11 @@ final class Renderer: NSObject, MTKViewDelegate {
         )
     }
 
-    private func drawEdges(_ drawable: BodyDrawable, encoder: MTLRenderCommandEncoder) {
+    private func drawEdges(
+        _ drawable: BodyDrawable,
+        encoder: MTLRenderCommandEncoder,
+        alphaScale: Float = 1
+    ) {
         guard let resources = cache.resources(for: drawable.id),
               let edgeBuffer = resources.edgeVertexBuffer,
               resources.edgeVertexCount > 0
@@ -374,6 +530,7 @@ final class Renderer: NSObject, MTKViewDelegate {
         body.baseColor = selected
             ? makeFrameUniforms().accentColor
             : SIMD4(0.13, 0.15, 0.17, 1)
+        body.baseColor.w *= alphaScale
         encoder.setVertexBuffer(edgeBuffer, offset: 0, index: Int(BufferIndexPositions.rawValue))
         encoder.setVertexBytes(&body, length: MemoryLayout<BodyUniforms>.stride,
                                index: Int(BufferIndexBodyUniforms.rawValue))
@@ -409,6 +566,15 @@ final class Renderer: NSObject, MTKViewDelegate {
         frame.gridParams = SIMD4(1, 10, 120, 0)
         frame.gridCenter = SIMD4(camera.target.x, 0, camera.target.z, 0)
         frame.edgeDepthBiasNDC = 1e-4
+
+        // Section view: fragments beyond the plane are discarded (spec §16.1).
+        if let section = scene.sectionPlane, section.enabled {
+            let plane = section.clipVector
+            if plane != .zero {
+                frame.clipPlane = plane
+                frame.clipEnabled = 1
+            }
+        }
         return frame
     }
 
@@ -417,6 +583,13 @@ final class Renderer: NSObject, MTKViewDelegate {
         body.modelMatrix = drawable.modelMatrix
         body.baseColor = drawable.baseColor
         body.selectionState = drawable.selectionState
+        // Visualization-lite material: zero metallic/roughness (the C-struct
+        // default) keeps the legacy shading path in fragment_lit.
+        if let material = drawable.material {
+            body.baseColor = material.baseColor
+            body.metallic = material.metallic
+            body.roughness = material.roughness
+        }
         return body
     }
 }

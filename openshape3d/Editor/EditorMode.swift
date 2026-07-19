@@ -64,6 +64,13 @@ enum EditorMode: Equatable {
     case aligning
     /// Measure tool: taps pick notable points; two picks show a distance.
     case measuring
+    /// Section View armed (spec §16.1): the plane tiles are shown; tapping a
+    /// world/construction plane tile or a planar face sets the section plane.
+    case pickingSectionPlane
+    /// Insert Image (plan §B10, spec §6.3): picked image bytes are waiting in
+    /// `EditorViewModel.pendingImageData`; the plane tiles are shown, and the
+    /// tapped plane (ground when the tap misses every tile) hosts the image.
+    case pickingImagePlane
 
     var isSketching: Bool {
         if case .sketching = self { return true }

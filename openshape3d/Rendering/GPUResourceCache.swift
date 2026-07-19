@@ -8,7 +8,9 @@
 //
 
 import Foundation
+import ImageIO
 import Metal
+import MetalKit
 import simd
 
 final class BodyGPUResources {
@@ -75,4 +77,55 @@ final class GPUResourceCache {
     func resources(for id: BodyID) -> BodyGPUResources? {
         cache[id]
     }
+}
+
+/// Decoded MTLTextures for Insert-Image quads, keyed by quad ID and
+/// invalidated by textureRevision (same pattern as BodyGPUResources: images
+/// change at user-action rate, so a stale texture is simply re-decoded).
+/// Nonisolated: an isolated deinit is both unnecessary and currently trips a
+/// Swift-runtime malloc fault when the cache is deallocated under XCTest.
+nonisolated final class ImageQuadTextureCache {
+    private struct Entry {
+        let revision: UInt64
+        let texture: MTLTexture?
+    }
+
+    private var cache: [UUID: Entry] = [:]
+    private var loader: MTKTextureLoader?
+
+    func sync(quads: [ImageQuadDrawable], device: MTLDevice) {
+        var liveIDs = Set<UUID>()
+        for quad in quads {
+            liveIDs.insert(quad.id)
+            if let existing = cache[quad.id], existing.revision == quad.textureRevision {
+                continue
+            }
+            let loader = self.loader ?? MTKTextureLoader(device: device)
+            self.loader = loader
+            // Decode via ImageIO first — MTKTextureLoader's data path is not
+            // safe against undecodable bytes. Failed decodes are cached as
+            // nil so a bad image doesn't retry every frame.
+            var texture: MTLTexture?
+            if let source = CGImageSourceCreateWithData(quad.textureData as CFData, nil),
+               let image = CGImageSourceCreateImageAtIndex(source, 0, nil) {
+                // The viewport renders into a non-sRGB target, so load
+                // without sRGB conversion to keep image colors consistent
+                // with body colors.
+                texture = try? loader.newTexture(cgImage: image, options: [
+                    .SRGB: false,
+                    .textureUsage: MTLTextureUsage.shaderRead.rawValue,
+                    .textureStorageMode: MTLStorageMode.shared.rawValue,
+                ])
+            }
+            cache[quad.id] = Entry(revision: quad.textureRevision, texture: texture)
+        }
+        cache = cache.filter { liveIDs.contains($0.key) }
+    }
+
+    func texture(for id: UUID) -> MTLTexture? {
+        cache[id]?.texture
+    }
+
+    /// Live entries — test hook for revision/eviction behavior.
+    var entryCount: Int { cache.count }
 }

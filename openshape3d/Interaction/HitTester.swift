@@ -59,6 +59,47 @@ nonisolated enum HitTester {
         return best
     }
 
+    /// Select Through (plan §B13, spec §8.3): every body under the ray —
+    /// the nearest hit per body — sorted front→back by world distance.
+    static func pickAllBodies(ray: Ray, in scene: ViewportScene) -> [PickHit] {
+        var hits: [PickHit] = []
+        for drawable in scene.bodies where !drawable.isTranslucent {
+            let inverse = simd_inverse(drawable.modelMatrix)
+            let localRay = ray.transformed(by: inverse)
+            let aabb = drawable.renderMesh.localAABB
+            guard slabTest(ray: localRay, min: aabb.min, max: aabb.max) else { continue }
+
+            let mesh = drawable.renderMesh
+            var best: PickHit?
+            for triangle in 0..<mesh.triangleCount {
+                let i0 = Int(mesh.indices[triangle * 3])
+                let i1 = Int(mesh.indices[triangle * 3 + 1])
+                let i2 = Int(mesh.indices[triangle * 3 + 2])
+                if let tLocal = intersectTriangle(
+                    ray: localRay,
+                    v0: mesh.positions[i0], v1: mesh.positions[i1], v2: mesh.positions[i2]
+                ) {
+                    let localPoint = localRay.point(at: tLocal)
+                    let world4 = drawable.modelMatrix * SIMD4(localPoint, 1)
+                    let worldPoint = SIMD3(world4.x, world4.y, world4.z)
+                    let distance = simd_length(worldPoint - ray.origin)
+                    if best == nil || distance < best!.distance {
+                        best = PickHit(
+                            bodyID: drawable.id,
+                            distance: distance,
+                            worldPoint: worldPoint,
+                            triangleIndex: triangle
+                        )
+                    }
+                }
+            }
+            if let best {
+                hits.append(best)
+            }
+        }
+        return hits.sorted { $0.distance < $1.distance }
+    }
+
     // MARK: - Primitives
 
     static func slabTest(ray: Ray, min lo: SIMD3<Float>, max hi: SIMD3<Float>) -> Bool {

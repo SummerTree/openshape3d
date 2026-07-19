@@ -112,6 +112,8 @@ final class ViewportCoordinator: NSObject, ViewportGestureDelegate, ViewportCame
     private var pullActive = false
     /// A drag scrubbing the Rotate-Around-Axis angle (5° steps).
     private var rotateAxisDragActive = false
+    /// A drag moving the section plane along its normal (spec §16.1).
+    private var sectionDragActive = false
 
     func gestureTapped(at point: CGPoint) {
         // Orientation cube first: taps on it never reach the model.
@@ -147,10 +149,19 @@ final class ViewportCoordinator: NSObject, ViewportGestureDelegate, ViewportCame
         viewModel.handle(.doubleTap(ray: ray))
     }
 
+    /// A one-finger drag drawing the select-mode marquee (plan §B13).
+    private var marqueeActive = false
+
     func gestureDragBegan(at point: CGPoint) -> Bool {
         guard let ray = ray(at: point) else { return false }
         dragStartPoint = point
         pullActive = false
+
+        // Select mode: one-finger drags draw the marquee (spec §8.2).
+        if viewModel.beginMarquee(at: SIMD2(Double(point.x), Double(point.y))) {
+            marqueeActive = true
+            return true
+        }
 
         // Sketch mode: one-finger drags draw.
         if viewModel.mode.isSketching {
@@ -194,6 +205,18 @@ final class ViewportCoordinator: NSObject, ViewportGestureDelegate, ViewportCame
             return false
         }
 
+        // Choosing a section plane: taps pick, drags orbit.
+        if case .pickingSectionPlane = viewModel.mode {
+            return false
+        }
+
+        // Section View active: a drag starting on the pull arrow moves the
+        // plane along its normal (offset-plane pattern); elsewhere orbits.
+        if viewModel.beginSectionDrag(ray: ray) {
+            sectionDragActive = true
+            return true
+        }
+
         // Face selected: dragging the face pushes/pulls it.
         if case .faceSelected = viewModel.mode {
             pullActive = viewModel.beginFacePull(ray: ray)
@@ -223,6 +246,11 @@ final class ViewportCoordinator: NSObject, ViewportGestureDelegate, ViewportCame
     }
 
     func gestureDragChanged(at point: CGPoint) {
+        if marqueeActive {
+            // The marquee overlay is SwiftUI state — no Metal redraw needed.
+            viewModel.updateMarquee(to: SIMD2(Double(point.x), Double(point.y)))
+            return
+        }
         guard let ray = ray(at: point) else { return }
         if viewModel.mode.isSketching {
             viewModel.updateSketchStroke(ray: ray)
@@ -232,6 +260,12 @@ final class ViewportCoordinator: NSObject, ViewportGestureDelegate, ViewportCame
         if rotateAxisDragActive {
             let screenDelta = Double(dragStartPoint.y - point.y) * worldPerPoint
             viewModel.updateRotateAxisDrag(screenDeltaWorld: screenDelta)
+            sceneDidChange()
+            return
+        }
+        if sectionDragActive {
+            let screenDelta = Double(dragStartPoint.y - point.y) * worldPerPoint
+            viewModel.updateSectionDrag(ray: ray, screenDeltaWorld: screenDelta)
             sceneDidChange()
             return
         }
@@ -255,6 +289,15 @@ final class ViewportCoordinator: NSObject, ViewportGestureDelegate, ViewportCame
     }
 
     func gestureDragEnded(at point: CGPoint) {
+        if marqueeActive {
+            marqueeActive = false
+            viewModel.updateMarquee(to: SIMD2(Double(point.x), Double(point.y)))
+            viewModel.endMarquee { [weak self] world in
+                self?.worldToScreen(world)
+            }
+            sceneDidChange()
+            return
+        }
         if viewModel.mode.isSketching, let ray = ray(at: point) {
             viewModel.endSketchStroke(ray: ray)
             sceneDidChange()
@@ -263,6 +306,12 @@ final class ViewportCoordinator: NSObject, ViewportGestureDelegate, ViewportCame
         if rotateAxisDragActive {
             // Angle already applied live; commit happens via Apply/empty tap.
             rotateAxisDragActive = false
+            sceneDidChange()
+            return
+        }
+        if sectionDragActive {
+            sectionDragActive = false
+            viewModel.endSectionDrag()
             sceneDidChange()
             return
         }
@@ -276,6 +325,32 @@ final class ViewportCoordinator: NSObject, ViewportGestureDelegate, ViewportCame
         viewModel.gizmoHighlight = nil
         viewModel.endMove()
         sceneDidChange()
+    }
+
+    /// Long-press → Select Through popup (plan §B13, spec §8.3).
+    func gestureLongPressed(at point: CGPoint) {
+        guard let ray = ray(at: point) else { return }
+        viewModel.presentSelectThrough(ray: ray)
+    }
+
+    /// World→screen projection for AreaSelect membership tests; nil for
+    /// points behind the camera. Matches the renderer camera exactly (same
+    /// view/projection matrices, ortho included — clip.w stays 1 there).
+    private func worldToScreen(_ world: SIMD3<Float>) -> SIMD2<Double>? {
+        guard let renderer, let view else { return nil }
+        let size = view.bounds.size
+        guard size.width > 0, size.height > 0 else { return nil }
+        let camera = renderer.camera
+        let viewPoint = camera.viewMatrix * SIMD4(world, 1)
+        guard viewPoint.z < 0 else { return nil } // behind the camera
+        let aspect = Float(size.width / size.height)
+        let clip = camera.projectionMatrix(aspect: aspect) * viewPoint
+        guard clip.w > 1e-9 else { return nil }
+        let ndc = SIMD3(clip.x, clip.y, clip.z) / clip.w
+        return SIMD2(
+            (Double(ndc.x) + 1) / 2 * Double(size.width),
+            (1 - Double(ndc.y)) / 2 * Double(size.height)
+        )
     }
 
     // MARK: - ViewportCameraControl
