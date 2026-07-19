@@ -66,9 +66,11 @@ nonisolated enum ProfileDetector {
 
     static func detectProfiles(in sketch: Sketch) -> [Profile] {
         var profiles: [Profile] = []
+        // Construction (reference) geometry never bounds a profile (spec §3.3).
+        let entities = sketch.regularEntities
 
         // Circles are always closed profiles.
-        for entity in sketch.entities {
+        for entity in entities {
             if case let .circle(id, center, radius) = entity, radius > 1e-6 {
                 let loop = (0..<circleSegments).map { i -> SIMD2<Double> in
                     let angle = Double(i) / Double(circleSegments) * 2 * .pi
@@ -83,7 +85,7 @@ nonisolated enum ProfileDetector {
         }
 
         // Rects are closed by definition; emit directly (CCW).
-        for entity in sketch.entities {
+        for entity in entities {
             if case let .rect(id, lo, hi) = entity {
                 let loop = [
                     lo, SIMD2(hi.x, lo.y), hi, SIMD2(lo.x, hi.y),
@@ -93,7 +95,7 @@ nonisolated enum ProfileDetector {
         }
 
         // Ellipses and polygons are closed profiles too (loops CCW by construction).
-        for entity in sketch.entities {
+        for entity in entities {
             switch entity {
             case let .ellipse(id, center, radiusX, radiusY, rotation)
                 where radiusX > 1e-6 && radiusY > 1e-6:
@@ -154,7 +156,7 @@ nonisolated enum ProfileDetector {
         }
 
         var chains: [Chain] = []
-        for entity in sketch.entities {
+        for entity in sketch.regularEntities {
             switch entity {
             case let .line(id, a, b) where simd_length(b - a) > 1e-9:
                 chains.append(Chain(entityID: id, points: [a, b]))

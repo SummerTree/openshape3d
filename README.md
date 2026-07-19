@@ -7,7 +7,7 @@ built with SwiftUI, a **custom Metal renderer**, and the MIT-licensed
 ![Platform](https://img.shields.io/badge/platform-iPadOS%20%7C%20iOS-blue)
 ![Swift](https://img.shields.io/badge/Swift-5-orange)
 
-## Features (v0.3)
+## Features (v0.4)
 
 - **Sketch planes** — pick a world plane (XY/YZ/ZX tiles at the origin), tap
   any planar body face to sketch on it, or pull an **offset construction
@@ -22,6 +22,15 @@ built with SwiftUI, a **custom Metal renderer**, and the MIT-licensed
   entity body to edit (one coalesced undo step per drag), Delete, and
   **Trim**: tap a segment to remove the span between its nearest
   intersections (circles trim to arcs, rectangles explode into lines).
+  A **move/rotate gizmo** appears on sketch selections (double-tap selects
+  the whole connected chain, Copy chip drags duplicates), and **Make
+  Construction / Make Regular** toggles dashed reference geometry that is
+  excluded from profile fills and preferred as a revolve axis.
+- **Text & Project** — the Text tool places typed strings as glyph-outline
+  sketch profiles (content/height/font dialog) that fill and extrude like
+  any sketch; the Project tool flattens a tapped body's feature edges onto
+  the active sketch plane as editable, unlinked line entities (the CNC
+  flat-layout workflow).
 - **Sketch → Extrude, the Shapr3D way** — tap a fill for numeric extrude or
   pull it directly with a live preview; nested profiles become holes;
   additional fills join a multi-profile extrude. **Boolean badge**
@@ -31,6 +40,20 @@ built with SwiftUI, a **custom Metal renderer**, and the MIT-licensed
 - **Revolve** — select a profile fill, tap "Revolve", pick a sketch line or
   world axis, drag or type the angle (default 360°, partial wedges
   supported); commits through the same automatic-boolean pipeline.
+- **Sweep, Loft & Helix** — from an armed profile: **Sweep** chains tapped
+  sketch lines/arcs (across planes) into a spine with a live preview and
+  segment count; **Loft** collects profile fills as ordered sections
+  (coplanar-only section sets are rejected with guidance); **Helix** sweeps
+  the profile along a generated helical spine (radius/pitch/turns). All
+  three commit through the automatic-boolean pipeline.
+- **Split Body** — select a body, tap Split, then tap a world/construction
+  plane tile or a sketch profile fill; the body divides into two solids
+  named "<name> A" / "<name> B" in one undo step.
+- **Pattern** — linear (X/Y/Z axis + spacing) and circular (axis + total
+  angle, rotated instances) patterns of a selected body, or in-plane
+  patterns of an armed sketch profile, with translucent ghost previews;
+  count−1 copies commit as one undo step with suffixed names (Box 2,
+  Box 3, …).
 - **Face push/pull with automatic booleans** — tap a body to select the
   planar face under your finger (double-tap selects the whole body). Drag
   the face to extrude it: pulling away adds material (union), pushing into
@@ -39,8 +62,13 @@ built with SwiftUI, a **custom Metal renderer**, and the MIT-licensed
   (computed off the main thread, cancellable).
 - **Transform** — move gizmo with XYZ arrows, plane tiles, and **rotation
   rings**; tap an arrow to type an exact distance; **Copy badge** duplicates
-  the selection on the next drag; uniform **Scale** by factor; **Mirror**
-  a body across a world or construction plane.
+  the selection on the next drag; uniform **Scale** by factor (Copy badge,
+  empty-grid commit); **Mirror** a body across a world or construction
+  plane; **Translate** moves point-to-point over vertex/sketch/grid snaps;
+  **Rotate Around Axis** picks a sketch line or world axis, then drags in
+  5° steps or takes typed fine angles; **Align** mates a snap point on one
+  body onto a point on another. Every transform lands in undo under its
+  own title (Move/Scale/Rotate/Translate/Align).
 - **Views** — orientation cube in the corner (tap a face or corner to snap
   the view), Views menu with the six standard views + isometric, and an
   **orthographic** projection toggle. Shapr3D-style navigation (one finger
@@ -111,11 +139,11 @@ real flows (place → edit → move → sketch → extrude → subtract).
 
 ## Roadmap
 
-- Sweep, loft, split body, patterns, offset edge, text (Phase B)
+- Offset edge UI (kernel done), insert image, section view (Phase B, cont.)
 - Splines, constraints and dimensions (2D solver — Phase C)
 - Parametric history sidebar with editable steps (Phase D)
 - Fillets/chamfers, shell, STEP/IGES via a B-rep kernel (Phase E)
-- Section view, display modes, area select, keyboard shortcuts
+- Display modes, area select, keyboard shortcuts
 - Fat-line edge rendering, dark mode viewport theme
 - GLB/USDZ export, DXF import/export
 - Assembly-style grouping, materials

@@ -132,6 +132,7 @@ final class EditorViewModel {
             render: recentered,
             revision: document.nextRevision()
         )
+        cancelTransientPicks()
         session.perform(AddBodyCommand(body: body, title: "Import \(body.name)"))
         selection = [body.id]
         mode = .idle
@@ -226,6 +227,8 @@ final class EditorViewModel {
                     origin: SIMD3(Float(tip.x), Float(tip.y), Float(tip.z)),
                     direction: SIMD3(Float(n.x), Float(n.y), Float(n.z))
                 )
+            case .sweep, .loft:
+                break // no drag-editable parameter → no arrow
             }
         }
 
@@ -245,18 +248,41 @@ final class EditorViewModel {
         }()
         for sketch in session.document.sketches
         where !sketch.isHidden || sketch.id == activeSketchID {
+            // Construction (reference) entities render dashed (spec §3.3).
+            let construction = sketch.constructionEntityIDs
             let unselected = sketch.entities.filter { !selectedSketchEntityIDs.contains($0.id) }
             let batch = SketchLineBatch(
-                segments: SketchTessellator.segments(for: unselected, on: sketch.plane),
+                segments: SketchTessellator.segments(
+                    for: unselected.filter { !construction.contains($0.id) }, on: sketch.plane
+                ),
                 color: committedColor
             )
             if !batch.segments.isEmpty {
                 scene.sketchLines.append(batch)
             }
-            let selected = sketch.entities.filter { selectedSketchEntityIDs.contains($0.id) }
-            if !selected.isEmpty {
+            let constructionUnselected = unselected.filter { construction.contains($0.id) }
+            if !constructionUnselected.isEmpty {
                 scene.sketchLines.append(SketchLineBatch(
-                    segments: SketchTessellator.segments(for: selected, on: sketch.plane),
+                    segments: SketchTessellator.dashedSegments(
+                        for: constructionUnselected, on: sketch.plane
+                    ),
+                    color: committedColor
+                ))
+            }
+            let selected = sketch.entities.filter { selectedSketchEntityIDs.contains($0.id) }
+            let regularSelected = selected.filter { !construction.contains($0.id) }
+            if !regularSelected.isEmpty {
+                scene.sketchLines.append(SketchLineBatch(
+                    segments: SketchTessellator.segments(for: regularSelected, on: sketch.plane),
+                    color: selectedColor
+                ))
+            }
+            let constructionSelected = selected.filter { construction.contains($0.id) }
+            if !constructionSelected.isEmpty {
+                scene.sketchLines.append(SketchLineBatch(
+                    segments: SketchTessellator.dashedSegments(
+                        for: constructionSelected, on: sketch.plane
+                    ),
                     color: selectedColor
                 ))
             }
@@ -272,6 +298,51 @@ final class EditorViewModel {
                     segments: SketchTessellator.segments(for: pendings, on: sketch.plane),
                     color: pendingColor
                 ))
+            }
+            // Selection gizmo (plan §B6, spec §1.10): move handle at the
+            // selection centroid plus a rotate ring around it.
+            if let centroid = sketchSelectionCentroid {
+                scene.sketchLines.append(SketchLineBatch(
+                    segments: sketchGizmoSegments(centroid: centroid, plane: sketch.plane),
+                    color: selectedColor
+                ))
+            }
+        }
+
+        // Pattern ghost preview (plan §B5): translucent body instances, or
+        // accent-blue entity copies for sketch-profile patterns.
+        if case .patterning = mode, let state = patternState {
+            if let bodyID = state.bodyID,
+               let body = session.document.body(with: bodyID) {
+                for transform in patternTransforms(state).dropFirst() {
+                    scene.bodies.append(BodyDrawable(
+                        id: body.id,
+                        renderMesh: body.render,
+                        edges: body.edges,
+                        meshRevision: body.meshRevision,
+                        modelMatrix: Self.composedPatternTransform(
+                            transform, base: body.transform
+                        ).matrixFloat,
+                        baseColor: SIMD4(0.72, 0.74, 0.78, 1),
+                        selectionState: SelectionStatePreview.rawValue,
+                        isTranslucent: true
+                    ))
+                }
+            } else if let sketchID = state.sketchID,
+                      let sketch = session.document.sketches.first(where: { $0.id == sketchID }) {
+                let entities = sketch.entities.filter { state.entityIDs.contains($0.id) }
+                var ghosts: [SketchEntity] = []
+                for transform in sketchPatternTransforms(state).dropFirst() {
+                    for entity in entities {
+                        ghosts.append(contentsOf: PatternKit.transformed(entity, by: transform))
+                    }
+                }
+                if !ghosts.isEmpty {
+                    scene.sketchLines.append(SketchLineBatch(
+                        segments: SketchTessellator.segments(for: ghosts, on: sketch.plane),
+                        color: pendingColor
+                    ))
+                }
             }
         }
 
@@ -295,16 +366,28 @@ final class EditorViewModel {
             )
         }
 
-        // Plane pickers while a sketch tool waits for its plane.
-        if case .pickingSketchPlane = mode {
+        // Plane pickers while a sketch tool waits for its plane, or while the
+        // Split tool waits for a cutter plane.
+        switch mode {
+        case .pickingSketchPlane, .pickingSplitCutter:
             scene.planePickers = PlanePicking.worldTiles + constructionPlaneTiles
+        default:
+            break
         }
 
-        // Measure picks: cross markers at each picked point + the span line.
-        if case .measuring = mode, !measurePoints.isEmpty {
+        // Measure/Translate/Align picks: cross markers at each picked point
+        // (+ the span line for a completed measure).
+        let markerPoints: [SIMD3<Double>] = {
+            switch mode {
+            case .measuring: return measurePoints
+            case .translating, .aligning: return transformPickPoints
+            default: return []
+            }
+        }()
+        if !markerPoints.isEmpty {
             var segments: [SIMD3<Float>] = []
             let r = Float(max(0.12, 8 * worldPerPoint))
-            for p in measurePoints {
+            for p in markerPoints {
                 let c = SIMD3<Float>(Float(p.x), Float(p.y), Float(p.z))
                 segments += [
                     c - SIMD3(r, 0, 0), c + SIMD3(r, 0, 0),
@@ -528,22 +611,41 @@ final class EditorViewModel {
     /// True while the palette's Scale tool shows its factor field.
     var scaleEntryActive = false
 
+    /// Factor typed in the scale bar; an empty-grid tap commits it
+    /// (spec §5.4 "commit by tapping empty grid").
+    var scalePendingFactor: Double = 1
+
+    /// Copy badge on the scale bar (spec §5.4): committing scales a
+    /// duplicate, keeping the original.
+    var scaleCopyOnCommit = false
+
     func beginScaleEntry() {
         guard !selection.isEmpty else { return }
+        cancelTransientPicks()
         axisEntryPart = nil
+        scalePendingFactor = 1
+        scaleCopyOnCommit = false
         scaleEntryActive = true
     }
 
     func cancelScaleEntry() {
         scaleEntryActive = false
+        scaleCopyOnCommit = false
     }
 
     /// Multiply each selected body's uniform scale by `factor`. Transform3D
     /// scales about the translation point, so this is scale-about-pivot.
+    /// With the Copy badge on, scaled duplicates are added instead.
     func commitScale(factor: Double) {
         scaleEntryActive = false
+        let copy = scaleCopyOnCommit
+        scaleCopyOnCommit = false
         guard factor > 0.001 else {
             errorMessage = "Scale factor must be greater than 0.001."
+            return
+        }
+        if copy {
+            commitScaleCopy(factor: factor)
             return
         }
         guard abs(factor - 1) > 1e-9 else { return }
@@ -557,8 +659,369 @@ final class EditorViewModel {
             after[id] = transform
         }
         guard !after.isEmpty else { return }
-        session.perform(TransformBodiesCommand(before: before, after: after))
+        session.perform(TransformBodiesCommand(title: "Scale", before: before, after: after))
         session.save()
+    }
+
+    /// Copy badge: add scaled duplicates in one undo step (originals keep
+    /// their size); the copies become the selection.
+    private func commitScaleCopy(factor: Double) {
+        var document = session.document // local: unique names + revisions
+        var commands: [DocumentCommand] = []
+        var ids: Set<BodyID> = []
+        for id in selection {
+            guard let body = session.document.body(with: id) else { continue }
+            var transform = body.transform
+            transform.scale *= factor
+            var clone = Body(
+                id: BodyID(),
+                name: document.uniqueBodyName(base: body.name),
+                transform: transform,
+                primitive: body.primitive,
+                render: body.render,
+                revision: document.nextRevision()
+            )
+            clone.euclid = body.euclid
+            document.bodies.append(clone) // keeps the next name unique
+            commands.append(AddBodyCommand(body: clone, title: "Scale Copy"))
+            ids.insert(clone.id)
+        }
+        guard !commands.isEmpty else { return }
+        session.perform(commands.count == 1
+            ? commands[0]
+            : CompositeCommand(title: "Scale Copy", commands: commands))
+        selection = ids
+        if ids.count == 1, let id = ids.first {
+            mode = .selected(id)
+        }
+        session.save()
+    }
+
+    // MARK: - Rotate Around Axis (plan §B6, spec §5.3)
+
+    struct RotateAxisState {
+        /// World axis line; nil until picked (sketch line or world-axis
+        /// button).
+        var axisPoint: SIMD3<Double>?
+        var axisDirection: SIMD3<Double>?
+        var angleDegrees: Double = 0
+        /// Transforms when the tool opened (preview baseline + undo `before`).
+        var before: [BodyID: Transform3D]
+
+        var hasAxis: Bool { axisPoint != nil && axisDirection != nil }
+    }
+
+    var rotateAxisState: RotateAxisState?
+    /// Angle when the current scrub drag began (5°-snapped drags, spec §5.3).
+    private var rotateDragStartDegrees: Double = 0
+
+    func beginRotateAxisPick() {
+        guard !selection.isEmpty else { return }
+        cancelTransientPicks()
+        cancelTool()
+        axisEntryPart = nil
+        scaleEntryActive = false
+        var before = [BodyID: Transform3D]()
+        for id in selection {
+            if let body = session.document.body(with: id) {
+                before[id] = body.transform
+            }
+        }
+        guard !before.isEmpty else { return }
+        rotateAxisState = RotateAxisState(before: before)
+        mode = .rotatingAroundAxis
+    }
+
+    func cancelRotateAxis() {
+        if let state = rotateAxisState {
+            session.preview { document in
+                for (id, original) in state.before {
+                    if let index = document.bodyIndex(of: id) {
+                        document.bodies[index].transform = original
+                    }
+                }
+            }
+        }
+        rotateAxisState = nil
+        if case .rotatingAroundAxis = mode {
+            mode = .idle
+        }
+    }
+
+    /// World-axis button in the pill: the axis runs through the origin.
+    func setRotateWorldAxis(_ axis: PatternState.Axis) {
+        guard var state = rotateAxisState else { return }
+        state.axisPoint = .zero
+        state.axisDirection = axis.direction
+        rotateAxisState = state
+        applyRotateAxisPreview()
+    }
+
+    func setRotateAngle(_ degrees: Double) {
+        guard var state = rotateAxisState, state.hasAxis else { return }
+        state.angleDegrees = degrees
+        rotateAxisState = state
+        applyRotateAxisPreview()
+    }
+
+    private func applyRotateAxisPreview() {
+        guard let state = rotateAxisState,
+              let point = state.axisPoint,
+              let direction = state.axisDirection
+        else { return }
+        let radians: Double = state.angleDegrees * Double.pi / 180
+        session.preview { document in
+            for (id, original) in state.before {
+                if let index = document.bodyIndex(of: id) {
+                    document.bodies[index].transform = original.rotated(
+                        byRadians: radians, aboutAxisThrough: point, direction: direction
+                    )
+                }
+            }
+        }
+    }
+
+    /// Drag while the axis is set scrubs the angle in 5° steps.
+    func beginRotateAxisDrag() -> Bool {
+        guard let state = rotateAxisState, state.hasAxis else { return false }
+        rotateDragStartDegrees = state.angleDegrees
+        return true
+    }
+
+    func updateRotateAxisDrag(screenDeltaWorld: Double) {
+        guard rotateAxisState?.hasAxis == true else { return }
+        let raw = rotateDragStartDegrees + screenDeltaWorld * Self.revolveDegreesPerWorldUnit
+        setRotateAngle((raw / 5).rounded() * 5)
+    }
+
+    func commitRotateAxis() {
+        guard let state = rotateAxisState,
+              let point = state.axisPoint,
+              let direction = state.axisDirection,
+              abs(state.angleDegrees) > 1e-9
+        else {
+            cancelRotateAxis()
+            return
+        }
+        let radians: Double = state.angleDegrees * Double.pi / 180
+        var after = [BodyID: Transform3D]()
+        for (id, original) in state.before {
+            after[id] = original.rotated(
+                byRadians: radians, aboutAxisThrough: point, direction: direction
+            )
+        }
+        rotateAxisState = nil
+        session.perform(TransformBodiesCommand(title: "Rotate", before: state.before, after: after))
+        mode = .idle
+        session.save()
+    }
+
+    /// Tap while rotating: with no axis yet, a sketch LINE sets it; with the
+    /// axis set, tapping empty space commits (the shared grid convention).
+    private func handleRotateAxisTap(ray: Ray) {
+        guard let state = rotateAxisState else {
+            mode = .idle
+            return
+        }
+        if state.hasAxis {
+            commitRotateAxis()
+            return
+        }
+        guard let hit = nearestSketchLine(to: ray) else { return }
+        let a = hit.plane.toWorld(hit.a)
+        let direction = hit.plane.toWorld(hit.b) - a
+        guard simd_length(direction) > 1e-9 else { return }
+        var updated = state
+        updated.axisPoint = a
+        updated.axisDirection = simd_normalize(direction)
+        rotateAxisState = updated
+    }
+
+    /// Nearest LINE entity under the ray across visible sketches.
+    private func nearestSketchLine(
+        to ray: Ray
+    ) -> (a: SIMD2<Double>, b: SIMD2<Double>, plane: SketchPlane)? {
+        let tolerance = max(0.4, 16 * worldPerPoint)
+        var best: (a: SIMD2<Double>, b: SIMD2<Double>, plane: SketchPlane, distance: Double)?
+        for sketch in session.document.sketches where !sketch.isHidden {
+            guard let local = localPoint(of: ray, on: sketch.plane) else { continue }
+            for entity in sketch.entities {
+                guard case .line(_, let a, let b) = entity else { continue }
+                let d = Self.distanceToSegment(local, a: a, b: b)
+                if d <= tolerance, best == nil || d < best!.distance {
+                    best = (a, b, sketch.plane, d)
+                }
+            }
+        }
+        return best.map { ($0.a, $0.b, $0.plane) }
+    }
+
+    // MARK: - Translate (spec §5.2) & Align (spec §5.5 v1)
+
+    /// Source point picked so far for Translate/Align (marker + pill state).
+    var transformPickPoints: [SIMD3<Double>] = []
+    /// Body that moves in an Align (owner of the first tapped snap point).
+    private var alignSourceBody: BodyID?
+
+    func beginTranslatePick() {
+        guard !selection.isEmpty else { return }
+        cancelTransientPicks()
+        cancelTool()
+        axisEntryPart = nil
+        scaleEntryActive = false
+        transformPickPoints = []
+        mode = .translating
+    }
+
+    func cancelTranslate() {
+        transformPickPoints = []
+        if case .translating = mode {
+            mode = .idle
+        }
+    }
+
+    func beginAlignPick() {
+        guard session.document.bodies.count >= 2 else { return }
+        cancelTransientPicks()
+        cancelTool()
+        axisEntryPart = nil
+        scaleEntryActive = false
+        transformPickPoints = []
+        alignSourceBody = nil
+        selection.removeAll()
+        mode = .aligning
+    }
+
+    func cancelAlign() {
+        transformPickPoints = []
+        alignSourceBody = nil
+        if case .aligning = mode {
+            mode = .idle
+        }
+    }
+
+    /// Cancel every transient pick/preview mode (rotate-around-axis preview,
+    /// translate/align picks, pattern bar, split/boolean cutter picks). Each
+    /// cancel is a no-op outside its own mode, so this is safe to call from
+    /// any surface that takes over — palette tools, the Items panel, measure,
+    /// sketching, import. Notably reverts the rotate preview, which mutates
+    /// transforms outside the undo stack until committed.
+    private func cancelTransientPicks() {
+        cancelRotateAxis()
+        cancelTranslate()
+        cancelAlign()
+        cancelPattern()
+        cancelSplitCutterPick()
+        cancelBooleanPicking()
+    }
+
+    /// Translate: first tap picks the source snap point, second the
+    /// destination; the selection shifts by the exact delta.
+    private func handleTranslateTap(ray: Ray) {
+        guard let point = translateSnapPoint(to: ray) else { return }
+        if transformPickPoints.isEmpty {
+            transformPickPoints = [point]
+            return
+        }
+        let delta = point - transformPickPoints[0]
+        transformPickPoints = []
+        guard simd_length(delta) > 1e-9 else {
+            mode = .idle
+            return
+        }
+        var before = [BodyID: Transform3D]()
+        var after = [BodyID: Transform3D]()
+        for id in selection {
+            guard let body = session.document.body(with: id) else { continue }
+            before[id] = body.transform
+            var transform = body.transform
+            transform.translation += delta
+            after[id] = transform
+        }
+        guard !after.isEmpty else {
+            mode = .idle
+            return
+        }
+        session.perform(TransformBodiesCommand(title: "Translate", before: before, after: after))
+        if selection.count == 1, let id = selection.first {
+            mode = .selected(id)
+        } else {
+            mode = .idle
+        }
+        session.save()
+    }
+
+    /// Snap for Translate picks: notable points (vertices, sketch points)
+    /// first, then the ground-plane grid.
+    private func translateSnapPoint(to ray: Ray) -> SIMD3<Double>? {
+        if let notable = nearestNotablePoint(to: ray) { return notable }
+        guard let t = ray.intersect(planePoint: .zero, planeNormal: SIMD3(0, 1, 0)) else {
+            return nil
+        }
+        let world = ray.point(at: t)
+        let g = SnapEngine.gridSpacing
+        return SIMD3(
+            (Double(world.x) / g).rounded() * g,
+            0,
+            (Double(world.z) / g).rounded() * g
+        )
+    }
+
+    /// Align: tap a snap point on the body that moves, then the destination
+    /// point on another body; the first body translates so they coincide.
+    private func handleAlignTap(ray: Ray) {
+        if alignSourceBody == nil {
+            guard let hit = nearestBodyVertex(to: ray) else { return }
+            alignSourceBody = hit.bodyID
+            transformPickPoints = [hit.point]
+            return
+        }
+        guard let source = alignSourceBody,
+              let anchor = transformPickPoints.first,
+              let body = session.document.body(with: source)
+        else {
+            cancelAlign()
+            return
+        }
+        guard let hit = nearestBodyVertex(to: ray, excluding: source) else { return }
+        transformPickPoints = []
+        alignSourceBody = nil
+        let delta = hit.point - anchor
+        guard simd_length(delta) > 1e-9 else {
+            mode = .idle
+            return
+        }
+        var transform = body.transform
+        transform.translation += delta
+        session.perform(TransformBodiesCommand(
+            title: "Align", before: [source: body.transform], after: [source: transform]
+        ))
+        selection = [source]
+        mode = .selected(source)
+        session.save()
+    }
+
+    /// Nearest render vertex across visible bodies, with its owner
+    /// (Align's purple snap points, v1).
+    private func nearestBodyVertex(
+        to ray: Ray, excluding: BodyID? = nil
+    ) -> (point: SIMD3<Double>, bodyID: BodyID)? {
+        let tolerance = max(0.5, 30 * worldPerPoint)
+        var best: (point: SIMD3<Double>, bodyID: BodyID, distance: Double)?
+        for body in session.document.bodies
+        where !body.isHidden && body.id != excluding {
+            for position in body.render.positions {
+                let p = body.transform.applying(to: SIMD3<Double>(position))
+                let pf = SIMD3<Float>(Float(p.x), Float(p.y), Float(p.z))
+                let t = simd_dot(pf - ray.origin, ray.direction)
+                guard t > 0 else { continue }
+                let d = Double(simd_length(pf - ray.point(at: t)))
+                if d <= tolerance, best == nil || d < best!.distance {
+                    best = (p, body.id, d)
+                }
+            }
+        }
+        return best.map { ($0.point, $0.bodyID) }
     }
 
     // MARK: - Mirror (spec §5.6, Keep Original always on for v1)
@@ -579,6 +1042,7 @@ final class EditorViewModel {
 
     /// Mirror the selected body across `plane` into a new body.
     func mirrorSelection(across plane: SketchPlane) {
+        cancelTransientPicks()
         guard selection.count == 1, let id = selection.first,
               let body = session.document.body(with: id)
         else { return }
@@ -608,12 +1072,326 @@ final class EditorViewModel {
         session.save()
     }
 
+    // MARK: - Split Body (plan §B3, spec §4.9 v1: one plane or profile cutter)
+
+    /// "Split" in the palette: the next tap picks the cutter — a world or
+    /// construction plane tile, or a sketch profile fill.
+    func beginSplitCutterPick() {
+        guard selection.count == 1, let target = selection.first,
+              session.document.body(with: target) != nil
+        else { return }
+        cancelTransientPicks()
+        cancelTool()
+        mode = .pickingSplitCutter(target: target)
+    }
+
+    func cancelSplitCutterPick() {
+        if case .pickingSplitCutter = mode {
+            mode = .idle
+        }
+    }
+
+    /// Tap while the split pick is armed: plane tiles win over the body
+    /// (cutter planes usually pass through it), then profile fills. Taps that
+    /// miss every cutter keep the pick armed.
+    private func handleSplitCutterTap(target: BodyID, ray: Ray) {
+        guard let body = session.document.body(with: target) else {
+            mode = .idle
+            return
+        }
+        let world = body.euclidMesh().transformed(by: body.transform.euclid)
+        let tiles = PlanePicking.worldTiles + constructionPlaneTiles
+        if let hit = PlanePicking.pick(ray: ray, tiles: tiles) {
+            let halves = KernelOps.split(body: world, byPlane: hit.tile.plane)
+            performSplit(of: body, halves: (halves.kept, halves.other))
+            return
+        }
+        if let fill = profileHit(ray: ray) {
+            let halves = KernelOps.split(
+                body: world, byProfile: fill.profile, holes: fill.holes, in: fill.plane
+            )
+            performSplit(of: body, halves: (halves.inside, halves.outside))
+        }
+    }
+
+    /// Replace the body with the first half and add the second as a new body
+    /// (one undo step — Keep Originals is what undo restores); both halves
+    /// end up selected. Halves are named "<name> A" / "<name> B" so the Items
+    /// Manager shows where they came from.
+    private func performSplit(of body: Body, halves: (Euclid.Mesh, Euclid.Mesh)) {
+        guard !halves.0.polygons.isEmpty, !halves.1.polygons.isEmpty else {
+            errorMessage = "The cutter doesn't pass through the body — nothing to split."
+            return
+        }
+        var document = session.document // local: unique name + revision
+        // First half keeps the original pivot (like commitToolResult).
+        let pivotA = body.transform.translation
+        var transformA = Transform3D.identity
+        transformA.translation = pivotA
+        let first = Body(
+            id: body.id,
+            name: document.uniqueBodyName(base: "\(body.name) A"),
+            transform: transformA,
+            primitive: nil,
+            euclidMesh: halves.0.translated(by: Vector(-pivotA.x, -pivotA.y, -pivotA.z)),
+            revision: 0 // assigned by the command
+        )
+        // Second half pivots at its own bounds center.
+        let boundsB = halves.1.bounds
+        let pivotB = SIMD3(
+            (boundsB.min.x + boundsB.max.x) / 2,
+            (boundsB.min.y + boundsB.max.y) / 2,
+            (boundsB.min.z + boundsB.max.z) / 2
+        )
+        var transformB = Transform3D.identity
+        transformB.translation = pivotB
+        let second = Body(
+            name: document.uniqueBodyName(base: "\(body.name) B"),
+            transform: transformB,
+            primitive: nil,
+            euclidMesh: halves.1.translated(by: Vector(-pivotB.x, -pivotB.y, -pivotB.z)),
+            revision: document.nextRevision()
+        )
+        session.perform(CompositeCommand(title: "Split", commands: [
+            ReplaceBodyCommand(title: "Split", before: body, after: first),
+            AddBodyCommand(body: second, title: "Split"),
+        ]))
+        selection = [body.id, second.id]
+        mode = .idle
+        session.save()
+    }
+
+    // MARK: - Pattern (plan §B5, spec §5.7 bodies / §1.11 sketch profiles, v1)
+
+    struct PatternState {
+        enum Kind: String, CaseIterable {
+            case linear = "Linear"
+            case circular = "Circular"
+        }
+
+        enum Axis: String, CaseIterable {
+            case x = "X"
+            case y = "Y"
+            case z = "Z"
+
+            var direction: SIMD3<Double> {
+                switch self {
+                case .x: SIMD3(1, 0, 0)
+                case .y: SIMD3(0, 1, 0)
+                case .z: SIMD3(0, 0, 1)
+                }
+            }
+
+            /// In-plane direction for sketch patterns (Z folds onto X).
+            var sketchDirection: SIMD2<Double> {
+                self == .y ? SIMD2(0, 1) : SIMD2(1, 0)
+            }
+        }
+
+        var kind: Kind = .linear
+        var axis: Axis = .x
+        /// Total instances, original included.
+        var count = 3
+        /// Adjacent-center distance (linear).
+        var spacing = 6.0
+        /// First→last sweep in degrees (circular; 360 closes the ring).
+        var totalAngle = 360.0
+        /// Body being patterned; nil for a sketch-profile pattern.
+        var bodyID: BodyID?
+        /// Sketch-profile pattern (armed from extrude mode): source sketch
+        /// plus the profile's entities.
+        var sketchID: SketchID?
+        var entityIDs: Set<UUID> = []
+
+        var isSketchPattern: Bool { bodyID == nil }
+    }
+
+    var patternState: PatternState?
+
+    /// True when the palette Pattern action applies: one body selected, or a
+    /// sketch profile armed in the extrude tool.
+    var canBeginPattern: Bool {
+        if selection.count == 1 { return true }
+        if case .extruding = mode, let context = toolContext,
+           case .extrude = context.kind, context.sketchID != nil {
+            return true
+        }
+        return false
+    }
+
+    /// "Pattern" in the palette: opens the pattern bar for the selected body,
+    /// or — while a profile fill is armed for extrude — for the profile's
+    /// sketch entities (patterned in-plane, spec §1.11).
+    func beginPattern() {
+        cancelTransientPicks()
+        if case .extruding = mode, let context = toolContext,
+           case .extrude = context.kind, let sketchID = context.sketchID {
+            var ids = context.profile.sourceEntityIDs
+            for hole in context.holes {
+                ids.formUnion(hole.sourceEntityIDs)
+            }
+            guard !ids.isEmpty else { return }
+            cancelTool()
+            var state = PatternState()
+            state.sketchID = sketchID
+            state.entityIDs = ids
+            patternState = state
+            mode = .patterning
+            return
+        }
+        guard selection.count == 1, let id = selection.first,
+              session.document.body(with: id) != nil
+        else { return }
+        cancelTool()
+        var state = PatternState()
+        state.bodyID = id
+        patternState = state
+        mode = .patterning
+    }
+
+    func cancelPattern() {
+        patternState = nil
+        if case .patterning = mode {
+            mode = .idle
+        }
+    }
+
+    /// 3D instance transforms for the current parameters; the first is always
+    /// identity (the original). Circular patterns spin about the chosen world
+    /// axis through the origin in v1.
+    private func patternTransforms(_ state: PatternState) -> [Transform3D] {
+        switch state.kind {
+        case .linear:
+            return PatternKit.linearTransforms(
+                direction: state.axis.direction,
+                spacing: state.spacing,
+                count: max(1, state.count)
+            )
+        case .circular:
+            return PatternKit.circularTransforms(
+                center: .zero,
+                axis: state.axis.direction,
+                count: max(1, state.count),
+                totalAngle: state.totalAngle * .pi / 180,
+                rotateInstances: true
+            )
+        }
+    }
+
+    /// Sketch-space instance transforms (spec §1.11); circular patterns spin
+    /// about the sketch-plane origin in v1.
+    private func sketchPatternTransforms(_ state: PatternState) -> [SketchPatternTransform] {
+        switch state.kind {
+        case .linear:
+            return PatternKit.linearSketchTransforms(
+                direction: state.axis.sketchDirection,
+                spacing: state.spacing,
+                count: max(1, state.count)
+            )
+        case .circular:
+            return PatternKit.circularSketchTransforms(
+                center: .zero,
+                count: max(1, state.count),
+                totalAngle: state.totalAngle * .pi / 180,
+                rotateInstances: true
+            )
+        }
+    }
+
+    /// Pattern transform composed onto a body transform:
+    /// world = q.act(base(x)) + t, so rotation/translation pre-compose.
+    nonisolated static func composedPatternTransform(
+        _ pattern: Transform3D, base: Transform3D
+    ) -> Transform3D {
+        var result = base
+        result.rotation = simd_normalize(pattern.rotation * base.rotation)
+        result.translation = pattern.rotation.act(base.translation) + pattern.translation
+        return result
+    }
+
+    /// Commit the armed pattern: one CompositeCommand adding count−1
+    /// instances (bodies, or transformed sketch entities).
+    func commitPattern() {
+        guard case .patterning = mode, let state = patternState else { return }
+        guard state.count >= 2 else {
+            errorMessage = "Pattern needs a quantity of at least 2."
+            return
+        }
+        if state.isSketchPattern {
+            commitSketchPattern(state)
+        } else {
+            commitBodyPattern(state)
+        }
+    }
+
+    private func commitBodyPattern(_ state: PatternState) {
+        guard let bodyID = state.bodyID,
+              let body = session.document.body(with: bodyID)
+        else {
+            cancelPattern()
+            return
+        }
+        var document = session.document // local: unique names + revisions
+        var commands: [DocumentCommand] = []
+        var ids: Set<BodyID> = [body.id]
+        for transform in patternTransforms(state).dropFirst() {
+            var copy = Body(
+                id: BodyID(),
+                name: document.uniqueBodyName(base: body.name),
+                transform: Self.composedPatternTransform(transform, base: body.transform),
+                primitive: body.primitive,
+                render: body.render,
+                revision: document.nextRevision()
+            )
+            copy.euclid = body.euclid
+            document.bodies.append(copy) // keeps the next name unique
+            commands.append(AddBodyCommand(body: copy, title: "Pattern"))
+            ids.insert(copy.id)
+        }
+        guard !commands.isEmpty else { return }
+        session.perform(CompositeCommand(title: "Pattern", commands: commands))
+        patternState = nil
+        selection = ids
+        mode = .idle
+        session.save()
+    }
+
+    private func commitSketchPattern(_ state: PatternState) {
+        guard let sketchID = state.sketchID,
+              let sketch = session.document.sketches.first(where: { $0.id == sketchID })
+        else {
+            cancelPattern()
+            return
+        }
+        let entities = sketch.entities.filter { state.entityIDs.contains($0.id) }
+        guard !entities.isEmpty else {
+            cancelPattern()
+            return
+        }
+        var commands: [DocumentCommand] = []
+        for transform in sketchPatternTransforms(state).dropFirst() {
+            for entity in entities {
+                for copy in PatternKit.transformed(entity, by: transform) {
+                    commands.append(AddSketchEntityCommand(sketchID: sketchID, entity: copy))
+                }
+            }
+        }
+        guard !commands.isEmpty else { return }
+        session.perform(CompositeCommand(title: "Pattern", commands: commands))
+        patternState = nil
+        mode = .idle
+        session.save()
+    }
+
     // MARK: - Profile fills (cached per sketch content)
 
-    private var fillCache: [SketchID: (entities: [SketchEntity], batches: [SketchFillBatch])] = [:]
+    private var fillCache: [SketchID: (
+        entities: [SketchEntity], construction: Set<UUID>, batches: [SketchFillBatch]
+    )] = [:]
 
     private func fillBatches(for sketch: Sketch) -> [SketchFillBatch] {
-        if let cached = fillCache[sketch.id], cached.entities == sketch.entities {
+        if let cached = fillCache[sketch.id], cached.entities == sketch.entities,
+           cached.construction == sketch.constructionEntityIDs {
             return cached.batches
         }
         let profiles = ProfileDetector.detectProfiles(in: sketch)
@@ -628,7 +1406,7 @@ final class EditorViewModel {
                 batches.append(SketchFillBatch(triangles: triangles, color: fillColor))
             }
         }
-        fillCache[sketch.id] = (sketch.entities, batches)
+        fillCache[sketch.id] = (sketch.entities, sketch.constructionEntityIDs, batches)
         return batches
     }
 
@@ -642,6 +1420,9 @@ final class EditorViewModel {
             return
         }
         guard !selection.isEmpty else { return }
+        // Revert any transient preview first (the rotate preview mutates
+        // transforms outside undo) so the delete captures clean state.
+        cancelTransientPicks()
         session.perform(DeleteBodiesCommand(ids: selection, document: session.document))
         selection.removeAll()
         mode = .idle
@@ -667,6 +1448,7 @@ final class EditorViewModel {
         adjustingArcBulge = false
         clearChain()
         sketchEntityDrag = nil
+        sketchGizmoDrag = nil
         let liveEntityIDs = Set(session.document.sketches.flatMap { $0.entities.map(\.id) })
         selectedSketchEntityIDs = selectedSketchEntityIDs.intersection(liveEntityIDs)
         // Selection/mode may reference bodies that no longer exist.
@@ -674,11 +1456,34 @@ final class EditorViewModel {
         selection = selection.intersection(liveIDs)
         switch mode {
         case .editingPrimitive(let id) where !liveIDs.contains(id),
-             .selected(let id) where !liveIDs.contains(id):
+             .selected(let id) where !liveIDs.contains(id),
+             .pickingSplitCutter(let id) where !liveIDs.contains(id):
             mode = .idle
         case .sketching(let id, _)
             where !session.document.sketches.contains(where: { $0.id == id }):
             mode = .idle
+        case .patterning:
+            // The pattern source (body or sketch) may have been undone away.
+            let valid: Bool
+            if let bodyID = patternState?.bodyID {
+                valid = liveIDs.contains(bodyID)
+            } else if let sketchID = patternState?.sketchID {
+                valid = session.document.sketches.contains { $0.id == sketchID }
+            } else {
+                valid = false
+            }
+            if !valid {
+                patternState = nil
+                mode = .idle
+            }
+        case .rotatingAroundAxis:
+            // The rotate baseline may reference undone bodies; drop the tool
+            // (cancel restores transforms for bodies that still exist).
+            cancelRotateAxis()
+        case .translating:
+            cancelTranslate()
+        case .aligning:
+            cancelAlign()
         default:
             break
         }
@@ -724,9 +1529,18 @@ final class EditorViewModel {
     }
 
     private func handleTap(ray: Ray) {
-        // Any viewport tap dismisses pending gizmo/scale numeric entry.
+        // Any viewport tap dismisses pending gizmo numeric entry.
         axisEntryPart = nil
-        scaleEntryActive = false
+        if scaleEntryActive {
+            // Spec §5.4: tapping an empty grid area commits the pending
+            // scale; tapping a body just dismisses the field.
+            if HitTester.pickBody(ray: ray, in: scene) == nil {
+                commitScale(factor: scalePendingFactor)
+                return
+            }
+            scaleEntryActive = false
+            scaleCopyOnCommit = false
+        }
         switch mode {
         case .idle, .editingPrimitive, .selected, .faceSelected:
             selectFaceOrBody(ray: ray)
@@ -737,8 +1551,22 @@ final class EditorViewModel {
             commitTool()
         case .pickingRevolveAxis:
             pickRevolveAxis(ray: ray)
+        case .pickingSweepPath:
+            pickSweepPathEntity(ray: ray)
+        case .pickingLoftProfiles:
+            pickLoftProfile(ray: ray)
         case .pickingBooleanTool(let kind, let targetID):
             handleBooleanToolTap(kind: kind, targetID: targetID, ray: ray)
+        case .pickingSplitCutter(let target):
+            handleSplitCutterTap(target: target, ray: ray)
+        case .patterning:
+            break // parameters live in the pattern bar; Apply/Cancel there
+        case .rotatingAroundAxis:
+            handleRotateAxisTap(ray: ray)
+        case .translating:
+            handleTranslateTap(ray: ray)
+        case .aligning:
+            handleAlignTap(ray: ray)
         case .pickingSketchPlane(let tool):
             handlePlanePick(ray: ray, tool: tool)
         case .sketching(_, let tool):
@@ -749,7 +1577,21 @@ final class EditorViewModel {
     }
 
     /// Shapr3D: double-tap selects the whole body; on empty space, fit view.
+    /// While sketching, double-tap selects the tapped entity's whole
+    /// connected chain (spec §1.10, endpoint adjacency).
     private func handleDoubleTap(ray: Ray) {
+        if case .sketching = mode {
+            guard let sketch = activeSketch,
+                  let raw = rawSketchPoint(from: ray),
+                  let hit = SketchHitTester.nearestEntity(
+                      to: raw, in: sketch.entities, tolerance: entityPickTolerance
+                  )
+            else { return }
+            selectedSketchEntityIDs = ProfileDetector.connectedEntityIDs(
+                from: hit.entity.id, in: sketch.entities
+            )
+            return
+        }
         if let hit = HitTester.pickBody(ray: ray, in: scene) {
             cancelTool()
             selection = [hit.bodyID]
@@ -869,6 +1711,7 @@ final class EditorViewModel {
 
     func armBoolean(_ kind: BooleanKind) {
         guard selection.count == 1, let target = selection.first else { return }
+        cancelTransientPicks()
         cancelTool()
         mode = .pickingBooleanTool(kind, target: target)
     }
@@ -949,6 +1792,10 @@ final class EditorViewModel {
             case revolve(axis: RevolveAxis, angle: Double)
             /// Offset construction plane pulled off a face along its normal.
             case offsetPlane(distance: Double)
+            /// Sweep the profile along a world-space polyline spine (plan §B1).
+            case sweep(spine: [SIMD3<Double>])
+            /// Loft through `loftProfiles` in selection order (plan §B2).
+            case loft
         }
 
         var profile: Profile
@@ -963,6 +1810,10 @@ final class EditorViewModel {
         var kind: Kind
         /// Extra fills added while extruding (multi-profile: union of prisms).
         var extraProfiles: [(profile: Profile, holes: [Profile])] = []
+        /// Entities already chained into the sweep path (tap order).
+        var sweepPathEntityIDs: [UUID] = []
+        /// Ordered loft sections (seeded with the armed profile; taps append).
+        var loftProfiles: [(profile: Profile, holes: [Profile], plane: SketchPlane, sketchID: SketchID)] = []
         /// Boolean badge: manual result override (auto = sample-point rules).
         var booleanOverride: BooleanOverride = .auto
         /// Symmetric sides: solid centered on the plane, total depth 2×.
@@ -976,7 +1827,7 @@ final class EditorViewModel {
             switch kind {
             case .extrude(let distance), .offsetPlane(let distance):
                 return distance
-            case .revolve:
+            case .revolve, .sweep, .loft:
                 return nil
             }
         }
@@ -1043,6 +1894,13 @@ final class EditorViewModel {
     /// (push/pull). Committing happens on release.
     func beginFillPull(ray: Ray) -> Bool {
         if case .measuring = mode { return false } // measure taps/drags never extrude
+        // Split/pattern/transform picks never start an extrude; unclaimed
+        // drags orbit (rotate-axis angle drags are claimed upstream).
+        if case .pickingSplitCutter = mode { return false }
+        if case .patterning = mode { return false }
+        if case .rotatingAroundAxis = mode { return false }
+        if case .translating = mode { return false }
+        if case .aligning = mode { return false }
         guard HitTester.pickBody(ray: ray, in: scene) == nil,
               let hit = profileHit(ray: ray)
         else { return false }
@@ -1126,6 +1984,17 @@ final class EditorViewModel {
                 in: context.plane,
                 axis: axis,
                 angle: angle
+            )
+        case .sweep(let spine):
+            mesh = KernelOps.sweep(
+                profile: context.profile,
+                holes: context.holes,
+                in: context.plane,
+                alongPath: spine
+            )
+        case .loft:
+            mesh = KernelOps.loft(
+                profiles: context.loftProfiles.map { ($0.profile, $0.holes, $0.plane) }
             )
         }
         updatePendingValidity(&context, toolMesh: mesh)
@@ -1285,6 +2154,10 @@ final class EditorViewModel {
             commitRevolve(context, angle: angle)
         case .offsetPlane(let distance):
             commitOffsetPlane(context, distance: distance)
+        case .sweep(let spine):
+            commitSweep(context, spine: spine)
+        case .loft:
+            commitLoft(context)
         }
     }
 
@@ -1561,7 +2434,8 @@ final class EditorViewModel {
         toolContext = nil
         extrudeDragAnchor = nil
         switch mode {
-        case .extruding, .faceSelected, .pickingRevolveAxis:
+        case .extruding, .faceSelected, .pickingRevolveAxis,
+             .pickingSweepPath, .pickingLoftProfiles:
             mode = .idle
         default:
             break
@@ -1602,14 +2476,25 @@ final class EditorViewModel {
         let local = plane.toLocal(SIMD3(Double(world.x), Double(world.y), Double(world.z)))
 
         // Nearest line entity within a forgiving tap tolerance; taps that miss
-        // every line keep the picking mode armed.
+        // every line keep the picking mode armed. Construction lines are
+        // preferred axis candidates (spec §3.3): any construction hit beats
+        // any regular hit; ties within a class break by distance.
         let tolerance = SnapEngine.pointTolerance * 2
-        var best: (a: SIMD2<Double>, b: SIMD2<Double>, distance: Double)?
+        var best: (a: SIMD2<Double>, b: SIMD2<Double>, distance: Double, isConstruction: Bool)?
         for entity in sketch.entities {
-            guard case .line(_, let a, let b) = entity else { continue }
+            guard case .line(let id, let a, let b) = entity else { continue }
             let d = Self.distanceToSegment(local, a: a, b: b)
-            if d <= tolerance, best == nil || d < best!.distance {
-                best = (a, b, d)
+            guard d <= tolerance else { continue }
+            let isConstruction = sketch.isConstruction(id)
+            let better: Bool = if let current = best {
+                isConstruction != current.isConstruction
+                    ? isConstruction
+                    : d < current.distance
+            } else {
+                true
+            }
+            if better {
+                best = (a, b, d, isConstruction)
             }
         }
         guard let line = best else { return }
@@ -1640,6 +2525,257 @@ final class EditorViewModel {
         return simd_length(p - (a + ab * t))
     }
 
+    // MARK: - Sweep path picking (plan §B1, spec §4.11)
+
+    /// "Sweep" in the extrude bar: subsequent taps on open sketch entities
+    /// (lines/arcs, any visible sketch) chain into the sweep spine.
+    func beginSweepPathPick() {
+        guard case .extruding = mode, let context = toolContext,
+              context.sketchID != nil
+        else { return }
+        mode = .pickingSweepPath
+    }
+
+    /// Cancel returns to the plain extrude tool (like the revolve axis pick).
+    func cancelSweepPathPick() {
+        guard case .pickingSweepPath = mode else { return }
+        guard var context = toolContext else {
+            mode = .idle
+            return
+        }
+        context.kind = .extrude(distance: 2)
+        context.sweepPathEntityIDs = []
+        rebuildToolPreview(&context)
+        toolContext = context
+        mode = .extruding
+    }
+
+    /// Tap while picking the sweep path: the nearest open entity chains onto
+    /// the spine; tapping empty space commits a nonempty path (extrude's rule).
+    private func pickSweepPathEntity(ray: Ray) {
+        guard var context = toolContext else {
+            cancelTool()
+            return
+        }
+        let tolerance = max(0.4, 16 * worldPerPoint)
+        var best: (entity: SketchEntity, plane: SketchPlane, distance: Double)?
+        for sketch in session.document.sketches where !sketch.isHidden {
+            guard let local = localPoint(of: ray, on: sketch.plane) else { continue }
+            for entity in sketch.entities {
+                guard let points = Self.sweepPathPolyline(of: entity) else { continue }
+                var distance = Double.infinity
+                for i in 1..<points.count {
+                    distance = min(
+                        distance,
+                        Self.distanceToSegment(local, a: points[i - 1], b: points[i])
+                    )
+                }
+                if distance <= tolerance, best == nil || distance < best!.distance {
+                    best = (entity, sketch.plane, distance)
+                }
+            }
+        }
+        guard let hit = best else {
+            if case .sweep = context.kind { commitTool() }
+            return
+        }
+        guard !context.sweepPathEntityIDs.contains(hit.entity.id),
+              let localPolyline = Self.sweepPathPolyline(of: hit.entity)
+        else { return }
+
+        let segment = localPolyline.map { hit.plane.toWorld($0) }
+        let spine: [SIMD3<Double>]
+        if case .sweep(let existing) = context.kind, existing.count >= 2 {
+            guard let joined = Self.chainedSpine(existing, adding: segment) else {
+                errorMessage = "That segment doesn't connect to the end of the path."
+                return
+            }
+            spine = joined
+        } else {
+            // First segment: start at the endpoint nearest the profile.
+            let anchor = context.plane.toWorld(context.profile.centroid)
+            spine = simd_length(segment.last! - anchor) < simd_length(segment.first! - anchor)
+                ? segment.reversed()
+                : segment
+        }
+        context.sweepPathEntityIDs.append(hit.entity.id)
+        context.kind = .sweep(spine: spine)
+        rebuildToolPreview(&context)
+        toolContext = context
+    }
+
+    /// Plane-local polyline of an OPEN entity (lines/arcs); closed entities
+    /// can't chain into a spine.
+    nonisolated static func sweepPathPolyline(of entity: SketchEntity) -> [SIMD2<Double>]? {
+        switch entity {
+        case let .line(_, a, b):
+            return [a, b]
+        case let .arc(_, center, radius, startAngle, endAngle):
+            let points = SketchEntity.arcPoints(
+                center: center, radius: radius,
+                startAngle: startAngle, endAngle: endAngle,
+                segmentsPerTurn: SketchTessellator.circleSegments
+            )
+            return points.count >= 2 ? points : nil
+        case .rect, .circle, .ellipse, .polygon:
+            return nil
+        }
+    }
+
+    /// Append `segment` to `spine`, reversed so its nearer endpoint meets the
+    /// spine's end; nil when neither endpoint is within `tolerance`. The
+    /// junction point is dropped so tiny gaps close onto the spine end.
+    nonisolated static func chainedSpine(
+        _ spine: [SIMD3<Double>],
+        adding segment: [SIMD3<Double>],
+        tolerance: Double = 0.75
+    ) -> [SIMD3<Double>]? {
+        guard let end = spine.last, let first = segment.first, let last = segment.last
+        else { return nil }
+        let dFirst = simd_length(first - end)
+        let dLast = simd_length(last - end)
+        guard min(dFirst, dLast) <= tolerance else { return nil }
+        let oriented: [SIMD3<Double>] = dLast < dFirst ? segment.reversed() : segment
+        return spine + oriented.dropFirst()
+    }
+
+    /// Ray → plane-local point on an arbitrary plane.
+    private func localPoint(of ray: Ray, on plane: SketchPlane) -> SIMD2<Double>? {
+        let planePoint = SIMD3<Float>(
+            Float(plane.origin.x), Float(plane.origin.y), Float(plane.origin.z)
+        )
+        let n = plane.normal
+        let planeNormal = SIMD3<Float>(Float(n.x), Float(n.y), Float(n.z))
+        guard let t = ray.intersect(planePoint: planePoint, planeNormal: planeNormal) else {
+            return nil
+        }
+        let world = ray.point(at: t)
+        return plane.toLocal(SIMD3(Double(world.x), Double(world.y), Double(world.z)))
+    }
+
+    private func commitSweep(_ context: ToolContext, spine: [SIMD3<Double>]) {
+        guard spine.count >= 2, let preview = context.preview else {
+            cancelTool()
+            return
+        }
+        // Like revolve: no push/pull direction — union overlapping bodies,
+        // otherwise a new body.
+        commitToolResult(
+            preview: preview,
+            mergeTool: preview.euclidMesh(),
+            sample: nil,
+            title: "Sweep",
+            context: context
+        )
+    }
+
+    // MARK: - Loft (plan §B2, spec §4.5 profiles-only)
+
+    /// "Loft" in the extrude bar: the armed profile becomes section 1; taps
+    /// on more profile fills (any plane) append sections in tap order.
+    func beginLoftProfilePick() {
+        guard case .extruding = mode, var context = toolContext,
+              let sketchID = context.sketchID
+        else { return }
+        context.loftProfiles = [(context.profile, context.holes, context.plane, sketchID)]
+        context.kind = .loft
+        rebuildToolPreview(&context)
+        toolContext = context
+        mode = .pickingLoftProfiles
+    }
+
+    /// Cancel returns to the plain extrude tool.
+    func cancelLoftProfilePick() {
+        guard case .pickingLoftProfiles = mode else { return }
+        guard var context = toolContext else {
+            mode = .idle
+            return
+        }
+        context.kind = .extrude(distance: 2)
+        context.loftProfiles = []
+        rebuildToolPreview(&context)
+        toolContext = context
+        mode = .extruding
+    }
+
+    /// Tap while picking loft sections: any profile fill appends a section.
+    private func pickLoftProfile(ray: Ray) {
+        guard var context = toolContext, case .loft = context.kind else {
+            cancelTool()
+            return
+        }
+        guard let hit = profileHit(ray: ray) else { return }
+        // The same fill can't be a section twice.
+        guard !context.loftProfiles.contains(where: {
+            $0.sketchID == hit.sketchID
+                && $0.profile.sourceEntityIDs == hit.profile.sourceEntityIDs
+        }) else { return }
+        context.loftProfiles.append((hit.profile, hit.holes, hit.plane, hit.sketchID))
+        rebuildToolPreview(&context)
+        toolContext = context
+    }
+
+    private func commitLoft(_ context: ToolContext) {
+        guard context.loftProfiles.count >= 2 else {
+            cancelTool()
+            return
+        }
+        // Coplanar sections loft to a zero-thickness sheet — reject upfront
+        // and keep the tool armed so another section can be added.
+        let firstPlane = context.loftProfiles[0].plane
+        guard context.loftProfiles.contains(where: {
+            !$0.plane.isCoincident(with: firstPlane)
+        }) else {
+            errorMessage = "Loft sections must lie on different planes — add a profile on another plane or face."
+            return
+        }
+        guard let preview = context.preview else {
+            errorMessage = "The loft produced no geometry."
+            cancelTool()
+            return
+        }
+        commitToolResult(
+            preview: preview,
+            mergeTool: preview.euclidMesh(),
+            sample: nil,
+            title: "Loft",
+            context: context
+        )
+    }
+
+    // MARK: - Helix (plan §B16, spec §1.17 minimal: a helix drives a sweep)
+
+    /// "Helix" in the extrude bar: sweep the armed profile along a generated
+    /// helical spine (coiling up the sketch-plane normal, starting at the
+    /// profile centroid) and commit immediately.
+    func commitHelixSweep(radius: Double, pitch: Double, turns: Double) {
+        guard var context = toolContext, case .extrude = context.kind else { return }
+        guard radius > 1e-6, turns > 1e-3, abs(pitch) > 1e-9 else {
+            errorMessage = "Helix needs a positive radius, pitch, and turns."
+            return
+        }
+        // Center the coil so the spine STARTS at the profile centroid — the
+        // profile rides the helix (Shapr3D: profile at the path start).
+        let center = context.profile.centroid - SIMD2(radius, 0)
+        let spine = HelixKit.path(
+            radius: radius, pitch: pitch, turns: turns,
+            center: center, in: context.plane
+        )
+        guard spine.count >= 2 else {
+            errorMessage = "The helix parameters produced no path."
+            return
+        }
+        context.kind = .sweep(spine: spine)
+        context.sweepPathEntityIDs = []
+        rebuildToolPreview(&context)
+        guard context.preview != nil else {
+            errorMessage = "The helix sweep produced no geometry."
+            return
+        }
+        toolContext = context
+        commitTool()
+    }
+
     // MARK: - Tool drag (extrude: pull along the plane normal; revolve: angle)
 
     /// Degrees of revolve sweep per world unit of screen-space drag.
@@ -1665,6 +2801,8 @@ final class EditorViewModel {
         case .revolve(_, let angle):
             extrudeDragAnchor = nil // angle drags are always screen-space
             toolDragStartValue = angle
+        case .sweep, .loft:
+            return false // no drag-editable parameter
         }
         return true
     }
@@ -1703,6 +2841,8 @@ final class EditorViewModel {
             // Snap to 15° stops (90, 180, …) with a small capture window.
             let snapped = (raw / 15).rounded() * 15
             setRevolveAngle(abs(raw - snapped) < 4 ? snapped : raw)
+        case .sweep, .loft:
+            break // no drag-editable parameter
         }
     }
 
@@ -1748,11 +2888,249 @@ final class EditorViewModel {
         max(0.4, 16 * worldPerPoint)
     }
 
+    // MARK: - Sketch Move/Rotate gizmo (plan §B6, spec §1.10)
+
+    /// Copy chip while sketching (spec §1.10): the next gizmo drag
+    /// moves/rotates duplicates of the selection. Resets after each drag.
+    var sketchCopyOnDrag = false
+
+    private enum SketchGizmoDragKind { case move, rotate }
+
+    /// A drag on the sketch selection gizmo: the handle translates the
+    /// selected entities, the ring rotates them about the centroid. One
+    /// command per drag (perform once, then amend-coalesce).
+    private struct SketchGizmoDrag {
+        var kind: SketchGizmoDragKind
+        var sketchID: SketchID
+        /// Entities when the drag began (transform baseline).
+        var originals: [SketchEntity]
+        var pivot: SIMD2<Double>
+        var grabPoint: SIMD2<Double>
+        var pushed = false
+    }
+    private var sketchGizmoDrag: SketchGizmoDrag?
+
+    /// Gizmo dimensions in plane units (floored for constant screen size).
+    private var sketchGizmoHandleRadius: Double { max(0.4, 22 * worldPerPoint) }
+    private var sketchGizmoRingRadius: Double { max(1.4, 64 * worldPerPoint) }
+    private var sketchGizmoRingWidth: Double { max(0.35, 16 * worldPerPoint) }
+
+    /// Centroid of the selected sketch entities (gizmo anchor), plane-local.
+    var sketchSelectionCentroid: SIMD2<Double>? {
+        guard let sketch = activeSketch else { return nil }
+        let selected = sketch.entities.filter { selectedSketchEntityIDs.contains($0.id) }
+        guard !selected.isEmpty else { return nil }
+        let sum = selected.reduce(SIMD2<Double>.zero) { $0 + Self.entityCenter($1) }
+        return sum / Double(selected.count)
+    }
+
+    nonisolated static func entityCenter(_ entity: SketchEntity) -> SIMD2<Double> {
+        switch entity {
+        case let .line(_, a, b): (a + b) / 2
+        case let .rect(_, lo, hi): (lo + hi) / 2
+        case let .circle(_, center, _), let .arc(_, center, _, _, _),
+             let .ellipse(_, center, _, _, _), let .polygon(_, center, _, _, _):
+            center
+        }
+    }
+
+    /// Overlay line segments for the selection gizmo: a cross + diamond
+    /// handle at the centroid and the surrounding rotate ring.
+    private func sketchGizmoSegments(
+        centroid: SIMD2<Double>, plane: SketchPlane
+    ) -> [SIMD3<Float>] {
+        func world(_ p: SIMD2<Double>) -> SIMD3<Float> {
+            let w = plane.toWorld(p)
+            return SIMD3(Float(w.x), Float(w.y), Float(w.z))
+        }
+        var segments: [SIMD3<Float>] = []
+        let r = sketchGizmoHandleRadius
+        segments += [
+            world(centroid - SIMD2(r, 0)), world(centroid + SIMD2(r, 0)),
+            world(centroid - SIMD2(0, r)), world(centroid + SIMD2(0, r)),
+        ]
+        let diamond = [SIMD2(r, 0.0), SIMD2(0.0, r), SIMD2(-r, 0.0), SIMD2(0.0, -r)]
+        for i in 0..<4 {
+            segments.append(world(centroid + diamond[i]))
+            segments.append(world(centroid + diamond[(i + 1) % 4]))
+        }
+        let ring = sketchGizmoRingRadius
+        let ringSegments = 48
+        for i in 0..<ringSegments {
+            let t0 = Double(i) / Double(ringSegments) * 2 * .pi
+            let t1 = Double(i + 1) / Double(ringSegments) * 2 * .pi
+            segments.append(world(centroid + SIMD2(cos(t0), sin(t0)) * ring))
+            segments.append(world(centroid + SIMD2(cos(t1), sin(t1)) * ring))
+        }
+        return segments
+    }
+
+    /// A drag starting on the selection gizmo claims the stroke: the center
+    /// handle translates, the ring rotates. Copy chip duplicates first.
+    private func beginSketchGizmoDrag(at raw: SIMD2<Double>) -> Bool {
+        guard case .sketching(let sketchID, _) = mode,
+              !selectedSketchEntityIDs.isEmpty,
+              let centroid = sketchSelectionCentroid,
+              let sketch = activeSketch
+        else { return false }
+        let distance = simd_length(raw - centroid)
+        let kind: SketchGizmoDragKind
+        if distance <= sketchGizmoHandleRadius {
+            kind = .move
+        } else if abs(distance - sketchGizmoRingRadius) <= sketchGizmoRingWidth {
+            kind = .rotate
+        } else {
+            return false
+        }
+        var entities = sketch.entities.filter { selectedSketchEntityIDs.contains($0.id) }
+        guard !entities.isEmpty else { return false }
+
+        // Copy chip: duplicate first; the drag then moves the copies.
+        if sketchCopyOnDrag {
+            sketchCopyOnDrag = false
+            entities = duplicateSketchEntities(entities, in: sketchID)
+        }
+
+        // Rotation decomposes rects into 4 lines once, up front, so every
+        // later step maps entities one-to-one (amend-friendly commands).
+        let containsRect = entities.contains {
+            if case .rect = $0 { return true }
+            return false
+        }
+        if kind == .rotate, containsRect {
+            entities = decomposeSelectedRects(entities, in: sketchID)
+        }
+
+        sketchGizmoDrag = SketchGizmoDrag(
+            kind: kind,
+            sketchID: sketchID,
+            originals: entities,
+            pivot: centroid,
+            grabPoint: raw
+        )
+        sketchStrokeStart = nil
+        pendingEntity = nil
+        return true
+    }
+
+    /// Clone `entities` with fresh IDs in one undo step; the copies become
+    /// the selection and the drag baseline.
+    private func duplicateSketchEntities(
+        _ entities: [SketchEntity], in sketchID: SketchID
+    ) -> [SketchEntity] {
+        var copies: [SketchEntity] = []
+        var commands: [DocumentCommand] = []
+        for entity in entities {
+            for copy in PatternKit.transformed(entity, by: .identity) {
+                copies.append(copy)
+                commands.append(AddSketchEntityCommand(sketchID: sketchID, entity: copy))
+            }
+        }
+        guard !commands.isEmpty else { return entities }
+        session.perform(commands.count == 1
+            ? commands[0]
+            : CompositeCommand(title: "Copy", commands: commands))
+        selectedSketchEntityIDs = Set(copies.map(\.id))
+        return copies
+    }
+
+    /// Replace each selected rect with its 4 edge lines (one undo step); the
+    /// first line inherits the rect's ID, like SketchTransform.rotate.
+    private func decomposeSelectedRects(
+        _ entities: [SketchEntity], in sketchID: SketchID
+    ) -> [SketchEntity] {
+        guard let sketch = activeSketch else { return entities }
+        var result: [SketchEntity] = []
+        var commands: [DocumentCommand] = []
+        for entity in entities {
+            guard case let .rect(id, lo, hi) = entity else {
+                result.append(entity)
+                continue
+            }
+            let corners = [lo, SIMD2(hi.x, lo.y), hi, SIMD2(lo.x, hi.y)]
+            var lines: [SketchEntity] = []
+            for i in 0..<4 {
+                lines.append(.line(
+                    id: i == 0 ? id : UUID(),
+                    a: corners[i], b: corners[(i + 1) % 4]
+                ))
+            }
+            commands.append(RemoveSketchEntitiesCommand(ids: [id], sketch: sketch))
+            for line in lines {
+                commands.append(AddSketchEntityCommand(sketchID: sketchID, entity: line))
+            }
+            result.append(contentsOf: lines)
+        }
+        guard !commands.isEmpty else { return entities }
+        session.perform(CompositeCommand(title: "Rotate", commands: commands))
+        selectedSketchEntityIDs = Set(result.map(\.id))
+        return result
+    }
+
+    private func updateSketchGizmoDrag(raw: SIMD2<Double>) {
+        guard var drag = sketchGizmoDrag else { return }
+        let after: [SketchEntity]
+        switch drag.kind {
+        case .move:
+            // Grid-capture each axis, like single-entity translates.
+            var delta = raw - drag.grabPoint
+            let snapped = SIMD2(
+                (delta.x / SnapEngine.gridSpacing).rounded() * SnapEngine.gridSpacing,
+                (delta.y / SnapEngine.gridSpacing).rounded() * SnapEngine.gridSpacing
+            )
+            if abs(delta.x - snapped.x) < 0.15 { delta.x = snapped.x }
+            if abs(delta.y - snapped.y) < 0.15 { delta.y = snapped.y }
+            after = SketchTransform.translate(entities: drag.originals, by: delta)
+        case .rotate:
+            // 5° steps while dragging (matches the body rings).
+            let anchorAngle = atan2(
+                drag.grabPoint.y - drag.pivot.y, drag.grabPoint.x - drag.pivot.x
+            )
+            let currentAngle = atan2(raw.y - drag.pivot.y, raw.x - drag.pivot.x)
+            let degrees = ((currentAngle - anchorAngle) * 180 / .pi / 5).rounded() * 5
+            after = SketchTransform.rotate(
+                entities: drag.originals, about: drag.pivot, angle: degrees * .pi / 180
+            )
+        }
+        // Rects were pre-decomposed, so the mapping is always one-to-one.
+        guard after.count == drag.originals.count else { return }
+        guard after != drag.originals || drag.pushed else { return }
+        let updates: [DocumentCommand] = zip(drag.originals, after).map {
+            UpdateSketchEntityCommand(sketchID: drag.sketchID, before: $0.0, after: $0.1)
+        }
+        let command: DocumentCommand = updates.count == 1
+            ? updates[0]
+            : CompositeCommand(
+                title: drag.kind == .move ? "Move" : "Rotate", commands: updates
+            )
+        if drag.pushed {
+            session.amend(command)
+        } else {
+            session.perform(command)
+            drag.pushed = true
+            sketchGizmoDrag = drag
+        }
+    }
+
     /// Tap while sketching: Trim cuts the span under the tap; other tools
     /// toggle entity selection, or finalize/clear pending state on empty space.
     private func handleSketchTap(ray: Ray, tool: SketchTool) {
         if tool == .trim {
             performTrim(ray: ray)
+            return
+        }
+        if tool == .text {
+            clearChain()
+            // Tap-to-place (spec §1.12): the tapped point anchors the text
+            // dialog's glyph baseline.
+            if let point = sketchPoint(from: ray) {
+                textPlacement = point
+            }
+            return
+        }
+        if tool == .project {
+            clearChain()
+            projectTappedBody(ray: ray)
             return
         }
         clearChain() // a tap ends line chaining
@@ -1899,6 +3277,7 @@ final class EditorViewModel {
             mode = .sketching(id, tool: tool) // just switch tools
             return
         }
+        cancelTransientPicks()
         // Sketch-on-face: a selected planar face IS the sketch plane
         // (spec §2.3); read it before cancelTool clears the context.
         if case .faceSelected = mode, let plane = toolContext?.plane {
@@ -1985,10 +3364,13 @@ final class EditorViewModel {
     func finishSketch() {
         commitPendingArc()
         clearChain()
+        textPlacement = nil
         pendingEntity = nil
         sketchStrokeStart = nil
         adjustingArcBulge = false
         sketchEntityDrag = nil
+        sketchGizmoDrag = nil
+        sketchCopyOnDrag = false
         selectedSketchEntityIDs.removeAll()
         if case .sketching = mode {
             mode = .idle
@@ -2021,8 +3403,8 @@ final class EditorViewModel {
               let raw = rawSketchPoint(from: ray)
         else { return false }
         sketchEntityDrag = nil
-        if tool == .trim {
-            return false // Trim works by taps; unclaimed drags orbit.
+        if tool == .trim || tool == .text || tool == .project {
+            return false // These tools work by taps; unclaimed drags orbit.
         }
 
         // A drag starting on the pending arc's midpoint adjusts its bulge.
@@ -2034,6 +3416,12 @@ final class EditorViewModel {
             return true
         }
         commitPendingArc()
+
+        // Selection gizmo first: drags on the handle/ring transform the
+        // selected entities instead of drawing or editing.
+        if beginSketchGizmoDrag(at: raw) {
+            return true
+        }
 
         // Chain continuation stays a drawing gesture even though it starts
         // on the previous line's endpoint.
@@ -2068,6 +3456,11 @@ final class EditorViewModel {
             pendingArc = arc
             return
         }
+        if sketchGizmoDrag != nil {
+            guard let raw = rawSketchPoint(from: ray) else { return }
+            updateSketchGizmoDrag(raw: raw)
+            return
+        }
         if sketchEntityDrag != nil {
             guard let raw = rawSketchPoint(from: ray) else { return }
             updateSketchEntityDrag(raw: raw)
@@ -2086,6 +3479,10 @@ final class EditorViewModel {
         }
         if adjustingArcBulge {
             adjustingArcBulge = false
+            return
+        }
+        if sketchGizmoDrag != nil {
+            sketchGizmoDrag = nil // commands already pushed/amended live
             return
         }
         if sketchEntityDrag != nil {
@@ -2201,9 +3598,88 @@ final class EditorViewModel {
                 id: UUID(), center: a, radius: radius,
                 sides: max(3, polygonSides), rotation: atan2(delta.y, delta.x)
             )
-        case .trim:
-            return nil // Trim never draws.
+        case .trim, .text, .project:
+            return nil // These tools never rubber-band draw.
         }
+    }
+
+    // MARK: - Text tool (plan §B7, spec §1.12 v1)
+
+    /// Plane-local baseline point for the pending text placement; non-nil
+    /// presents the text dialog (set by a tap with the Text tool active).
+    var textPlacement: SIMD2<Double>?
+
+    /// Commit from the text dialog: glyph outlines as one undo step. The
+    /// resulting closed loops are ordinary sketch entities, so their profiles
+    /// fill and extrude like any other.
+    func commitText(content: String, height: Double, fontName: String?) {
+        guard case .sketching(let sketchID, _) = mode else {
+            textPlacement = nil
+            return
+        }
+        let origin = textPlacement ?? .zero
+        textPlacement = nil
+        let entities = TextSketch.glyphEntities(
+            text: content, fontName: fontName, height: height, at: origin
+        )
+        guard !entities.isEmpty else {
+            errorMessage = "No outlines for that text — try different content or a larger height."
+            return
+        }
+        session.perform(CompositeCommand(
+            title: "Text",
+            commands: [AddSketchEntitiesCommand(
+                sketchID: sketchID, entities: entities, title: "Text"
+            )]
+        ))
+    }
+
+    // MARK: - Project (plan §B8, spec §1.13 v1: unlinked body → sketch plane)
+
+    /// Project-tool tap: flatten the tapped body's feature edges onto the
+    /// active sketch plane as regular line entities (one undo step, so they
+    /// participate in profiles for the CNC flat-layout workflow).
+    private func projectTappedBody(ray: Ray) {
+        guard case .sketching(let sketchID, _) = mode,
+              let sketch = activeSketch,
+              let hit = HitTester.pickBody(ray: ray, in: scene),
+              let body = session.document.body(with: hit.bodyID)
+        else { return }
+        let entities = ProjectionKit.project(body: body, onto: sketch.plane)
+        guard !entities.isEmpty else {
+            errorMessage = "Nothing to project — the body has no edges to flatten onto this plane."
+            return
+        }
+        session.perform(CompositeCommand(
+            title: "Project",
+            commands: [AddSketchEntitiesCommand(
+                sketchID: sketchID, entities: entities, title: "Project"
+            )]
+        ))
+    }
+
+    // MARK: - Make Construction / Make Regular (plan §B9, spec §3.3)
+
+    /// True when every selected sketch entity is construction geometry
+    /// (palette toggle state; the next toggle then makes them regular).
+    var selectionIsConstruction: Bool {
+        guard let sketch = activeSketch, !selectedSketchEntityIDs.isEmpty else { return false }
+        return selectedSketchEntityIDs.allSatisfy { sketch.isConstruction($0) }
+    }
+
+    /// Bulk toggle on the selection: mixed/regular → all construction;
+    /// all-construction → all regular.
+    func toggleConstructionOnSelection() {
+        guard case .sketching(let sketchID, _) = mode,
+              let sketch = activeSketch,
+              !selectedSketchEntityIDs.isEmpty
+        else { return }
+        session.perform(SetConstructionCommand(
+            sketchID: sketchID,
+            entityIDs: selectedSketchEntityIDs,
+            isConstruction: !selectionIsConstruction,
+            sketch: sketch
+        ))
     }
 
     // MARK: - Measure tool (spec §16.3 v1: point-to-point)
@@ -2222,6 +3698,7 @@ final class EditorViewModel {
             return
         }
         if case .sketching = mode { finishSketch() }
+        cancelTransientPicks()
         cancelTool()
         selection.removeAll()
         measurePoints.removeAll()
@@ -2339,6 +3816,7 @@ final class EditorViewModel {
     func selectItemBody(_ id: BodyID) {
         guard let body = session.document.body(with: id) else { return }
         if case .sketching = mode { finishSketch() }
+        cancelTransientPicks()
         cancelTool()
         selection = [id]
         mode = body.primitive != nil ? .editingPrimitive(id) : .selected(id)
@@ -2350,6 +3828,7 @@ final class EditorViewModel {
         guard let sketch = session.document.sketches.first(where: { $0.id == id }) else { return }
         if case .sketching(let current, _) = mode, current == id { return }
         if case .sketching = mode { finishSketch() }
+        cancelTransientPicks()
         cancelTool()
         selection.removeAll()
         mode = .sketching(id, tool: .line)
@@ -2379,6 +3858,11 @@ final class EditorViewModel {
         switch item {
         case .body(let id):
             if toolContext?.sourceBody == id { cancelTool() }
+            // Transient modes may reference the body (rotate preview baseline,
+            // pattern source, split target) — revert them before deleting.
+            if rotateAxisState != nil || patternState?.bodyID == id {
+                cancelTransientPicks()
+            }
             session.perform(DeleteBodiesCommand(ids: [id], document: session.document))
             selection.remove(id)
             switch mode {
@@ -2387,6 +3871,8 @@ final class EditorViewModel {
                  .faceSelected(let selected) where selected == id:
                 mode = .idle
             case .pickingBooleanTool(_, let target) where target == id:
+                mode = .idle
+            case .pickingSplitCutter(let target) where target == id:
                 mode = .idle
             default:
                 break

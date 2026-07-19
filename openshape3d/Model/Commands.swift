@@ -57,7 +57,9 @@ struct DeleteBodiesCommand: DocumentCommand {
 }
 
 struct TransformBodiesCommand: DocumentCommand {
-    let title = "Move"
+    /// Undo title: the tool that produced the transform ("Move" default;
+    /// Scale/Rotate/Translate/Align pass their own).
+    var title: String = "Move"
     let before: [BodyID: Transform3D]
     var after: [BodyID: Transform3D]
 
@@ -176,6 +178,72 @@ struct AddSketchEntityCommand: DocumentCommand {
         if let index = document.sketches.firstIndex(where: { $0.id == sketchID }) {
             document.sketches[index].entities.removeAll { $0.id == entity.id }
         }
+    }
+}
+
+/// Bulk entity insertion in one undo step (Text glyph outlines, projected
+/// body edges); optionally arrives flagged as construction geometry.
+struct AddSketchEntitiesCommand: DocumentCommand {
+    let title: String
+    let sketchID: SketchID
+    let entities: [SketchEntity]
+    let asConstruction: Bool
+
+    init(
+        sketchID: SketchID, entities: [SketchEntity],
+        title: String = "Sketch", asConstruction: Bool = false
+    ) {
+        self.sketchID = sketchID
+        self.entities = entities
+        self.title = title
+        self.asConstruction = asConstruction
+    }
+
+    func apply(to document: inout DesignDocument) {
+        guard let index = document.sketches.firstIndex(where: { $0.id == sketchID }) else { return }
+        document.sketches[index].entities.append(contentsOf: entities)
+        if asConstruction {
+            document.sketches[index].setConstruction(true, forEntityIDs: entities.map(\.id))
+        }
+    }
+
+    func revert(in document: inout DesignDocument) {
+        guard let index = document.sketches.firstIndex(where: { $0.id == sketchID }) else { return }
+        let ids = Set(entities.map(\.id))
+        document.sketches[index].entities.removeAll { ids.contains($0.id) }
+        if asConstruction {
+            document.sketches[index].setConstruction(false, forEntityIDs: ids)
+        }
+    }
+}
+
+/// Make Construction / Make Regular (spec §3.3): flips the construction flag
+/// on a batch of sketch entities. Only IDs whose flag actually changes are
+/// stored, so revert restores exactly the prior state.
+struct SetConstructionCommand: DocumentCommand {
+    let title: String
+    let sketchID: SketchID
+    let isConstruction: Bool
+    let changedIDs: Set<UUID>
+
+    init(sketchID: SketchID, entityIDs: Set<UUID>, isConstruction: Bool, sketch: Sketch) {
+        self.sketchID = sketchID
+        self.isConstruction = isConstruction
+        self.changedIDs = entityIDs.filter { sketch.isConstruction($0) != isConstruction }
+        self.title = isConstruction ? "Make Construction" : "Make Regular"
+    }
+
+    private func set(_ flag: Bool, in document: inout DesignDocument) {
+        guard let index = document.sketches.firstIndex(where: { $0.id == sketchID }) else { return }
+        document.sketches[index].setConstruction(flag, forEntityIDs: changedIDs)
+    }
+
+    func apply(to document: inout DesignDocument) {
+        set(isConstruction, in: &document)
+    }
+
+    func revert(in document: inout DesignDocument) {
+        set(!isConstruction, in: &document)
     }
 }
 

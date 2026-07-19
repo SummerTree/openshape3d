@@ -14,7 +14,7 @@ struct NumericInputBar: View {
 
     @State private var values: [Double] = []
     @State private var axisDistance: Double = 0
-    @State private var scaleFactor: Double = 1
+    @State private var showHelixSheet = false
     @FocusState private var focusedField: Int?
 
     var body: some View {
@@ -22,14 +22,29 @@ struct NumericInputBar: View {
             axisMoveBar(part)
         } else if viewModel.scaleEntryActive {
             scaleBar
+        } else if viewModel.mode == .rotatingAroundAxis,
+                  viewModel.rotateAxisState?.hasAxis == true {
+            rotateAxisBar
+        } else if viewModel.mode == .patterning, let state = viewModel.patternState {
+            patternBar(state)
         } else if let context = viewModel.toolContext, viewModel.mode != .pickingRevolveAxis {
             switch context.kind {
             case .extrude:
-                extrudeBar(context)
+                // While the sweep path pick is armed but empty, the sweep bar
+                // carries the prompt/cancel instead of the extrude controls.
+                if viewModel.mode == .pickingSweepPath {
+                    sweepBar(context)
+                } else {
+                    extrudeBar(context)
+                }
             case .revolve:
                 revolveBar(context)
             case .offsetPlane:
                 offsetPlaneBar(context)
+            case .sweep:
+                sweepBar(context)
+            case .loft:
+                loftBar(context)
             }
         } else if case .sketching(_, .polygon) = viewModel.mode {
             polygonBar
@@ -111,7 +126,8 @@ struct NumericInputBar: View {
         .onAppear { axisDistance = 0 }
     }
 
-    /// Uniform scale about the body pivot (spec §5.4 v1).
+    /// Uniform scale about the body pivot (spec §5.4): factor field, Copy
+    /// badge (scales a duplicate), commit via Apply or an empty-grid tap.
     private var scaleBar: some View {
         HStack(spacing: 16) {
             Text("Scale")
@@ -124,12 +140,27 @@ struct NumericInputBar: View {
                 Text("Factor")
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                TextField("Factor", value: $scaleFactor, format: .number)
-                    .keyboardType(.numbersAndPunctuation)
-                    .textFieldStyle(.roundedBorder)
-                    .frame(width: 90)
-                    .onSubmit { viewModel.commitScale(factor: scaleFactor) }
+                TextField(
+                    "Factor",
+                    value: Binding(
+                        get: { viewModel.scalePendingFactor },
+                        set: { viewModel.scalePendingFactor = $0 }
+                    ),
+                    format: .number
+                )
+                .keyboardType(.numbersAndPunctuation)
+                .textFieldStyle(.roundedBorder)
+                .frame(width: 90)
+                .accessibilityIdentifier("ScaleFactorField")
+                .onSubmit { viewModel.commitScale(factor: viewModel.scalePendingFactor) }
             }
+
+            Button("Copy") {
+                viewModel.scaleCopyOnCommit.toggle()
+            }
+            .buttonStyle(.bordered)
+            .tint(viewModel.scaleCopyOnCommit ? Color.blue : Color.secondary)
+            .accessibilityIdentifier("ScaleCopyBadge")
 
             Spacer()
 
@@ -137,15 +168,170 @@ struct NumericInputBar: View {
                 viewModel.cancelScaleEntry()
             }
             Button("Apply") {
-                viewModel.commitScale(factor: scaleFactor)
+                viewModel.commitScale(factor: viewModel.scalePendingFactor)
             }
             .buttonStyle(.borderedProminent)
+            .accessibilityIdentifier("ScaleApply")
         }
         .padding(.horizontal, 20)
         .padding(.vertical, 12)
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16))
         .shadow(color: .black.opacity(0.15), radius: 10, y: 3)
-        .onAppear { scaleFactor = 1 }
+    }
+
+    /// Rotate Around Axis (spec §5.3): angle entry once the axis is set;
+    /// drags scrub in 5° steps, typed values are exact.
+    private var rotateAxisBar: some View {
+        HStack(spacing: 16) {
+            Text("Rotate")
+                .font(.headline)
+            Text("Drag to rotate (5° steps), or type an angle")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            HStack(spacing: 6) {
+                Text("Angle")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                TextField(
+                    "Angle",
+                    value: Binding(
+                        get: { viewModel.rotateAxisState?.angleDegrees ?? 0 },
+                        set: { viewModel.setRotateAngle($0) }
+                    ),
+                    format: .number
+                )
+                .keyboardType(.numbersAndPunctuation)
+                .textFieldStyle(.roundedBorder)
+                .frame(width: 90)
+                .accessibilityIdentifier("RotateAxisAngle")
+                .onSubmit { viewModel.commitRotateAxis() }
+            }
+
+            Spacer()
+
+            Button("Cancel") {
+                viewModel.cancelRotateAxis()
+            }
+            Button("Apply") {
+                viewModel.commitRotateAxis()
+            }
+            .buttonStyle(.borderedProminent)
+            .accessibilityIdentifier("RotateAxisApply")
+        }
+        .padding(.horizontal, 20)
+        .padding(.vertical, 12)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16))
+        .shadow(color: .black.opacity(0.15), radius: 10, y: 3)
+    }
+
+    /// Pattern bar (plan §B5): Linear/Circular, axis, count, spacing/angle;
+    /// instances preview live as ghosts in the viewport.
+    private func patternBar(_ state: EditorViewModel.PatternState) -> some View {
+        let axisChoices: [EditorViewModel.PatternState.Axis] = {
+            guard state.isSketchPattern else { return [.x, .y, .z] }
+            // Sketch patterns are in-plane: X/Y only; circular needs no axis.
+            return state.kind == .linear ? [.x, .y] : []
+        }()
+        return HStack(spacing: 16) {
+            Text("Pattern")
+                .font(.headline)
+
+            Picker("Type", selection: Binding(
+                get: { viewModel.patternState?.kind ?? .linear },
+                set: { viewModel.patternState?.kind = $0 }
+            )) {
+                ForEach(EditorViewModel.PatternState.Kind.allCases, id: \.self) { kind in
+                    Text(kind.rawValue).tag(kind)
+                }
+            }
+            .pickerStyle(.segmented)
+            .fixedSize()
+
+            if !axisChoices.isEmpty {
+                Picker("Axis", selection: Binding(
+                    get: { viewModel.patternState?.axis ?? .x },
+                    set: { viewModel.patternState?.axis = $0 }
+                )) {
+                    ForEach(axisChoices, id: \.self) { axis in
+                        Text(axis.rawValue).tag(axis)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .fixedSize()
+            }
+
+            HStack(spacing: 6) {
+                Text("Count")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                TextField(
+                    "Count",
+                    value: Binding(
+                        get: { viewModel.patternState?.count ?? 3 },
+                        set: { viewModel.patternState?.count = min(max($0, 1), 64) }
+                    ),
+                    format: .number
+                )
+                .keyboardType(.numberPad)
+                .textFieldStyle(.roundedBorder)
+                .frame(width: 60)
+                .accessibilityIdentifier("PatternCount")
+            }
+
+            if state.kind == .linear {
+                HStack(spacing: 6) {
+                    Text("Spacing")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    TextField(
+                        "Spacing",
+                        value: Binding(
+                            get: { viewModel.patternState?.spacing ?? 6 },
+                            set: { viewModel.patternState?.spacing = $0 }
+                        ),
+                        format: .number
+                    )
+                    .keyboardType(.numbersAndPunctuation)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(width: 80)
+                    .accessibilityIdentifier("PatternSpacing")
+                }
+            } else {
+                HStack(spacing: 6) {
+                    Text("Angle")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    TextField(
+                        "Angle",
+                        value: Binding(
+                            get: { viewModel.patternState?.totalAngle ?? 360 },
+                            set: { viewModel.patternState?.totalAngle = $0 }
+                        ),
+                        format: .number
+                    )
+                    .keyboardType(.numbersAndPunctuation)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(width: 80)
+                    .accessibilityIdentifier("PatternAngle")
+                }
+            }
+
+            Spacer()
+
+            Button("Cancel") {
+                viewModel.cancelPattern()
+            }
+            Button("Apply") {
+                viewModel.commitPattern()
+            }
+            .buttonStyle(.borderedProminent)
+            .accessibilityIdentifier("PatternApply")
+        }
+        .padding(.horizontal, 20)
+        .padding(.vertical, 12)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16))
+        .shadow(color: .black.opacity(0.15), radius: 10, y: 3)
     }
 
     private var polygonBar: some View {
@@ -223,10 +409,20 @@ struct NumericInputBar: View {
 
                 Spacer()
 
-                // Sketch profiles can revolve about one of their lines instead.
+                // Sketch profiles can revolve about one of their lines, sweep
+                // along a path, loft to more profiles, or coil into a helix.
                 if context.sketchID != nil {
                     Button("Revolve") {
                         viewModel.beginRevolveAxisPick()
+                    }
+                    Button("Sweep") {
+                        viewModel.beginSweepPathPick()
+                    }
+                    Button("Loft") {
+                        viewModel.beginLoftProfilePick()
+                    }
+                    Button("Helix") {
+                        showHelixSheet = true
                     }
                 }
                 // Face pulls can become an offset construction plane instead.
@@ -260,6 +456,71 @@ struct NumericInputBar: View {
                 .pickerStyle(.segmented)
                 .fixedSize()
             }
+        }
+        .padding(.horizontal, 20)
+        .padding(.vertical, 12)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16))
+        .shadow(color: .black.opacity(0.15), radius: 10, y: 3)
+        .sheet(isPresented: $showHelixSheet) {
+            HelixOptionsSheet { radius, pitch, turns in
+                viewModel.commitHelixSweep(radius: radius, pitch: pitch, turns: turns)
+            }
+        }
+    }
+
+    /// Sweep path builder (plan §B1): taps chain sketch lines/arcs into the
+    /// spine; commit sweeps the armed profile along it.
+    private func sweepBar(_ context: EditorViewModel.ToolContext) -> some View {
+        let count = context.sweepPathEntityIDs.count
+        return HStack(spacing: 16) {
+            Text("Sweep")
+                .font(.headline)
+            Text(count == 0
+                ? "Tap sketch lines or arcs to build the path"
+                : "\(count) path segment\(count == 1 ? "" : "s")")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            Spacer()
+
+            Button("Cancel") {
+                viewModel.cancelSweepPathPick()
+            }
+            Button("Sweep") {
+                viewModel.commitTool()
+            }
+            .buttonStyle(.borderedProminent)
+            .disabled(count == 0)
+            .accessibilityIdentifier("SweepCommit")
+        }
+        .padding(.horizontal, 20)
+        .padding(.vertical, 12)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16))
+        .shadow(color: .black.opacity(0.15), radius: 10, y: 3)
+    }
+
+    /// Loft section collector (plan §B2): taps append profile fills in order;
+    /// commit lofts through them.
+    private func loftBar(_ context: EditorViewModel.ToolContext) -> some View {
+        let count = context.loftProfiles.count
+        return HStack(spacing: 16) {
+            Text("Loft")
+                .font(.headline)
+            Text("\(count) section\(count == 1 ? "" : "s") — tap more profile fills")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            Spacer()
+
+            Button("Cancel") {
+                viewModel.cancelLoftProfilePick()
+            }
+            Button("Loft") {
+                viewModel.commitTool()
+            }
+            .buttonStyle(.borderedProminent)
+            .disabled(count < 2)
+            .accessibilityIdentifier("LoftCommit")
         }
         .padding(.horizontal, 20)
         .padding(.vertical, 12)
@@ -395,5 +656,57 @@ struct NumericInputBar: View {
         default:
             return nil
         }
+    }
+}
+
+/// Helix sweep options (plan §B16, spec §1.17): the armed profile sweeps
+/// along a helical spine coiling up from the sketch plane.
+struct HelixOptionsSheet: View {
+    @State private var radius = 3.0
+    @State private var pitch = 2.0
+    @State private var turns = 3.0
+
+    @Environment(\.dismiss) private var dismiss
+    let onCreate: (Double, Double, Double) -> Void
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                LabeledContent("Radius") {
+                    TextField("Radius", value: $radius, format: .number)
+                        .keyboardType(.numbersAndPunctuation)
+                        .multilineTextAlignment(.trailing)
+                        .accessibilityIdentifier("HelixRadius")
+                }
+                LabeledContent("Pitch") {
+                    TextField("Pitch", value: $pitch, format: .number)
+                        .keyboardType(.numbersAndPunctuation)
+                        .multilineTextAlignment(.trailing)
+                        .accessibilityIdentifier("HelixPitch")
+                }
+                LabeledContent("Turns") {
+                    TextField("Turns", value: $turns, format: .number)
+                        .keyboardType(.numbersAndPunctuation)
+                        .multilineTextAlignment(.trailing)
+                        .accessibilityIdentifier("HelixTurns")
+                }
+            }
+            .navigationTitle("Helix")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                        .accessibilityIdentifier("HelixCancel")
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Create") {
+                        onCreate(radius, pitch, turns)
+                        dismiss()
+                    }
+                    .accessibilityIdentifier("HelixCreate")
+                }
+            }
+        }
+        .presentationDetents([.medium])
     }
 }

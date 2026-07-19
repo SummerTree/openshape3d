@@ -125,26 +125,34 @@ nonisolated struct Sketch: Identifiable, Codable, Equatable, Sendable {
     /// Items Manager visibility (spec §11); sketches auto-hide once an
     /// extrude/revolve consumes them.
     var isHidden: Bool
+    /// IDs of entities flagged as construction (reference) geometry
+    /// (spec §3.3): rendered dashed and excluded from profile detection.
+    /// Kept as a side set so `SketchEntity`'s Codable wire format (and every
+    /// fixed-arity pattern match on it) stays unchanged.
+    var constructionEntityIDs: Set<UUID>
 
     init(
         id: SketchID = SketchID(),
         name: String = "Sketch",
         plane: SketchPlane,
         entities: [SketchEntity] = [],
-        isHidden: Bool = false
+        isHidden: Bool = false,
+        constructionEntityIDs: Set<UUID> = []
     ) {
         self.id = id
         self.name = name
         self.plane = plane
         self.entities = entities
         self.isHidden = isHidden
+        self.constructionEntityIDs = constructionEntityIDs
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, name, plane, entities, isHidden
+        case id, name, plane, entities, isHidden, constructionEntityIDs
     }
 
-    /// `name`/`isHidden` are optional on decode so pre-A8 documents load.
+    /// `name`/`isHidden`/`constructionEntityIDs` are optional on decode so
+    /// pre-A8 / pre-B9 documents load.
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         id = try container.decode(SketchID.self, forKey: .id)
@@ -152,5 +160,31 @@ nonisolated struct Sketch: Identifiable, Codable, Equatable, Sendable {
         plane = try container.decode(SketchPlane.self, forKey: .plane)
         entities = try container.decode([SketchEntity].self, forKey: .entities)
         isHidden = try container.decodeIfPresent(Bool.self, forKey: .isHidden) ?? false
+        constructionEntityIDs =
+            try container.decodeIfPresent(Set<UUID>.self, forKey: .constructionEntityIDs) ?? []
+    }
+}
+
+// MARK: - Construction geometry (spec §3.3)
+
+nonisolated extension Sketch {
+    func isConstruction(_ entityID: UUID) -> Bool {
+        constructionEntityIDs.contains(entityID)
+    }
+
+    /// Make Construction (`true`) / Make Regular (`false`) for a batch of entities.
+    mutating func setConstruction(_ flag: Bool, forEntityIDs ids: some Sequence<UUID>) {
+        if flag {
+            constructionEntityIDs.formUnion(ids)
+        } else {
+            constructionEntityIDs.subtract(ids)
+        }
+    }
+
+    /// Entities that participate in profile detection (non-construction).
+    var regularEntities: [SketchEntity] {
+        constructionEntityIDs.isEmpty
+            ? entities
+            : entities.filter { !constructionEntityIDs.contains($0.id) }
     }
 }

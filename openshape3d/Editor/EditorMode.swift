@@ -14,6 +14,12 @@ enum SketchTool: String, CaseIterable {
     case polygon
     /// Tap-to-trim: no drawing; taps delete the entity span under them.
     case trim
+    /// Text (plan §B7, spec §1.12): taps place the text dialog's glyph
+    /// outlines at the tapped point.
+    case text
+    /// Project (plan §B8, spec §1.13 v1): taps on a visible body flatten its
+    /// feature edges onto the active sketch plane.
+    case project
 }
 
 enum EditorMode: Equatable {
@@ -34,8 +40,28 @@ enum EditorMode: Equatable {
     case extruding
     /// Revolve armed: waiting for a tap on a sketch line to use as the axis.
     case pickingRevolveAxis
+    /// Sweep armed: taps on open sketch entities (lines/arcs) chain into the
+    /// sweep path.
+    case pickingSweepPath
+    /// Loft armed: taps on profile fills append loft sections in order.
+    case pickingLoftProfiles
     /// Waiting for the second body of a boolean operation.
     case pickingBooleanTool(BooleanKind, target: BodyID)
+    /// Split armed: waiting for a cutter tap — a world/construction plane
+    /// tile, or a sketch profile fill (through-extruded cutter).
+    case pickingSplitCutter(target: BodyID)
+    /// Pattern bar active (linear/circular); parameters live in
+    /// `EditorViewModel.patternState`, instances preview as ghosts.
+    case patterning
+    /// Rotate Around Axis (spec §5.3): waiting for an axis pick (sketch line
+    /// tap or a world-axis button), then live angle entry/drag.
+    case rotatingAroundAxis
+    /// Translate (spec §5.2): tap a source snap point, then a destination;
+    /// the selection shifts by the exact delta.
+    case translating
+    /// Align v1 (spec §5.5): tap a snap point on the body to move, then the
+    /// destination point; that body translates so the points coincide.
+    case aligning
     /// Measure tool: taps pick notable points; two picks show a distance.
     case measuring
 

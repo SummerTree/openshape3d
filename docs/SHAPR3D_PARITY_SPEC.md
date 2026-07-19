@@ -2,7 +2,9 @@
 
 **openshape3d** — feature-for-feature product spec derived from the Shapr3D Help
 Center (manual + tutorial corpus, extracted 2026-07-18), with an honest status
-audit against the current source tree (v0.3, post-Phase A).
+audit against the current source tree (v0.4, post-Phase B tranche 1: sweep,
+loft, split, pattern, text, project, sketch move/rotate, translate,
+rotate-around-axis, align, construction geometry, helix).
 
 ## Legend
 
@@ -26,7 +28,9 @@ audit against the current source tree (v0.3, post-Phase A).
   work; no geometry involved.
 
 Status verified against: `openshape3d/Kernel/` (`KernelOps`, `ProfileDetector`,
-`FaceTopology`, `SketchTypes`, `SketchPlanes`, `MeasureKit`, `STLExporter`,
+`FaceTopology`, `SketchTypes`, `SketchPlanes`, `MeasureKit`, `SweepLoftKit`,
+`SplitKit`, `PatternKit`, `TextSketch`, `ProjectionKit`, `SketchTransform`,
+`SketchOffset`, `STLExporter`,
 `STLImporter`, `OBJExporter`, `ThreeMFExporter`, `EuclidBridge`), `Editor/`
 (`EditorViewModel`, `EditorMode`, `SnapEngine`, `SketchTessellator`), `Model/`
 (`Commands`, `DocumentSession`, `UndoStack`, `PersistenceModels`),
@@ -179,7 +183,10 @@ use gizmo to set offset direction + distance. If the selected item is shared by
 multiple loops, an arrow shows per loop — pick the arrow of the loop to offset.
 Finish with "Exit Sketching". Hotkey O. Used constantly in tutorials for wall
 thickness (e.g. offset outer edge 1 mm and cut).
-**Status:** ❌ not implemented.
+**Status:** 🟡 partial — kernel only: `SketchOffset` offsets closed
+primitives (circle/arc/rect/polygon) and connected line chains/loops with
+degenerate-collapse cleanup, unit-tested; no palette tool, gizmo, or
+loop-arrow disambiguation UI yet.
 **Feasibility:** [mesh-kernel OK] (polyline/arc offsetting is 2D geometry)
 
 ### 1.10 Move/Rotate (sketch mode)
@@ -190,13 +197,14 @@ connected group. Copy badge (turns BLUE when active) moves/rotates a duplicate.
 Complete by selecting empty grid area. Direct manipulation without the tool:
 elements/edges/points can simply be dragged. With the default view, dragging
 the gizmo center tiles moves a sketch along/between planes.
-**Status:** 🟡 partial — the direct-manipulation half: a drag starting on an
-entity edits it (control points — endpoints/corners/handles — win, then
-whole-entity translate with grid capture), coalescing into one
-`UpdateSketchEntityCommand` per drag; tap toggles entity selection
-(`beginSketchEntityDrag`, `SketchHitTester`, `selectedSketchEntityIDs`).
-Missing: the Move/Rotate gizmo on sketch selections, Copy badge,
-connected-group double-tap, between-plane moves.
+**Status:** 🟡 partial — direct manipulation (drag edits an entity, control
+points win, one coalesced `UpdateSketchEntityCommand` per drag) PLUS the
+selection gizmo: a move handle + rotate ring at the selection centroid
+(`sketchGizmoSegments`, `beginSketchGizmoDrag`, `SketchTransform`), a Copy
+chip that turns blue and drags duplicates (`sketchCopyOnDrag`), and
+double-tap selecting the connected chain via endpoint adjacency
+(`ProfileDetector.connectedEntityIDs`). Missing: dimension labels on the
+gizmo, between-plane moves via center tiles.
 **Feasibility:** [mesh-kernel OK]; copy-that-loses-constraints details
 [needs constraint solver]
 
@@ -224,7 +232,14 @@ pattern-rotation as the sole remaining DOF (lockable via an angled
 construction line). Documented failure mode: constraining the LAST copy
 breaks the pattern when Quantity shrinks below it — constrain the first copy
 instead.
-**Status:** ❌ not implemented.
+**Status:** 🟡 partial — static copies: with a profile armed for extrude,
+the palette Pattern patterns the profile's entities in-plane — Linear
+(X/Y direction + spacing) or Circular about the sketch origin (total
+angle, rotated instances) — with accent-blue ghost previews and one
+CompositeCommand of `AddSketchEntityCommand`s (`PatternKit`,
+`commitSketchPattern`). Missing: gizmo-driven direction/center dragging,
+Total-distance definition, 2-axis grids, the live pattern constraint,
+re-editing, variables.
 **Feasibility:** static copies [mesh-kernel OK]; live pattern constraint &
 re-editing [needs constraint solver] + [needs history engine]
 
@@ -239,7 +254,13 @@ X/Y pad values, rotation, and a relocatable reference point for precise
 placement — while the string and size are immutable. After completion text is
 editable only as sketch elements.
 Fonts with discontinuous sections may need cleanup before solid use.
-**Status:** ❌ not implemented.
+**Status:** 🟡 partial — Text in the sketch palette: tap a baseline point on
+the active sketch plane → dialog (Content, Height, curated Font list) →
+glyph outlines land as polygon/line sketch entities in one undo step
+(`TextSketch` via Core Text, `commitText`); the resulting closed loops fill
+and extrude like any profile. Missing: alignment option, the full
+installed-font list, post-Continue gizmo repositioning (position is fixed
+at the tapped point), pre-selected face entry.
 **Feasibility:** [mesh-kernel OK] (Core Text glyph outlines → sketch profiles)
 
 ### 1.13 Project — Sketches (sketch mode; also Tools > Project)
@@ -263,7 +284,14 @@ displayed construction plane to project that region's outline onto the plane.
 Projected sketch entities render PURPLE/VIOLET and are LOCKED in place
 (cannot be dragged); projections from a hidden source sketch stay live.
 Hotkey P.
-**Status:** ❌ not implemented.
+**Status:** 🟡 partial — the unlinked CNC-flat-layout core: Project in the
+sketch palette, then tap a visible body — its feature edges flatten onto
+the active sketch plane as regular, editable line entities in one undo
+step (`ProjectionKit.project`, `projectTappedBody`); re-running on the
+same sketch appends, and projected entities delete like any others.
+Missing: sketch/edge-selection sources, silhouette outlines, linked
+(magenta, auto-updating) projections, purple/locked rendering, non-planar
+targets, drag-and-drop shortcut.
 **Feasibility:** unlinked planar sketch projection [mesh-kernel OK]; linked
 projections [needs history engine]; edge projections that split faces
 [needs B-rep kernel]
@@ -307,7 +335,12 @@ instances rigid under constraint edits [needs constraint solver]
 **Spec:** Listed among the sketch primitives (Line, Arc, Circle, Ellipse,
 Polygon, Rectangle, Spline, Helix): a helical 3D curve, usable e.g. as a
 Sweep path. (Helical SOLIDS come from Revolve's Elevation param, §4.10.)
-**Status:** ❌ not implemented.
+**Status:** 🟡 partial — not a sketch entity, but the primary use case
+works: "Helix" in the extrude bar sweeps the armed profile along a
+generated helical spine (radius/pitch/turns dialog, coiling up the
+sketch-plane normal from the profile centroid; `HelixKit.path`,
+`commitHelixSweep`). Missing: a persistent helix curve entity reusable as
+a generic sweep path.
 **Feasibility:** [mesh-kernel OK] (tessellated helix polyline)
 
 ---
@@ -504,7 +537,12 @@ rendered DASHED; excluded from closed-profile fill/region detection. Uses:
 revolve axis, symmetry axis, alignment scaffolding, references. Reverse via
 "Make Regular". Construction geometry survives only the native format — X_T/
 STEP/IGES exports skip all sketch elements. Bulk toggle of many lines at once.
-**Status:** ❌ not implemented.
+**Status:** ✅ implemented — palette "Construct" bulk-toggles the selected
+sketch entities (mixed/regular → all construction, all-construction → all
+regular; one undoable `SetConstructionCommand`); construction entities
+render dashed (`SketchTessellator.dashedSegments`), are excluded from
+`ProfileDetector` fills, and are the PREFERRED candidates when picking a
+revolve axis. Persisted per sketch with backward-compatible decoding.
 **Feasibility:** [mesh-kernel OK] (a flag on `SketchEntity` + `ProfileDetector`
 exclusion + dashed rendering — no solver needed)
 
@@ -656,7 +694,14 @@ params: Profiles, Periodic on/off, Guides, Start/End Tangent Continuity =
 None | G1 | G2 with Magnitude values. Curve-network workflow: rail splines
 coincident to profile intersection points; editing rails/profiles live-updates
 the loft.
-**Status:** ❌ not implemented.
+**Status:** 🟡 partial — profiles-only loft: with a profile armed for
+extrude, "Loft" seeds it as section 1 and taps on more profile fills (any
+sketch plane) append sections in tap order, with a live translucent
+preview and section counts in the pill/bar; commit lofts through the
+sections (holes carried per section, `SweepLoftKit.loft`) and runs the
+shared automatic-boolean pipeline; coplanar-only section sets are rejected
+with guidance. Missing: body FACES as sections, guide curves, Periodic,
+tangent continuity/bulge handles, live updates.
 **Feasibility:** profiles-only loft [mesh-kernel OK] (Euclid `Mesh.loft`);
 guide curves/continuity/periodic [needs B-rep kernel] for exactness; live
 updates [needs history engine]
@@ -710,7 +755,14 @@ of the body's OWN faces. Tools are projected through the bodies (no contact
 needed); multiple tools cut simultaneously; connected same-plane sketches merge
 into one splitting surface. Keep Originals toggle. History params: Bodies to
 Split, Split With, Keep Originals.
-**Status:** ❌ not implemented.
+**Status:** 🟡 partial — one body, one cutter: palette "Split" on a selected
+body arms a cutter pick (world/construction plane tiles shown); tapping a
+plane tile splits by half-space CSG, tapping a sketch profile fill splits
+by a through-extruded cutter (`SplitKit`); the two halves land as
+"<name> A" / "<name> B" in ONE undo step (Replace + Add composite — undo
+is the Keep Originals path), both selected. Missing: multiple bodies,
+multiple simultaneous cutters, own-face/other-face and image cutters,
+Keep Originals toggle.
 **Feasibility:** [mesh-kernel OK] (plane/extruded-profile splitting via CSG
 with half-spaces/cutter solids; curved-face splitting tools are harder but
 possible with thickened cutters)
@@ -750,7 +802,15 @@ History params: Profile, Path, Profile Position = Auto | Path intersection |
 Closest point | Closest endpoint; Orientation = Normal to path | Parallel to
 profile; Twist (angle along path); Scale (size along path); Corner type =
 Mitre | Round. Hotkey W.
-**Status:** ❌ not implemented.
+**Status:** 🟡 partial — with a profile armed for extrude, "Sweep" arms a
+path pick: single taps chain open sketch lines/arcs (across sketches/
+planes) into the spine — the first segment auto-orients toward the
+profile, later segments must join the spine end — with a live preview and
+segment counts in the pill/bar; commit sweeps the profile (holes included)
+along the spine (`SweepLoftKit.sweep`) through the automatic-boolean
+pipeline; empty-space tap commits like extrude. Missing: body edges as
+paths, double-tap whole-chain path selection, Profile Position /
+Orientation / Twist / Scale / Corner params.
 **Feasibility:** [mesh-kernel OK] (Euclid `Mesh.extrude(along:)`; twist/scale/
 corner options are mesh-sweep math)
 
@@ -857,7 +917,12 @@ bodies from one specific point to another; start and end points snap to grid
 points, edges, and vertices. Copy option duplicates instead of moving.
 History params: Target Bodies/Faces/Edges, Start Point, End Point, Copy
 toggle. Hotkey N.
-**Status:** ❌ not implemented.
+**Status:** 🟡 partial — bodies only: palette "Translate" on a selection,
+then two taps — source snap point, destination snap point (body vertices
+and sketch notable points first, ground-grid intersections as fallback;
+hidden items excluded; cross markers at picks) — and the selection shifts
+by the exact delta as one undoable step titled "Translate". Escape/Cancel
+in the pill exits. Missing: sketch/profile targets, Copy option.
 **Feasibility:** [mesh-kernel OK]
 
 ### 5.3 Rotate Around Axis
@@ -869,7 +934,13 @@ linear edge) → drag the rotation gizmo or type an angle → Done. Dragging
 snaps in 5-DEGREE increments; finer values (e.g. 1.5°) are typed into the
 numeric field. Copy badge rotates a duplicate. History params: Targets,
 Axis, Angle (numeric), Copy.
-**Status:** ❌ not implemented.
+**Status:** 🟡 partial — bodies only: palette "Rotate" on a selection, then
+tap a sketch line or an X/Y/Z pill button for the axis; drags scrub the
+angle in 5° steps with a live preview, the numeric field takes exact fine
+angles, Apply/empty-tap commits one `TransformBodiesCommand` titled
+"Rotate" (cancel restores the pre-tool transforms). Missing: construction
+axes and linear body edges as axes, the on-axis rotation gizmo, Copy
+badge.
 **Feasibility:** [mesh-kernel OK]
 
 ### 5.4 Scale
@@ -886,8 +957,10 @@ History params: Scale X/Y/Z, Uniform toggle, Copy. Hotkey S.
 **Status:** 🟡 partial — uniform scale only: palette "Scale" on a selection
 opens a factor field; committing multiplies each selected body's uniform
 scale about its pivot, undoably (`beginScaleEntry`/`commitScale` →
-`TransformBodiesCommand`). Missing: drag handles, movable scale center,
-Non-uniform mode, Copy badge, face/edge scaling, empty-grid commit.
+`TransformBodiesCommand` titled "Scale"); the Copy badge (blue when
+active) scales duplicates instead, and tapping empty grid commits the
+pending factor per spec. Missing: drag handles, movable scale center,
+Non-uniform mode, face/edge scaling.
 **Feasibility:** [mesh-kernel OK]
 
 ### 5.5 Align
@@ -904,7 +977,12 @@ while dragging: aligned vertices, collinear edges, coplanar arcs (with a
 two cylindrical faces auto-centers them COLLINEARLY (Parametric Clamp). The
 relation is static — no persistent mates (Shapr3D has no native
 assemblies). History param: Target Body.
-**Status:** ❌ not implemented.
+**Status:** 🟡 partial — vertex-onto-vertex mating: palette "Align" (needs
+≥2 bodies), tap a snap point on the body to move, then a point on another
+VISIBLE body (hidden bodies never pick); the first body translates so the
+points coincide, one undo step titled "Align". Missing: purple snap-point
+rendering on faces/edges/centers, post-mate gizmo + Flip badge,
+likely-position snapping, cylindrical auto-collinear centering.
 **Feasibility:** [mesh-kernel OK]
 
 ### 5.6 Mirror
@@ -947,7 +1025,15 @@ limits; workaround: pattern the tool bodies, then Subtract). SKETCH PROFILES
 can also be patterned in 3D — doing so auto-creates the sketch pattern
 constraint (§2.5) linking the instances. Patterned copies get suffixed
 names (§4.7).
-**Status:** ❌ not implemented.
+**Status:** 🟡 partial — static instances: palette "Pattern" on a selected
+body opens the pattern bar (Linear: X/Y/Z axis + spacing; Circular: axis
++ total angle + count, instances rotated) with translucent ghost
+previews; Apply adds count−1 copies as ONE CompositeCommand ("Pattern" in
+undo) with suffixed names (Box 2, Box 3, …), all instances selected.
+Sketch profiles pattern in-plane per §1.11. Missing: 2-/3-axis linear
+grids, Total-distance definition, draggable direction/center handles onto
+sketch lines, movable circular center, Uniform orientation, Items Manager
+pattern FOLDER grouping and folder-as-Subtract-tool, live re-editing.
 **Feasibility:** static instances [mesh-kernel OK]; editable pattern group
 [needs history engine]
 

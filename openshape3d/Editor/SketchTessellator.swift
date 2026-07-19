@@ -84,6 +84,50 @@ nonisolated enum SketchTessellator {
         return out
     }
 
+    // MARK: - Dashed rendering (construction geometry, spec §3.3)
+
+    /// Dash pattern in plane/world units.
+    static let dashLength: Float = 0.5
+    static let dashGap: Float = 0.3
+
+    /// Dashed variant of `segments(for:on:)` for construction entities.
+    static func dashedSegments(
+        for entities: [SketchEntity], on plane: SketchPlane
+    ) -> [SIMD3<Float>] {
+        dashed(segments(for: entities, on: plane), dash: dashLength, gap: dashGap)
+    }
+
+    /// Splits solid line-batch segments (point pairs) into short dashes.
+    /// Pieces shorter than one dash+gap period (tessellated curves) keep the
+    /// dash duty cycle so curves still read as dashed.
+    static func dashed(_ segments: [SIMD3<Float>], dash: Float, gap: Float) -> [SIMD3<Float>] {
+        var out: [SIMD3<Float>] = []
+        let period = dash + gap
+        var i = 0
+        while i + 1 < segments.count {
+            let a = segments[i]
+            let b = segments[i + 1]
+            i += 2
+            let delta = b - a
+            let length = simd_length(delta)
+            guard length > 1e-6 else { continue }
+            let direction = delta / length
+            if length <= period {
+                out.append(a)
+                out.append(a + direction * (length * dash / period))
+                continue
+            }
+            var t: Float = 0
+            while t < length {
+                let end = min(t + dash, length)
+                out.append(a + direction * t)
+                out.append(a + direction * end)
+                t += period
+            }
+        }
+        return out
+    }
+
     private static func appendPolyline(
         _ points: [SIMD2<Double>], closed: Bool,
         _ plane: SketchPlane, _ out: inout [SIMD3<Float>]

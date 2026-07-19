@@ -110,6 +110,8 @@ final class ViewportCoordinator: NSObject, ViewportGestureDelegate, ViewportCame
     }
 
     private var pullActive = false
+    /// A drag scrubbing the Rotate-Around-Axis angle (5° steps).
+    private var rotateAxisDragActive = false
 
     func gestureTapped(at point: CGPoint) {
         // Orientation cube first: taps on it never reach the model.
@@ -166,6 +168,27 @@ final class ViewportCoordinator: NSObject, ViewportGestureDelegate, ViewportCame
             return false
         }
 
+        // Waiting for sweep-path / loft-section taps: stray drags orbit.
+        if case .pickingSweepPath = viewModel.mode {
+            return false
+        }
+        if case .pickingLoftProfiles = viewModel.mode {
+            return false
+        }
+
+        // Rotate Around Axis: once the axis is set, drags scrub the angle;
+        // before that (and for Translate/Align picks) drags orbit.
+        if case .rotatingAroundAxis = viewModel.mode {
+            rotateAxisDragActive = viewModel.beginRotateAxisDrag()
+            return rotateAxisDragActive
+        }
+        if case .translating = viewModel.mode {
+            return false
+        }
+        if case .aligning = viewModel.mode {
+            return false
+        }
+
         // Choosing a sketch plane: taps pick, drags orbit.
         if case .pickingSketchPlane = viewModel.mode {
             return false
@@ -206,6 +229,12 @@ final class ViewportCoordinator: NSObject, ViewportGestureDelegate, ViewportCame
             sceneDidChange()
             return
         }
+        if rotateAxisDragActive {
+            let screenDelta = Double(dragStartPoint.y - point.y) * worldPerPoint
+            viewModel.updateRotateAxisDrag(screenDeltaWorld: screenDelta)
+            sceneDidChange()
+            return
+        }
         if pullActive {
             let screenDelta = Double(dragStartPoint.y - point.y) * worldPerPoint
             viewModel.updateToolDrag(ray: ray, screenDeltaWorld: screenDelta)
@@ -228,6 +257,12 @@ final class ViewportCoordinator: NSObject, ViewportGestureDelegate, ViewportCame
     func gestureDragEnded(at point: CGPoint) {
         if viewModel.mode.isSketching, let ray = ray(at: point) {
             viewModel.endSketchStroke(ray: ray)
+            sceneDidChange()
+            return
+        }
+        if rotateAxisDragActive {
+            // Angle already applied live; commit happens via Apply/empty tap.
+            rotateAxisDragActive = false
             sceneDidChange()
             return
         }

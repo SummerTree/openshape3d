@@ -138,6 +138,13 @@ struct EditorView: View {
 
     private func sketchStatusText(_ viewModel: EditorViewModel) -> String {
         guard let sketch = viewModel.activeSketch else { return "Sketching" }
+        if case .sketching(_, let tool) = viewModel.mode {
+            switch tool {
+            case .text: return "Tap to place text"
+            case .project: return "Tap a body to project its edges"
+            default: break
+            }
+        }
         return sketch.plane.isCoincident(with: .ground)
             ? "Sketching on ground plane"
             : "Sketching on plane"
@@ -202,6 +209,12 @@ struct EditorView: View {
             .overlay(alignment: .leading) {
                 ToolPaletteView(viewModel: viewModel)
                     .padding(.leading, 14)
+                    // Keep the (scrollable) palette clear of the top bar and
+                    // the bottom info/input bars, which span the full width:
+                    // without the inset the last tools (Delete) can sit under
+                    // the numeric bar and become untappable in portrait.
+                    .padding(.top, 8)
+                    .padding(.bottom, 96)
             }
             .overlay(alignment: .bottom) {
                 VStack(spacing: 10) {
@@ -236,6 +249,22 @@ struct EditorView: View {
                     .accessibilityIdentifier("CopyBadge")
                     .padding(.trailing, 16)
                     .padding(.bottom, 96)
+                } else if viewModel.mode.isSketching,
+                          !viewModel.selectedSketchEntityIDs.isEmpty {
+                    // Sketch Copy chip (spec §1.10): the next selection-gizmo
+                    // drag moves/rotates duplicates.
+                    Button {
+                        viewModel.sketchCopyOnDrag.toggle()
+                    } label: {
+                        Label("Copy", systemImage: "plus.square.on.square")
+                            .font(.subheadline.weight(.semibold))
+                    }
+                    .buttonStyle(.bordered)
+                    .tint(viewModel.sketchCopyOnDrag ? Color.blue : Color.secondary)
+                    .background(.regularMaterial, in: Capsule())
+                    .accessibilityIdentifier("SketchCopyBadge")
+                    .padding(.trailing, 16)
+                    .padding(.bottom, 96)
                 }
             }
             .overlay(alignment: .top) {
@@ -264,6 +293,7 @@ struct EditorView: View {
                             viewModel.cancelPlanePicking()
                         }
                         .controlSize(.small)
+                        .keyboardShortcut(.cancelAction)
                     }
                 } else if case .pickingBooleanTool(let kind, _) = viewModel.mode {
                     statusPill(
@@ -274,6 +304,7 @@ struct EditorView: View {
                             viewModel.cancelBooleanPicking()
                         }
                         .controlSize(.small)
+                        .keyboardShortcut(.cancelAction)
                     }
                 } else if case .pickingRevolveAxis = viewModel.mode {
                     statusPill(
@@ -284,6 +315,109 @@ struct EditorView: View {
                             viewModel.cancelRevolveAxisPick()
                         }
                         .controlSize(.small)
+                        .keyboardShortcut(.cancelAction)
+                    }
+                } else if case .pickingSweepPath = viewModel.mode {
+                    // Pill mirrors the sweep bar's segment count (plan §B1).
+                    let count = viewModel.toolContext?.sweepPathEntityIDs.count ?? 0
+                    statusPill(
+                        icon: "point.topleft.down.to.point.bottomright.curvepath",
+                        text: count == 0
+                            ? "Tap sketch lines to build the sweep path"
+                            : "Sweep path: \(count) segment\(count == 1 ? "" : "s") chained"
+                    ) {
+                        Button("Cancel") {
+                            viewModel.cancelSweepPathPick()
+                        }
+                        .controlSize(.small)
+                        .keyboardShortcut(.cancelAction)
+                    }
+                } else if case .pickingLoftProfiles = viewModel.mode {
+                    // Pill mirrors the loft bar's section count (plan §B2).
+                    let count = viewModel.toolContext?.loftProfiles.count ?? 0
+                    statusPill(
+                        icon: "square.stack.3d.up",
+                        text: count < 2
+                            ? "Tap profile fills to add loft sections"
+                            : "Loft: \(count) sections in tap order"
+                    ) {
+                        Button("Cancel") {
+                            viewModel.cancelLoftProfilePick()
+                        }
+                        .controlSize(.small)
+                        .keyboardShortcut(.cancelAction)
+                    }
+                } else if case .pickingSplitCutter = viewModel.mode {
+                    statusPill(
+                        icon: "square.split.1x2",
+                        text: "Tap a plane or profile to split"
+                    ) {
+                        Button("Cancel") {
+                            viewModel.cancelSplitCutterPick()
+                        }
+                        .controlSize(.small)
+                        .keyboardShortcut(.cancelAction)
+                    }
+                } else if case .patterning = viewModel.mode {
+                    statusPill(
+                        icon: "square.grid.3x3",
+                        text: "Set pattern options below, then Apply"
+                    ) {
+                        Button("Cancel") {
+                            viewModel.cancelPattern()
+                        }
+                        .controlSize(.small)
+                        .keyboardShortcut(.cancelAction)
+                    }
+                } else if case .rotatingAroundAxis = viewModel.mode {
+                    statusPill(
+                        icon: "arrow.clockwise",
+                        text: viewModel.rotateAxisState?.hasAxis == true
+                            ? "Drag to rotate, or type an angle"
+                            : "Tap a sketch line, or pick a world axis"
+                    ) {
+                        if viewModel.rotateAxisState?.hasAxis != true {
+                            Button("X") { viewModel.setRotateWorldAxis(.x) }
+                                .controlSize(.small)
+                                .accessibilityIdentifier("RotateAxisX")
+                            Button("Y") { viewModel.setRotateWorldAxis(.y) }
+                                .controlSize(.small)
+                                .accessibilityIdentifier("RotateAxisY")
+                            Button("Z") { viewModel.setRotateWorldAxis(.z) }
+                                .controlSize(.small)
+                                .accessibilityIdentifier("RotateAxisZ")
+                        }
+                        Button("Cancel") {
+                            viewModel.cancelRotateAxis()
+                        }
+                        .controlSize(.small)
+                        .keyboardShortcut(.cancelAction)
+                    }
+                } else if case .translating = viewModel.mode {
+                    statusPill(
+                        icon: "arrow.right.to.line",
+                        text: viewModel.transformPickPoints.isEmpty
+                            ? "Tap the source point"
+                            : "Tap the destination point"
+                    ) {
+                        Button("Cancel") {
+                            viewModel.cancelTranslate()
+                        }
+                        .controlSize(.small)
+                        .keyboardShortcut(.cancelAction)
+                    }
+                } else if case .aligning = viewModel.mode {
+                    statusPill(
+                        icon: "point.3.connected.trianglepath.dotted",
+                        text: viewModel.transformPickPoints.isEmpty
+                            ? "Tap a point on the body to move"
+                            : "Tap the destination point"
+                    ) {
+                        Button("Cancel") {
+                            viewModel.cancelAlign()
+                        }
+                        .controlSize(.small)
+                        .keyboardShortcut(.cancelAction)
                     }
                 } else if case .measuring = viewModel.mode {
                     measurePill(viewModel)
@@ -445,6 +579,14 @@ struct EditorView: View {
                         transparentBackground: transparent,
                         showGrid: showGrid
                     )
+                }
+            }
+            .sheet(isPresented: Binding(
+                get: { viewModel.textPlacement != nil },
+                set: { if !$0 { viewModel.textPlacement = nil } }
+            )) {
+                TextToolSheet { content, height, fontName in
+                    viewModel.commitText(content: content, height: height, fontName: fontName)
                 }
             }
             .fileExporter(
