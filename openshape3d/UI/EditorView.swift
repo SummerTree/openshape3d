@@ -563,6 +563,10 @@ struct EditorView: View {
                 // Constraint glyphs: tap to select, Delete removes (plan §C3).
                 SketchConstraintOverlay(viewModel: viewModel)
             }
+            .overlay {
+                // Shapr3D on-arrow value pill for extrude / diameter (§4.1).
+                ExtrudeGizmoOverlay(viewModel: viewModel)
+            }
             .overlay(alignment: .leading) {
                 ToolPaletteView(viewModel: viewModel)
                     .padding(.leading, 14)

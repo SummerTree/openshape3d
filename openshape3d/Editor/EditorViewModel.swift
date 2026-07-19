@@ -2936,6 +2936,61 @@ final class EditorViewModel {
         toolContext = context
     }
 
+    // MARK: - Extrude arrow value pill (Shapr3D on-arrow dimension)
+
+    struct ExtrudeArrowLabel {
+        var world: SIMD3<Double>   // arrow-tip world position
+        var text: String           // "12.0 mm" or "⌀ 24.0 mm"
+        var isDiameter: Bool
+        var symmetric: Bool
+    }
+
+    /// True while the on-arrow value pill is being typed into.
+    var editingExtrudeArrow = false
+
+    /// The editable value pill riding the extrude/diameter arrow, or nil.
+    var extrudeArrowLabel: ExtrudeArrowLabel? {
+        guard let context = toolContext, case .extrude(let distance) = context.kind else { return nil }
+        let centroid = context.plane.toWorld(context.profile.centroid)
+        let tip = centroid + context.plane.normal * distance
+        if let cyl = context.cylinderFace {
+            let dia = 2 * (cyl.radius + distance / max(sourceScale(context), 1e-6))
+            return ExtrudeArrowLabel(
+                world: tip, text: String(format: "⌀ %.1f mm", dia),
+                isDiameter: true, symmetric: false
+            )
+        }
+        let shown = context.symmetric ? abs(distance) * 2 : abs(distance)
+        return ExtrudeArrowLabel(
+            world: tip, text: String(format: "%.1f mm", shown),
+            isDiameter: false, symmetric: context.symmetric
+        )
+    }
+
+    private func sourceScale(_ context: ToolContext) -> Double {
+        context.sourceBody.flatMap { session.document.body(with: $0) }?.transform.scale ?? 1
+    }
+
+    func beginExtrudeArrowEdit() { editingExtrudeArrow = true }
+
+    /// Commit a typed value from the on-arrow pill: set the distance/diameter
+    /// (Enter commits the feature, matching the bottom bar).
+    func commitExtrudeArrowEdit(_ text: String) {
+        defer { editingExtrudeArrow = false }
+        guard let value = ExpressionEvaluator.evaluate(text),
+              let context = toolContext, case .extrude = context.kind
+        else { return }
+        if let cyl = context.cylinderFace {
+            setExtrudeDistance(value / 2 - cyl.radius)
+        } else {
+            let signed = (context.distance ?? 0) < 0 ? -abs(value) : abs(value)
+            setExtrudeDistance(context.symmetric ? signed / 2 : signed)
+        }
+        commitTool()
+    }
+
+    func cancelExtrudeArrowEdit() { editingExtrudeArrow = false }
+
     func setExtrudeSymmetric(_ symmetric: Bool) {
         guard var context = toolContext, case .extrude = context.kind,
               context.symmetric != symmetric
