@@ -235,10 +235,18 @@ final class EditorViewModel {
     var scene: ViewportScene {
         _ = session.changeCount // establish observation dependency
         var drawables: [BodyDrawable] = []
+        // During a face push/pull, the preview IS the modified source body, so
+        // hide the original to avoid it poking through the preview.
+        let facePreviewSource: BodyID? =
+            (toolContext?.previewReplacesSource == true && toolContext?.preview != nil)
+            ? toolContext?.sourceBody : nil
+
         // Isolate (spec §16.2): a transient override hides everything outside
         // the isolated set without touching persisted visibility.
         for body in session.document.bodies
-        where !body.isHidden && (isolatedBodyIDs?.contains(body.id) ?? true) {
+        where !body.isHidden
+            && body.id != facePreviewSource
+            && (isolatedBodyIDs?.contains(body.id) ?? true) {
             var selectionState = SelectionStateNone.rawValue
             if selection.contains(body.id) {
                 selectionState = SelectionStateSelected.rawValue
@@ -265,8 +273,11 @@ final class EditorViewModel {
         }
         var scene = ViewportScene(bodies: drawables)
 
-        // Tool preview (extrude/revolve): translucent accent body.
+        // Tool preview (extrude/revolve): translucent accent body — except a
+        // face push/pull preview replaces the source body, so it renders as a
+        // solid selected body (the real edited result).
         if let preview = toolContext?.preview {
+            let replacesSource = facePreviewSource != nil
             scene.bodies.append(BodyDrawable(
                 id: preview.id,
                 renderMesh: preview.render,
@@ -274,14 +285,18 @@ final class EditorViewModel {
                 meshRevision: preview.meshRevision,
                 modelMatrix: preview.transform.matrixFloat,
                 baseColor: SIMD4(0.72, 0.74, 0.78, 1),
-                selectionState: SelectionStatePreview.rawValue,
-                isTranslucent: true
+                selectionState: replacesSource
+                    ? SelectionStateSelected.rawValue : SelectionStatePreview.rawValue,
+                isTranslucent: !replacesSource
             ))
         }
 
-        // Selected-face highlight (Shapr3D: tap selects a face).
+        // Selected-face highlight (Shapr3D: tap selects a face) — hidden once a
+        // push/pull preview is showing, since the highlight sits at the
+        // original face position while the preview body has already moved.
         if case .faceSelected(let bodyID) = mode,
            let context = toolContext,
+           facePreviewSource == nil,
            let body = session.document.body(with: bodyID) {
             let matrix = body.transform.matrixFloat
             var triangles: [SIMD3<Float>] = []
@@ -2535,8 +2550,17 @@ final class EditorViewModel {
         var symmetric = false
         /// False when committing now would fail (arrow renders red).
         var isPendingValid = true
+        /// True while the preview should REPLACE the source body in the scene
+        /// (face push/pull: the preview is the whole modified body, not an
+        /// overlapping tool prism).
+        var previewReplacesSource = false
         var previewRevision: UInt64 = 1
         var preview: Body?
+
+        /// A push/pull of an existing body's planar face (vs. a fresh sketch
+        /// extrude). These need a coincident-wall-safe truncation, not a
+        /// same-cross-section boolean.
+        var isFaceOperation: Bool { sourceBody != nil && !faceTriangles.isEmpty }
 
         var distance: Double? {
             switch kind {
@@ -2677,6 +2701,32 @@ final class EditorViewModel {
         case .offsetPlane:
             return // handled above
         case .extrude(let distance):
+            // Face push/pull: preview the whole modified body so the viewport
+            // matches the committed result (no overlapping-prism z-fighting).
+            if context.isFaceOperation {
+                context.previewReplacesSource = true
+                if abs(distance) <= 1e-4 {
+                    context.preview = nil
+                    context.isPendingValid = true
+                    return
+                }
+                let modified = faceModifiedMesh(context, distance: distance)
+                context.isPendingValid = !(modified?.polygons.isEmpty ?? true)
+                guard let modified, !modified.polygons.isEmpty else {
+                    context.preview = nil
+                    return
+                }
+                context.previewRevision += 1
+                context.preview = Body(
+                    id: toolPreviewID,
+                    name: "Tool Preview",
+                    transform: .identity,
+                    primitive: nil,
+                    euclidMesh: modified,
+                    revision: context.previewRevision
+                )
+                return
+            }
             var solid = KernelOps.extrude(
                 profile: context.profile,
                 holes: context.holes,
@@ -2934,6 +2984,13 @@ final class EditorViewModel {
             return
         }
 
+        // Face push/pull modifies its own body directly (coincident-wall-safe
+        // truncation/extension), not via a same-cross-section boolean.
+        if context.isFaceOperation, context.booleanOverride == .auto {
+            commitFaceOperation(context, distance: distance)
+            return
+        }
+
         // Automatic boolean (Shapr3D Extrude): pulled away from a body →
         // union; pushed into a body → subtract; touching nothing → new body.
         let n = context.plane.normal
@@ -2948,6 +3005,40 @@ final class EditorViewModel {
             title: "Extrude",
             context: context
         )
+    }
+
+    /// The source body's world mesh after a face push/pull. Robust against
+    /// coincident walls (the failure mode of a same-cross-section boolean):
+    /// - inward push (distance < 0) truncates via a half-space cut whose lateral
+    ///   walls sit far outside the body, so only the new face plane cuts;
+    /// - outward pull (distance > 0) unions a flush prism (union tolerates the
+    ///   coincident side walls, merging them into one continuous wall).
+    /// Returns nil when the source body is gone or the result is empty.
+    private func faceModifiedMesh(_ context: ToolContext, distance: Double) -> Euclid.Mesh? {
+        guard let sourceID = context.sourceBody,
+              let source = session.document.body(with: sourceID)
+        else { return nil }
+        let worldBody = source.euclidMesh().transformed(by: source.transform.euclid)
+        let n = context.plane.normal
+
+        if distance < 0 {
+            // Move the face plane into the body; keep the interior (−n) side.
+            let cutOrigin = context.plane.origin + n * distance
+            let cutPlane = SketchPlane(
+                origin: cutOrigin, xAxis: context.plane.xAxis, yAxis: context.plane.yAxis
+            )
+            let truncated = SplitKit.split(mesh: worldBody, byPlane: cutPlane).other
+            return truncated.polygons.isEmpty ? nil : truncated
+        } else {
+            let prism = KernelOps.extrude(
+                profile: context.profile,
+                holes: context.holes,
+                in: context.plane,
+                distance: distance
+            )
+            guard !prism.polygons.isEmpty else { return nil }
+            return worldBody.union(prism).makeWatertight()
+        }
     }
 
     /// Slightly overlapped tool (union of all profile prisms) so coplanar
@@ -2978,6 +3069,39 @@ final class EditorViewModel {
             solid = solid.union(tool(extra.profile, extra.holes))
         }
         return solid
+    }
+
+    /// Commit a face push/pull: replace the source body with its truncated or
+    /// extended mesh, preserving the pivot (rotation/scale bake in).
+    private func commitFaceOperation(_ context: ToolContext, distance: Double) {
+        guard let sourceID = context.sourceBody,
+              let source = session.document.body(with: sourceID),
+              let modified = faceModifiedMesh(context, distance: distance),
+              !modified.polygons.isEmpty
+        else {
+            errorMessage = distance < 0
+                ? "The push removed the entire body."
+                : "The pull produced no geometry."
+            cancelTool()
+            return
+        }
+        let pivot = source.transform.translation
+        var transform = Transform3D.identity
+        transform.translation = pivot
+        let localMesh = modified.translated(by: Vector(-pivot.x, -pivot.y, -pivot.z))
+        let after = Body(
+            id: source.id,
+            name: source.name,
+            transform: transform,
+            primitive: nil,
+            euclidMesh: localMesh,
+            revision: 0
+        )
+        session.perform(ReplaceBodyCommand(title: "Push/Pull", before: source, after: after))
+        toolContext = nil
+        mode = .selected(source.id)
+        selection = [source.id]
+        session.save()
     }
 
     private func commitRevolve(_ context: ToolContext, angle: Double) {
