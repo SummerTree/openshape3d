@@ -230,6 +230,23 @@ struct EditorView: View {
         }
     }
 
+    /// Sketch-state chip inside the sketch pill (plan §C4): GREEN "Fully
+    /// defined" at zero DOF, else BLUE "Under-defined — N DOF".
+    @ViewBuilder
+    private func sketchStateChip(_ viewModel: EditorViewModel) -> some View {
+        if let status = viewModel.sketchDefinitionStatus {
+            Text(status.fullyDefined
+                ? "Fully defined"
+                : "Under-defined — \(status.dof) DOF")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.white)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 4)
+                .background(status.fullyDefined ? Color.green : Color.blue, in: Capsule())
+                .accessibilityIdentifier("SketchStateChip")
+        }
+    }
+
     private func sketchStatusText(_ viewModel: EditorViewModel) -> String {
         guard let sketch = viewModel.activeSketch else { return "Sketching" }
         if case .sketching(_, let tool) = viewModel.mode {
@@ -538,6 +555,14 @@ struct EditorView: View {
             .overlay {
                 marqueeOverlay(viewModel)
             }
+            .overlay {
+                // Sketch dimension annotations + inline editors (plan §C2).
+                SketchDimensionOverlay(viewModel: viewModel)
+            }
+            .overlay {
+                // Constraint glyphs: tap to select, Delete removes (plan §C3).
+                SketchConstraintOverlay(viewModel: viewModel)
+            }
             .overlay(alignment: .leading) {
                 ToolPaletteView(viewModel: viewModel)
                     .padding(.leading, 14)
@@ -643,6 +668,7 @@ struct EditorView: View {
                     }
                 } else if viewModel.mode.isSketching {
                     statusPill(icon: "pencil.and.outline", text: sketchStatusText(viewModel)) {
+                        sketchStateChip(viewModel)
                         // Shown when the camera drifted >10° off head-on.
                         if viewModel.lookAtSketchAvailable {
                             Button("Look at Sketch") {

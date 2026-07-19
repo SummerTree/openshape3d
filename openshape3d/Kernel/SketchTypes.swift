@@ -130,6 +130,10 @@ nonisolated struct Sketch: Identifiable, Codable, Equatable, Sendable {
     /// Kept as a side set so `SketchEntity`'s Codable wire format (and every
     /// fixed-arity pattern match on it) stays unchanged.
     var constructionEntityIDs: Set<UUID>
+    /// Symbolic geometric constraints (spec §3) lowered by `SketchSolverBridge`.
+    var constraints: [SketchConstraint]
+    /// Driving dimensions (spec §2.2) lowered by `SketchSolverBridge`.
+    var dimensions: [SketchDimension]
 
     init(
         id: SketchID = SketchID(),
@@ -137,7 +141,9 @@ nonisolated struct Sketch: Identifiable, Codable, Equatable, Sendable {
         plane: SketchPlane,
         entities: [SketchEntity] = [],
         isHidden: Bool = false,
-        constructionEntityIDs: Set<UUID> = []
+        constructionEntityIDs: Set<UUID> = [],
+        constraints: [SketchConstraint] = [],
+        dimensions: [SketchDimension] = []
     ) {
         self.id = id
         self.name = name
@@ -145,14 +151,17 @@ nonisolated struct Sketch: Identifiable, Codable, Equatable, Sendable {
         self.entities = entities
         self.isHidden = isHidden
         self.constructionEntityIDs = constructionEntityIDs
+        self.constraints = constraints
+        self.dimensions = dimensions
     }
 
     private enum CodingKeys: String, CodingKey {
         case id, name, plane, entities, isHidden, constructionEntityIDs
+        case constraints, dimensions
     }
 
-    /// `name`/`isHidden`/`constructionEntityIDs` are optional on decode so
-    /// pre-A8 / pre-B9 documents load.
+    /// `name`/`isHidden`/`constructionEntityIDs`/`constraints`/`dimensions`
+    /// are optional on decode so pre-A8 / pre-B9 / pre-C documents load.
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         id = try container.decode(SketchID.self, forKey: .id)
@@ -162,6 +171,10 @@ nonisolated struct Sketch: Identifiable, Codable, Equatable, Sendable {
         isHidden = try container.decodeIfPresent(Bool.self, forKey: .isHidden) ?? false
         constructionEntityIDs =
             try container.decodeIfPresent(Set<UUID>.self, forKey: .constructionEntityIDs) ?? []
+        constraints =
+            try container.decodeIfPresent([SketchConstraint].self, forKey: .constraints) ?? []
+        dimensions =
+            try container.decodeIfPresent([SketchDimension].self, forKey: .dimensions) ?? []
     }
 }
 

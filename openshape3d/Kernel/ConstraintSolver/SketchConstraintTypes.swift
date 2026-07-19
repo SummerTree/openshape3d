@@ -1,0 +1,91 @@
+//
+//  SketchConstraintTypes.swift
+//  openshape3d
+//
+//  Persisted constraint & dimension data model for sketches (Phase C).
+//  These types describe geometric relationships symbolically — they reference
+//  sketch entities by ID and a point role — and are lowered into concrete
+//  `ConstraintResidual` systems by `SketchSolverBridge` at solve time.
+//
+//  nonisolated + Double/Codable to match the rest of the kernel.
+//
+
+import Foundation
+
+/// Which point of a referenced entity a constraint/dimension operand addresses.
+/// `whole` means the entity itself (e.g. a line used as a direction/axis, or a
+/// circle used for a radius/tangent) rather than one of its points.
+nonisolated enum PointRole: String, Codable, Equatable, Sendable {
+    case endpointA
+    case endpointB
+    case center
+    case whole
+}
+
+/// A single operand of a constraint or dimension: an entity plus the point role
+/// on that entity the operand refers to.
+nonisolated struct ConstraintRef: Codable, Equatable, Sendable {
+    var entityID: UUID
+    var role: PointRole
+
+    init(entityID: UUID, role: PointRole) {
+        self.entityID = entityID
+        self.role = role
+    }
+}
+
+/// Geometric constraint kinds (spec §3.2). `fixed` locks the referenced
+/// point(s) in place (Lock).
+nonisolated enum SketchConstraintKind: String, Codable, Equatable, Sendable {
+    case coincident
+    case horizontal
+    case vertical
+    case parallel
+    case perpendicular
+    case equalLength
+    case equalRadius
+    case concentric
+    case midpoint
+    case symmetric
+    case tangent
+    case colinear
+    case fixed
+}
+
+/// A symbolic constraint on a sketch. `refs` layout is kind-specific and
+/// documented in `SketchSolverBridge` (which lowers each kind).
+nonisolated struct SketchConstraint: Identifiable, Codable, Equatable, Sendable {
+    let id: UUID
+    var kind: SketchConstraintKind
+    var refs: [ConstraintRef]
+
+    init(id: UUID = UUID(), kind: SketchConstraintKind, refs: [ConstraintRef]) {
+        self.id = id
+        self.kind = kind
+        self.refs = refs
+    }
+}
+
+/// Dimension label kinds (spec §2.2).
+nonisolated enum DimensionKind: String, Codable, Equatable, Sendable {
+    case distance
+    case radius
+    case diameter
+    case angle
+}
+
+/// A driving dimension: a measured value the solver drives geometry to satisfy.
+/// `value` is in sketch units for linear kinds, and in RADIANS for `.angle`.
+nonisolated struct SketchDimension: Identifiable, Codable, Equatable, Sendable {
+    let id: UUID
+    var kind: DimensionKind
+    var refs: [ConstraintRef]
+    var value: Double
+
+    init(id: UUID = UUID(), kind: DimensionKind, refs: [ConstraintRef], value: Double) {
+        self.id = id
+        self.kind = kind
+        self.refs = refs
+        self.value = value
+    }
+}

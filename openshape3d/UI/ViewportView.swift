@@ -410,6 +410,17 @@ final class ViewportCoordinator: NSObject, ViewportGestureDelegate, ViewportCame
         if viewModel.lookAtSketchAvailable != available {
             viewModel.lookAtSketchAvailable = available
         }
+        // Let SwiftUI overlays that reproject world points (dimension labels,
+        // plan §C2) re-run their layout as the camera moves.
+        viewModel.cameraEpoch &+= 1
+    }
+
+    /// World→screen projection for SwiftUI overlays (dimension labels).
+    /// Mirrors the private `worldToScreen`, taking Double world coordinates.
+    func worldToScreenPoint(_ world: SIMD3<Double>) -> CGPoint? {
+        guard let p = worldToScreen(SIMD3<Float>(Float(world.x), Float(world.y), Float(world.z)))
+        else { return nil }
+        return CGPoint(x: p.x, y: p.y)
     }
 
     func moveCameraHeadOn(to plane: SketchPlane) {

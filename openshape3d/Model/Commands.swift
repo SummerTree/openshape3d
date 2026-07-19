@@ -247,6 +247,113 @@ struct SetConstructionCommand: DocumentCommand {
     }
 }
 
+/// Add a symbolic geometric constraint to a sketch (plan §C3). Applied
+/// together with any solver-moved entity updates inside a `CompositeCommand`,
+/// so one undo removes the constraint AND restores the pre-solve geometry.
+struct AddSketchConstraintCommand: DocumentCommand {
+    let title = "Constraint"
+    let sketchID: SketchID
+    let constraint: SketchConstraint
+
+    func apply(to document: inout DesignDocument) {
+        guard let index = document.sketches.firstIndex(where: { $0.id == sketchID }) else { return }
+        document.sketches[index].constraints.append(constraint)
+    }
+
+    func revert(in document: inout DesignDocument) {
+        guard let index = document.sketches.firstIndex(where: { $0.id == sketchID }) else { return }
+        document.sketches[index].constraints.removeAll { $0.id == constraint.id }
+    }
+}
+
+/// Add a driving dimension to a sketch (plan §C2). Like a constraint, it is
+/// applied together with any solver-moved entity updates in a
+/// `CompositeCommand`, so one undo removes the dimension AND restores the
+/// pre-solve geometry.
+struct AddSketchDimensionCommand: DocumentCommand {
+    let title = "Dimension"
+    let sketchID: SketchID
+    let dimension: SketchDimension
+
+    func apply(to document: inout DesignDocument) {
+        guard let index = document.sketches.firstIndex(where: { $0.id == sketchID }) else { return }
+        document.sketches[index].dimensions.append(dimension)
+    }
+
+    func revert(in document: inout DesignDocument) {
+        guard let index = document.sketches.firstIndex(where: { $0.id == sketchID }) else { return }
+        document.sketches[index].dimensions.removeAll { $0.id == dimension.id }
+    }
+}
+
+/// Change a driving dimension's value (plan §C2). Paired with the solver-moved
+/// entity updates in a `CompositeCommand` so editing a label is one undo step.
+struct UpdateSketchDimensionCommand: DocumentCommand {
+    let title = "Edit Dimension"
+    let sketchID: SketchID
+    let before: SketchDimension
+    let after: SketchDimension
+
+    private func replace(_ dimension: SketchDimension, in document: inout DesignDocument) {
+        guard let sketchIndex = document.sketches.firstIndex(where: { $0.id == sketchID }),
+              let dimIndex = document.sketches[sketchIndex].dimensions.firstIndex(where: {
+                  $0.id == dimension.id
+              })
+        else { return }
+        document.sketches[sketchIndex].dimensions[dimIndex] = dimension
+    }
+
+    func apply(to document: inout DesignDocument) {
+        replace(after, in: &document)
+    }
+
+    func revert(in document: inout DesignDocument) {
+        replace(before, in: &document)
+    }
+}
+
+/// Remove a symbolic constraint from a sketch (plan §C, constraint delete).
+/// Undo re-appends it at its original position so the relationship (and any
+/// re-solve it drove) is restored exactly.
+struct RemoveSketchConstraintCommand: DocumentCommand {
+    let title = "Delete Constraint"
+    let sketchID: SketchID
+    let constraint: SketchConstraint
+    /// Original index so undo restores ordering.
+    let index: Int
+
+    func apply(to document: inout DesignDocument) {
+        guard let s = document.sketches.firstIndex(where: { $0.id == sketchID }) else { return }
+        document.sketches[s].constraints.removeAll { $0.id == constraint.id }
+    }
+
+    func revert(in document: inout DesignDocument) {
+        guard let s = document.sketches.firstIndex(where: { $0.id == sketchID }) else { return }
+        let clamped = min(max(index, 0), document.sketches[s].constraints.count)
+        document.sketches[s].constraints.insert(constraint, at: clamped)
+    }
+}
+
+/// Remove a driving dimension from a sketch (plan §C2). Undo re-appends it at
+/// its original position.
+struct RemoveSketchDimensionCommand: DocumentCommand {
+    let title = "Delete Dimension"
+    let sketchID: SketchID
+    let dimension: SketchDimension
+    let index: Int
+
+    func apply(to document: inout DesignDocument) {
+        guard let s = document.sketches.firstIndex(where: { $0.id == sketchID }) else { return }
+        document.sketches[s].dimensions.removeAll { $0.id == dimension.id }
+    }
+
+    func revert(in document: inout DesignDocument) {
+        guard let s = document.sketches.firstIndex(where: { $0.id == sketchID }) else { return }
+        let clamped = min(max(index, 0), document.sketches[s].dimensions.count)
+        document.sketches[s].dimensions.insert(dimension, at: clamped)
+    }
+}
+
 /// Drag-edit of a sketch entity (endpoint/center/body moves). Coalesced with
 /// `session.amend` during the drag, like TransformBodiesCommand.
 struct UpdateSketchEntityCommand: DocumentCommand {
@@ -262,6 +369,38 @@ struct UpdateSketchEntityCommand: DocumentCommand {
               })
         else { return }
         document.sketches[sketchIndex].entities[entityIndex] = entity
+    }
+
+    func apply(to document: inout DesignDocument) {
+        replace(after, in: &document)
+    }
+
+    func revert(in document: inout DesignDocument) {
+        replace(before, in: &document)
+    }
+}
+
+/// Solve-on-edit multi-entity update (plan §C1): a constraint solve during a
+/// drag moves several entities at once. `before`/`after` are full snapshots
+/// keyed by ID and applied ABSOLUTELY (set-by-ID, not delta), so the command
+/// amend-coalesces cleanly across drag frames — every frame re-applies the
+/// complete solved state, leaving no stale intermediate positions behind.
+struct UpdateSketchEntitiesCommand: DocumentCommand {
+    let title = "Move"
+    let sketchID: SketchID
+    let before: [SketchEntity]
+    let after: [SketchEntity]
+
+    private func replace(_ entities: [SketchEntity], in document: inout DesignDocument) {
+        guard let sketchIndex = document.sketches.firstIndex(where: { $0.id == sketchID })
+        else { return }
+        var byID = [UUID: SketchEntity](minimumCapacity: entities.count)
+        for entity in entities { byID[entity.id] = entity }
+        for i in document.sketches[sketchIndex].entities.indices {
+            if let replacement = byID[document.sketches[sketchIndex].entities[i].id] {
+                document.sketches[sketchIndex].entities[i] = replacement
+            }
+        }
     }
 
     func apply(to document: inout DesignDocument) {

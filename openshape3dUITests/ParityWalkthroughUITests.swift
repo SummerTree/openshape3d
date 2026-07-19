@@ -357,4 +357,136 @@ final class ParityWalkthroughUITests: XCTestCase {
         snap("26-symbol-placement-two-instances")
         app.buttons["InsertSymbolDone"].tap()
     }
+
+    // MARK: - Phase C: constraints, dimensions, sketch states
+
+    /// Enter a ground sketch with the named tool (plane-pick step, then settle
+    /// the head-on camera animation). Mirrors the constraint flow tests.
+    private func startGroundSketch(
+        _ app: XCUIApplication, window: XCUIElement, tool: String
+    ) {
+        app.buttons.containing(.staticText, identifier: tool).firstMatch.tap()
+        XCTAssertTrue(app.staticTexts["Choose a sketch plane"].waitForExistence(timeout: 3))
+        window.coordinate(withNormalizedOffset: CGVector(dx: 0.80, dy: 0.78)).tap()
+        XCTAssertTrue(app.staticTexts["Sketching on ground plane"].waitForExistence(timeout: 3))
+        sleep(2)
+    }
+
+    /// Constraints tranche: the sketch-state chip flipping blue→green, and the
+    /// adaptive Constrain menu (only the constraints valid for two selected
+    /// lines are enabled). Draws two lines meeting at a corner, snaps the
+    /// under-defined (blue) chip, opens the adaptive menu, then Locks the lines
+    /// so the chip flips to fully-defined (green).
+    func testWalkthrough10ConstraintsAndStates() throws {
+        let app = launchFresh()
+        let window = app.windows.firstMatch
+        startGroundSketch(app, window: window, tool: "Line")
+
+        func p(_ dx: CGFloat, _ dy: CGFloat) -> XCUICoordinate {
+            window.coordinate(withNormalizedOffset: CGVector(dx: dx, dy: dy))
+        }
+
+        // Two near-touching lines: a horizontal-ish top and a slanted side, all
+        // four endpoints free → the sketch is under-defined.
+        p(0.30, 0.45).press(forDuration: 0.15, thenDragTo: p(0.55, 0.45))
+        p(0.57, 0.47).press(forDuration: 0.15, thenDragTo: p(0.66, 0.70))
+        sleep(1)
+
+        // Sketch-state chip: BLUE "Under-defined — N DOF".
+        let chip = app.staticTexts["SketchStateChip"]
+        XCTAssertTrue(chip.waitForExistence(timeout: 3))
+        XCTAssertTrue(chip.label.contains("Under-defined"),
+                      "Fresh free lines should read under-defined, got \"\(chip.label)\"")
+        snap("27-sketch-under-defined-blue")
+
+        // Select both lines by tapping their middles.
+        p(0.42, 0.45).tap()
+        sleep(1)
+        p(0.615, 0.585).tap()
+        sleep(1)
+
+        // Open the adaptive Constrain menu. With two lines selected, direction
+        // relations (Parallel/Perpendicular/Equal Length/Coincident/Lock) are
+        // enabled while circle-only ones (Concentric/Equal Radius/Tangent) stay
+        // disabled — the screenshot captures that adaptive enablement.
+        let menu = app.buttons.containing(.staticText, identifier: "Constrain").firstMatch
+        XCTAssertTrue(menu.waitForExistence(timeout: 3))
+        menu.tap()
+        let parallel = app.buttons["Constraint_Parallel"]
+        XCTAssertTrue(parallel.waitForExistence(timeout: 3))
+        XCTAssertTrue(parallel.isEnabled, "Parallel should enable for two lines")
+        XCTAssertFalse(app.buttons["Constraint_Concentric"].isEnabled,
+                       "Concentric needs two circles — disabled for two lines")
+        snap("28-constraint-menu-adaptive")
+
+        // Lock both lines: all four endpoints fixed → 0 DOF → fully defined.
+        let lock = app.buttons["Constraint_Lock"]
+        XCTAssertTrue(lock.isEnabled, "Lock should enable for a non-empty selection")
+        lock.tap()
+        sleep(1)
+
+        // The chip flips to GREEN "Fully defined".
+        let fully = NSPredicate(format: "label == %@", "Fully defined")
+        let defined = app.staticTexts.containing(fully).firstMatch
+        XCTAssertTrue(defined.waitForExistence(timeout: 3),
+                      "Locking the lines should make the sketch fully defined")
+
+        // Clear the selection so the shot reads cleanly: the move/rotate gizmo
+        // and the candidate angle label drop away, leaving the locked geometry,
+        // its Lock glyph, and the green chip. A tap on empty grid only
+        // deselects — it never draws a line (which needs a drag stroke).
+        p(0.86, 0.28).tap()
+        sleep(1)
+        snap("29-sketch-fully-defined-green")
+
+        app.buttons["Exit Sketching"].tap()
+    }
+
+    /// Dimensions tranche: selecting a line surfaces its editable length label;
+    /// tapping it opens the inline numeric field. Captures the label being
+    /// edited (the field + commit check open over the annotation line).
+    func testWalkthrough11DimensionEditing() throws {
+        let app = launchFresh()
+        let window = app.windows.firstMatch
+        startGroundSketch(app, window: window, tool: "Line")
+
+        func p(_ dx: CGFloat, _ dy: CGFloat) -> XCUICoordinate {
+            window.coordinate(withNormalizedOffset: CGVector(dx: dx, dy: dy))
+        }
+
+        // A single line, then tap its middle to select it → the driving-length
+        // candidate label appears in the overlay.
+        p(0.34, 0.50).press(forDuration: 0.15, thenDragTo: p(0.62, 0.50))
+        sleep(1)
+        p(0.48, 0.50).tap()
+        sleep(1)
+
+        let label = app.buttons["DimensionLabel"].firstMatch
+        XCTAssertTrue(label.waitForExistence(timeout: 3),
+                      "Selecting the line should show an editable dimension label")
+        label.tap()
+
+        // The inline field opens; type a driving value before committing so the
+        // screenshot shows the label mid-edit.
+        let field = app.textFields["DimensionField"]
+        XCTAssertTrue(field.waitForExistence(timeout: 3))
+        field.tap()
+        let existing = (field.value as? String) ?? ""
+        if !existing.isEmpty {
+            field.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue,
+                                  count: existing.count))
+        }
+        field.typeText("20")
+        XCTAssertTrue(app.buttons["DimensionCommit"].waitForExistence(timeout: 2))
+        snap("30-dimension-label-editing")
+
+        // Commit: the solver drives the line to length 20.
+        app.buttons["DimensionCommit"].tap()
+        sleep(1)
+        XCTAssertTrue(app.staticTexts["20.00 mm"].waitForExistence(timeout: 3),
+                      "The line should be driven to length 20")
+        snap("31-dimension-driven-length")
+
+        app.buttons["Exit Sketching"].tap()
+    }
 }

@@ -56,6 +56,34 @@ struct ItemsPanelView: View {
                     )
                 }
 
+                // Constraints + dimensions of the active sketch (plan §C3).
+                if viewModel.mode.isSketching {
+                    let constraints = viewModel.activeSketchConstraintRows
+                    let dimensions = viewModel.activeSketchDimensionRows
+                    sectionHeader("Constraints")
+                    if constraints.isEmpty && dimensions.isEmpty {
+                        emptyRow("No constraints yet")
+                    }
+                    ForEach(constraints, id: \.id) { row in
+                        ConstraintRowView(
+                            code: row.code,
+                            title: row.title,
+                            isSelected: viewModel.selectedConstraintID == row.id,
+                            onSelect: { viewModel.selectConstraint(row.id) },
+                            onDelete: { viewModel.deleteConstraint(row.id) }
+                        )
+                    }
+                    ForEach(dimensions, id: \.id) { row in
+                        ConstraintRowView(
+                            code: row.code,
+                            title: row.title,
+                            isSelected: viewModel.selectedDimensionID == row.id,
+                            onSelect: { viewModel.selectDimension(row.id) },
+                            onDelete: { viewModel.deleteDimension(row.id) }
+                        )
+                    }
+                }
+
                 sectionHeader("Images")
                 if document.images.isEmpty {
                     emptyRow("No images yet")
@@ -141,6 +169,46 @@ struct ItemsPanelView: View {
             .foregroundStyle(.tertiary)
             .padding(.vertical, 4)
             .padding(.horizontal, 8)
+    }
+}
+
+/// One constraint/dimension row: a code badge, its title, tap-to-select, and a
+/// trailing trash button that deletes it (undoable, re-solves).
+private struct ConstraintRowView: View {
+    let code: String
+    let title: String
+    let isSelected: Bool
+    let onSelect: () -> Void
+    let onDelete: () -> Void
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Text(code)
+                .font(.caption.weight(.bold))
+                .frame(width: 24)
+                .foregroundStyle(Color.blue)
+            Text(title)
+                .font(.footnote)
+                .foregroundStyle(isSelected ? Color.blue : Color.primary)
+            Spacer(minLength: 4)
+            Button(action: onDelete) {
+                Image(systemName: "trash")
+                    .font(.system(size: 13))
+                    .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
+            .accessibilityIdentifier("ConstraintDelete-\(title)")
+        }
+        .padding(.vertical, 6)
+        .padding(.horizontal, 8)
+        .background(
+            isSelected ? Color.blue.opacity(0.12) : Color.clear,
+            in: RoundedRectangle(cornerRadius: 6)
+        )
+        .contentShape(Rectangle())
+        .onTapGesture(perform: onSelect)
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("ConstraintRow-\(title)")
     }
 }
 

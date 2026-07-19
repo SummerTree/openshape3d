@@ -34,6 +34,10 @@ protocol ViewportCameraControl: AnyObject {
     /// World units per screen point at the camera target depth — converts
     /// screen-space pick tolerances into sketch-plane distances.
     var worldUnitsPerPoint: Double { get }
+    /// Project a world-space point to viewport screen points (top-left origin),
+    /// or nil when it is behind the camera. Used to place SwiftUI overlays such
+    /// as dimension labels (plan §C2).
+    func worldToScreenPoint(_ world: SIMD3<Double>) -> CGPoint?
 }
 
 @MainActor
@@ -50,6 +54,11 @@ final class EditorViewModel {
     var selectionAdditive = false
 
     weak var cameraControl: (any ViewportCameraControl)?
+
+    /// Bumped by the viewport coordinator whenever the camera moves; SwiftUI
+    /// overlays that reproject world points (dimension labels, plan §C2) read
+    /// it to re-run their layout as the camera orbits/animates.
+    var cameraEpoch = 0
 
     init(project: Project, modelContext: ModelContext) {
         self.session = DocumentSession(project: project, modelContext: modelContext)
@@ -352,10 +361,14 @@ final class EditorViewModel {
         }
 
         // Sketch overlay: committed entities dark, in-progress accent blue,
-        // selected entities accent orange.
+        // selected entities accent orange. The sketch BEING EDITED renders its
+        // committed entities by definition state (plan §C4): GREEN when fully
+        // defined, BLUE when under-defined.
         let committedColor = SIMD4<Float>(0.15, 0.17, 0.20, 1)
         let pendingColor = SIMD4<Float>(0.20, 0.48, 0.95, 1)
         let selectedColor = SIMD4<Float>(0.98, 0.55, 0.12, 1)
+        let definedColor = SIMD4<Float>(0.20, 0.70, 0.35, 1)      // fully defined
+        let underDefinedColor = SIMD4<Float>(0.20, 0.48, 0.95, 1) // under-defined
         // Hidden sketches are skipped — except the one being edited.
         let activeSketchID: SketchID? = {
             if case .sketching(let id, _) = mode { return id }
@@ -366,23 +379,28 @@ final class EditorViewModel {
             // Construction (reference) entities render dashed (spec §3.3).
             let construction = sketch.constructionEntityIDs
             let unselected = sketch.entities.filter { !selectedSketchEntityIDs.contains($0.id) }
-            let batch = SketchLineBatch(
-                segments: SketchTessellator.segments(
-                    for: unselected.filter { !construction.contains($0.id) }, on: sketch.plane
-                ),
-                color: committedColor
-            )
-            if !batch.segments.isEmpty {
-                scene.sketchLines.append(batch)
+            // Per-entity definition state, only for the sketch being edited.
+            let states: [UUID: Bool]? = (sketch.id == activeSketchID)
+                ? SketchSolverBridge.entityStates(sketch) : nil
+            func committedColorFor(_ id: UUID) -> SIMD4<Float> {
+                guard let states else { return committedColor }
+                return (states[id] ?? false) ? definedColor : underDefinedColor
             }
+            // Solid committed entities, grouped by state color.
+            let regularUnselected = unselected.filter { !construction.contains($0.id) }
+            for (color, group) in Dictionary(grouping: regularUnselected, by: { committedColorFor($0.id) }) {
+                let segs = SketchTessellator.segments(for: group, on: sketch.plane)
+                if !segs.isEmpty {
+                    scene.sketchLines.append(SketchLineBatch(segments: segs, color: color))
+                }
+            }
+            // Dashed construction entities, grouped by state color.
             let constructionUnselected = unselected.filter { construction.contains($0.id) }
-            if !constructionUnselected.isEmpty {
-                scene.sketchLines.append(SketchLineBatch(
-                    segments: SketchTessellator.dashedSegments(
-                        for: constructionUnselected, on: sketch.plane
-                    ),
-                    color: committedColor
-                ))
+            for (color, group) in Dictionary(grouping: constructionUnselected, by: { committedColorFor($0.id) }) {
+                let segs = SketchTessellator.dashedSegments(for: group, on: sketch.plane)
+                if !segs.isEmpty {
+                    scene.sketchLines.append(SketchLineBatch(segments: segs, color: color))
+                }
             }
             let selected = sketch.entities.filter { selectedSketchEntityIDs.contains($0.id) }
             let regularSelected = selected.filter { !construction.contains($0.id) }
@@ -1680,6 +1698,15 @@ final class EditorViewModel {
 
     func deleteSelection() {
         if case .sketching = mode {
+            // A selected constraint/dimension glyph deletes first (undoable).
+            if let cid = selectedConstraintID {
+                deleteConstraint(cid)
+                return
+            }
+            if let did = selectedDimensionID {
+                deleteDimension(did)
+                return
+            }
             guard !selectedSketchEntityIDs.isEmpty, let sketch = activeSketch else { return }
             session.perform(RemoveSketchEntitiesCommand(ids: selectedSketchEntityIDs, sketch: sketch))
             selectedSketchEntityIDs.removeAll()
@@ -1721,6 +1748,12 @@ final class EditorViewModel {
         sketchGizmoDrag = nil
         let liveEntityIDs = Set(session.document.sketches.flatMap { $0.entities.map(\.id) })
         selectedSketchEntityIDs = selectedSketchEntityIDs.intersection(liveEntityIDs)
+        selectedSketchPoints = selectedSketchPoints.filter { liveEntityIDs.contains($0.entityID) }
+        // A selected constraint/dimension may have been undone away.
+        let liveConstraintIDs = Set(session.document.sketches.flatMap { $0.constraints.map(\.id) })
+        let liveDimensionIDs = Set(session.document.sketches.flatMap { $0.dimensions.map(\.id) })
+        if let cid = selectedConstraintID, !liveConstraintIDs.contains(cid) { selectedConstraintID = nil }
+        if let did = selectedDimensionID, !liveDimensionIDs.contains(did) { selectedDimensionID = nil }
         // Selection/mode may reference bodies that no longer exist.
         let liveIDs = Set(session.document.bodies.map(\.id))
         selection = selection.intersection(liveIDs)
@@ -3706,6 +3739,28 @@ final class EditorViewModel {
     /// Delete removes them).
     var selectedSketchEntityIDs: Set<UUID> = []
 
+    /// A selected model point (endpoint/center) on a sketch entity, addressed
+    /// by the role the constraint solver understands (plan §C3).
+    struct SketchPointSelection: Hashable, Sendable {
+        var entityID: UUID
+        var role: PointRole
+    }
+
+    /// Points tapped for constraints (endpoints/centers). Independent of
+    /// `selectedSketchEntityIDs` so a mixed selection (e.g. a point + a line
+    /// for Midpoint) is expressible.
+    var selectedSketchPoints: Set<SketchPointSelection> = []
+
+    /// The constraint glyph currently selected (tap-select in the overlay or the
+    /// Items panel). Palette/keyboard Delete removes it. Mutually exclusive with
+    /// `selectedDimensionID`.
+    var selectedConstraintID: UUID?
+
+    /// The dimension currently selected in the Items panel (for delete). The
+    /// overlay label tap opens the numeric editor instead, so this is set from
+    /// the Items list.
+    var selectedDimensionID: UUID?
+
     /// A drag editing one entity: a control point (endpoint/center/handle)
     /// or the whole body (nil control = translate). The command is pushed on
     /// the first change and amend-coalesced for the rest of the drag.
@@ -3715,6 +3770,10 @@ final class EditorViewModel {
         var before: SketchEntity
         /// Raw plane point where the drag grabbed the entity (translations).
         var grabPoint: SIMD2<Double>
+        /// Pre-drag snapshot of ALL sketch entities. Used by the solve-on-edit
+        /// path (plan §C1) as the fixed baseline every frame solves from — and
+        /// as the command's undo `before`.
+        var baseline: [SketchEntity]
         var pushed = false
     }
     private var sketchEntityDrag: SketchEntityDrag?
@@ -3987,6 +4046,23 @@ final class EditorViewModel {
             return
         }
         guard let sketch = activeSketch, let raw = rawSketchPoint(from: ray) else { return }
+        // Tapping geometry clears any constraint/dimension glyph selection.
+        selectedConstraintID = nil
+        selectedDimensionID = nil
+        // A tap landing near a model point (endpoint/center) selects that POINT
+        // for constraints (plan §C3); the tight point tolerance means the body
+        // of a line/curve still selects the whole entity.
+        if let pt = SketchHitTester.nearestPoint(
+            to: raw, in: sketch.entities, tolerance: controlPointTolerance
+        ) {
+            let sel = SketchPointSelection(entityID: pt.entityID, role: pt.role)
+            if selectedSketchPoints.contains(sel) {
+                selectedSketchPoints.remove(sel)
+            } else {
+                selectedSketchPoints.insert(sel)
+            }
+            return
+        }
         if let hit = SketchHitTester.nearestEntity(
             to: raw, in: sketch.entities, tolerance: entityPickTolerance
         ) {
@@ -3997,6 +4073,7 @@ final class EditorViewModel {
             }
         } else {
             selectedSketchEntityIDs.removeAll()
+            selectedSketchPoints.removeAll()
         }
     }
 
@@ -4036,7 +4113,8 @@ final class EditorViewModel {
             sketchID: sketch.id,
             control: control?.kind,
             before: entity,
-            grabPoint: raw
+            grabPoint: raw,
+            baseline: sketch.entities
         )
         sketchStrokeStart = nil
         pendingEntity = nil
@@ -4045,6 +4123,18 @@ final class EditorViewModel {
 
     private func updateSketchEntityDrag(raw: SIMD2<Double>) {
         guard var drag = sketchEntityDrag, let sketch = activeSketch else { return }
+
+        // Solve-on-edit (plan §C1): when the sketch carries constraints or
+        // dimensions, route a control-point drag through the solver so
+        // constrained geometry holds and under-constrained geometry follows.
+        // Body translates keep the direct path (the solver pins a single
+        // point, which would deform rather than translate a whole entity).
+        if drag.control != nil,
+           !(sketch.constraints.isEmpty && sketch.dimensions.isEmpty) {
+            updateSolvedSketchEntityDrag(&drag, raw: raw, sketch: sketch)
+            return
+        }
+
         let after: SketchEntity
         if let control = drag.control {
             // Snap against the rest of the sketch (not the dragged entity —
@@ -4078,6 +4168,46 @@ final class EditorViewModel {
             drag.pushed = true
             sketchEntityDrag = drag
         }
+    }
+
+    /// Solve-on-edit drag frame (plan §C1): pull the grabbed control point
+    /// toward the drag target through the constraint solver, then coalesce the
+    /// whole solved sketch into ONE amendable `UpdateSketchEntitiesCommand`.
+    /// Fully-defined (zero-DOF) geometry refuses to move — the solve is a
+    /// no-op and the geometry springs back to its baseline.
+    private func updateSolvedSketchEntityDrag(
+        _ drag: inout SketchEntityDrag, raw: SIMD2<Double>, sketch: Sketch
+    ) {
+        // Target for the grabbed point: snap against the OTHER entities (its own
+        // points would pin the handle in place), matching the direct path.
+        let others = Sketch(
+            plane: sketch.plane,
+            entities: drag.baseline.filter { $0.id != drag.before.id }
+        )
+        let target = SnapEngine.snap(raw, in: others).point
+
+        // Always solve from the fixed pre-drag baseline so the target is
+        // absolute and the result is deterministic across frames.
+        var baselineSketch = sketch
+        baselineSketch.entities = drag.baseline
+        let (solved, dof) = SketchSolverBridge.solve(
+            baselineSketch, movingEntity: drag.before.id, dragTarget: target
+        )
+
+        // Rigid sketch: refuse to move (no-op / spring back to baseline).
+        guard dof > 0 else { return }
+        guard solved != drag.baseline || drag.pushed else { return }
+
+        let command = UpdateSketchEntitiesCommand(
+            sketchID: drag.sketchID, before: drag.baseline, after: solved
+        )
+        if drag.pushed {
+            session.amend(command)
+        } else {
+            session.perform(command)
+            drag.pushed = true
+        }
+        sketchEntityDrag = drag
     }
 
     /// Polygon tool: number of sides for the next placement (NumericInputBar).
@@ -4115,6 +4245,15 @@ final class EditorViewModel {
     var activeSketch: Sketch? {
         guard case .sketching(let id, _) = mode else { return nil }
         return session.document.sketches.first { $0.id == id }
+    }
+
+    /// Definition state of the active sketch for the status chip (plan §C4):
+    /// remaining structural DOF and whether the sketch is fully defined
+    /// (0 DOF). `nil` when not sketching or the sketch has no geometry yet.
+    var sketchDefinitionStatus: (dof: Int, fullyDefined: Bool)? {
+        guard let sketch = activeSketch, !sketch.entities.isEmpty else { return nil }
+        let (_, dof) = SketchSolverBridge.solve(sketch, movingEntity: nil, dragTarget: nil)
+        return (dof, dof == 0)
     }
 
     func startSketch(tool: SketchTool) {
@@ -4221,6 +4360,9 @@ final class EditorViewModel {
         sketchGizmoDrag = nil
         sketchCopyOnDrag = false
         selectedSketchEntityIDs.removeAll()
+        selectedSketchPoints.removeAll()
+        selectedConstraintID = nil
+        selectedDimensionID = nil
         if case .sketching = mode {
             mode = .idle
         }
@@ -4585,6 +4727,679 @@ final class EditorViewModel {
         if pendingSymbolID == id { pendingSymbolID = nil }
         guard let command = RemoveSymbolCommand(id: id, document: session.document) else { return }
         session.perform(command)
+    }
+
+    // MARK: - Sketch constraints (plan §C3, spec §3.2)
+
+    /// Residual-norm ceiling above which a proposed constraint/dimension is
+    /// treated as conflicting (over-constrained) and refused. Geometry is in
+    /// millimetres, so an unsatisfiable residual is order-of-magnitude the
+    /// geometry size; anything above this fine tolerance is a genuine conflict.
+    nonisolated static let overConstraintTolerance = 1e-3
+
+    /// Selected sketch entities of the given kind (helpers for the adaptive
+    /// constraint menu). Lines feed direction constraints; circle/arc/polygon
+    /// (entities the solver gives a radius variable) feed concentric/radius/
+    /// tangent.
+    private var selectedSketchEntities: [SketchEntity] {
+        guard let sketch = activeSketch else { return [] }
+        return sketch.entities.filter { selectedSketchEntityIDs.contains($0.id) }
+    }
+
+    private var selectedLineEntities: [SketchEntity] {
+        selectedSketchEntities.filter { if case .line = $0 { return true }; return false }
+    }
+
+    private var selectedRadiusEntities: [SketchEntity] {
+        selectedSketchEntities.filter {
+            switch $0 {
+            case .circle, .arc, .polygon: return true
+            default: return false
+            }
+        }
+    }
+
+    /// Adaptive enablement (Shapr3D rule, spec §3.2): a constraint is offered
+    /// only when the current selection supports it.
+    func canApplyConstraint(_ kind: SketchConstraintKind) -> Bool {
+        guard mode.isSketching else { return false }
+        let points = selectedSketchPoints.count
+        let lines = selectedLineEntities.count
+        let circles = selectedRadiusEntities.count
+        switch kind {
+        case .coincident:
+            // Two points, or two lines that share an approximate corner.
+            return points >= 2 || (lines == 2 && nearestEndpointPair(selectedLineEntities) != nil)
+        case .horizontal, .vertical:
+            return lines >= 1 || points == 2
+        case .parallel, .perpendicular, .equalLength:
+            return lines == 2
+        case .equalRadius, .concentric:
+            return circles == 2
+        case .tangent:
+            return lines == 1 && circles == 1
+        case .midpoint:
+            return points == 1 && lines == 1
+        case .symmetric:
+            return points == 2 && lines == 1
+        case .fixed:
+            return points >= 1 || !selectedSketchEntityIDs.isEmpty
+        case .colinear:
+            return lines == 2
+        }
+    }
+
+    /// Apply `kind` to the current selection: build a `SketchConstraint` from
+    /// the selected points/entities, append it, re-solve the sketch, and commit
+    /// the constraint + any solver-moved geometry in ONE undoable command.
+    func applyConstraint(_ kind: SketchConstraintKind) {
+        guard canApplyConstraint(kind),
+              case .sketching(let sketchID, _) = mode,
+              let sketch = activeSketch,
+              let refs = constraintRefs(for: kind, in: sketch)
+        else { return }
+
+        let constraint = SketchConstraint(kind: kind, refs: refs)
+
+        // Solve the sketch with the new constraint in place; the bridge welds
+        // coincident points and pulls under-defined geometry to satisfy it.
+        var proposed = sketch
+        proposed.constraints.append(constraint)
+
+        // Over-constraint guard (spec §2.2): if the added constraint makes the
+        // system unsatisfiable (conflicting), refuse it — never corrupt the
+        // sketch. `.fixed` (Lock) only pins existing positions, so it can never
+        // conflict and is exempt.
+        if kind != .fixed,
+           SketchSolverBridge.residualNorm(proposed) > Self.overConstraintTolerance {
+            errorMessage = "\(Self.constraintTitle(kind)) conflicts with the existing constraints — not added."
+            return
+        }
+
+        let (solvedEntities, _) = SketchSolverBridge.solve(
+            proposed, movingEntity: nil, dragTarget: nil
+        )
+
+        var commands: [DocumentCommand] = [
+            AddSketchConstraintCommand(sketchID: sketchID, constraint: constraint)
+        ]
+        for (before, after) in zip(sketch.entities, solvedEntities) where before != after {
+            commands.append(UpdateSketchEntityCommand(
+                sketchID: sketchID, before: before, after: after
+            ))
+        }
+        let title = Self.constraintTitle(kind)
+        session.perform(commands.count == 1
+            ? commands[0]
+            : CompositeCommand(title: title, commands: commands))
+        session.save()
+    }
+
+    static func constraintTitle(_ kind: SketchConstraintKind) -> String {
+        switch kind {
+        case .coincident: "Coincident"
+        case .horizontal: "Horizontal"
+        case .vertical: "Vertical"
+        case .parallel: "Parallel"
+        case .perpendicular: "Perpendicular"
+        case .equalLength: "Equal Length"
+        case .equalRadius: "Equal Radius"
+        case .concentric: "Concentric"
+        case .midpoint: "Midpoint"
+        case .symmetric: "Symmetric"
+        case .tangent: "Tangent"
+        case .colinear: "Colinear"
+        case .fixed: "Lock"
+        }
+    }
+
+    /// Map the selection to the ref layout each constraint kind expects
+    /// (documented in `SketchSolverBridge`). Returns nil when the selection
+    /// does not form the operands for `kind`.
+    private func constraintRefs(
+        for kind: SketchConstraintKind, in sketch: Sketch
+    ) -> [ConstraintRef]? {
+        let pts = Array(selectedSketchPoints)
+        let lines = selectedLineEntities
+        let circles = selectedRadiusEntities
+        func ref(_ p: SketchPointSelection) -> ConstraintRef {
+            ConstraintRef(entityID: p.entityID, role: p.role)
+        }
+        func whole(_ e: SketchEntity) -> ConstraintRef {
+            ConstraintRef(entityID: e.id, role: .whole)
+        }
+        switch kind {
+        case .coincident:
+            if pts.count >= 2 { return [ref(pts[0]), ref(pts[1])] }
+            return nearestEndpointPair(lines)
+        case .horizontal, .vertical:
+            if let line = lines.first { return [whole(line)] }
+            if pts.count == 2 { return [ref(pts[0]), ref(pts[1])] }
+            return nil
+        case .parallel, .perpendicular, .equalLength, .colinear:
+            guard lines.count == 2 else { return nil }
+            return [whole(lines[0]), whole(lines[1])]
+        case .equalRadius, .concentric:
+            guard circles.count == 2 else { return nil }
+            return [
+                ConstraintRef(entityID: circles[0].id, role: .center),
+                ConstraintRef(entityID: circles[1].id, role: .center),
+            ]
+        case .tangent:
+            guard let line = lines.first, let circle = circles.first else { return nil }
+            return [whole(line), whole(circle)]
+        case .midpoint:
+            guard pts.count == 1, let line = lines.first else { return nil }
+            return [ref(pts[0]), whole(line)]
+        case .symmetric:
+            guard pts.count == 2, let line = lines.first else { return nil }
+            return [ref(pts[0]), ref(pts[1]), whole(line)]
+        case .fixed:
+            var refs = pts.map(ref)
+            let pointed = Set(pts.map(\.entityID))
+            for e in selectedSketchEntities where !pointed.contains(e.id) {
+                refs.append(whole(e))
+            }
+            return refs.isEmpty ? nil : refs
+        }
+    }
+
+    /// The closest endpoint pair between two lines, as coincident refs — lets
+    /// Coincident weld a shared corner when whole lines are selected.
+    private func nearestEndpointPair(_ lines: [SketchEntity]) -> [ConstraintRef]? {
+        guard lines.count == 2,
+              case let .line(id0, a0, b0) = lines[0],
+              case let .line(id1, a1, b1) = lines[1]
+        else { return nil }
+        let candidates: [(PointRole, PointRole, Double)] = [
+            (.endpointA, .endpointA, simd_distance(a0, a1)),
+            (.endpointA, .endpointB, simd_distance(a0, b1)),
+            (.endpointB, .endpointA, simd_distance(b0, a1)),
+            (.endpointB, .endpointB, simd_distance(b0, b1)),
+        ]
+        guard let best = candidates.min(by: { $0.2 < $1.2 }) else { return nil }
+        return [
+            ConstraintRef(entityID: id0, role: best.0),
+            ConstraintRef(entityID: id1, role: best.1),
+        ]
+    }
+
+    // MARK: - Constraint glyphs + delete (plan §C3)
+
+    /// A constraint's on-canvas glyph: a short code badge at the relationship's
+    /// location. World-space anchor so the overlay reprojects each camera move;
+    /// `slot` fans out glyphs that share an anchor so each stays tappable.
+    struct SketchConstraintGlyph: Identifiable {
+        let id: UUID           // the constraint's id
+        let kind: SketchConstraintKind
+        let code: String
+        let worldAnchor: SIMD3<Double>
+        let slot: Int
+    }
+
+    /// Compact badge text per constraint kind.
+    static func constraintCode(_ kind: SketchConstraintKind) -> String {
+        switch kind {
+        case .coincident: "⌖"
+        case .horizontal: "H"
+        case .vertical: "V"
+        case .parallel: "∥"
+        case .perpendicular: "⊥"
+        case .equalLength: "="
+        case .equalRadius: "=R"
+        case .concentric: "◎"
+        case .midpoint: "M"
+        case .symmetric: "⧓"
+        case .tangent: "T"
+        case .colinear: "L"
+        case .fixed: "🔒"
+        }
+    }
+
+    /// Local-plane anchor of a constraint: the average of its operands' points
+    /// (whole-line operands contribute their midpoint via `localPoint`).
+    private func constraintAnchorLocal(_ c: SketchConstraint, in sketch: Sketch) -> SIMD2<Double>? {
+        var sum = SIMD2<Double>(0, 0)
+        var n = 0
+        for ref in c.refs {
+            if let p = localPoint(ref, in: sketch) { sum += p; n += 1 }
+        }
+        guard n > 0 else { return nil }
+        return sum / Double(n)
+    }
+
+    /// Constraint glyphs to render in the sketch overlay.
+    var sketchConstraintGlyphs: [SketchConstraintGlyph] {
+        _ = session.changeCount
+        guard let sketch = activeSketch else { return [] }
+        var out: [SketchConstraintGlyph] = []
+        var slotAt: [String: Int] = [:] // stack glyphs sharing an anchor
+        for c in sketch.constraints {
+            guard let local = constraintAnchorLocal(c, in: sketch) else { continue }
+            let key = "\((local.x * 100).rounded())-\((local.y * 100).rounded())"
+            let slot = slotAt[key, default: 0]
+            slotAt[key] = slot + 1
+            out.append(SketchConstraintGlyph(
+                id: c.id, kind: c.kind, code: Self.constraintCode(c.kind),
+                worldAnchor: sketch.plane.toWorld(local), slot: slot
+            ))
+        }
+        return out
+    }
+
+    /// True when a constraint or dimension glyph is selected (enables Delete).
+    var hasSketchGlyphSelection: Bool {
+        selectedConstraintID != nil || selectedDimensionID != nil
+    }
+
+    /// Tap-select a constraint glyph (clears geometry + dimension selection).
+    func selectConstraint(_ id: UUID) {
+        selectedConstraintID = (selectedConstraintID == id) ? nil : id
+        selectedDimensionID = nil
+        selectedSketchEntityIDs.removeAll()
+        selectedSketchPoints.removeAll()
+    }
+
+    /// Select a dimension (from the Items panel) for delete.
+    func selectDimension(_ id: UUID) {
+        selectedDimensionID = (selectedDimensionID == id) ? nil : id
+        selectedConstraintID = nil
+        selectedSketchEntityIDs.removeAll()
+        selectedSketchPoints.removeAll()
+    }
+
+    /// Remove a constraint (undoable) and re-solve the relaxed sketch so any
+    /// geometry it was holding settles.
+    func deleteConstraint(_ id: UUID) {
+        guard case .sketching(let sketchID, _) = mode,
+              let sketch = activeSketch,
+              let index = sketch.constraints.firstIndex(where: { $0.id == id }) else { return }
+        let constraint = sketch.constraints[index]
+        if selectedConstraintID == id { selectedConstraintID = nil }
+        session.perform(RemoveSketchConstraintCommand(
+            sketchID: sketchID, constraint: constraint, index: index
+        ))
+        session.save()
+    }
+
+    /// Remove a dimension (undoable).
+    func deleteDimension(_ id: UUID) {
+        guard case .sketching(let sketchID, _) = mode,
+              let sketch = activeSketch,
+              let index = sketch.dimensions.firstIndex(where: { $0.id == id }) else { return }
+        let dimension = sketch.dimensions[index]
+        if selectedDimensionID == id { selectedDimensionID = nil }
+        session.perform(RemoveSketchDimensionCommand(
+            sketchID: sketchID, dimension: dimension, index: index
+        ))
+        session.save()
+    }
+
+    /// Items-panel rows for the active sketch's constraints.
+    var activeSketchConstraintRows: [(id: UUID, code: String, title: String)] {
+        _ = session.changeCount
+        guard let sketch = activeSketch else { return [] }
+        return sketch.constraints.map {
+            (id: $0.id, code: Self.constraintCode($0.kind), title: Self.constraintTitle($0.kind))
+        }
+    }
+
+    /// Items-panel rows for the active sketch's dimensions.
+    var activeSketchDimensionRows: [(id: UUID, code: String, title: String)] {
+        _ = session.changeCount
+        guard let sketch = activeSketch else { return [] }
+        return sketch.dimensions.map { d in
+            let title: String
+            switch d.kind {
+            case .distance: title = "Distance " + String(format: "%.2f mm", d.value)
+            case .radius: title = "Radius " + String(format: "%.2f mm", d.value)
+            case .diameter: title = "Diameter " + String(format: "%.2f mm", d.value)
+            case .angle: title = "Angle " + String(format: "%.1f°", d.value * 180 / .pi)
+            }
+            let code: String
+            switch d.kind {
+            case .distance: code = "↔"
+            case .radius: code = "R"
+            case .diameter: code = "⌀"
+            case .angle: code = "∠"
+            }
+            return (id: d.id, code: code, title: title)
+        }
+    }
+
+    // MARK: - Sketch dimensions (plan §C2, spec §2.2)
+
+    /// A dimension label to draw in the sketch overlay: a driving dimension, or
+    /// the live candidate for the current selection (`dimensionID == nil`).
+    /// Positions are WORLD-space so the overlay reprojects them each camera move.
+    struct SketchDimensionLabel: Identifiable {
+        let id: String
+        let dimensionID: UUID?
+        let kind: DimensionKind
+        let refs: [ConstraintRef]
+        /// Display value (degrees for `.angle`, sketch units otherwise).
+        let displayValue: Double
+        let text: String
+        let worldAnchor: SIMD3<Double>
+        let worldStart: SIMD3<Double>
+        let worldEnd: SIMD3<Double>
+    }
+
+    /// In-flight inline edit of a dimension field (the candidate or an existing
+    /// dimension). Non-nil while the numeric field is open in the overlay.
+    struct DimensionEdit: Equatable {
+        var labelID: String
+        var dimensionID: UUID?
+        var kind: DimensionKind
+        var refs: [ConstraintRef]
+        var text: String
+    }
+    var editingDimension: DimensionEdit?
+
+    /// Radius of a circular entity (circle/arc/polygon); nil otherwise.
+    private static func entityRadius(_ e: SketchEntity) -> Double? {
+        switch e {
+        case let .circle(_, _, r), let .arc(_, _, r, _, _), let .polygon(_, _, r, _, _): return r
+        default: return nil
+        }
+    }
+
+    private func sketchEntity(_ id: UUID, in sketch: Sketch) -> SketchEntity? {
+        sketch.entities.first { $0.id == id }
+    }
+
+    /// Plane-local position of a constraint ref's point on its entity.
+    private func localPoint(_ ref: ConstraintRef, in sketch: Sketch) -> SIMD2<Double>? {
+        guard let e = sketchEntity(ref.entityID, in: sketch) else { return nil }
+        switch (e, ref.role) {
+        case let (.line(_, a, _), .endpointA): return a
+        case let (.line(_, _, b), .endpointB): return b
+        case let (.rect(_, mn, _), .endpointA): return mn
+        case let (.rect(_, _, mx), .endpointB): return mx
+        case let (.line(_, a, b), .whole): return (a + b) / 2
+        default:
+            switch e {
+            case let .circle(_, c, _), let .arc(_, c, _, _, _),
+                 let .ellipse(_, c, _, _, _), let .polygon(_, c, _, _, _):
+                return c
+            default: return nil
+            }
+        }
+    }
+
+    private func lineEndpoints(_ id: UUID, in sketch: Sketch) -> (SIMD2<Double>, SIMD2<Double>)? {
+        guard case let .line(_, a, b)? = sketchEntity(id, in: sketch) else { return nil }
+        return (a, b)
+    }
+
+    /// Local-space geometry for a dimension: (label anchor, annotation line
+    /// endpoints). Kind-specific; falls back to the anchor for degenerate refs.
+    private func dimensionGeometry(
+        kind: DimensionKind, refs: [ConstraintRef], in sketch: Sketch
+    ) -> (anchor: SIMD2<Double>, start: SIMD2<Double>, end: SIMD2<Double>)? {
+        switch kind {
+        case .distance:
+            guard refs.count == 2 else { return nil }
+            // point-to-line if exactly one ref is a whole line.
+            let wholes = refs.filter { $0.role == .whole }
+            if wholes.count == 1, let lineRef = wholes.first,
+               let pointRef = refs.first(where: { $0.role != .whole }),
+               let p = localPoint(pointRef, in: sketch),
+               let (la, lb) = lineEndpoints(lineRef.entityID, in: sketch) {
+                let proj = closestPointOnSegment(p, la, lb)
+                return (( p + proj) / 2, p, proj)
+            }
+            guard let a = localPoint(refs[0], in: sketch),
+                  let b = localPoint(refs[1], in: sketch) else { return nil }
+            return ((a + b) / 2, a, b)
+        case .radius, .diameter:
+            guard let ref = refs.first,
+                  let e = sketchEntity(ref.entityID, in: sketch),
+                  let r = Self.entityRadius(e),
+                  let c = localPoint(ConstraintRef(entityID: ref.entityID, role: .center), in: sketch)
+            else { return nil }
+            let end = c + SIMD2(r, 0)
+            return (c + SIMD2(r * 0.5, 0), c, end)
+        case .angle:
+            guard refs.count == 2,
+                  let (a1, b1) = lineEndpoints(refs[0].entityID, in: sketch),
+                  let (a2, b2) = lineEndpoints(refs[1].entityID, in: sketch) else { return nil }
+            let anchor = (a1 + b1 + a2 + b2) / 4
+            return (anchor, (a1 + b1) / 2, (a2 + b2) / 2)
+        }
+    }
+
+    private func closestPointOnSegment(
+        _ p: SIMD2<Double>, _ a: SIMD2<Double>, _ b: SIMD2<Double>
+    ) -> SIMD2<Double> {
+        let ab = b - a
+        let len2 = simd_length_squared(ab)
+        guard len2 > 1e-12 else { return a }
+        let t = simd_dot(p - a, ab) / len2
+        return a + ab * t
+    }
+
+    /// Measured value of a dimension in DISPLAY units (degrees for angle).
+    private func measuredValue(kind: DimensionKind, refs: [ConstraintRef], in sketch: Sketch) -> Double? {
+        switch kind {
+        case .distance:
+            guard let g = dimensionGeometry(kind: kind, refs: refs, in: sketch) else { return nil }
+            return simd_distance(g.start, g.end)
+        case .radius:
+            guard let ref = refs.first, let e = sketchEntity(ref.entityID, in: sketch) else { return nil }
+            return Self.entityRadius(e)
+        case .diameter:
+            guard let ref = refs.first, let e = sketchEntity(ref.entityID, in: sketch) else { return nil }
+            return Self.entityRadius(e).map { $0 * 2 }
+        case .angle:
+            guard refs.count == 2,
+                  let (a1, b1) = lineEndpoints(refs[0].entityID, in: sketch),
+                  let (a2, b2) = lineEndpoints(refs[1].entityID, in: sketch) else { return nil }
+            let d1 = b1 - a1, d2 = b2 - a2
+            let n1 = simd_length(d1), n2 = simd_length(d2)
+            guard n1 > 1e-9, n2 > 1e-9 else { return nil }
+            let cosA = min(max(simd_dot(d1, d2) / (n1 * n2), -1), 1)
+            return acos(cosA) * 180 / .pi
+        }
+    }
+
+    /// The dimension the current selection would create (auto-shown as an
+    /// editable candidate label; also what the palette Dimension action edits).
+    private var dimensionCandidate: (kind: DimensionKind, refs: [ConstraintRef])? {
+        guard mode.isSketching else { return nil }
+        let lines = selectedLineEntities
+        let radii = selectedRadiusEntities
+        let pts = Array(selectedSketchPoints)
+        func pRef(_ p: SketchPointSelection) -> ConstraintRef {
+            ConstraintRef(entityID: p.entityID, role: p.role)
+        }
+        // Two lines → angle.
+        if lines.count == 2, radii.isEmpty, pts.isEmpty {
+            return (.angle, [ConstraintRef(entityID: lines[0].id, role: .whole),
+                             ConstraintRef(entityID: lines[1].id, role: .whole)])
+        }
+        // Two points → distance.
+        if pts.count == 2 {
+            return (.distance, [pRef(pts[0]), pRef(pts[1])])
+        }
+        // One point + one line → point-to-line distance.
+        if pts.count == 1, lines.count == 1 {
+            return (.distance, [pRef(pts[0]), ConstraintRef(entityID: lines[0].id, role: .whole)])
+        }
+        // Single line → length.
+        if lines.count == 1, radii.isEmpty, pts.isEmpty {
+            let id = lines[0].id
+            return (.distance, [ConstraintRef(entityID: id, role: .endpointA),
+                                ConstraintRef(entityID: id, role: .endpointB)])
+        }
+        // Single circle/arc/polygon → radius.
+        if radii.count == 1, lines.isEmpty, pts.isEmpty {
+            return (.radius, [ConstraintRef(entityID: radii[0].id, role: .whole)])
+        }
+        return nil
+    }
+
+    /// True when the palette Dimension action can act on the selection.
+    var canDimensionSelection: Bool { dimensionCandidate != nil }
+
+    /// Number → clean editable string (drops trailing zeros).
+    private static func dimensionFieldText(_ value: Double) -> String {
+        if abs(value - value.rounded()) < 1e-6 {
+            return String(Int(value.rounded()))
+        }
+        return String(format: "%g", (value * 1000).rounded() / 1000)
+    }
+
+    /// Dimension labels to render in the sketch overlay: existing driving
+    /// dimensions plus the live selection candidate (if any and not already an
+    /// existing dimension over the same refs).
+    var sketchDimensionLabels: [SketchDimensionLabel] {
+        _ = session.changeCount
+        guard let sketch = activeSketch else { return [] }
+        var labels: [SketchDimensionLabel] = []
+
+        func makeLabel(id: String, dimensionID: UUID?, kind: DimensionKind,
+                       refs: [ConstraintRef], value: Double) -> SketchDimensionLabel? {
+            guard let g = dimensionGeometry(kind: kind, refs: refs, in: sketch) else { return nil }
+            let unit: String
+            switch kind {
+            case .angle: unit = "°"
+            default: unit = " mm"
+            }
+            let text = String(format: "%.2f", value) + unit
+            return SketchDimensionLabel(
+                id: id, dimensionID: dimensionID, kind: kind, refs: refs,
+                displayValue: value, text: text,
+                worldAnchor: sketch.plane.toWorld(g.anchor),
+                worldStart: sketch.plane.toWorld(g.start),
+                worldEnd: sketch.plane.toWorld(g.end)
+            )
+        }
+
+        for d in sketch.dimensions {
+            // Prefer the measured value so the label is a truthful readout of
+            // the solved geometry (matches the driving value when satisfied).
+            let stored = d.kind == .angle ? d.value * 180 / .pi : d.value
+            let display = measuredValue(kind: d.kind, refs: d.refs, in: sketch) ?? stored
+            if let label = makeLabel(id: d.id.uuidString, dimensionID: d.id,
+                                     kind: d.kind, refs: d.refs, value: display) {
+                labels.append(label)
+            }
+        }
+
+        // Live candidate — skip if an existing dimension already covers the
+        // same refs+kind (so we don't double-draw once it's committed).
+        if let cand = dimensionCandidate {
+            let refSet = Set(cand.refs.map { "\($0.entityID)-\($0.role.rawValue)" })
+            let existing = sketch.dimensions.contains { d in
+                d.kind == cand.kind &&
+                Set(d.refs.map { "\($0.entityID)-\($0.role.rawValue)" }) == refSet
+            }
+            if !existing, let value = measuredValue(kind: cand.kind, refs: cand.refs, in: sketch),
+               let label = makeLabel(id: "candidate", dimensionID: nil,
+                                     kind: cand.kind, refs: cand.refs, value: value) {
+                labels.append(label)
+            }
+        }
+        return labels
+    }
+
+    /// Open the inline numeric field for a label (tap on a dimension label).
+    func beginDimensionEdit(_ label: SketchDimensionLabel) {
+        editingDimension = DimensionEdit(
+            labelID: label.id,
+            dimensionID: label.dimensionID,
+            kind: label.kind,
+            refs: label.refs,
+            text: Self.dimensionFieldText(label.displayValue)
+        )
+    }
+
+    /// Palette Dimension action: open the field for the selection candidate
+    /// (creating a new driving dimension on commit).
+    func beginDimensionForSelection() {
+        guard let cand = dimensionCandidate, let sketch = activeSketch,
+              let value = measuredValue(kind: cand.kind, refs: cand.refs, in: sketch) else { return }
+        editingDimension = DimensionEdit(
+            labelID: "candidate",
+            dimensionID: nil,
+            kind: cand.kind,
+            refs: cand.refs,
+            // `measuredValue` already returns degrees for `.angle`.
+            text: Self.dimensionFieldText(value)
+        )
+    }
+
+    func cancelDimensionEdit() {
+        editingDimension = nil
+    }
+
+    /// Commit the inline field: evaluate the (possibly arithmetic) text, set the
+    /// driving value, re-solve, and push one undoable command. On over-defined
+    /// refusal the geometry can't reach the value; we still record it and warn.
+    func commitDimensionEdit(_ rawText: String) {
+        guard let edit = editingDimension,
+              case .sketching(let sketchID, _) = mode,
+              let sketch = activeSketch else {
+            editingDimension = nil
+            return
+        }
+        editingDimension = nil
+        guard let parsed = ExpressionEvaluator.evaluate(rawText) else {
+            errorMessage = "Couldn't read \"\(rawText)\" as a number."
+            return
+        }
+        // Linear dims must be positive; angles within (0, 180)°.
+        switch edit.kind {
+        case .angle:
+            guard parsed > 0, parsed < 180 else {
+                errorMessage = "Angle must be between 0° and 180°."
+                return
+            }
+        default:
+            guard parsed > 0 else {
+                errorMessage = "Dimension must be greater than zero."
+                return
+            }
+        }
+        let stored = edit.kind == .angle ? parsed * .pi / 180 : parsed
+
+        var proposed = sketch
+        var setup: DocumentCommand
+        if let dimID = edit.dimensionID,
+           let idx = proposed.dimensions.firstIndex(where: { $0.id == dimID }) {
+            let before = proposed.dimensions[idx]
+            var after = before
+            after.value = stored
+            proposed.dimensions[idx] = after
+            setup = UpdateSketchDimensionCommand(sketchID: sketchID, before: before, after: after)
+        } else {
+            let dim = SketchDimension(kind: edit.kind, refs: edit.refs, value: stored)
+            proposed.dimensions.append(dim)
+            setup = AddSketchDimensionCommand(sketchID: sketchID, dimension: dim)
+        }
+
+        // Over-constraint guard (spec §2.2): the solver refuses a dimension on
+        // an already fully-solved region / one that conflicts with existing
+        // dimensions. Don't apply — never corrupt the sketch.
+        if SketchSolverBridge.residualNorm(proposed) > Self.overConstraintTolerance {
+            errorMessage = "That value over-constrains the sketch — it conflicts with the existing dimensions."
+            return
+        }
+
+        let (solvedEntities, _) = SketchSolverBridge.solve(
+            proposed, movingEntity: nil, dragTarget: nil
+        )
+        var commands: [DocumentCommand] = [setup]
+        for (before, after) in zip(sketch.entities, solvedEntities) where before != after {
+            commands.append(UpdateSketchEntityCommand(
+                sketchID: sketchID, before: before, after: after
+            ))
+        }
+        session.perform(commands.count == 1
+            ? commands[0]
+            : CompositeCommand(title: "Dimension", commands: commands))
+        session.save()
     }
 
     // MARK: - Make Construction / Make Regular (plan §B9, spec §3.3)

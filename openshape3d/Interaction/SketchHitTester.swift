@@ -40,6 +40,18 @@ nonisolated enum SketchHitTester {
         var distance: Double
     }
 
+    /// A selectable model point (endpoint/center) on an entity, addressed by
+    /// the `PointRole` the constraint solver understands. Only the points the
+    /// solver treats as variables are returned (line endpoints, rect diagonal
+    /// corners as min/max, and circle/arc/ellipse/polygon centers), so a point
+    /// selection maps one-to-one onto a `ConstraintRef` (plan §C3).
+    struct PointHit {
+        var entityID: UUID
+        var role: PointRole
+        var point: SIMD2<Double>
+        var distance: Double
+    }
+
     // MARK: - Queries
 
     static func nearestEntity(
@@ -68,6 +80,38 @@ nonisolated enum SketchHitTester {
             }
         }
         return best
+    }
+
+    /// Nearest solver-addressable point (endpoint/center) to `p`, tagged with
+    /// its `PointRole`. Used to select individual points for constraints
+    /// (plan §C3).
+    static func nearestPoint(
+        to p: SIMD2<Double>, in entities: [SketchEntity], tolerance: Double
+    ) -> PointHit? {
+        var best: PointHit?
+        for entity in entities {
+            for (role, point) in modelPoints(of: entity) {
+                let d = simd_length(point - p)
+                if d <= tolerance, best == nil || d < best!.distance {
+                    best = PointHit(entityID: entity.id, role: role, point: point, distance: d)
+                }
+            }
+        }
+        return best
+    }
+
+    /// The points the constraint solver treats as variables for an entity,
+    /// paired with their `PointRole` (mirrors `SketchSolverBridge.mutableSlots`).
+    static func modelPoints(of entity: SketchEntity) -> [(role: PointRole, point: SIMD2<Double>)] {
+        switch entity {
+        case let .line(_, a, b):
+            return [(.endpointA, a), (.endpointB, b)]
+        case let .rect(_, lo, hi):
+            return [(.endpointA, lo), (.endpointB, hi)]
+        case let .circle(_, center, _), let .arc(_, center, _, _, _),
+             let .ellipse(_, center, _, _, _), let .polygon(_, center, _, _, _):
+            return [(.center, center)]
+        }
     }
 
     static func controlPoints(of entity: SketchEntity) -> [(kind: ControlKind, point: SIMD2<Double>)] {

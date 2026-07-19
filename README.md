@@ -26,6 +26,21 @@ built with SwiftUI, a **custom Metal renderer**, and the MIT-licensed
   the whole connected chain, Copy chip drags duplicates), and **Make
   Construction / Make Regular** toggles dashed reference geometry that is
   excluded from profile fills and preferred as a revolve axis.
+- **Constraints & dimensions (2D solver)** — a **pure-Swift** variational
+  solver (Levenberg–Marquardt with a numeric Jacobian, SVD/eigen null-space
+  DOF analysis) behind a `ConstraintSolver` facade — no C++ dependency.
+  An adaptive **Constrain** menu applies geometric relations (coincident,
+  horizontal/vertical, parallel, perpendicular, equal length/radius,
+  concentric, midpoint, symmetric, tangent, colinear, and Lock); **driving
+  dimensions** (length, radius, diameter, angle — with inline arithmetic like
+  `25.4/2`) pull the geometry to value. Constraints show as tap-selectable
+  **glyphs** on the canvas and, with dimensions, list under **Constraints**
+  in the Items panel — Delete removes either (undoable, re-solves). A
+  conflicting constraint/dimension is **refused** with a non-blocking message
+  rather than corrupting the sketch. The sketch pill reports its state —
+  **green** fully defined (0 DOF) or **blue** under-defined (N DOF) — and
+  dragging an under-defined point **solves live** as the rest follows.
+  Constraints/dimensions persist with the sketch and survive extrude.
 - **Text & Project** — the Text tool places typed strings as glyph-outline
   sketch profiles (content/height/font dialog) that fill and extrude like
   any sketch; the Project tool flattens a tapped body's feature edges onto
@@ -166,7 +181,9 @@ real flows (place → edit → move → sketch → extrude → subtract).
 ## Roadmap
 
 - Offset edge UI (kernel done), section caps + interference highlighting
-- Splines, constraints and dimensions (2D solver — Phase C)
+- Auto-constraining guides, pattern constraint, spline tangency (Phase C
+  tranche 2+); the 2D constraint solver, constraints, dimensions, and sketch
+  states already ship (Phase C tranche 1)
 - Parametric history sidebar with editable steps (Phase D)
 - Fillets/chamfers, shell, STEP/IGES via a B-rep kernel (Phase E)
 - Keyboard shortcuts + Command Search, face/edge selection filters

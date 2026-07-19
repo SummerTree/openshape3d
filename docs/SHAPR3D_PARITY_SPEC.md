@@ -2,8 +2,10 @@
 
 **openshape3d** — feature-for-feature product spec derived from the Shapr3D Help
 Center (manual + tutorial corpus, extracted 2026-07-18), with an honest status
-audit against the current source tree (v0.4, post-Phase B tranche 1: sweep,
-loft, split, pattern, text, project, sketch move/rotate, translate,
+audit against the current source tree (v0.5, post-Phase C tranche 1: a
+pure-Swift 2D constraint solver, geometric constraints, driving dimensions,
+sketch states (green/blue) and drag-to-solve — on top of Phase B tranche 1:
+sweep, loft, split, pattern, text, project, sketch move/rotate, translate,
 rotate-around-axis, align, construction geometry, helix).
 
 ## Legend
@@ -30,15 +32,18 @@ rotate-around-axis, align, construction geometry, helix).
 Status verified against: `openshape3d/Kernel/` (`KernelOps`, `ProfileDetector`,
 `FaceTopology`, `SketchTypes`, `SketchPlanes`, `MeasureKit`, `SweepLoftKit`,
 `SplitKit`, `PatternKit`, `TextSketch`, `ProjectionKit`, `SketchTransform`,
-`SketchOffset`, `STLExporter`,
-`STLImporter`, `OBJExporter`, `ThreeMFExporter`, `EuclidBridge`), `Editor/`
+`SketchOffset`, `ExpressionEvaluator`, `STLExporter`,
+`STLImporter`, `OBJExporter`, `ThreeMFExporter`, `EuclidBridge`),
+`Kernel/ConstraintSolver/` (`Solver`, `Constraints`, `SketchConstraintTypes`,
+`SketchSolverBridge`, `LinearAlgebra`), `Editor/`
 (`EditorViewModel`, `EditorMode`, `SnapEngine`, `SketchTessellator`), `Model/`
 (`Commands`, `DocumentSession`, `UndoStack`, `PersistenceModels`),
 `Interaction/` (`HitTester`, `MoveGizmoController`, `ViewportGestureController`,
 `PlanePicking`, `SketchHitTester`, `SketchTrimmer`), `Rendering/` (`Renderer`,
 `Camera`, `CameraAnimator`, `GizmoRenderer`, `OrientationCube`), `UI/`
 (`EditorView`, `ToolPaletteView`, `NumericInputBar`, `ItemsPanelView`,
-`SelectionInfoBar`, `ProjectGalleryView`).
+`SelectionInfoBar`, `SketchConstraintOverlay`, `SketchDimensionOverlay`,
+`ProjectGalleryView`).
 
 ---
 
@@ -368,8 +373,17 @@ at line center as length changes), point-to-point (move together). Dragging
 geometry is the DOF test: a fully constrained sketch does not move when
 dragged. Points that are connected render with a FILLED CENTER; locked points
 render SOLID BLUE.
-**Status:** ❌ not implemented.
-**Feasibility:** [needs constraint solver]
+**Status:** 🟡 partial (Phase C tranche 1) — the solver derives the sketch's
+degrees of freedom from the null space of the numeric constraint Jacobian
+(`SketchSolverBridge.entityStates` / the `dof` returned by `solve`), and the
+sketch pill shows a state chip: **green "Fully defined"** at 0 DOF, **blue
+"Under-defined — N DOF"** otherwise (`SketchStateChip`). Dragging IS the DOF
+test — a fully-constrained sketch springs back (drag routed through the solver,
+`updateSolvedSketchEntityDrag`), and under-defined geometry follows the drag
+live. Missing: the per-POINT color states (filled-center connected points,
+solid-blue locked points) — state is currently surfaced at the sketch level,
+not per point.
+**Feasibility:** [needs constraint solver] — solver shipped.
 
 ### 2.2 Editing sketch dimensions
 
@@ -395,13 +409,25 @@ the origin, which then serves as the reference (Layout sketch technique).
 Fully-defined dimensions stay visible/editable
 outside sketch mode when visibility is on. The solver refuses a dimension on an
 already fully-solved region.
-**Status:** ❌ not implemented — no dimension labels anywhere in sketching.
-(Numeric editing exists only for tool parameters — extrude distance,
-revolve angle, offset-plane distance, axis moves, scale factor, polygon
-sides — plus the legacy primitive W/D/H fields, dead on FRESH installs but
-reachable in persisted documents containing a primitive body via
-double-tap → `.editingPrimitive` → `NumericInputBar`; see §18.)
-**Feasibility:** [needs constraint solver] (label UI itself is app code)
+**Status:** 🟡 partial (Phase C tranche 1) — **driving dimensions** exist for
+length, radius, diameter, and angle. Selecting geometry surfaces an editable
+candidate label in the sketch overlay (`SketchDimensionOverlay`); tapping opens
+an inline numeric field that accepts **inline arithmetic** (`25.4/2`, via
+`ExpressionEvaluator`) and, on commit, sets the driving value and re-solves so
+the geometry is driven to it (verified end-to-end by `DimensionUITests`).
+Pairwise point-to-point and point-to-line distances are supported, as is angle
+between two lines. Dimensions list under **Constraints** in the Items panel and
+Delete removes them (undoable). The **solver refuses** a value that
+over-constrains / conflicts with the existing dimensions (residual-norm check,
+non-blocking message — not applied). Missing: the Distance-Type badge
+(absolute/horizontal/vertical projection), diameter Circular-Annotation
+setting, draggable dimension-TEXT position, double-click-to-reopen, the
+diameter→radius auto-convert on trim, the secondary-point move rule, the
+origin/axis operand restriction + locked-crosshair workaround, and visibility
+outside sketch mode. (Tool-parameter numeric editing — extrude distance,
+revolve angle, offset-plane distance, axis moves, scale factor, polygon sides,
+legacy primitive W/D/H — remains as before; see §18.)
+**Feasibility:** [needs constraint solver] — solver shipped (label UI is app code)
 
 ### 2.3 Using sketch planes
 
@@ -503,10 +529,19 @@ shown PURPLE) = Midpoint. Constraint icons render in the modeling space
 (governed by Constraint Settings); selecting an icon lets you delete it;
 selecting an element highlights its constraints and vice versa.
 
-**Status (menu + all constraint types):** ❌ not implemented — there is no
-constraint system in the codebase.
-**Feasibility:** [needs constraint solver] for everything below except where
-noted.
+**Status (menu + all constraint types):** 🟡 partial (Phase C tranche 1) — a
+pure-Swift `ConstraintSolver` (Levenberg–Marquardt, numeric Jacobian) backs an
+adaptive **Constrain** menu that enables only the constraints valid for the
+current selection (`canApplyConstraint`) and applies each relation plus any
+solver-moved geometry as ONE undoable step (`applyConstraint`). Applied
+constraints render as tap-selectable on-canvas glyphs and list under
+**Constraints** in the Items panel (Delete removes either, undoable, re-solves).
+An over-constraining pick is refused with a non-blocking message rather than
+corrupting the sketch. Missing (menu-level): the auto-open behavior, Shift+letter
+shortcuts, drag-and-drop creation, the PURPLE midpoint hint, and the
+element↔constraint highlight linking. Per-constraint status in §3.2.
+**Feasibility:** [needs constraint solver] — solver shipped; the remaining
+menu-behavior gaps are app code.
 
 ### 3.1 Constraint Settings
 
@@ -525,19 +560,34 @@ Each: select the listed operands on the same plane → pick the constraint.
 
 | Constraint | Operands & behavior | Shortcut | Status |
 |---|---|---|---|
-| Parallel | 2+ lines; constant direction | Shift+A | ❌ |
-| Perpendicular | 2 lines, 90°; need not touch — guide curves shown when apart | Shift+P | ❌ |
-| Tangent | line+curve or curve+curve; single-point touch; guide curves when separated | Shift+T | ❌ |
-| Coincident | endpoint + endpoint/line/curve/edge; also by dragging; filled-center point rendering | Shift+N | ❌ |
-| Midpoint | endpoint + line center, tracks length changes; drag onto purple midpoint | Shift+M | ❌ |
-| Concentric | arcs/circles share center | Shift+C | ❌ |
-| Horizontal/Vertical | line(s) align to sketch axes (each line goes to the NEAREST axis) — or TWO POINTS, aligning the pair horizontally/vertically; auto-created when auto-constraining is on | Shift+V | ❌ |
-| Equal | equal length (lines) / equal radius (arcs, circles) | Shift+E | ❌ |
-| Symmetry | two similar elements mirrored; then select a line or edge as the axis | Shift+S | ❌ |
+| Parallel | 2+ lines; constant direction | Shift+A | 🟡 |
+| Perpendicular | 2 lines, 90°; need not touch — guide curves shown when apart | Shift+P | 🟡 |
+| Tangent | line+curve or curve+curve; single-point touch; guide curves when separated | Shift+T | 🟡 |
+| Coincident | endpoint + endpoint/line/curve/edge; also by dragging; filled-center point rendering | Shift+N | 🟡 |
+| Midpoint | endpoint + line center, tracks length changes; drag onto purple midpoint | Shift+M | 🟡 |
+| Concentric | arcs/circles share center | Shift+C | ✅ |
+| Horizontal/Vertical | line(s) align to sketch axes (each line goes to the NEAREST axis) — or TWO POINTS, aligning the pair horizontally/vertically; auto-created when auto-constraining is on | Shift+V | 🟡 |
+| Equal | equal length (lines) / equal radius (arcs, circles) | Shift+E | ✅ |
+| Symmetry | two similar elements mirrored; then select a line or edge as the axis | Shift+S | 🟡 |
 | Disconnect | breaks connected points; deletes Coincident/Midpoint on the point | — | ❌ |
-| Lock/Unlock | fixes an element/point in place; locked points render solid blue | Shift+L | ❌ |
+| Lock/Unlock | fixes an element/point in place; locked points render solid blue | Shift+L | 🟡 |
 
-**Feasibility:** [needs constraint solver]
+**Status:** 🟡 implemented (Phase C tranche 1) — the pure-Swift
+`ConstraintSolver` (Levenberg–Marquardt, numeric Jacobian) lowers each of the
+above (except Disconnect) from an **adaptive Constrain menu** that
+enables/disables entries per selection (`canApplyConstraint`), applying the
+relation + any solver-moved geometry as ONE undoable step
+(`EditorViewModel.applyConstraint`). Coincident welds endpoints (point-to-point
+or nearest-corner of two lines); Horizontal/Vertical accept a line OR a point
+pair; Lock pins points via the solver's fixed set. Applied constraints render
+as **on-canvas glyphs** (tap-selects, Delete removes — undoable, re-solves) and
+list under **Constraints** in the Items panel. An over-constraining pick is
+**refused** with a non-blocking message (residual-norm conflict check) rather
+than corrupting the sketch. Missing: Shift+letter shortcuts, drag-to-create
+coincident/midpoint, the violet guide curves for separated operands, the
+filled-center / solid-blue POINT rendering (see §2.1), auto-constrain, and
+Disconnect.
+**Feasibility:** [needs constraint solver] — solver shipped.
 
 ### 3.3 Make Construction / Make Regular
 

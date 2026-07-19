@@ -38,6 +38,8 @@ struct ToolPaletteView: View {
                 sketchButton("square.on.square.dashed", label: "Project", tool: .project)
                 makeSymbolButton
                 insertSymbolMenu
+                constraintsMenu
+                dimensionButton
             }
             Divider().frame(width: 40)
             section("Combine") {
@@ -88,7 +90,8 @@ struct ToolPaletteView: View {
                 }
                 .disabled(
                     viewModel.mode.isSketching
-                        ? viewModel.selectedSketchEntityIDs.isEmpty
+                        ? (viewModel.selectedSketchEntityIDs.isEmpty
+                           && !viewModel.hasSketchGlyphSelection)
                         : viewModel.selection.isEmpty && viewModel.selectedImage == nil
                 )
                 .accessibilityIdentifier("DeleteButton")
@@ -349,6 +352,54 @@ struct ToolPaletteView: View {
                 .fill(armed ? Color.blue.opacity(0.15) : Color.clear)
         )
         .accessibilityIdentifier("InsertSymbolMenu")
+    }
+
+    /// Constraints menu (plan §C3, spec §3.2): adaptive — each entry is
+    /// enabled only when the current sketch selection supports it. Applying
+    /// re-solves the sketch and commits the moved geometry in one undo step.
+    private var constraintsMenu: some View {
+        Menu {
+            constraintItem("Coincident", .coincident)
+            constraintItem("Horizontal", .horizontal)
+            constraintItem("Vertical", .vertical)
+            constraintItem("Parallel", .parallel)
+            constraintItem("Perpendicular", .perpendicular)
+            constraintItem("Equal Length", .equalLength)
+            constraintItem("Equal Radius", .equalRadius)
+            constraintItem("Concentric", .concentric)
+            constraintItem("Midpoint", .midpoint)
+            constraintItem("Symmetric", .symmetric)
+            constraintItem("Tangent", .tangent)
+            constraintItem("Lock", .fixed)
+        } label: {
+            paletteIcon("link", label: "Constrain")
+                .foregroundStyle(Color.primary)
+        }
+        .disabled(!viewModel.mode.isSketching)
+        .accessibilityIdentifier("ConstraintsMenu")
+    }
+
+    /// Dimension action (plan §C2, spec §2.2): opens the inline numeric field
+    /// for the current selection's candidate dimension (length/radius/angle, or
+    /// a pairwise distance between two points/lines). Committing adds a driving
+    /// dimension and re-solves.
+    private var dimensionButton: some View {
+        Button {
+            viewModel.beginDimensionForSelection()
+        } label: {
+            paletteIcon("ruler", label: "Dimension")
+                .foregroundStyle(Color.primary)
+        }
+        .disabled(!viewModel.canDimensionSelection)
+        .accessibilityIdentifier("DimensionButton")
+    }
+
+    private func constraintItem(_ label: String, _ kind: SketchConstraintKind) -> some View {
+        Button(label) {
+            viewModel.applyConstraint(kind)
+        }
+        .disabled(!viewModel.canApplyConstraint(kind))
+        .accessibilityIdentifier("Constraint_\(label.replacingOccurrences(of: " ", with: ""))")
     }
 
     private func sketchButton(_ systemImage: String, label: String, tool: SketchTool) -> some View {
