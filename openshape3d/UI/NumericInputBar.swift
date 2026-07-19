@@ -102,6 +102,7 @@ struct NumericInputBar: View {
                 Text("Distance")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                    .fixedSize()
                 TextField("Distance", value: $axisDistance, format: .number)
                     .keyboardType(.numbersAndPunctuation)
                     .textFieldStyle(.roundedBorder)
@@ -140,13 +141,14 @@ struct NumericInputBar: View {
                 Text("Factor")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                    .fixedSize()
                 TextField(
                     "Factor",
                     value: Binding(
                         get: { viewModel.scalePendingFactor },
                         set: { viewModel.scalePendingFactor = $0 }
                     ),
-                    format: .number
+                    format: .number.precision(.fractionLength(0...2))
                 )
                 .keyboardType(.numbersAndPunctuation)
                 .textFieldStyle(.roundedBorder)
@@ -193,13 +195,14 @@ struct NumericInputBar: View {
                 Text("Angle")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                    .fixedSize()
                 TextField(
                     "Angle",
                     value: Binding(
                         get: { viewModel.rotateAxisState?.angleDegrees ?? 0 },
                         set: { viewModel.setRotateAngle($0) }
                     ),
-                    format: .number
+                    format: .number.precision(.fractionLength(0...2))
                 )
                 .keyboardType(.numbersAndPunctuation)
                 .textFieldStyle(.roundedBorder)
@@ -265,13 +268,14 @@ struct NumericInputBar: View {
                 Text("Count")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                    .fixedSize()
                 TextField(
                     "Count",
                     value: Binding(
                         get: { viewModel.patternState?.count ?? 3 },
                         set: { viewModel.patternState?.count = min(max($0, 1), 64) }
                     ),
-                    format: .number
+                    format: .number.precision(.fractionLength(0...2))
                 )
                 .keyboardType(.numberPad)
                 .textFieldStyle(.roundedBorder)
@@ -284,13 +288,14 @@ struct NumericInputBar: View {
                     Text("Spacing")
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                        .fixedSize()
                     TextField(
                         "Spacing",
                         value: Binding(
                             get: { viewModel.patternState?.spacing ?? 6 },
                             set: { viewModel.patternState?.spacing = $0 }
                         ),
-                        format: .number
+                        format: .number.precision(.fractionLength(0...2))
                     )
                     .keyboardType(.numbersAndPunctuation)
                     .textFieldStyle(.roundedBorder)
@@ -302,13 +307,14 @@ struct NumericInputBar: View {
                     Text("Angle")
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                        .fixedSize()
                     TextField(
                         "Angle",
                         value: Binding(
                             get: { viewModel.patternState?.totalAngle ?? 360 },
                             set: { viewModel.patternState?.totalAngle = $0 }
                         ),
-                        format: .number
+                        format: .number.precision(.fractionLength(0...2))
                     )
                     .keyboardType(.numbersAndPunctuation)
                     .textFieldStyle(.roundedBorder)
@@ -346,13 +352,14 @@ struct NumericInputBar: View {
                 Text("Sides")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                    .fixedSize()
                 TextField(
                     "Sides",
                     value: Binding(
                         get: { viewModel.polygonSides },
                         set: { viewModel.polygonSides = min(max($0, 3), 64) }
                     ),
-                    format: .number
+                    format: .number.precision(.fractionLength(0...2))
                 )
                 .keyboardType(.numberPad)
                 .textFieldStyle(.roundedBorder)
@@ -386,13 +393,14 @@ struct NumericInputBar: View {
                     Text("Distance")
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                        .fixedSize()
                     TextField(
                         "Distance",
                         value: Binding(
                             get: { viewModel.toolContext?.distance ?? 0 },
                             set: { viewModel.setExtrudeDistance($0) }
                         ),
-                        format: .number
+                        format: .number.precision(.fractionLength(0...2))
                     )
                     .keyboardType(.numbersAndPunctuation)
                     .textFieldStyle(.roundedBorder)
@@ -540,13 +548,14 @@ struct NumericInputBar: View {
                 Text("Distance")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                    .fixedSize()
                 TextField(
                     "Distance",
                     value: Binding(
                         get: { viewModel.toolContext?.distance ?? 0 },
                         set: { viewModel.setOffsetPlaneDistance($0) }
                     ),
-                    format: .number
+                    format: .number.precision(.fractionLength(0...2))
                 )
                 .keyboardType(.numbersAndPunctuation)
                 .textFieldStyle(.roundedBorder)
@@ -582,13 +591,14 @@ struct NumericInputBar: View {
                 Text("Angle")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                    .fixedSize()
                 TextField(
                     "Angle",
                     value: Binding(
                         get: { viewModel.toolContext?.angle ?? 360 },
                         set: { viewModel.setRevolveAngle($0) }
                     ),
-                    format: .number
+                    format: .number.precision(.fractionLength(0...2))
                 )
                 .keyboardType(.numbersAndPunctuation)
                 .textFieldStyle(.roundedBorder)

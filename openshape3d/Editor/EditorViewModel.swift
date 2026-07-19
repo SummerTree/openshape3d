@@ -1206,7 +1206,36 @@ final class EditorViewModel {
         var isSketchPattern: Bool { bodyID == nil }
     }
 
-    var patternState: PatternState?
+    var patternState: PatternState? {
+        didSet { fitCameraToPatternGhosts() }
+    }
+
+    /// Keep every ghost instance in frame while the pattern bar is up —
+    /// param changes can push instances far outside the current view.
+    private func fitCameraToPatternGhosts() {
+        guard case .patterning = mode, let state = patternState,
+              let bodyID = state.bodyID,
+              let body = session.document.body(with: bodyID)
+        else { return }
+        let aabb = body.render.localAABB
+        var lo = SIMD3<Float>(repeating: .greatestFiniteMagnitude)
+        var hi = -lo
+        for transform in patternTransforms(state) {
+            let matrix = Self.composedPatternTransform(transform, base: body.transform).matrixFloat
+            for i in 0..<8 {
+                let corner = SIMD3<Float>(
+                    (i & 1) == 0 ? aabb.min.x : aabb.max.x,
+                    (i & 2) == 0 ? aabb.min.y : aabb.max.y,
+                    (i & 4) == 0 ? aabb.min.z : aabb.max.z
+                )
+                let world = matrix * SIMD4(corner, 1)
+                lo = simd_min(lo, SIMD3(world.x, world.y, world.z))
+                hi = simd_max(hi, SIMD3(world.x, world.y, world.z))
+            }
+        }
+        guard lo.x <= hi.x else { return }
+        cameraControl?.fitTo(bounds: (lo, hi))
+    }
 
     /// True when the palette Pattern action applies: one body selected, or a
     /// sketch profile armed in the extrude tool.
@@ -1247,6 +1276,7 @@ final class EditorViewModel {
         state.bodyID = id
         patternState = state
         mode = .patterning
+        fitCameraToPatternGhosts() // mode wasn't set yet during didSet
     }
 
     func cancelPattern() {
