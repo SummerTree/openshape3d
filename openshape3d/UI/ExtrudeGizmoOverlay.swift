@@ -18,8 +18,8 @@ struct ExtrudeGizmoOverlay: View {
         if let label = viewModel.extrudeArrowLabel,
            let pt = viewModel.cameraControl?.worldToScreenPoint(label.world) {
             pill(label)
-                // Nudge above-right of the tip so the arrowhead stays visible.
-                .position(x: pt.x + 46, y: pt.y - 14)
+                // Just off the shaft so the arrow line stays visible.
+                .position(x: pt.x + 34, y: pt.y)
         }
     }
 
@@ -28,7 +28,8 @@ struct ExtrudeGizmoOverlay: View {
         if viewModel.editingExtrudeArrow {
             ExtrudeArrowField(viewModel: viewModel)
         } else {
-            HStack(spacing: 6) {
+            // Extent menu stacked above the value pill, centred on the arrow.
+            VStack(spacing: 5) {
                 if !label.isDiameter {
                     Menu {
                         Button { viewModel.setExtrudeSymmetric(false) } label: {
@@ -43,7 +44,7 @@ struct ExtrudeGizmoOverlay: View {
                             Image(systemName: "chevron.down").font(.system(size: 8))
                         }
                         .padding(.horizontal, 7)
-                        .padding(.vertical, 4)
+                        .padding(.vertical, 3)
                         .background(.regularMaterial, in: Capsule())
                     }
                     .accessibilityIdentifier("ExtrudeExtentMenu")

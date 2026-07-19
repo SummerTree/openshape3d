@@ -13,7 +13,7 @@ import simd
 
 final class GizmoRenderer {
     private struct Part {
-        let part: GizmoPart
+        let part: GizmoPart?   // nil = non-interactive (centre dot)
         let vertexRange: Range<Int>
         let color: SIMD4<Float>
     }
@@ -21,16 +21,17 @@ final class GizmoRenderer {
     private var vertexBuffer: MTLBuffer?
     private var parts: [Part] = []
 
-    private static let axisColors: [GizmoPart: SIMD4<Float>] = [
-        .xAxis: SIMD4(0.88, 0.26, 0.26, 1),
-        .yAxis: SIMD4(0.35, 0.72, 0.28, 1),
-        .zAxis: SIMD4(0.26, 0.47, 0.90, 1),
-        .yzPlane: SIMD4(0.88, 0.26, 0.26, 0.35),
-        .zxPlane: SIMD4(0.35, 0.72, 0.28, 0.35),
-        .xyPlane: SIMD4(0.26, 0.47, 0.90, 0.35),
-        .xRing: SIMD4(0.88, 0.26, 0.26, 0.55),
-        .yRing: SIMD4(0.35, 0.72, 0.28, 0.55),
-        .zRing: SIMD4(0.26, 0.47, 0.90, 0.55),
+    // Shapr3D-style monochrome gizmo: white translate/rotate handles, white
+    // plane tiles, a cyan centre dot. Axis identity comes from position, not
+    // colour (matches the reference).
+    private static let handleWhite = SIMD4<Float>(0.97, 0.97, 0.99, 1)
+    private static let planeWhite = SIMD4<Float>(0.97, 0.97, 0.99, 0.5)
+    private static let centerCyan = SIMD4<Float>(0.20, 0.80, 0.85, 1)
+
+    private static let colors: [GizmoPart: SIMD4<Float>] = [
+        .xAxis: handleWhite, .yAxis: handleWhite, .zAxis: handleWhite,
+        .yzPlane: planeWhite, .zxPlane: planeWhite, .xyPlane: planeWhite,
+        .xRing: handleWhite, .yRing: handleWhite, .zRing: handleWhite,
     ]
 
     func prepare(device: MTLDevice) {
@@ -41,30 +42,26 @@ final class GizmoRenderer {
         for part in [GizmoPart.xAxis, .yAxis, .zAxis] {
             let start = vertices.count
             appendArrow(along: part.axisDirection, into: &vertices)
-            built.append(Part(
-                part: part,
-                vertexRange: start..<vertices.count,
-                color: Self.axisColors[part]!
-            ))
+            built.append(Part(part: part, vertexRange: start..<vertices.count,
+                              color: Self.colors[part]!))
         }
         for part in [GizmoPart.xyPlane, .yzPlane, .zxPlane] {
             let start = vertices.count
             appendPlaneHandle(normalAxis: part, into: &vertices)
-            built.append(Part(
-                part: part,
-                vertexRange: start..<vertices.count,
-                color: Self.axisColors[part]!
-            ))
+            built.append(Part(part: part, vertexRange: start..<vertices.count,
+                              color: Self.colors[part]!))
         }
         for part in [GizmoPart.xRing, .yRing, .zRing] {
             let start = vertices.count
-            appendRing(around: part, into: &vertices)
-            built.append(Part(
-                part: part,
-                vertexRange: start..<vertices.count,
-                color: Self.axisColors[part]!
-            ))
+            appendRotationGlyph(around: part, into: &vertices)
+            built.append(Part(part: part, vertexRange: start..<vertices.count,
+                              color: Self.colors[part]!))
         }
+        // Centre dot (free-move pivot) — non-interactive (nil part).
+        let dotStart = vertices.count
+        appendCenterDot(into: &vertices)
+        built.append(Part(part: nil, vertexRange: dotStart..<vertices.count,
+                          color: Self.centerCyan))
 
         vertexBuffer = vertices.withUnsafeBytes { raw in
             device.makeBuffer(
@@ -100,13 +97,9 @@ final class GizmoRenderer {
             var body = BodyUniforms()
             body.modelMatrix = model
             var color = part.color
-            if gizmo.highlighted == part.part {
-                color = SIMD4(
-                    min(color.x * 1.35 + 0.1, 1),
-                    min(color.y * 1.35 + 0.1, 1),
-                    min(color.z * 1.35 + 0.1, 1),
-                    min(color.w + 0.3, 1)
-                )
+            if let p = part.part, gizmo.highlighted == p {
+                // Highlight in Shapr3D blue (arrows/handles are white).
+                color = SIMD4(0.20, 0.55, 0.95, 1)
             }
             body.baseColor = color
             encoder.setVertexBytes(&body, length: MemoryLayout<BodyUniforms>.stride,
@@ -149,8 +142,9 @@ final class GizmoRenderer {
 
         var body = BodyUniforms()
         body.modelMatrix = model
-        // Validity feedback: red when the pending result would fail (spec §18).
-        body.baseColor = arrow.isValid ? frame.accentColor : SIMD4(0.88, 0.20, 0.20, 1)
+        // Thin dark arrow (Shapr3D). Validity feedback: red when the pending
+        // result would fail (spec §18).
+        body.baseColor = arrow.isValid ? SIMD4(0.14, 0.15, 0.17, 1) : SIMD4(0.88, 0.20, 0.20, 1)
         encoder.setVertexBytes(&body, length: MemoryLayout<BodyUniforms>.stride,
                                index: Int(BufferIndexBodyUniforms.rawValue))
         encoder.setFragmentBytes(&body, length: MemoryLayout<BodyUniforms>.stride,
@@ -214,10 +208,11 @@ final class GizmoRenderer {
     // MARK: - Mesh generation (gizmo-local space, unit length arrows)
 
     private func appendArrow(along axis: SIMD3<Float>, into vertices: inout [SIMD3<Float>]) {
-        let shaftRadius: Float = 0.02
-        let shaftLength: Float = 0.72
-        let coneRadius: Float = 0.07
-        let coneLength: Float = 0.28
+        // Shorter, slimmer than before so the gizmo reads as a tight cluster.
+        let shaftRadius: Float = 0.014
+        let shaftLength: Float = 0.62
+        let coneRadius: Float = 0.055
+        let coneLength: Float = 0.2
         let segments = 16
 
         let (u, v) = perpendicularBasis(for: axis)
@@ -268,26 +263,55 @@ final class GizmoRenderer {
         vertices.append(contentsOf: [c[0], c[3], c[2]])
     }
 
-    /// Slim annulus band in the ring's plane (rotation affordance). Kept thin
-    /// so the translate arrows/plane handles dominate, matching Shapr3D's
-    /// compact gizmo; the hit radius (GizmoGeometry.ringRadius) is unchanged.
-    private func appendRing(around part: GizmoPart, into vertices: inout [SIMD3<Float>]) {
-        let inner = GizmoGeometry.ringRadius - 0.014
-        let outer = GizmoGeometry.ringRadius + 0.014
-        let segments = 64
+    /// A small curved rotation glyph (short arc + arrowheads) in the ring's
+    /// plane — Shapr3D's rotation affordance instead of a full ring. The hit
+    /// test still uses the full circle at GizmoGeometry.ringRadius (forgiving).
+    private func appendRotationGlyph(around part: GizmoPart, into vertices: inout [SIMD3<Float>]) {
+        let r = GizmoGeometry.ringRadius
+        let half: Float = 0.014            // band half-thickness
         let (u, v) = GizmoGeometry.ringBasis(for: part)
-        for i in 0..<segments {
-            let a0 = Float(i) / Float(segments) * 2 * .pi
-            let a1 = Float(i + 1) / Float(segments) * 2 * .pi
-            let d0 = u * cos(a0) + v * sin(a0)
-            let d1 = u * cos(a1) + v * sin(a1)
-            let c0 = d0 * inner
-            let c1 = d0 * outer
-            let c2 = d1 * outer
-            let c3 = d1 * inner
-            // Both windings so the band is visible from either side.
+        // Arc centred at a fixed local angle, ~70° wide.
+        let center: Float = .pi / 4
+        let span: Float = 70 * .pi / 180
+        let a0 = center - span / 2, a1 = center + span / 2
+        let steps = 16
+        func dir(_ a: Float) -> SIMD3<Float> { u * cos(a) + v * sin(a) }
+
+        for i in 0..<steps {
+            let t0 = a0 + (a1 - a0) * Float(i) / Float(steps)
+            let t1 = a0 + (a1 - a0) * Float(i + 1) / Float(steps)
+            let d0 = dir(t0), d1 = dir(t1)
+            let c0 = d0 * (r - half), c1 = d0 * (r + half)
+            let c2 = d1 * (r + half), c3 = d1 * (r - half)
             vertices.append(contentsOf: [c0, c1, c2, c0, c2, c3])
             vertices.append(contentsOf: [c0, c2, c1, c0, c3, c2])
+        }
+        // Tangential arrowheads at each arc end.
+        func head(at a: Float, pointing forward: Bool) {
+            let p = dir(a) * r
+            let radial = dir(a)
+            var tangent = u * -sin(a) + v * cos(a)
+            if !forward { tangent = -tangent }
+            let tip = p + tangent * 0.09
+            let b1 = p + radial * 0.05
+            let b2 = p - radial * 0.05
+            vertices.append(contentsOf: [tip, b1, b2])
+            vertices.append(contentsOf: [tip, b2, b1])
+        }
+        head(at: a0, pointing: false)
+        head(at: a1, pointing: true)
+    }
+
+    /// A small cyan sphere-ish dot at the origin (free-move pivot).
+    private func appendCenterDot(into vertices: inout [SIMD3<Float>]) {
+        let r: Float = 0.055
+        // Octahedron.
+        let p = [SIMD3<Float>(r,0,0), SIMD3(-r,0,0), SIMD3(0,r,0),
+                 SIMD3(0,-r,0), SIMD3(0,0,r), SIMD3(0,0,-r)]
+        let faces = [(0,2,4),(2,1,4),(1,3,4),(3,0,4),
+                     (2,0,5),(1,2,5),(3,1,5),(0,3,5)]
+        for (a, b, c) in faces {
+            vertices.append(contentsOf: [p[a], p[b], p[c]])
         }
     }
 

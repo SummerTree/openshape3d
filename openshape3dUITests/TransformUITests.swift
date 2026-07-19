@@ -29,12 +29,13 @@ final class TransformUITests: XCTestCase {
     func testRingDragRotatesUndoably() throws {
         let app = launchSeeded()
 
-        // The seeded box pivot projects at ~(0.5, 0.68). For the fitted
-        // camera these two screen points lie on the blue Z ring (world XY
-        // plane) at its 150° and 240° points — a quarter-turn drag.
+        // The seeded box pivot projects at ~(0.5, 0.68). These two screen
+        // points lie on the Z rotation handle (world XY plane) at its 150°
+        // and 240° points — a quarter-turn drag. (Radius 0.5 in gizmo units
+        // after the compact-gizmo restyle.)
         let window = app.windows.firstMatch
-        let start = window.coordinate(withNormalizedOffset: CGVector(dx: 0.4056, dy: 0.6094))
-        let end = window.coordinate(withNormalizedOffset: CGVector(dx: 0.4471, dy: 0.7363))
+        let start = window.coordinate(withNormalizedOffset: CGVector(dx: 0.4445, dy: 0.6385))
+        let end = window.coordinate(withNormalizedOffset: CGVector(dx: 0.4689, dy: 0.7131))
         start.press(forDuration: 0.1, thenDragTo: end)
 
         // Two commands undoable: seed Add and the ring rotation (Move).

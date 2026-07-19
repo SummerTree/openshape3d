@@ -2952,17 +2952,19 @@ final class EditorViewModel {
     var extrudeArrowLabel: ExtrudeArrowLabel? {
         guard let context = toolContext, case .extrude(let distance) = context.kind else { return nil }
         let centroid = context.plane.toWorld(context.profile.centroid)
-        let tip = centroid + context.plane.normal * distance
+        // Anchor the pill at the arrow's midpoint (Shapr3D centres it on the
+        // line), nudged just off-axis so it doesn't overlap the shaft.
+        let mid = centroid + context.plane.normal * (distance * 0.5)
         if let cyl = context.cylinderFace {
             let dia = 2 * (cyl.radius + distance / max(sourceScale(context), 1e-6))
             return ExtrudeArrowLabel(
-                world: tip, text: String(format: "⌀ %.1f mm", dia),
+                world: mid, text: String(format: "⌀ %.1f mm", dia),
                 isDiameter: true, symmetric: false
             )
         }
         let shown = context.symmetric ? abs(distance) * 2 : abs(distance)
         return ExtrudeArrowLabel(
-            world: tip, text: String(format: "%.1f mm", shown),
+            world: mid, text: String(format: "%.1f mm", shown),
             isDiameter: false, symmetric: context.symmetric
         )
     }
