@@ -28,9 +28,9 @@ final class GizmoRenderer {
         .yzPlane: SIMD4(0.88, 0.26, 0.26, 0.35),
         .zxPlane: SIMD4(0.35, 0.72, 0.28, 0.35),
         .xyPlane: SIMD4(0.26, 0.47, 0.90, 0.35),
-        .xRing: SIMD4(0.88, 0.26, 0.26, 0.85),
-        .yRing: SIMD4(0.35, 0.72, 0.28, 0.85),
-        .zRing: SIMD4(0.26, 0.47, 0.90, 0.85),
+        .xRing: SIMD4(0.88, 0.26, 0.26, 0.55),
+        .yRing: SIMD4(0.35, 0.72, 0.28, 0.55),
+        .zRing: SIMD4(0.26, 0.47, 0.90, 0.55),
     ]
 
     func prepare(device: MTLDevice) {
@@ -268,10 +268,12 @@ final class GizmoRenderer {
         vertices.append(contentsOf: [c[0], c[3], c[2]])
     }
 
-    /// Flat annulus band in the ring's plane (rotation affordance).
+    /// Slim annulus band in the ring's plane (rotation affordance). Kept thin
+    /// so the translate arrows/plane handles dominate, matching Shapr3D's
+    /// compact gizmo; the hit radius (GizmoGeometry.ringRadius) is unchanged.
     private func appendRing(around part: GizmoPart, into vertices: inout [SIMD3<Float>]) {
-        let inner = GizmoGeometry.ringRadius - 0.035
-        let outer = GizmoGeometry.ringRadius + 0.035
+        let inner = GizmoGeometry.ringRadius - 0.014
+        let outer = GizmoGeometry.ringRadius + 0.014
         let segments = 64
         let (u, v) = GizmoGeometry.ringBasis(for: part)
         for i in 0..<segments {
