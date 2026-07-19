@@ -28,6 +28,9 @@ final class GizmoRenderer {
         .yzPlane: SIMD4(0.88, 0.26, 0.26, 0.35),
         .zxPlane: SIMD4(0.35, 0.72, 0.28, 0.35),
         .xyPlane: SIMD4(0.26, 0.47, 0.90, 0.35),
+        .xRing: SIMD4(0.88, 0.26, 0.26, 0.85),
+        .yRing: SIMD4(0.35, 0.72, 0.28, 0.85),
+        .zRing: SIMD4(0.26, 0.47, 0.90, 0.85),
     ]
 
     func prepare(device: MTLDevice) {
@@ -47,6 +50,15 @@ final class GizmoRenderer {
         for part in [GizmoPart.xyPlane, .yzPlane, .zxPlane] {
             let start = vertices.count
             appendPlaneHandle(normalAxis: part, into: &vertices)
+            built.append(Part(
+                part: part,
+                vertexRange: start..<vertices.count,
+                color: Self.axisColors[part]!
+            ))
+        }
+        for part in [GizmoPart.xRing, .yRing, .zRing] {
+            let start = vertices.count
+            appendRing(around: part, into: &vertices)
             built.append(Part(
                 part: part,
                 vertexRange: start..<vertices.count,
@@ -137,7 +149,8 @@ final class GizmoRenderer {
 
         var body = BodyUniforms()
         body.modelMatrix = model
-        body.baseColor = frame.accentColor
+        // Validity feedback: red when the pending result would fail (spec §18).
+        body.baseColor = arrow.isValid ? frame.accentColor : SIMD4(0.88, 0.20, 0.20, 1)
         encoder.setVertexBytes(&body, length: MemoryLayout<BodyUniforms>.stride,
                                index: Int(BufferIndexBodyUniforms.rawValue))
         encoder.setFragmentBytes(&body, length: MemoryLayout<BodyUniforms>.stride,
@@ -147,6 +160,55 @@ final class GizmoRenderer {
             vertexStart: yPart.vertexRange.lowerBound,
             vertexCount: yPart.vertexRange.count
         )
+    }
+
+    /// Plane picker tiles: translucent bordered quads in world space. Tiny
+    /// vertex payloads, so setVertexBytes instead of buffers.
+    func drawPlaneTiles(
+        encoder: MTLRenderCommandEncoder,
+        pipelines: PipelineStore,
+        frame: inout FrameUniforms,
+        tiles: [PlanePickerTile]
+    ) {
+        guard !tiles.isEmpty else { return }
+        encoder.setRenderPipelineState(pipelines.unlitColor)
+        encoder.setDepthStencilState(pipelines.depthReadWrite)
+        encoder.setVertexBytes(&frame, length: MemoryLayout<FrameUniforms>.stride,
+                               index: Int(BufferIndexFrameUniforms.rawValue))
+
+        for tile in tiles {
+            let c = tile.worldCorners
+            // Both windings so the quad is visible from either side.
+            let triangles: [SIMD3<Float>] = [
+                c[0], c[1], c[2], c[0], c[2], c[3],
+                c[0], c[2], c[1], c[0], c[3], c[2],
+            ]
+            let border: [SIMD3<Float>] = [c[0], c[1], c[1], c[2], c[2], c[3], c[3], c[0]]
+
+            var body = BodyUniforms()
+            body.modelMatrix = matrix_identity_float4x4
+            body.baseColor = tile.color
+            encoder.setVertexBytes(&body, length: MemoryLayout<BodyUniforms>.stride,
+                                   index: Int(BufferIndexBodyUniforms.rawValue))
+            encoder.setFragmentBytes(&body, length: MemoryLayout<BodyUniforms>.stride,
+                                     index: Int(BufferIndexBodyUniforms.rawValue))
+            triangles.withUnsafeBytes { raw in
+                encoder.setVertexBytes(raw.baseAddress!, length: raw.count,
+                                       index: Int(BufferIndexPositions.rawValue))
+            }
+            encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: triangles.count)
+
+            body.baseColor = SIMD4(tile.color.x, tile.color.y, tile.color.z, 1)
+            encoder.setVertexBytes(&body, length: MemoryLayout<BodyUniforms>.stride,
+                                   index: Int(BufferIndexBodyUniforms.rawValue))
+            encoder.setFragmentBytes(&body, length: MemoryLayout<BodyUniforms>.stride,
+                                     index: Int(BufferIndexBodyUniforms.rawValue))
+            border.withUnsafeBytes { raw in
+                encoder.setVertexBytes(raw.baseAddress!, length: raw.count,
+                                       index: Int(BufferIndexPositions.rawValue))
+            }
+            encoder.drawPrimitives(type: .line, vertexStart: 0, vertexCount: border.count)
+        }
     }
 
     // MARK: - Mesh generation (gizmo-local space, unit length arrows)
@@ -204,6 +266,27 @@ final class GizmoRenderer {
         vertices.append(contentsOf: [c[0], c[2], c[3]])
         vertices.append(contentsOf: [c[0], c[2], c[1]])
         vertices.append(contentsOf: [c[0], c[3], c[2]])
+    }
+
+    /// Flat annulus band in the ring's plane (rotation affordance).
+    private func appendRing(around part: GizmoPart, into vertices: inout [SIMD3<Float>]) {
+        let inner = GizmoGeometry.ringRadius - 0.035
+        let outer = GizmoGeometry.ringRadius + 0.035
+        let segments = 64
+        let (u, v) = GizmoGeometry.ringBasis(for: part)
+        for i in 0..<segments {
+            let a0 = Float(i) / Float(segments) * 2 * .pi
+            let a1 = Float(i + 1) / Float(segments) * 2 * .pi
+            let d0 = u * cos(a0) + v * sin(a0)
+            let d1 = u * cos(a1) + v * sin(a1)
+            let c0 = d0 * inner
+            let c1 = d0 * outer
+            let c2 = d1 * outer
+            let c3 = d1 * inner
+            // Both windings so the band is visible from either side.
+            vertices.append(contentsOf: [c0, c1, c2, c0, c2, c3])
+            vertices.append(contentsOf: [c0, c2, c1, c0, c3, c2])
+        }
     }
 
     private func perpendicularBasis(for axis: SIMD3<Float>) -> (SIMD3<Float>, SIMD3<Float>) {

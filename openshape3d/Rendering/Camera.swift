@@ -9,14 +9,31 @@
 import Foundation
 import simd
 
+/// Camera projection mode (spec §7.3: FOV slider reaching 0° = orthographic;
+/// v1 is a binary toggle).
+nonisolated enum CameraProjection: Sendable, Equatable {
+    case perspective(fovY: Float)
+    case orthographic
+}
+
 nonisolated struct TurntableCamera: Sendable, Equatable {
     var target: SIMD3<Float> = .zero
     var distance: Float = 12
     var azimuth: Float = .pi / 5      // radians around +Y, 0 looks down -Z
     var elevation: Float = .pi / 7    // radians above the ground plane
-    var fovY: Float = 40 * .pi / 180
+    var projection: CameraProjection = .perspective(fovY: TurntableCamera.defaultFovY)
 
+    static let defaultFovY: Float = 40 * .pi / 180
     static let elevationLimit: Float = 89 * .pi / 180
+
+    /// Vertical FOV used for screen-size conversions (pan, fit, gizmo scale).
+    /// Orthographic keeps the default so the frustum height at the target
+    /// depth (2·d·tan(fov/2)) matches perspective — toggling projection keeps
+    /// the model the same on-screen size and pinch-zoom keeps working.
+    var fovY: Float {
+        if case .perspective(let fov) = projection { return fov }
+        return Self.defaultFovY
+    }
 
     var position: SIMD3<Float> {
         let ce = cos(elevation)
@@ -37,7 +54,17 @@ nonisolated struct TurntableCamera: Sendable, Equatable {
         // model is 5mm or 5m.
         let near = max(0.01, distance * 0.01)
         let far = max(100, distance * 40)
-        return Matrices.perspective(fovYRadians: fovY, aspect: aspect, near: near, far: far)
+        switch projection {
+        case .perspective(let fov):
+            return Matrices.perspective(fovYRadians: fov, aspect: aspect, near: near, far: far)
+        case .orthographic:
+            // Ortho scale derives from distance: the frustum height equals the
+            // perspective height at the target depth, so dolly = zoom.
+            let halfHeight = distance * tan(fovY * 0.5)
+            return Matrices.orthographic(
+                halfWidth: halfHeight * aspect, halfHeight: halfHeight, near: near, far: far
+            )
+        }
     }
 
     func viewProjection(aspect: Float) -> simd_float4x4 {
@@ -72,6 +99,9 @@ nonisolated struct TurntableCamera: Sendable, Equatable {
     }
 
     /// Ray through a screen point (points, UIKit top-left origin).
+    /// Orthographic needs no special branch: the inverse view-projection is
+    /// affine (w stays 1), so unprojected near/far points yield parallel rays
+    /// whose origins slide on the near plane — exactly ortho picking.
     func ray(through point: CGPoint, viewportSize: CGSize) -> Ray {
         let aspect = Float(viewportSize.width / max(viewportSize.height, 1))
         let ndcX = Float(point.x / viewportSize.width) * 2 - 1
@@ -90,5 +120,48 @@ nonisolated struct TurntableCamera: Sendable, Equatable {
         let radius = max(simd_length(boundsMax - boundsMin) * 0.5, 0.5)
         target = center
         distance = radius / tan(fovY * 0.5) * 1.35
+    }
+}
+
+/// Canonical turntable poses for the Views popover (spec §7.3).
+nonisolated enum StandardView: String, CaseIterable, Identifiable, Sendable {
+    case isometric = "Isometric"
+    case top = "Top"
+    case bottom = "Bottom"
+    case front = "Front"
+    case back = "Back"
+    case right = "Right"
+    case left = "Left"
+
+    var id: String { rawValue }
+
+    /// The pose for this view, keeping target/distance/projection. Top and
+    /// Bottom clamp to ±89° (TurntableCamera.elevationLimit) — 1° short of a
+    /// true plan view, because the turntable's fixed Y-up degenerates at ±90°;
+    /// they also keep the current azimuth so the flight doesn't spin.
+    func applied(to camera: TurntableCamera) -> TurntableCamera {
+        var cam = camera
+        switch self {
+        case .isometric:
+            cam.azimuth = .pi / 5
+            cam.elevation = .pi / 7
+        case .top:
+            cam.elevation = TurntableCamera.elevationLimit
+        case .bottom:
+            cam.elevation = -TurntableCamera.elevationLimit
+        case .front:
+            cam.azimuth = 0
+            cam.elevation = 0
+        case .back:
+            cam.azimuth = .pi
+            cam.elevation = 0
+        case .right:
+            cam.azimuth = .pi / 2
+            cam.elevation = 0
+        case .left:
+            cam.azimuth = -.pi / 2
+            cam.elevation = 0
+        }
+        return cam
     }
 }

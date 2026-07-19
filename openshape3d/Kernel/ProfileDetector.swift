@@ -2,10 +2,10 @@
 //  ProfileDetector.swift
 //  openshape3d
 //
-//  Finds closed profiles in a sketch: circles directly, and simple closed
-//  loops walked from line/rect segments (degree-2 nodes only in v1 — branching
-//  arrangements are a v2 problem). Nested profiles are reported so the caller
-//  can treat them as holes.
+//  Finds closed profiles in a sketch: circles/rects/ellipses/polygons directly,
+//  and simple closed loops walked from line segments and arc chains (degree-2
+//  nodes only in v1 — branching arrangements are a v2 problem). Nested profiles
+//  are reported so the caller can treat them as holes.
 //
 
 import Foundation
@@ -92,7 +92,28 @@ nonisolated enum ProfileDetector {
             }
         }
 
-        // Walk loops from line segments.
+        // Ellipses and polygons are closed profiles too (loops CCW by construction).
+        for entity in sketch.entities {
+            switch entity {
+            case let .ellipse(id, center, radiusX, radiusY, rotation)
+                where radiusX > 1e-6 && radiusY > 1e-6:
+                let loop = SketchEntity.ellipsePoints(
+                    center: center, radiusX: radiusX, radiusY: radiusY,
+                    rotation: rotation, segments: circleSegments
+                )
+                profiles.append(Profile(loop: loop, kind: .polygonal, sourceEntityIDs: [id]))
+            case let .polygon(id, center, radius, sides, rotation)
+                where radius > 1e-6 && sides >= 3:
+                let loop = SketchEntity.polygonPoints(
+                    center: center, radius: radius, sides: sides, rotation: rotation
+                )
+                profiles.append(Profile(loop: loop, kind: .polygonal, sourceEntityIDs: [id]))
+            default:
+                break
+            }
+        }
+
+        // Walk loops from line segments and arc chains.
         profiles.append(contentsOf: lineLoops(in: sketch))
         return profiles
     }
@@ -124,40 +145,51 @@ nonisolated enum ProfileDetector {
     }
 
     private static func lineLoops(in sketch: Sketch) -> [Profile] {
-        struct Segment {
+        // A chain is one entity exploded to a polyline. Only its two ENDPOINTS
+        // enter the node graph — tessellated interior points (arcs) are never
+        // junction candidates; they are spliced into the loop when walked.
+        struct Chain {
             let entityID: UUID
-            let a: SIMD2<Double>
-            let b: SIMD2<Double>
+            let points: [SIMD2<Double>]
         }
 
-        var segments: [Segment] = []
+        var chains: [Chain] = []
         for entity in sketch.entities {
-            if case let .line(id, a, b) = entity, simd_length(b - a) > 1e-9 {
-                segments.append(Segment(entityID: id, a: a, b: b))
+            switch entity {
+            case let .line(id, a, b) where simd_length(b - a) > 1e-9:
+                chains.append(Chain(entityID: id, points: [a, b]))
+            case let .arc(id, center, radius, startAngle, endAngle):
+                let points = SketchEntity.arcPoints(
+                    center: center, radius: radius,
+                    startAngle: startAngle, endAngle: endAngle,
+                    segmentsPerTurn: circleSegments
+                )
+                if points.count >= 2 {
+                    chains.append(Chain(entityID: id, points: points))
+                }
+            default:
+                break
             }
         }
-        guard segments.count >= 3 else { return [] }
+        guard chains.count >= 2 else { return [] }
 
-        // Node table.
-        var nodePositions: [NodeKey: SIMD2<Double>] = [:]
-        var adjacency: [NodeKey: [(segment: Int, other: NodeKey)]] = [:]
-        for (index, segment) in segments.enumerated() {
-            let ka = NodeKey(segment.a)
-            let kb = NodeKey(segment.b)
+        // Node table over chain endpoints only.
+        var adjacency: [NodeKey: [(chain: Int, forward: Bool, other: NodeKey)]] = [:]
+        for (index, chain) in chains.enumerated() {
+            let ka = NodeKey(chain.points.first!)
+            let kb = NodeKey(chain.points.last!)
             guard ka != kb else { continue }
-            nodePositions[ka] = segment.a
-            nodePositions[kb] = segment.b
-            adjacency[ka, default: []].append((index, kb))
-            adjacency[kb, default: []].append((index, ka))
+            adjacency[ka, default: []].append((index, true, kb))
+            adjacency[kb, default: []].append((index, false, ka))
         }
 
         var used = Set<Int>()
         var profiles: [Profile] = []
 
-        for startIndex in segments.indices where !used.contains(startIndex) {
-            let startKey = NodeKey(segments[startIndex].a)
-            var loopKeys: [NodeKey] = [startKey]
-            var loopSegments: [Int] = []
+        for startIndex in chains.indices where !used.contains(startIndex) {
+            let startKey = NodeKey(chains[startIndex].points[0])
+            var loopChains: [Int] = []
+            var loopPoints: [SIMD2<Double>] = []
             var current = startKey
             var closed = false
 
@@ -166,23 +198,30 @@ nonisolated enum ProfileDetector {
                 guard let neighbors = adjacency[current], neighbors.count == 2 || current == startKey else {
                     break
                 }
-                guard let next = neighbors.first(where: { !used.contains($0.segment) && !loopSegments.contains($0.segment) }) else {
+                guard let next = neighbors.first(where: { !used.contains($0.chain) && !loopChains.contains($0.chain) }) else {
                     break
                 }
-                loopSegments.append(next.segment)
+                loopChains.append(next.chain)
+                let points = chains[next.chain].points
+                if next.forward {
+                    loopPoints.append(contentsOf: points.dropLast())
+                } else {
+                    loopPoints.append(contentsOf: points.reversed().dropLast())
+                }
                 current = next.other
                 if current == startKey {
                     closed = true
                     break
                 }
                 guard adjacency[current]?.count == 2 else { break }
-                loopKeys.append(current)
-                if loopKeys.count > segments.count + 1 { break }
+                if loopChains.count > chains.count { break }
             }
 
-            guard closed, loopSegments.count >= 3 else { continue }
-            var loop = loopKeys.compactMap { nodePositions[$0] }
-            guard loop.count == loopSegments.count else { continue }
+            // Two chains can close a region (arc + line); pure line pairs are
+            // rejected by the zero-area guard.
+            guard closed, loopChains.count >= 2, loopPoints.count >= 3 else { continue }
+            var loop = loopPoints
+            guard abs(Profile.signedArea(loop)) > 1e-9 else { continue }
 
             // Orient CCW.
             if Profile.signedArea(loop) < 0 {
@@ -190,11 +229,11 @@ nonisolated enum ProfileDetector {
             }
             guard !isSelfIntersecting(loop) else { continue }
 
-            used.formUnion(loopSegments)
+            used.formUnion(loopChains)
             profiles.append(Profile(
                 loop: loop,
                 kind: .polygonal,
-                sourceEntityIDs: Set(loopSegments.map { segments[$0].entityID })
+                sourceEntityIDs: Set(loopChains.map { chains[$0].entityID })
             ))
         }
         return profiles

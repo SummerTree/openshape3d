@@ -106,6 +106,23 @@ final class ProfileTests: XCTestCase {
         XCTAssertEqual(aabb.max.z, 0, accuracy: 1e-4)
     }
 
+    func testExtrudeSymmetricCentersOnPlaneWithDoubleDepth() {
+        let sketch = makeSketch([
+            .rect(id: UUID(), min: SIMD2(0, 0), max: SIMD2(4, 3)),
+        ])
+        let profile = ProfileDetector.detectProfiles(in: sketch)[0]
+        let mesh = KernelOps.extrude(profile: profile, in: .ground, distance: 5, symmetric: true)
+
+        XCTAssertTrue(mesh.isWatertight)
+        let aabb = EuclidBridge.renderMesh(from: mesh).localAABB
+        // Spec §4.1: symmetric uses per-side values — 5 each way, 10 total,
+        // centered on the sketch plane.
+        XCTAssertEqual(aabb.min.y, -5, accuracy: 1e-4)
+        XCTAssertEqual(aabb.max.y, 5, accuracy: 1e-4)
+        XCTAssertEqual(aabb.min.x, 0, accuracy: 1e-4)
+        XCTAssertEqual(aabb.max.x, 4, accuracy: 1e-4)
+    }
+
     func testExtrudeNegativeDistanceGoesDown() {
         let sketch = makeSketch([
             .rect(id: UUID(), min: SIMD2(0, 0), max: SIMD2(2, 2)),

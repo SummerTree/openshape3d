@@ -122,6 +122,9 @@ nonisolated struct Body: Identifiable, Sendable {
     var edges: FeatureEdgeSet
     /// Bumped whenever the geometry changes so the GPU cache rebuilds buffers.
     var meshRevision: UInt64
+    /// Items Manager visibility (spec §11): hidden bodies stay in the
+    /// document but are skipped by the viewport scene.
+    var isHidden: Bool = false
     /// Euclid source mesh, if this body was just built/booleaned in-session.
     /// Nil after loading from disk; use `euclidMesh()` which rebuilds on demand.
     var euclid: Euclid.Mesh?

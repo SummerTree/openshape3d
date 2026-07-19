@@ -46,6 +46,7 @@ nonisolated enum SnapEngine {
             case let .line(_, a, b):
                 points.append(a)
                 points.append(b)
+                points.append((a + b) / 2)
             case let .rect(_, lo, hi):
                 points.append(lo)
                 points.append(hi)
@@ -53,6 +54,16 @@ nonisolated enum SnapEngine {
                 points.append(SIMD2(hi.x, lo.y))
             case let .circle(_, center, _):
                 points.append(center)
+            case let .arc(_, center, radius, startAngle, endAngle):
+                points.append(center)
+                points.append(SketchEntity.arcPoint(center: center, radius: radius, angle: startAngle))
+                points.append(SketchEntity.arcPoint(center: center, radius: radius, angle: endAngle))
+            case let .ellipse(_, center, _, _, _):
+                points.append(center)
+            case let .polygon(_, center, radius, sides, rotation):
+                points.append(contentsOf: SketchEntity.polygonPoints(
+                    center: center, radius: radius, sides: sides, rotation: rotation
+                ))
             }
         }
         return points

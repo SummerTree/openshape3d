@@ -45,6 +45,9 @@ struct SketchFillBatch {
 struct PullArrowState: Equatable {
     var origin: SIMD3<Float>
     var direction: SIMD3<Float> // unit
+    /// Operation-validity feedback (spec §18): false renders the arrow red
+    /// because committing the pending result would fail.
+    var isValid: Bool = true
 }
 
 struct ViewportScene {
@@ -58,6 +61,9 @@ struct ViewportScene {
     var profileFills: [SketchFillBatch] = []
     /// Extrude pull arrow, drawn in the overlay pass.
     var pullArrow: PullArrowState?
+    /// Plane picker tiles (origin planes + construction planes) shown while a
+    /// sketch tool waits for a plane; drawn in the overlay pass.
+    var planePickers: [PlanePickerTile] = []
 
     /// World-space AABB of all bodies, for fit-view. Nil when empty.
     var worldBounds: (min: SIMD3<Float>, max: SIMD3<Float>)? {

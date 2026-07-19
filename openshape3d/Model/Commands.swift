@@ -142,6 +142,25 @@ struct BooleanCommand: DocumentCommand {
     }
 }
 
+/// Groups several commands into one undo step (e.g. a cut that subtracts
+/// from every intersected body commits one ReplaceBodyCommand per body).
+struct CompositeCommand: DocumentCommand {
+    let title: String
+    let commands: [DocumentCommand]
+
+    func apply(to document: inout DesignDocument) {
+        for command in commands {
+            command.apply(to: &document)
+        }
+    }
+
+    func revert(in document: inout DesignDocument) {
+        for command in commands.reversed() {
+            command.revert(in: &document)
+        }
+    }
+}
+
 struct AddSketchEntityCommand: DocumentCommand {
     let title = "Sketch"
     let sketchID: SketchID
@@ -157,6 +176,214 @@ struct AddSketchEntityCommand: DocumentCommand {
         if let index = document.sketches.firstIndex(where: { $0.id == sketchID }) {
             document.sketches[index].entities.removeAll { $0.id == entity.id }
         }
+    }
+}
+
+/// Drag-edit of a sketch entity (endpoint/center/body moves). Coalesced with
+/// `session.amend` during the drag, like TransformBodiesCommand.
+struct UpdateSketchEntityCommand: DocumentCommand {
+    let title = "Move"
+    let sketchID: SketchID
+    let before: SketchEntity
+    let after: SketchEntity
+
+    private func replace(_ entity: SketchEntity, in document: inout DesignDocument) {
+        guard let sketchIndex = document.sketches.firstIndex(where: { $0.id == sketchID }),
+              let entityIndex = document.sketches[sketchIndex].entities.firstIndex(where: {
+                  $0.id == entity.id
+              })
+        else { return }
+        document.sketches[sketchIndex].entities[entityIndex] = entity
+    }
+
+    func apply(to document: inout DesignDocument) {
+        replace(after, in: &document)
+    }
+
+    func revert(in document: inout DesignDocument) {
+        replace(before, in: &document)
+    }
+}
+
+struct RemoveSketchEntitiesCommand: DocumentCommand {
+    let title = "Delete"
+    let sketchID: SketchID
+    /// Snapshots with original array indices so undo restores ordering.
+    let removed: [(index: Int, entity: SketchEntity)]
+
+    init(ids: Set<UUID>, sketch: Sketch) {
+        sketchID = sketch.id
+        removed = sketch.entities.enumerated()
+            .filter { ids.contains($0.element.id) }
+            .map { (index: $0.offset, entity: $0.element) }
+    }
+
+    func apply(to document: inout DesignDocument) {
+        guard let index = document.sketches.firstIndex(where: { $0.id == sketchID }) else { return }
+        let ids = Set(removed.map(\.entity.id))
+        document.sketches[index].entities.removeAll { ids.contains($0.id) }
+    }
+
+    func revert(in document: inout DesignDocument) {
+        guard let index = document.sketches.firstIndex(where: { $0.id == sketchID }) else { return }
+        for entry in removed.sorted(by: { $0.index < $1.index }) {
+            let at = min(entry.index, document.sketches[index].entities.count)
+            document.sketches[index].entities.insert(entry.entity, at: at)
+        }
+    }
+}
+
+/// Trim: replace one entity with the fragments left after deleting a span
+/// (may be empty — the whole entity goes away).
+struct TrimCommand: DocumentCommand {
+    let title = "Trim"
+    let sketchID: SketchID
+    let index: Int
+    let removed: SketchEntity
+    let fragments: [SketchEntity]
+
+    func apply(to document: inout DesignDocument) {
+        guard let sketchIndex = document.sketches.firstIndex(where: { $0.id == sketchID }) else { return }
+        document.sketches[sketchIndex].entities.removeAll { $0.id == removed.id }
+        let at = min(index, document.sketches[sketchIndex].entities.count)
+        document.sketches[sketchIndex].entities.insert(contentsOf: fragments, at: at)
+    }
+
+    func revert(in document: inout DesignDocument) {
+        guard let sketchIndex = document.sketches.firstIndex(where: { $0.id == sketchID }) else { return }
+        let ids = Set(fragments.map(\.id))
+        document.sketches[sketchIndex].entities.removeAll { ids.contains($0.id) }
+        let at = min(index, document.sketches[sketchIndex].entities.count)
+        document.sketches[sketchIndex].entities.insert(removed, at: at)
+    }
+}
+
+// MARK: - Items Manager (spec §11)
+
+/// A row in the Items Manager: any document item addressable by ID.
+enum DocumentItemRef: Hashable {
+    case body(BodyID)
+    case sketch(SketchID)
+    case plane(ConstructionPlaneID)
+}
+
+struct SetItemVisibilityCommand: DocumentCommand {
+    let title: String
+    let item: DocumentItemRef
+    let isHidden: Bool
+
+    init(item: DocumentItemRef, isHidden: Bool) {
+        self.item = item
+        self.isHidden = isHidden
+        self.title = isHidden ? "Hide" : "Show"
+    }
+
+    private func setHidden(_ hidden: Bool, in document: inout DesignDocument) {
+        switch item {
+        case .body(let id):
+            if let index = document.bodyIndex(of: id) {
+                document.bodies[index].isHidden = hidden
+            }
+        case .sketch(let id):
+            if let index = document.sketches.firstIndex(where: { $0.id == id }) {
+                document.sketches[index].isHidden = hidden
+            }
+        case .plane(let id):
+            if let index = document.planes.firstIndex(where: { $0.id == id }) {
+                document.planes[index].isHidden = hidden
+            }
+        }
+    }
+
+    func apply(to document: inout DesignDocument) {
+        setHidden(isHidden, in: &document)
+    }
+
+    func revert(in document: inout DesignDocument) {
+        setHidden(!isHidden, in: &document)
+    }
+}
+
+struct RenameItemCommand: DocumentCommand {
+    let title = "Rename"
+    let item: DocumentItemRef
+    let before: String
+    let after: String
+
+    private func setName(_ name: String, in document: inout DesignDocument) {
+        switch item {
+        case .body(let id):
+            if let index = document.bodyIndex(of: id) {
+                document.bodies[index].name = name
+            }
+        case .sketch(let id):
+            if let index = document.sketches.firstIndex(where: { $0.id == id }) {
+                document.sketches[index].name = name
+            }
+        case .plane:
+            break // planes are unnamed in v1
+        }
+    }
+
+    func apply(to document: inout DesignDocument) {
+        setName(after, in: &document)
+    }
+
+    func revert(in document: inout DesignDocument) {
+        setName(before, in: &document)
+    }
+}
+
+struct DeleteSketchCommand: DocumentCommand {
+    let title = "Delete"
+    let index: Int
+    let sketch: Sketch
+
+    init?(id: SketchID, document: DesignDocument) {
+        guard let index = document.sketches.firstIndex(where: { $0.id == id }) else { return nil }
+        self.index = index
+        self.sketch = document.sketches[index]
+    }
+
+    func apply(to document: inout DesignDocument) {
+        document.sketches.removeAll { $0.id == sketch.id }
+    }
+
+    func revert(in document: inout DesignDocument) {
+        document.sketches.insert(sketch, at: min(index, document.sketches.count))
+    }
+}
+
+struct DeletePlaneCommand: DocumentCommand {
+    let title = "Delete"
+    let index: Int
+    let plane: ConstructionPlane
+
+    init?(id: ConstructionPlaneID, document: DesignDocument) {
+        guard let index = document.planes.firstIndex(where: { $0.id == id }) else { return nil }
+        self.index = index
+        self.plane = document.planes[index]
+    }
+
+    func apply(to document: inout DesignDocument) {
+        document.planes.removeAll { $0.id == plane.id }
+    }
+
+    func revert(in document: inout DesignDocument) {
+        document.planes.insert(plane, at: min(index, document.planes.count))
+    }
+}
+
+struct AddConstructionPlaneCommand: DocumentCommand {
+    let title = "Offset Plane"
+    let plane: ConstructionPlane
+
+    func apply(to document: inout DesignDocument) {
+        document.planes.append(plane)
+    }
+
+    func revert(in document: inout DesignDocument) {
+        document.planes.removeAll { $0.id == plane.id }
     }
 }
 

@@ -25,6 +25,9 @@ final class BooleanFlowUITests: XCTestCase {
         let window = app.windows.firstMatch
         let rectButton = app.buttons.containing(.staticText, identifier: "Rect").firstMatch
         rectButton.tap()
+        // Plane pickers appear; tap the bare ground to sketch there.
+        XCTAssertTrue(app.staticTexts["Choose a sketch plane"].waitForExistence(timeout: 3))
+        window.coordinate(withNormalizedOffset: CGVector(dx: 0.80, dy: 0.78)).tap()
         XCTAssertTrue(app.staticTexts["Sketching on ground plane"].waitForExistence(timeout: 3))
         sleep(2) // camera animation to head-on
 

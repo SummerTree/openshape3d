@@ -2,7 +2,7 @@
 
 **openshape3d** — feature-for-feature product spec derived from the Shapr3D Help
 Center (manual + tutorial corpus, extracted 2026-07-18), with an honest status
-audit against the current source tree (v0.2).
+audit against the current source tree (v0.3, post-Phase A).
 
 ## Legend
 
@@ -26,12 +26,15 @@ audit against the current source tree (v0.2).
   work; no geometry involved.
 
 Status verified against: `openshape3d/Kernel/` (`KernelOps`, `ProfileDetector`,
-`FaceTopology`, `SketchTypes`, `STLExporter`, `EuclidBridge`), `Editor/`
+`FaceTopology`, `SketchTypes`, `SketchPlanes`, `MeasureKit`, `STLExporter`,
+`STLImporter`, `OBJExporter`, `ThreeMFExporter`, `EuclidBridge`), `Editor/`
 (`EditorViewModel`, `EditorMode`, `SnapEngine`, `SketchTessellator`), `Model/`
 (`Commands`, `DocumentSession`, `UndoStack`, `PersistenceModels`),
-`Interaction/` (`HitTester`, `MoveGizmoController`, `ViewportGestureController`),
-`Rendering/` (`Renderer`, `Camera`, `CameraAnimator`, `GizmoRenderer`), `UI/`
-(`EditorView`, `ToolPaletteView`, `NumericInputBar`, `ProjectGalleryView`).
+`Interaction/` (`HitTester`, `MoveGizmoController`, `ViewportGestureController`,
+`PlanePicking`, `SketchHitTester`, `SketchTrimmer`), `Rendering/` (`Renderer`,
+`Camera`, `CameraAnimator`, `GizmoRenderer`, `OrientationCube`), `UI/`
+(`EditorView`, `ToolPaletteView`, `NumericInputBar`, `ItemsPanelView`,
+`SelectionInfoBar`, `ProjectGalleryView`).
 
 ---
 
@@ -63,12 +66,13 @@ axis — this drawing-time auto-constraint is the ONLY way to tie geometry to
 the axes, because the origin/axes cannot be referenced by dimensions or
 constraints afterwards (see §2.2's origin/axis restriction).
 History params per sketch step: Plane (Edit…/Select…), Projection.
-**Status:** 🟡 partial — drag-defined single segments exist
-(`EditorViewModel.beginSketchStroke/updateSketchStroke/endSketchStroke`,
-`SketchEntity.line`), with endpoint + grid snap (`SnapEngine`), so chains and
-closed shapes can be built stroke-by-stroke. Missing: tap-tap polyline
-chaining, auto-finish on closure, Escape/Enter semantics, numeric length entry
-mid-draw, auto-constraints, dimension labels.
+**Status:** 🟡 partial — drag-defined segments with chain continuation: after
+a stroke, the next stroke starting on the previous endpoint pre-anchors there
+(`chainAnchor`), and a stroke that closes onto the chain's first point
+finishes the chain (`EditorViewModel.beginSketchStroke/endSketchStroke`,
+`SketchEntity.line`), with endpoint/midpoint + grid snap (`SnapEngine`).
+Missing: tap-tap polyline chaining, Escape/Enter semantics, numeric length
+entry mid-draw, auto-constraints, dimension labels.
 **Feasibility:** core [mesh-kernel OK]; locked dimensions [needs constraint solver]
 
 ### 1.2 Line/Arc — Automatic mode (pen)
@@ -77,12 +81,11 @@ mid-draw, auto-constraints, dimension labels.
 sketch mode and auto-detects whether a stroke is a line or an arc; WIGGLE the
 pen mid-stroke to switch between arc and line. Override via the "Line Type"
 menu below Line/Arc: Automatic (default) | Line | Arc.
-**Status:** ❌ not implemented — no line/arc auto-detection. The Pencil is
-excluded in code, not just comments: the one-finger drag/orbit recognizer
-accepts direct touches only (`orbit.allowedTouchTypes = [.direct]`,
-`ViewportGestureController` line 42), and since that recognizer is the sole
-drag source, the Apple Pencil cannot draw sketch strokes at all — it can
-only tap. That is the opposite of this spec (pen draws, finger navigates).
+**Status:** ❌ not implemented — no line/arc auto-detection. The former
+Pencil exclusion is fixed: the one-finger recognizer now accepts `.pencil`
+touches (`ViewportGestureController.attach`), so the Pencil draws sketch
+strokes; but the auto line-vs-arc classification and the Line Type menu do
+not exist.
 **Feasibility:** [mesh-kernel OK] (stroke classification is app code)
 
 ### 1.3 Arc
@@ -92,8 +95,13 @@ finalize; Escape finishes; "Exit Sketching" leaves sketch mode. Touch: Line/Arc
 with Line Type = Arc, draw with pen, complete by tapping outside the sketch.
 Hotkey A. Arc angle can be dimensioned (e.g. 90° = quarter arc); radius
 dimensionable.
-**Status:** ❌ not implemented — `SketchEntity` has no arc case; no arc
-tessellation in `SketchTessellator`/`ProfileDetector`.
+**Status:** 🟡 partial — touch-first arc: drag places the chord endpoints,
+then a drag on the pending arc adjusts the bulge; committed on the next tool
+action / tap elsewhere (`SketchEntity.arc`, `EditorViewModel.PendingArc`).
+Arcs tessellate into profiles whose endpoints chain with lines
+(`SketchTessellator`, `ProfileDetector`); arc endpoints/centers are snap
+points. Missing: desktop click-click-drag-click flow, angle/radius
+dimensions, hotkey.
 **Feasibility:** [mesh-kernel OK]
 
 ### 1.4 Spline (Fit / Control)
@@ -122,10 +130,10 @@ corners, drag the diagonal from the anchor. **Three-point**: baseline first
 (click, move, click), then height perpendicular to it; remaining sides
 auto-created. Hotkey R. Numeric entry before placing fixes dimensions.
 **Status:** 🟡 partial — Diagonal only, as a drag from corner to corner
-(`SketchEntity.rect(min:max:)` — axis-aligned only). Missing: Center and
-Three-point types, anchor-point X-mark, rotated rectangles, numeric entry,
-per-side line decomposition (a rect is one opaque entity, so individual sides
-cannot be trimmed/constrained).
+(`SketchEntity.rect(min:max:)` — axis-aligned only). Trimming a rect now
+explodes it into its four lines first (`SketchTrimmer`), so sides become
+individually editable after a trim. Missing: Center and Three-point types,
+anchor-point X-mark, rotated rectangles, numeric entry.
 **Feasibility:** [mesh-kernel OK]
 
 ### 1.6 Circle
@@ -143,7 +151,10 @@ drawing, dimension label on selection, Circular Annotations setting.
 **Spec:** Click to place center/point, draw first axis, click to fix its
 diameter, move perpendicular for the second axis, click to finish. Numeric
 major/minor entry supported. Major and minor radii dimensionable.
-**Status:** ❌ not implemented.
+**Status:** 🟡 partial — drag-drawn ellipse entity (center + two radii +
+rotation, `SketchEntity.ellipse`), tessellated into closed profiles;
+center is a snap point. Missing: two-axis click flow, numeric major/minor
+entry, dimensions.
 **Feasibility:** [mesh-kernel OK]
 
 ### 1.8 Polygon
@@ -153,7 +164,11 @@ Pentagon, Hexagon, Octagon. Click center, move to define radius, click outer
 vertex. Numeric radius before placing. After placement two labels appear:
 sides-count and radius — the sides label is only available immediately after
 creation (disappears once anything else is selected). Hotkey G.
-**Status:** ❌ not implemented.
+**Status:** 🟡 partial — center + drag-radius regular N-gon
+(`SketchEntity.polygon`); the side count is set in the numeric bar
+(`polygonSides`, default 6); vertices are snap points; closed profiles
+detected. Missing: type menu (Triangle/Pentagon/Hexagon/Octagon), numeric
+radius before placing, post-creation sides/radius labels.
 **Feasibility:** [mesh-kernel OK]
 
 ### 1.9 Offset Edge (sketch mode)
@@ -175,8 +190,13 @@ connected group. Copy badge (turns BLUE when active) moves/rotates a duplicate.
 Complete by selecting empty grid area. Direct manipulation without the tool:
 elements/edges/points can simply be dragged. With the default view, dragging
 the gizmo center tiles moves a sketch along/between planes.
-**Status:** ❌ not implemented — sketch entities cannot be selected or moved at
-all after placement (no sketch-selection state in `EditorMode`).
+**Status:** 🟡 partial — the direct-manipulation half: a drag starting on an
+entity edits it (control points — endpoints/corners/handles — win, then
+whole-entity translate with grid capture), coalescing into one
+`UpdateSketchEntityCommand` per drag; tap toggles entity selection
+(`beginSketchEntityDrag`, `SketchHitTester`, `selectedSketchEntityIDs`).
+Missing: the Move/Rotate gizmo on sketch selections, Copy badge,
+connected-group double-tap, between-plane moves.
 **Feasibility:** [mesh-kernel OK]; copy-that-loses-constraints details
 [needs constraint solver]
 
@@ -255,17 +275,23 @@ boundary. In a sketch: Sketch > Trim, tap/click each unwanted segment — it is
 removed immediately. Complete by tapping empty grid area or Escape. Hotkey T.
 Supports the "overbuild then trim" workflow (draw lines past intersections,
 trim the excess).
-**Status:** ❌ not implemented (requires curve-curve intersection splitting,
-which `ProfileDetector` does not do — loops are walked on exact shared
-endpoints only).
+**Status:** ✅ implemented — Trim tool in the sketch palette: tapping an
+entity removes the span between its nearest intersections with the other
+entities (lines split exactly, arcs/circles by angle, circles trim to arcs,
+rects explode into lines, uncrossed entities are removed whole); one
+undoable `TrimCommand` per tap (`SketchTrimmer`, `performTrim`). The
+"overbuild then trim" workflow works. Keyboard (hotkey T / Escape) rides the
+app-wide §8.4 gap.
 **Feasibility:** [mesh-kernel OK]
 
 ### 1.15 Delete (sketch)
 
 **Spec:** Select sketch element(s) within a sketch, then Delete. Finish with
 Escape or "Exit sketching".
-**Status:** ❌ not implemented — no sketch-entity selection; entities can only
-be removed via Undo.
+**Status:** ✅ implemented — tap toggles entity selection while sketching;
+the palette Delete removes the selection as one undoable
+`RemoveSketchEntitiesCommand`; "Exit Sketching" finishes. (Escape rides the
+§8.4 keyboard gap.)
 **Feasibility:** [mesh-kernel OK]
 
 ### 1.16 Symbol
@@ -328,10 +354,10 @@ Fully-defined dimensions stay visible/editable
 outside sketch mode when visibility is on. The solver refuses a dimension on an
 already fully-solved region.
 **Status:** ❌ not implemented — no dimension labels anywhere in sketching.
-(The only numeric editing is the Extrude distance field and legacy primitive
-W/D/H fields in `NumericInputBar` — the latter effectively dead on FRESH
-installs, but still reachable in any persisted document containing a
-primitive body (from the `OS3D_DEBUG_SEED` hook or an older build) via
+(Numeric editing exists only for tool parameters — extrude distance,
+revolve angle, offset-plane distance, axis moves, scale factor, polygon
+sides — plus the legacy primitive W/D/H fields, dead on FRESH installs but
+reachable in persisted documents containing a primitive body via
 double-tap → `.editingPrimitive` → `NumericInputBar`; see §18.)
 **Feasibility:** [needs constraint solver] (label UI itself is app code)
 
@@ -350,18 +376,17 @@ moves the sketch with it ("Sketch with design history"). "Normal to Sketch" butt
 restores the head-on view after orbiting mid-sketch. Each sketch is an item in
 the Items Manager and a step in History; continuing on the same plane
 immediately after edits the same sketch item, otherwise a new item is created.
-**Status:** 🟡 partial (borderline — the thinnest partial in this document;
-defensible under the legend but flagged as marginal) — NONE of the spec's
-plane-definition mechanisms exist (no plane picker rectangles, no tap-a-face,
-no construction planes): sketching is hardwired to the single ground plane
-(`EditorViewModel.startSketch` reuses/creates the one `.ground` sketch;
-`SketchPlane` itself supports arbitrary origin/basis). The credited subset —
-a defined plane before sketching plus head-on camera animation
-(`moveCameraHeadOn`) — is real but marginal, and `moveCameraHeadOn`
-implements only the ground-plane (top-down) case (`ViewportView`). Missing:
-plane picker rectangles, sketch-on-face, construction planes, Normal to
-Sketch button, body-intersection snap points and the associative
-intersection coincidence, per-plane sketch item management.
+**Status:** 🟡 partial — the plane-definition mechanisms exist: selecting a
+sketch tool with no plane shows the THREE world-plane tiles at the origin
+("Choose a sketch plane", `PlanePicking.worldTiles` rendered by
+`GizmoRenderer`); tapping a tile, a planar body face, a construction plane,
+or the bare ground starts the sketch there with a head-on camera animation
+(`handlePlanePick`, `moveCameraHeadOn` for arbitrary planes); a selected
+face also offers "Sketch" directly (`startSketch` reads the face plane).
+Same-plane sketches are reused as one sketch item (Shapr3D's rule), and
+re-opening an auto-hidden sketch makes it visible again (`beginSketch`).
+Missing: hover grid-follow, Space-bar entry, body-intersection snap points
+and the associative intersection coincidence, Normal to Sketch button.
 **Feasibility:** [mesh-kernel OK]
 
 ### 2.4 Changing a sketch plane / moving sketches
@@ -399,10 +424,11 @@ releasing on the guide creates a Coincident constraint to the element's
 an arc yields a curved guideline (its full circle). Show settings: guide-point
 visibility and Snapping Hints (text next to pointer, e.g. "endpoint",
 "midpoint", "sketch center"). Snap points are suggestions only.
-**Status:** 🟡 partial — `SnapEngine` snaps to existing sketch endpoints /
-rect corners / circle centers (0.35 tolerance) then to a fixed 0.5 grid.
-Missing: guidelines, midpoints, 3D guide points, distant edges, hints UI,
-enable/disable toggles, dynamic grid resolution.
+**Status:** 🟡 partial — `SnapEngine` snaps to sketch endpoints, line
+midpoints, rect corners, circle/ellipse/arc centers, arc endpoints, and
+polygon vertices (0.35 tolerance), then to a fixed 0.5 grid. Missing:
+guidelines, entity–entity intersection points, 3D guide points, distant
+edges, hints UI, enable/disable toggles, dynamic grid resolution.
 **Feasibility:** snapping [mesh-kernel OK]; guide-created constraints
 [needs constraint solver]
 
@@ -414,9 +440,11 @@ their bounding edges' points), midpoints (linear elements/edges), center points
 intersection points (two linear elements). Splines never have midpoints or
 center points. Used for measurement, constraints, alignment; visibility via
 Snap To settings.
-**Status:** 🟡 partial — endpoints/corners/circle centers only, sketch-space
-only (`SnapEngine.snapPoints`); no 3D body notable points, no midpoints, no
-intersections.
+**Status:** 🟡 partial — endpoints, line midpoints, rect corners, arc
+endpoints, circle/ellipse/arc centers, and polygon vertices in sketch space
+(`SnapEngine.snapPoints`); Measure's point-to-point mode also offers body
+vertices. Missing: intersection points, face/edge-derived points as general
+snap targets.
 **Feasibility:** [mesh-kernel OK]
 
 ---
@@ -525,22 +553,22 @@ pitfall: new sketch-pattern instances are NOT auto-included in an existing
 extrusion — the profile list must be re-edited per instance (Pipe Flange
 pt 1). Hotkey E.
 **Status:** 🟡 partial — the core loop is real: tap a fill → Extrude mode with
-numeric input; drag pull with live preview + pull arrow
-(`EditorViewModel.tryStartExtrude/beginFillPull/updateExtrudeDrag`); nested
-profiles become holes (`ProfileDetector.holes`); profile extrudes commit on
-ANY tap, not just empty space (`handleTap` in `.extruding` always calls
-`commitExtrude`); automatic boolean union/subtract/new-body with
-coplanar-seam overlap handling (`commitExtrude`); face push/pull re-extrudes
-planar faces (`FaceTopology.planarFace` → `beginFacePull`) — but with the
-commit convention INVERTED: tapping empty space during a face pull cancels
-it (`selectFaceOrBody` empty-space branch → `cancelExtrude`); face pulls
-commit via any of three paths — the extrude bar's "Extrude" button, the
-distance field's onSubmit, or the "Done" pill (`NumericInputBar` is shown
-whenever `extrudeContext != nil`, including `.faceSelected` mode). Missing:
-Boolean badge manual
-override (incl. Intersect and forcing New Body), draft angle, Symmetric sides,
-extents (To Object / Through All), Start options, multi-profile selection,
-per-body cut scope, empty-tap commit for face pulls, history card.
+numeric input; drag pull with live preview + pull arrow; nested profiles
+become holes (`ProfileDetector.holes`); automatic boolean
+union/subtract/new-body with coplanar-seam overlap handling
+(`commitTool`); face push/pull re-extrudes planar faces
+(`FaceTopology.planarFace` → `beginFacePull`). Phase A additions: **Boolean
+badge** (Auto | New Body | Union | Subtract | Intersect segmented control in
+the extrude bar, `BooleanOverride`); **Symmetric** sides (per-side distance,
+2× total, centered on the plane); **multi-profile** — additional fills
+tapped while extruding union into one solid (`extraProfiles`); validity
+feedback — the pull arrow renders RED when the pending result would fail
+(`isPendingValid`, spec §18); and the commit convention is unified — tapping
+empty grid commits a nonzero face pull too (`selectFaceOrBody`). A cut
+applies to EVERY intersected body (`commitTool`), and a Union override
+touching nothing stays a separate body. Missing: draft angle, extents
+(To Object / Through All), Start options, the per-body include/exclude
+"Subtract From" UI list, history card.
 **Feasibility:** [mesh-kernel OK] (draft + extents included); parametric
 history card [needs history engine]
 
@@ -698,7 +726,13 @@ self-intersecting-body error). Same automatic Boolean rules as Extrude;
 Boolean badge for overrides. Selection flow: profile + Shift-click axis →
 Revolve in adaptive menu. History params: Profile, Axis, Angle, Elevation.
 Hotkey V.
-**Status:** ❌ not implemented.
+**Status:** 🟡 partial — select a profile fill → "Revolve" in the extrude
+bar → pick a sketch line or world axis (`pickingRevolveAxis` mode) → drag or
+type the angle (default 360°, partial wedges stitched manually,
+`KernelOps.revolve`); commits through the same automatic-boolean pipeline
+and Boolean badge as Extrude; profiles crossing the axis are rejected.
+Missing: linear-edge/construction axes, Shift-click selection flow, helical
+Elevation, history params.
 **Feasibility:** full + partial revolve [mesh-kernel OK] (Euclid `Mesh.lathe` +
 wedge intersect); helical revolve [mesh-kernel OK] (swept mesh construction)
 
@@ -803,15 +837,17 @@ circle center — Floor fan), which is distinct from manual center
 re-anchoring. Moves/rotations are recorded as history steps whose target-body
 list can be edited later. Hotkey M. Model-aware dimension labels show total body
 dimensions during direct face pulls, not just deltas.
-**Status:** 🟡 partial — translate-only gizmo: XYZ arrows + XY/YZ/ZX plane
-tiles with axis/plane-constrained drag math and drag-time highlight only
-(`gizmoHighlight` is set at drag-begin and cleared at drag-end in
-`ViewportView`; no hover recognizer or pointer interaction exists, so there
-is no pre-drag hover highlight)
-(`GizmoPart`, `GizmoDragSession`, `EditorViewModel.beginMove/updateMove/
-endMove`; undoable via `TransformBodiesCommand`). Missing: rotation arcs,
-numeric entry on arrows, center re-anchoring/snapping, Copy badge, Link badge,
-auto-orientation, multi-select transforms beyond shared drag.
+**Status:** 🟡 partial — full translate + rotate gizmo: XYZ arrows,
+XY/YZ/ZX plane tiles, and X/Y/Z ROTATION RINGS with axis/plane/ring-
+constrained drag math (`GizmoPart` ring cases, `GizmoDragSession.
+rotationDelta`, quaternion-multiplying `updateTransform`); tapping an arrow
+(not dragging) opens exact-distance entry in the numeric bar
+(`beginAxisDistanceEntry` → "Move X/Y/Z" field); the **Copy badge** chip
+duplicates the selection in place before the next drag (`copyOnDrag`,
+`AddBodyCommand` clones); undoable via `TransformBodiesCommand`. Highlight
+is drag-time only (no hover recognizer). Missing: center
+re-anchoring/snapping, dimension labels during drag, Link badge,
+auto-orientation, model-aware totals.
 **Feasibility:** [mesh-kernel OK]; history integration [needs history engine]
 
 ### 5.2 Translate
@@ -847,8 +883,11 @@ tapping empty grid. Face/edge scaling semantics: uniform Scale on a swept
 body's END face tapers the cross-section along the sweep (Organic Chair).
 Used to calibrate imported reference images against a dimensioned line.
 History params: Scale X/Y/Z, Uniform toggle, Copy. Hotkey S.
-**Status:** ❌ not implemented (uniform scale exists in `Transform3D.scale`
-but no tool/UI sets it).
+**Status:** 🟡 partial — uniform scale only: palette "Scale" on a selection
+opens a factor field; committing multiplies each selected body's uniform
+scale about its pivot, undoably (`beginScaleEntry`/`commitScale` →
+`TransformBodiesCommand`). Missing: drag handles, movable scale center,
+Non-uniform mode, Copy badge, face/edge scaling, empty-grid commit.
 **Feasibility:** [mesh-kernel OK]
 
 ### 5.5 Align
@@ -881,7 +920,12 @@ other); a mirrored construction plane follows its original. Mirrored body
 halves remain two SEPARATE bodies with a visible seam until Union (Bodies
 and patterns pt 2); mirrored copies get suffixed names (§4.7). History
 params: Target Bodies/Faces, Plane, Keep Originals toggle.
-**Status:** ❌ not implemented.
+**Status:** 🟡 partial — body mirror: palette "Mirror" on a selected body
+lists the world planes plus any construction planes; picking one reflects
+the mesh across it (winding flipped, `KernelOps.mirror`) and adds the
+result as a new body, keeping the original (Keep Originals always on,
+`mirrorSelection`). Missing: sketch and face-selection mirror, blue/purple
+role badges, Keep Originals toggle, constraint-linked sketch symmetry.
 **Feasibility:** body/sketch mirror [mesh-kernel OK]; constraint-linked sketch
 mirror [needs constraint solver]; face-feature mirror [needs B-rep kernel]
 
@@ -930,7 +974,14 @@ has an editable **Size** parameter; per-type History params: Face,
 Point #1–3, Edge, Angle (plus Offset distance where applicable). Plane
 icons can be visually scaled down. Sketches attached to a plane follow it
 parametrically (offset edit moves plane + sketch).
-**Status:** ❌ not implemented.
+**Status:** 🟡 partial — the **Offset** tool only: with a face selected,
+"Offset Plane" pulls a construction plane off it along the normal (drag the
+arrow or type the distance, extrude-style preview); committed as an
+undoable `AddConstructionPlaneCommand`, persisted (`PersistedPlane`),
+rendered as a tile, usable as a sketch plane and a mirror plane. Missing:
+the other six plane tools (Midplane, Perpendicular to Edge, Through Edge at
+Angle, Parallel to Face at Point, 3 Points, Along Spline, Mirrored), the
+Size parameter, construction axes (§6.2), parametric following.
 **Feasibility:** planes themselves [mesh-kernel OK]; parametric following
 [needs history engine]
 
@@ -1028,11 +1079,11 @@ drags transform, and drags starting over a filled profile begin a pull
 to the `ViewportView.gestureDragBegan` delegate first and falls back to
 orbit only when no tool claims it). That mirrors Shapr3D's own
 convention, so the level stands (`TurntableCamera.orbit/pan/zoom`);
-double-tap empty space fits the scene.
-Missing: Pencil-vs-finger distinction (recognizers allow `.direct` touches for
-orbit but Pencil draw-vs-navigate arbitration isn't implemented), 2-finger
-twist rotation, zoom-to-face on double-tap (double-tap on a body selects it
-instead — deliberate v0.2 choice), presets, scroll/modifier desktop mappings.
+double-tap empty space fits the scene. The Apple Pencil now draws sketch
+strokes (`.pencil` accepted on the one-finger recognizer, with
+pencil-touch tracking for arbitration). Missing: 2-finger twist rotation,
+zoom-to-face on double-tap (double-tap on a body selects it instead —
+deliberate choice), presets, scroll/modifier desktop mappings.
 **Feasibility:** [mesh-kernel OK]
 
 ### 7.2 Orientation Cube
@@ -1042,7 +1093,12 @@ instead — deliberate v0.2 choice), presets, scroll/modifier desktop mappings.
 appear above the cube to spin the plane in 90° steps), corner/edge click goes
 to that orthographic view. Drag the cube to rotate freely; double-click/tap
 resets to default view. Right-click menu: Default View, Top View, Zoom to Fit.
-**Status:** ❌ not implemented.
+**Status:** 🟡 partial — a live axis-tinted cube renders in the top-trailing
+corner in its own overlay pass (`OrientationCube` + `OrientationCubeRenderer`
+reusing the gizmo pipeline); tapping a face or corner animates the camera to
+that view (`hitPose` → `CameraAnimator`); cube taps never reach the model.
+Missing: edge hits, X/Y/Z labels, drag-to-orbit on the cube, double-tap
+reset, the 2D-planar-view rotation arrows, context menu.
 **Feasibility:** [mesh-kernel OK]
 
 ### 7.3 Views & Appearance panel
@@ -1058,15 +1114,14 @@ Measurements; Shaders = Shaded | Visualized; Surface Analysis = Zebra
 Desktop View-menu extras: Rotate View (fixed-angle camera increments),
 Collapse All, Show Properties Sidebar, Enter Full Screen, and a "keep
 horizon level" navigation toggle (Staircase tutorial).
-**Status:** ❌ not implemented — none of the features this section enumerates
-exist: no Views/Appearance panel anywhere in `UI/`, no standard or saved
-views, no grid-position setting, no FOV control (`TurntableCamera.fovY` is
-hardcoded to 40° and `projectionMatrix` is perspective-only — `Camera.swift`),
-no shaders/surface-analysis/hidden-edges. The two behaviors previously cited
-as a subset are not §7.3 features: the fit-view toolbar button
-(`EditorView`) belongs to navigation (§7.1), and `CameraAnimator` is
-unconditioned behavior with no "Animate Camera" toggle. By the legend's own
-bar ("a real subset exists"), this item has no subset.
+**Status:** 🟡 partial — a Views toolbar menu offers the six standard views
+(Top/Bottom/Front/Back/Right/Left) plus Isometric (`StandardView`,
+`applyStandardView`, animated through `CameraAnimator`) and an
+**Orthographic** projection toggle (`CameraProjection.orthographic` branch
+in `TurntableCamera.projectionMatrix`). Missing: saved views, Nearest Ortho
+View, grid-position setting, the FOV slider (toggle only), Appearance tab
+(2-finger rotation, hidden edges, shaders, surface analysis), view
+shortcuts.
 **Feasibility:** [mesh-kernel OK]
 
 ### 7.4 Grid & units
@@ -1105,9 +1160,10 @@ can invert this). Selecting a sketch element from 3D jumps straight into
 editing that sketch without rotating the camera.
 **Status:** 🟡 partial — tap = planar face selection with orange highlight
 (`selectFaceOrBody` + `FaceTopology`), fallback to whole body on curved
-regions; double-tap = whole body; tap empty = deselect. Missing: edge
-selection, sketch-element selection, multi-select, highlight-through-occluders,
-jump-into-sketch-on-tap.
+regions; double-tap = whole body; tap empty = deselect; sketch elements are
+tap-selectable while in sketch mode (`selectedSketchEntityIDs`). Missing:
+edge selection, multi-select, highlight-through-occluders,
+jump-into-sketch-on-tap from 3D.
 **Feasibility:** [mesh-kernel OK]
 
 ### 8.2 Area (box) selection + filters
@@ -1187,10 +1243,11 @@ Desktop menu bar File/Edit/View/Help (+ Sketch/Add/Transform/Tools on macOS).
 Top bar: back, project name + sync, undo/redo, Share, More (Import/Export/
 Settings).
 **Status:** 🟡 partial — a floating left palette exists with Sketch
-(line/rect/circle), Combine (booleans), Edit (delete) sections
-(`ToolPaletteView`), plus a top status pill for mode prompts and a navigation
-toolbar (undo/redo/fit/export). Missing: the real menu taxonomy, modes
-cluster, context menus, command search, Share/More menus.
+(Line/Rect/Circle/Arc/Ellipse/Polygon/Trim), Combine (booleans), Transform
+(Scale/Mirror), and Edit (Measure/Delete) sections (`ToolPaletteView`), plus
+a top status pill for mode prompts and a navigation toolbar
+(undo/redo/fit/Views/Items/Import/Export). Missing: the real menu taxonomy,
+modes cluster, context menus, command search, Share/More menus.
 **Feasibility:** [mesh-kernel OK]
 
 ---
@@ -1266,7 +1323,7 @@ selection sanitization after history jumps
 "full-length … for all actions": (1) `UndoStack` caps history at 50 commands
 and silently drops the oldest (`limit = 50`; `removeFirst` on overflow) —
 not full-length; (2) creating the sketch container bypasses the command
-stack (`EditorViewModel.startSketch` appends the `Sketch` via the
+stack (`EditorViewModel.beginSketch` appends the `Sketch` via the
 non-undoable `session.preview` path), so undo can remove sketch entities but
 never the sketch itself; (3) sanitization resets only
 `.editingPrimitive`/`.selected` when their body is gone —
@@ -1289,9 +1346,15 @@ Folders: create from selection (button bottom-left), drag-and-drop to
 organize, nested folders. "Reveal in Items" from the modeling space highlights
 the item's row. Three-dots menu: Show Hidden Items, Invert All Item
 Visibility. Names are shared with History (rename in one place updates both).
-**Status:** ❌ not implemented — bodies/sketches have names in the model
-(`Body.name`, `uniqueBodyName`) but no sidebar, visibility flags, or folders
-exist.
+**Status:** 🟡 partial — an Items panel (toolbar "Items" button,
+`ItemsPanelView`) lists bodies, sketches, and construction planes with type
+icons; per row: visibility eye (`SetItemVisibilityCommand`), inline rename
+(`RenameItemCommand`), delete, tap-to-select, and Zoom To (camera fit to the
+item's AABB). Extrude auto-hides the consumed sketch, and re-opening a
+hidden sketch for editing un-hides it. `isHidden` persists. Missing:
+folders, filter dropdown, multi-select, image rows/opacity, Reveal in
+Items, Show Hidden Items / Invert Visibility menu, shared names with
+History (no history engine).
 **Feasibility:** [mesh-kernel OK]
 
 ---
@@ -1311,7 +1374,11 @@ Import Planar Curves as Sketches. .shapr imports keep editable per-feature
 history; all other formats arrive as a single Import history step. STEP
 assembly hierarchy → nested folders. Mesh rules: booleans work only on closed
 mesh bodies; any boolean involving a mesh yields a mesh.
-**Status:** ❌ not implemented (no import path of any format).
+**Status:** 🟡 partial — STL import only: toolbar Import menu → file picker →
+binary or ASCII STL parsed and welded into a solid mesh body
+(`STLImporter` → `EuclidBridge` weld path → `AddBodyCommand`); imported
+bodies boolean like any native body (everything is a mesh here). Missing:
+every other format, unit options UI, import preferences, assembly folders.
 **Feasibility:** STL/OBJ/3MF/DXF [mesh-kernel OK]; STEP/IGES
 [needs B-rep kernel] (OpenCASCADE); X_T/X_B, SLDPRT/SLDASM, CATIA/NX/Creo/
 Solid Edge/JT — commercial-licensed formats, see IMPLEMENTATION_PLAN;
@@ -1332,10 +1399,12 @@ unitless so the unit is declared at export). Favorite formats (star) persist;
 batch export multiple formats; isolated parts exportable in any type except
 .shapr. Screenshot tool: grid on/off, transparency, body edges, item chooser,
 resolution Actual/Double/FullHD/4K/8K, remembers settings, clipboard shortcut.
-**Status:** 🟡 partial — binary STL export of the whole design via the iOS
-file exporter (`STLExporter.binarySTL`, 1 unit = 1 mm; `EditorView`
-fileExporter). Everything else missing: all other formats, options, units,
-hidden-item filtering, per-item files, screenshots, slicer hand-off.
+**Status:** 🟡 partial — STL (binary, `STLExporter`), OBJ (`OBJExporter`),
+and 3MF (`ThreeMFExporter`, zip + XML) export of the design via the toolbar
+Export menu (1 unit = 1 mm), plus a **PNG screenshot** entry with an options
+sheet: resolution multiplier, transparent background, and grid on/off
+(offscreen renderer capture). Missing: all other formats, unit options,
+hidden-item filtering, per-item files, favorites/batch, slicer hand-off.
 **Feasibility:** OBJ/3MF/GLB/USDZ/PNG [mesh-kernel OK]; STEP/IGES
 [needs B-rep kernel]; X_T/X_B commercial; DWG via licensed libs (DXF/SVG
 [mesh-kernel OK])
@@ -1524,7 +1593,14 @@ points; placed points movable), 3-Point Angle; optional X/Y/Z deltas; Pin to
 Always Show keeps measurements as in-model annotations (appearance toggle);
 hover a panel row to highlight the referenced geometry. Shift-click two faces
 for a quick face-to-face distance.
-**Status:** ❌ not implemented.
+**Status:** 🟡 partial — a selection info bar shows without any mode
+(`SelectionInfoBar` + `MeasureKit`): face area, body volume
+(signed-tetrahedron sum) + bounding box, sketch-entity length and
+radius/diameter; and a palette Measure mode measures point-to-point
+distance with X/Y/Z deltas over notable points (sketch snap points + body
+vertices, cross markers + span line rendered in the overlay). Missing: the
+movable panel, angle/min-distance/central-distance types, pinned
+measurements, row-hover highlighting.
 **Feasibility:** [mesh-kernel OK]
 
 ### 16.4 Display Modes
@@ -1584,18 +1660,17 @@ body wouldn't be valid"); a fillet drag stops at — and thereby reveals — the
 maximum possible radius; failed fillets suggest "try adding more edges" as
 the recovery (Primary and secondary fillets). Applies across Shell, Fillet,
 Offset Face, and the boolean tools.
-**Status:** 🟡 partial — the extrude-distance numeric field is real; the
-primitive W/D/H fields in `NumericInputBar` are effectively DEAD UI (no
-shipped tool creates a primitive body — `ToolPaletteView` has only
-Sketch/Combine/Edit sections, so `primitive != nil` bodies arise only from
-the `OS3D_DEBUG_SEED` debug hook or previously persisted documents).
-Commit-on-empty-tap holds for PROFILE extrudes only — and actually commits
-on ANY tap — while face pulls CANCEL on empty tap and commit via any of
-three paths: the extrude bar's "Extrude" button, the distance field's
-onSubmit, or the "Done" pill (`NumericInputBar` shows whenever
-`extrudeContext != nil`, including `.faceSelected`; §4.1). Missing:
-calculator/expression parsing, numpad UI, hover-to-type,
-labels on gizmo arrows and sketch elements, validity-feedback layer.
+**Status:** 🟡 partial — numeric fields exist for extrude distance, revolve
+angle, offset-plane distance, exact gizmo-arrow moves ("Move X/Y/Z"), scale
+factor, and polygon side count (`NumericInputBar`); the primitive W/D/H
+fields remain DEAD UI outside the `OS3D_DEBUG_SEED` hook. The
+commit-on-empty-tap convention is unified: tapping empty grid commits both
+profile extrudes and nonzero face pulls (§4.1). The validity-feedback layer
+is seeded: the pull arrow renders RED when the pending extrude/revolve
+result would fail (`ToolContext.isPendingValid` → `GizmoRenderer`), with
+failures surfaced via an error alert (not yet a top banner). Missing:
+calculator/expression parsing, numpad UI, hover-to-type, Tab cycling,
+running totals, unit suffixes, labels on gizmo arrows and sketch elements.
 **Feasibility:** [mesh-kernel OK]
 
 ---
@@ -1604,30 +1679,31 @@ labels on gizmo arrows and sketch elements, validity-feedback layer.
 
 | Area | ✅ | 🟡 | ❌ |
 |---|---|---|---|
-| Sketch menu (17) | 0 | 3 (Line, Rectangle, Circle) | 14 |
+| Sketch menu (17) | 2 (Trim, Delete) | 7 (Line, Rectangle, Circle, Arc, Ellipse, Polygon, Move/Rotate) | 8 |
 | Sketch controls (7) | 0 | 3 (planes, snapping, notable points) | 4 |
 | Constraints (14: menu, settings, 11 types, make-construction) | 0 | 0 | 14 |
-| Tools menu (16) | 0 | 5 (Extrude, Offset Face, Union, Subtract, Intersect) | 11 |
-| Transform (7) | 0 | 1 (Move gizmo) | 6 |
-| Insert/Construct (6) | 0 | 0 | 6 |
-| Navigation & views (5) | 0 | 2 (camera, grid) | 3 (views panel, Orientation Cube, peripherals) |
+| Tools menu (16) | 0 | 6 (Extrude, Offset Face, Union, Subtract, Intersect, Revolve) | 10 |
+| Transform (7) | 0 | 3 (Move/Rotate gizmo, Scale, Mirror) | 4 |
+| Insert/Construct (6) | 0 | 1 (Offset construction plane) | 5 |
+| Navigation & views (5) | 0 | 4 (camera, Orientation Cube, views panel, grid) | 1 (peripherals) |
 | Selection & gestures (4) | 0 | 1 | 3 |
 | Adaptive UI (2) | 0 | 2 | 0 |
 | History & parametrics (3) | 0 | 2 (direct modeling, Undo/Redo) | 1 |
-| Items Manager (1) | 0 | 0 | 1 |
-| Import/Export (2) | 0 | 1 (STL export) | 1 |
+| Items Manager (1) | 0 | 1 | 0 |
+| Import/Export (2) | 0 | 2 (STL import; STL/OBJ/3MF/PNG export) | 0 |
 | Projects/Sync/Collab (5) | 0 | 1 (local gallery) | 4 |
 | Visualization (1) | 0 | 0 | 1 |
 | Drawings (1) | 0 | 0 | 1 |
-| Modes & display (4) | 0 | 1 | 3 |
+| Modes & display (4) | 0 | 2 (Measure, display modes) | 2 |
 | Settings (1) | 0 | 0 | 1 |
 | Numeric input (1) | 0 | 1 | 0 |
-| **Total (97)** | **0** | **23** | **74** |
+| **Total (97)** | **2** | **36** | **59** |
 
 (Counting caveats: §4.2's 🟡 rides the same code path as §4.1 — one behavior
-counted under two Tools-menu entries; §2.3 and §9.1 are borderline partials,
-flagged in their status notes.)
+counted under two Tools-menu entries; §9.1 remains a borderline partial,
+flagged in its status note.)
 
-The center of gravity of the gap: (a) sketch tooling breadth, (b) the
-constraint solver, (c) the history engine, (d) B-rep-only surface operations.
-See `IMPLEMENTATION_PLAN.md` for sequencing.
+The center of gravity of the gap: (a) the constraint solver, (b) the history
+engine, (c) B-rep-only surface operations (fillet/chamfer/shell/offset), and
+(d) the remaining geometry breadth (splines, sweep, loft, split, patterns,
+text). See `IMPLEMENTATION_PLAN.md` for sequencing.

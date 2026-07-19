@@ -19,6 +19,9 @@ final class Project {
     @Relationship(deleteRule: .cascade, inverse: \PersistedSketch.project)
     var sketches: [PersistedSketch] = []
 
+    @Relationship(deleteRule: .cascade, inverse: \PersistedPlane.project)
+    var planes: [PersistedPlane] = []
+
     init(name: String) {
         self.name = name
         self.createdAt = Date()
@@ -36,6 +39,8 @@ final class PersistedBody {
     var primitiveData: Data?
     /// Compact binary mesh blob ("OS3D" format) — exactly the RenderMesh buffers.
     @Attribute(.externalStorage) var meshData: Data = Data()
+    /// Items Manager visibility (spec §11). Defaulted so pre-A8 stores migrate.
+    var isHidden: Bool = false
     var project: Project?
 
     init(bodyID: UUID, name: String, transformData: Data, primitiveData: Data?, meshData: Data) {
@@ -57,5 +62,18 @@ final class PersistedSketch {
     init(sketchID: UUID, sketchData: Data) {
         self.sketchID = sketchID
         self.sketchData = sketchData
+    }
+}
+
+@Model
+final class PersistedPlane {
+    @Attribute(.unique) var planeID: UUID = UUID()
+    /// JSON-encoded ConstructionPlane (tiny).
+    var planeData: Data = Data()
+    var project: Project?
+
+    init(planeID: UUID, planeData: Data) {
+        self.planeID = planeID
+        self.planeData = planeData
     }
 }

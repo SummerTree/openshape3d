@@ -16,6 +16,10 @@ struct ToolPaletteView: View {
                 sketchButton("line.diagonal", label: "Line", tool: .line)
                 sketchButton("rectangle", label: "Rect", tool: .rect)
                 sketchButton("circle", label: "Circle", tool: .circle)
+                sketchButton("point.topleft.down.to.point.bottomright.curvepath", label: "Arc", tool: .arc)
+                sketchButton("oval", label: "Ellipse", tool: .ellipse)
+                sketchButton("hexagon", label: "Polygon", tool: .polygon)
+                sketchButton("scissors", label: "Trim", tool: .trim)
             }
             Divider().frame(width: 40)
             section("Combine") {
@@ -24,13 +28,42 @@ struct ToolPaletteView: View {
                 booleanButton("square.on.square.intersection.dashed", label: "Intersect", kind: .intersect)
             }
             Divider().frame(width: 40)
+            section("Transform") {
+                Button {
+                    viewModel.beginScaleEntry()
+                } label: {
+                    paletteIcon("arrow.down.left.and.arrow.up.right", label: "Scale")
+                        .foregroundStyle(viewModel.scaleEntryActive ? Color.blue : Color.primary)
+                }
+                .disabled(viewModel.selection.isEmpty)
+
+                Menu {
+                    ForEach(
+                        Array(viewModel.mirrorPlaneOptions.enumerated()), id: \.offset
+                    ) { _, option in
+                        Button(option.label) {
+                            viewModel.mirrorSelection(across: option.plane)
+                        }
+                    }
+                } label: {
+                    paletteIcon("rectangle.on.rectangle", label: "Mirror")
+                        .foregroundStyle(Color.primary)
+                }
+                .disabled(viewModel.selection.count != 1)
+            }
+            Divider().frame(width: 40)
             section("Edit") {
+                measureButton
                 Button {
                     viewModel.deleteSelection()
                 } label: {
                     paletteIcon("trash", label: "Delete")
                 }
-                .disabled(viewModel.selection.isEmpty)
+                .disabled(
+                    viewModel.mode.isSketching
+                        ? viewModel.selectedSketchEntityIDs.isEmpty
+                        : viewModel.selection.isEmpty
+                )
             }
         }
         .padding(.vertical, 16)
@@ -71,6 +104,25 @@ struct ToolPaletteView: View {
             RoundedRectangle(cornerRadius: 10)
                 .fill(isArming ? Color.purple.opacity(0.15) : Color.clear)
         )
+    }
+
+    /// Point-to-point Measure tool (spec §16.3): toggles measuring mode.
+    private var measureButton: some View {
+        let isMeasuring: Bool = {
+            if case .measuring = viewModel.mode { return true }
+            return false
+        }()
+        return Button {
+            viewModel.toggleMeasure()
+        } label: {
+            paletteIcon("ruler", label: "Measure")
+                .foregroundStyle(isMeasuring ? Color.blue : Color.primary)
+        }
+        .background(
+            RoundedRectangle(cornerRadius: 10)
+                .fill(isMeasuring ? Color.blue.opacity(0.15) : Color.clear)
+        )
+        .accessibilityIdentifier("MeasureButton")
     }
 
     private func sketchButton(_ systemImage: String, label: String, tool: SketchTool) -> some View {

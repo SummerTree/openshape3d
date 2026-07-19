@@ -64,6 +64,36 @@ final class BooleanTests: XCTestCase {
         XCTAssertEqual(aabb.max.x, 2, accuracy: 1e-3, "Intersection is the overlap slab")
     }
 
+    func testCompositeCommandAppliesAndRevertsAsOneStep() {
+        var document = DesignDocument()
+        let a = makeBody(.box(width: 2, depth: 2, height: 2), at: .zero)
+        let b = makeBody(.box(width: 2, depth: 2, height: 2), at: SIMD3(5, 0, 0))
+        document.bodies = [a, b]
+
+        // Multi-body cut shape: one ReplaceBodyCommand per body, one step.
+        func shrunk(_ body: Body) -> Body {
+            Body(
+                id: body.id, name: body.name, transform: body.transform,
+                primitive: nil,
+                euclidMesh: .primitive(.box(width: 1, depth: 1, height: 1)),
+                revision: 0
+            )
+        }
+        let composite = CompositeCommand(title: "Extrude", commands: [
+            ReplaceBodyCommand(title: "Extrude", before: a, after: shrunk(a)),
+            ReplaceBodyCommand(title: "Extrude", before: b, after: shrunk(b)),
+        ])
+
+        composite.apply(to: &document)
+        XCTAssertEqual(document.bodies.count, 2)
+        XCTAssertNil(document.bodies[0].primitive, "Both bodies replaced")
+        XCTAssertNil(document.bodies[1].primitive)
+
+        composite.revert(in: &document)
+        XCTAssertNotNil(document.body(with: a.id)?.primitive, "Both bodies restored")
+        XCTAssertNotNil(document.body(with: b.id)?.primitive)
+    }
+
     func testBooleanCommandUndoRestoresBothBodies() {
         var document = DesignDocument()
         let a = makeBody(.box(width: 4, depth: 4, height: 4), at: .zero)

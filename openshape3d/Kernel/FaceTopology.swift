@@ -149,33 +149,59 @@ nonisolated enum FaceTopology {
                 boundaryCount[edge, default: 0] += 1
             }
         }
-        var directed = [PositionKey: DirectedEdge]()
+        var outgoing = [PositionKey: [DirectedEdge]]()
+        var edgeTotal = 0
         for t in faceTriangles {
             let (a, b, c) = triangleVertices(t)
             for (p, q) in [(a, b), (b, c), (c, a)] where boundaryCount[EdgeKey(p, q)] == 1 {
                 let edge = DirectedEdge(
                     from: PositionKey(p), to: PositionKey(q), fromPos: p, toPos: q
                 )
-                directed[edge.from] = edge
+                outgoing[edge.from, default: []].append(edge)
+                edgeTotal += 1
             }
         }
 
-        // Chain directed boundary edges into loops.
+        // Chain directed boundary edges into loops. CSG healing can pinch a
+        // boundary through a welded vertex (two boundary edges leaving one
+        // node), so keep every outgoing edge and split a closed sub-loop off
+        // the walk whenever it revisits a vertex; degenerate out-and-back
+        // spurs fall out as sub-loops with fewer than 3 vertices.
         var loops3D: [[SIMD3<Float>]] = []
-        var visited = Set<PositionKey>()
-        for (start, _) in directed where !visited.contains(start) {
-            var loop: [SIMD3<Float>] = []
-            var currentKey = start
-            var steps = 0
-            while let edge = directed[currentKey], !visited.contains(currentKey) {
-                visited.insert(currentKey)
-                loop.append(edge.fromPos)
-                currentKey = edge.to
-                steps += 1
-                if steps > directed.count + 1 { break }
-            }
-            if loop.count >= 3, currentKey == start {
-                loops3D.append(loop)
+        func takeEdge(from key: PositionKey) -> DirectedEdge? {
+            guard var edges = outgoing[key], let edge = edges.popLast() else { return nil }
+            outgoing[key] = edges
+            return edge
+        }
+        for start in Array(outgoing.keys) {
+            while let firstEdge = takeEdge(from: start) {
+                var pathKeys = [firstEdge.from]
+                var pathPositions = [firstEdge.fromPos]
+                var indexOf = [firstEdge.from: 0]
+                var currentKey = firstEdge.to
+                var currentPos = firstEdge.toPos
+                var steps = 0
+                while steps <= edgeTotal {
+                    steps += 1
+                    if let at = indexOf[currentKey] {
+                        let loop = Array(pathPositions[at...])
+                        if loop.count >= 3 {
+                            loops3D.append(loop)
+                        }
+                        for key in pathKeys[at...] {
+                            indexOf[key] = nil
+                        }
+                        pathKeys.removeSubrange(at...)
+                        pathPositions.removeSubrange(at...)
+                        if pathKeys.isEmpty { break }
+                    }
+                    guard let edge = takeEdge(from: currentKey) else { break }
+                    indexOf[currentKey] = pathKeys.count
+                    pathKeys.append(currentKey)
+                    pathPositions.append(currentPos)
+                    currentKey = edge.to
+                    currentPos = edge.toPos
+                }
             }
         }
         guard !loops3D.isEmpty else { return nil }
@@ -221,9 +247,12 @@ nonisolated enum FaceTopology {
         var projected = loops3D.map(project)
         projected.sort { abs(Profile.signedArea($0)) > abs(Profile.signedArea($1)) }
         var outer = projected[0]
+        let outerArea = abs(Profile.signedArea(outer))
         if Profile.signedArea(outer) < 0 { outer.reverse() }
         var holes: [[SIMD2<Double>]] = []
         for var hole in projected.dropFirst() {
+            // CSG healing can leave near-zero-area sliver loops; drop them.
+            guard abs(Profile.signedArea(hole)) > outerArea * 1e-7 else { continue }
             if Profile.signedArea(hole) < 0 { hole.reverse() }
             holes.append(hole)
         }

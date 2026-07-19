@@ -20,18 +20,20 @@ final class SketchFlowUITests: XCTestCase {
         app.launchEnvironment["OS3D_AUTO_OPEN"] = "1"
         app.launch()
 
+        let window = app.windows.firstMatch
         let rectButton = app.buttons.containing(.staticText, identifier: "Rect").firstMatch
         XCTAssertTrue(rectButton.waitForExistence(timeout: 10))
         rectButton.tap()
+
+        // Plane pickers appear; tapping the bare ground starts there.
+        XCTAssertTrue(app.staticTexts["Choose a sketch plane"].waitForExistence(timeout: 3))
+        window.coordinate(withNormalizedOffset: CGVector(dx: 0.80, dy: 0.78)).tap()
 
         XCTAssertTrue(app.staticTexts["Sketching on ground plane"].waitForExistence(timeout: 3),
                       "Sketch status bar should appear")
 
         // Let the head-on camera animation settle.
         sleep(2)
-
-        // Draw a rectangle with a one-finger drag.
-        let window = app.windows.firstMatch
         let start = window.coordinate(withNormalizedOffset: CGVector(dx: 0.45, dy: 0.45))
         let end = window.coordinate(withNormalizedOffset: CGVector(dx: 0.68, dy: 0.62))
         start.press(forDuration: 0.15, thenDragTo: end)

@@ -66,6 +66,19 @@ nonisolated enum Matrices {
         )
     }
 
+    /// Right-handed orthographic projection centered on the view axis, depth
+    /// range [0, 1] (Metal). `near`/`far` are distances along -Z (near may be
+    /// negative to include geometry behind the eye plane).
+    static func orthographic(halfWidth: Float, halfHeight: Float, near: Float, far: Float) -> simd_float4x4 {
+        let zs = 1 / (near - far)
+        return simd_float4x4(
+            SIMD4(1 / halfWidth, 0, 0, 0),
+            SIMD4(0, 1 / halfHeight, 0, 0),
+            SIMD4(0, 0, zs, 0),
+            SIMD4(0, 0, zs * near, 1)
+        )
+    }
+
     /// Right-handed look-at view matrix.
     static func lookAt(eye: SIMD3<Float>, target: SIMD3<Float>, up: SIMD3<Float>) -> simd_float4x4 {
         let z = simd_normalize(eye - target)

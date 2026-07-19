@@ -13,15 +13,14 @@ import simd
 nonisolated enum GizmoPart: CaseIterable, Equatable {
     case xAxis, yAxis, zAxis
     case xyPlane, yzPlane, zxPlane
+    /// Rotation rings; the axis is the axis of rotation (ring plane normal).
+    case xRing, yRing, zRing
 
     var axisDirection: SIMD3<Float> {
         switch self {
-        case .xAxis: SIMD3(1, 0, 0)
-        case .yAxis: SIMD3(0, 1, 0)
-        case .zAxis: SIMD3(0, 0, 1)
-        case .yzPlane: SIMD3(1, 0, 0)
-        case .zxPlane: SIMD3(0, 1, 0)
-        case .xyPlane: SIMD3(0, 0, 1)
+        case .xAxis, .yzPlane, .xRing: SIMD3(1, 0, 0)
+        case .yAxis, .zxPlane, .yRing: SIMD3(0, 1, 0)
+        case .zAxis, .xyPlane, .zRing: SIMD3(0, 0, 1)
         }
     }
 
@@ -29,6 +28,29 @@ nonisolated enum GizmoPart: CaseIterable, Equatable {
         switch self {
         case .xyPlane, .yzPlane, .zxPlane: true
         default: false
+        }
+    }
+
+    var isRing: Bool {
+        switch self {
+        case .xRing, .yRing, .zRing: true
+        default: false
+        }
+    }
+
+    var isArrow: Bool {
+        switch self {
+        case .xAxis, .yAxis, .zAxis: true
+        default: false
+        }
+    }
+
+    /// Axis display name for numeric entry ("Move X").
+    var axisName: String {
+        switch self {
+        case .xAxis, .yzPlane, .xRing: "X"
+        case .yAxis, .zxPlane, .yRing: "Y"
+        case .zAxis, .xyPlane, .zRing: "Z"
         }
     }
 }
@@ -48,6 +70,11 @@ nonisolated enum GizmoGeometry {
     /// Plane handles span [planeMin, planeMax]² on their plane.
     static let planeMin: Float = 0.18
     static let planeMax: Float = 0.48
+    /// Rotation rings sit at this radius from the origin (gizmo units),
+    /// outside the plane handles' far corner (0.48·√2 ≈ 0.68).
+    static let ringRadius: Float = 0.85
+    /// Radial hit tolerance around a ring (inflated for touch).
+    static let ringHitWidth: Float = 0.12
 
     /// Nearest gizmo part hit by the ray, if any. Ray and state in world space.
     static func hitTest(ray: Ray, gizmo: GizmoState) -> GizmoPart? {
@@ -80,7 +107,30 @@ nonisolated enum GizmoGeometry {
                 }
             }
         }
+
+        // Rings last: where a ring crosses an arrow, the tie goes to the
+        // arrow (strict < above), keeping translation drags stable.
+        for part in [GizmoPart.xRing, .yRing, .zRing] {
+            if let t = localRay.intersect(planePoint: .zero, planeNormal: part.axisDirection) {
+                let p = localRay.point(at: t)
+                if abs(simd_length(p) - ringRadius) <= ringHitWidth {
+                    if best == nil || t < best!.t {
+                        best = (part, t)
+                    }
+                }
+            }
+        }
         return best?.part
+    }
+
+    /// In-plane basis of a ring: angle 0 along `u`, growing toward `v`
+    /// (right-handed about the ring's rotation axis: axis × u = v).
+    static func ringBasis(for part: GizmoPart) -> (u: SIMD3<Float>, v: SIMD3<Float>) {
+        switch part {
+        case .xRing: (SIMD3(0, 1, 0), SIMD3(0, 0, 1))
+        case .yRing: (SIMD3(0, 0, 1), SIMD3(1, 0, 0))
+        default: (SIMD3(1, 0, 0), SIMD3(0, 1, 0))
+        }
     }
 
     private static func planeCoordinates(of p: SIMD3<Float>, normal part: GizmoPart) -> SIMD2<Float> {
@@ -131,17 +181,42 @@ nonisolated struct GizmoDragSession {
     }
 
     func translationDelta(for ray: Ray) -> SIMD3<Float>? {
-        guard let current = Self.constrainedPoint(part: part, origin: startOrigin, ray: ray) else {
+        guard !part.isRing,
+              let current = Self.constrainedPoint(part: part, origin: startOrigin, ray: ray)
+        else {
             return nil
         }
         return current - anchor
     }
 
-    /// Point on the drag constraint (axis line or plane) nearest to the ray.
+    /// Ring drag: signed rotation (radians, right-handed about the ring axis)
+    /// from the anchor to the ray's current position on the ring plane.
+    /// atan2 on the ring plane; wrapped to (-π, π].
+    func rotationDelta(for ray: Ray) -> Float? {
+        guard part.isRing,
+              let current = Self.constrainedPoint(part: part, origin: startOrigin, ray: ray)
+        else {
+            return nil
+        }
+        let anchorAngle = Self.ringAngle(of: anchor - startOrigin, part: part)
+        let currentAngle = Self.ringAngle(of: current - startOrigin, part: part)
+        var delta = currentAngle - anchorAngle
+        if delta > .pi { delta -= 2 * .pi }
+        if delta <= -.pi { delta += 2 * .pi }
+        return delta
+    }
+
+    private static func ringAngle(of offset: SIMD3<Float>, part: GizmoPart) -> Float {
+        let (u, v) = GizmoGeometry.ringBasis(for: part)
+        return atan2(simd_dot(offset, v), simd_dot(offset, u))
+    }
+
+    /// Point on the drag constraint (axis line, plane, or ring plane) nearest
+    /// to the ray.
     private static func constrainedPoint(
         part: GizmoPart, origin: SIMD3<Float>, ray: Ray
     ) -> SIMD3<Float>? {
-        if part.isPlane {
+        if part.isPlane || part.isRing {
             guard let t = ray.intersect(planePoint: origin, planeNormal: part.axisDirection) else {
                 return nil
             }

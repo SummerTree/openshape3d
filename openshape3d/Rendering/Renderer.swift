@@ -21,6 +21,7 @@ final class Renderer: NSObject, MTKViewDelegate {
 
     private let cache = GPUResourceCache()
     private let gizmoRenderer = GizmoRenderer()
+    private let orientationCubeRenderer = OrientationCubeRenderer()
     private var viewportSize = CGSize(width: 1, height: 1)
 
     /// World-units-per-gizmo-unit for constant ~screen size, shared by
@@ -46,19 +47,17 @@ final class Renderer: NSObject, MTKViewDelegate {
             let commandBuffer = context.commandQueue.makeCommandBuffer()
         else { return }
 
-        // With a gizmo or pull arrow, the frame ends in a second overlay pass
-        // (cleared depth). Keep the MSAA color texture and resolve at the end.
-        let hasGizmo = scene.gizmo != nil || scene.pullArrow != nil
+        // Every frame ends in a second overlay pass (cleared depth): the
+        // orientation cube always, plus gizmo/pull arrow/plane pickers when
+        // present. Keep the MSAA color texture and resolve at the end.
         let msaaColor = descriptor.colorAttachments[0].texture
         let resolveTarget = descriptor.colorAttachments[0].resolveTexture
-        if hasGizmo {
-            // A pass with a resolveTexture attached must use a resolving store
-            // action (Metal validation asserts otherwise) — detach it here and
-            // resolve in the overlay pass instead.
-            descriptor.colorAttachments[0].resolveTexture = nil
-            descriptor.colorAttachments[0].storeAction = .store
-            descriptor.depthAttachment.storeAction = .dontCare
-        }
+        // A pass with a resolveTexture attached must use a resolving store
+        // action (Metal validation asserts otherwise) — detach it here and
+        // resolve in the overlay pass instead.
+        descriptor.colorAttachments[0].resolveTexture = nil
+        descriptor.colorAttachments[0].storeAction = .store
+        descriptor.depthAttachment.storeAction = .dontCare
 
         guard let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: descriptor) else {
             return
@@ -70,8 +69,8 @@ final class Renderer: NSObject, MTKViewDelegate {
         encodeScene(encoder: encoder, frame: &frame)
         encoder.endEncoding()
 
-        // 6. Overlay pass: depth cleared so gizmo/pull arrow draw on top.
-        if hasGizmo, let msaaColor {
+        // 6. Overlay pass: depth cleared so overlays draw on top.
+        if let msaaColor {
             let overlay = MTLRenderPassDescriptor()
             overlay.colorAttachments[0].texture = msaaColor
             overlay.colorAttachments[0].loadAction = .load
@@ -97,6 +96,14 @@ final class Renderer: NSObject, MTKViewDelegate {
                         gizmo: gizmo
                     )
                 }
+                if !scene.planePickers.isEmpty {
+                    gizmoRenderer.drawPlaneTiles(
+                        encoder: overlayEncoder,
+                        pipelines: context.pipelines,
+                        frame: &frame,
+                        tiles: scene.planePickers
+                    )
+                }
                 if let arrow = scene.pullArrow {
                     gizmoRenderer.drawPullArrow(
                         encoder: overlayEncoder,
@@ -106,6 +113,15 @@ final class Renderer: NSObject, MTKViewDelegate {
                         scale: gizmoScale(origin: arrow.origin)
                     )
                 }
+                // Orientation cube (spec §7.2), always on. Layout math is in
+                // points so its NDC placement matches tap hit-testing.
+                orientationCubeRenderer.prepare(device: context.device)
+                orientationCubeRenderer.draw(
+                    encoder: overlayEncoder,
+                    pipelines: context.pipelines,
+                    camera: camera,
+                    viewSize: view.bounds.size
+                )
                 overlayEncoder.endEncoding()
             }
         }
@@ -117,16 +133,24 @@ final class Renderer: NSObject, MTKViewDelegate {
     }
 
     /// Everything except the gizmo overlay — shared by live drawing and
-    /// offscreen thumbnail capture.
-    private func encodeScene(encoder: MTLRenderCommandEncoder, frame: inout FrameUniforms) {
+    /// offscreen thumbnail/screenshot capture. `drawBackground`/`drawGrid`
+    /// support screenshot options (transparent background, grid off).
+    private func encodeScene(
+        encoder: MTLRenderCommandEncoder,
+        frame: inout FrameUniforms,
+        drawBackground: Bool = true,
+        drawGrid: Bool = true
+    ) {
         let pipelines = context.pipelines
 
         // 1. Background gradient
-        encoder.setRenderPipelineState(pipelines.background)
-        encoder.setDepthStencilState(pipelines.depthIgnore)
-        encoder.setFragmentBytes(&frame, length: MemoryLayout<FrameUniforms>.stride,
-                                 index: Int(BufferIndexFrameUniforms.rawValue))
-        encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
+        if drawBackground {
+            encoder.setRenderPipelineState(pipelines.background)
+            encoder.setDepthStencilState(pipelines.depthIgnore)
+            encoder.setFragmentBytes(&frame, length: MemoryLayout<FrameUniforms>.stride,
+                                     index: Int(BufferIndexFrameUniforms.rawValue))
+            encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
+        }
 
         // 2. Opaque bodies
         encoder.setVertexBytes(&frame, length: MemoryLayout<FrameUniforms>.stride,
@@ -145,9 +169,11 @@ final class Renderer: NSObject, MTKViewDelegate {
         }
 
         // 4. Ground grid (blended, depth read only)
-        encoder.setRenderPipelineState(pipelines.grid)
-        encoder.setDepthStencilState(pipelines.depthReadOnly)
-        encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
+        if drawGrid {
+            encoder.setRenderPipelineState(pipelines.grid)
+            encoder.setDepthStencilState(pipelines.depthReadOnly)
+            encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
+        }
 
         // 4b. Closed-profile fills (edge pipeline reused for its depth bias so
         // fills win against coplanar body faces; blended, no depth write)
@@ -205,7 +231,14 @@ final class Renderer: NSObject, MTKViewDelegate {
     // MARK: - Thumbnail capture
 
     /// Offscreen render of the current scene (no gizmo), returned as PNG data.
-    func makeThumbnailPNG(width: Int = 640, height: Int = 480) -> Data? {
+    /// Screenshot options: `transparentBackground` clears to alpha 0 and skips
+    /// the gradient pass; `showGrid` off skips the ground grid.
+    func makeThumbnailPNG(
+        width: Int = 640,
+        height: Int = 480,
+        transparentBackground: Bool = false,
+        showGrid: Bool = true
+    ) -> Data? {
         let device = context.device
 
         let colorDescriptor = MTLTextureDescriptor.texture2DDescriptor(
@@ -245,7 +278,9 @@ final class Renderer: NSObject, MTKViewDelegate {
         pass.colorAttachments[0].resolveTexture = resolveTexture
         pass.colorAttachments[0].loadAction = .clear
         pass.colorAttachments[0].storeAction = .multisampleResolve
-        pass.colorAttachments[0].clearColor = MTLClearColor(red: 0.93, green: 0.94, blue: 0.96, alpha: 1)
+        pass.colorAttachments[0].clearColor = transparentBackground
+            ? MTLClearColor(red: 0, green: 0, blue: 0, alpha: 0)
+            : MTLClearColor(red: 0.93, green: 0.94, blue: 0.96, alpha: 1)
         pass.depthAttachment.texture = depthTexture
         pass.depthAttachment.loadAction = .clear
         pass.depthAttachment.storeAction = .dontCare
@@ -258,7 +293,12 @@ final class Renderer: NSObject, MTKViewDelegate {
 
         cache.sync(with: scene, device: context.device)
         var frame = makeFrameUniforms(viewportSize: CGSize(width: width, height: height))
-        encodeScene(encoder: encoder, frame: &frame)
+        encodeScene(
+            encoder: encoder,
+            frame: &frame,
+            drawBackground: !transparentBackground,
+            drawGrid: showGrid
+        )
         encoder.endEncoding()
         commandBuffer.commit()
         commandBuffer.waitUntilCompleted()

@@ -80,7 +80,7 @@ final class DocumentSession {
             let primitive = persisted.primitiveData.flatMap {
                 try? JSONDecoder().decode(PrimitiveSpec.self, from: $0)
             }
-            let body = Body(
+            var body = Body(
                 id: BodyID(raw: persisted.bodyID),
                 name: persisted.name,
                 transform: transform,
@@ -88,11 +88,17 @@ final class DocumentSession {
                 render: render,
                 revision: loaded.nextRevision()
             )
+            body.isHidden = persisted.isHidden
             loaded.bodies.append(body)
         }
         for persisted in project.sketches {
             if let sketch = try? JSONDecoder().decode(Sketch.self, from: persisted.sketchData) {
                 loaded.sketches.append(sketch)
+            }
+        }
+        for persisted in project.planes {
+            if let plane = try? JSONDecoder().decode(ConstructionPlane.self, from: persisted.planeData) {
+                loaded.planes.append(plane)
             }
         }
         document = loaded
@@ -130,6 +136,7 @@ final class DocumentSession {
                 persisted.transformData = transformData
                 persisted.primitiveData = primitiveData
                 persisted.meshData = meshData
+                persisted.isHidden = body.isHidden
             } else {
                 let persisted = PersistedBody(
                     bodyID: body.id.raw,
@@ -138,6 +145,7 @@ final class DocumentSession {
                     primitiveData: primitiveData,
                     meshData: meshData
                 )
+                persisted.isHidden = body.isHidden
                 persisted.project = project
                 modelContext.insert(persisted)
             }
@@ -163,6 +171,26 @@ final class DocumentSession {
             }
         }
         for persisted in project.sketches where !liveSketchIDs.contains(persisted.sketchID) {
+            modelContext.delete(persisted)
+        }
+
+        var persistedPlaneByID = [UUID: PersistedPlane]()
+        for persisted in project.planes {
+            persistedPlaneByID[persisted.planeID] = persisted
+        }
+        var livePlaneIDs = Set<UUID>()
+        for plane in document.planes {
+            livePlaneIDs.insert(plane.id.raw)
+            let data = (try? JSONEncoder().encode(plane)) ?? Data()
+            if let persisted = persistedPlaneByID[plane.id.raw] {
+                persisted.planeData = data
+            } else {
+                let persisted = PersistedPlane(planeID: plane.id.raw, planeData: data)
+                persisted.project = project
+                modelContext.insert(persisted)
+            }
+        }
+        for persisted in project.planes where !livePlaneIDs.contains(persisted.planeID) {
             modelContext.delete(persisted)
         }
 

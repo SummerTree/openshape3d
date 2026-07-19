@@ -21,6 +21,9 @@ final class CameraAnimator {
     private var startTime: CFTimeInterval = 0
     private var duration: CFTimeInterval = 0.35
 
+    /// Fired on every animation step (the camera moved).
+    var cameraChanged: (() -> Void)?
+
     init(renderer: Renderer, view: MTKView) {
         self.renderer = renderer
         self.view = view
@@ -57,6 +60,7 @@ final class CameraAnimator {
         camera.elevation = start.elevation + (target.elevation - start.elevation) * t
         renderer.camera = camera
         view?.setNeedsDisplay()
+        cameraChanged?()
 
         if raw >= 1 {
             displayLink?.invalidate()

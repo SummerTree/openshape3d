@@ -11,6 +11,7 @@ import Foundation
 nonisolated struct DesignDocument: Sendable {
     var bodies: [Body] = []
     var sketches: [Sketch] = []
+    var planes: [ConstructionPlane] = []
 
     /// Monotonic revision source for mesh changes (GPU cache invalidation).
     private var revisionCounter: UInt64 = 0
@@ -33,6 +34,14 @@ nonisolated struct DesignDocument: Sendable {
         let existing = Set(bodies.map(\.name))
         if !existing.contains(base) { return base }
         var n = 2
+        while existing.contains("\(base) \(n)") { n += 1 }
+        return "\(base) \(n)"
+    }
+
+    /// Sketches number from 1 ("Sketch 1", "Sketch 2", …), Shapr3D style.
+    func uniqueSketchName(base: String = "Sketch") -> String {
+        let existing = Set(sketches.map(\.name))
+        var n = 1
         while existing.contains("\(base) \(n)") { n += 1 }
         return "\(base) \(n)"
     }

@@ -61,9 +61,40 @@ nonisolated enum SketchTessellator {
                     appendSegment(previous, point, plane, &out)
                     previous = point
                 }
+            case let .arc(_, center, radius, startAngle, endAngle):
+                let points = SketchEntity.arcPoints(
+                    center: center, radius: radius,
+                    startAngle: startAngle, endAngle: endAngle,
+                    segmentsPerTurn: circleSegments
+                )
+                appendPolyline(points, closed: false, plane, &out)
+            case let .ellipse(_, center, radiusX, radiusY, rotation):
+                let points = SketchEntity.ellipsePoints(
+                    center: center, radiusX: radiusX, radiusY: radiusY,
+                    rotation: rotation, segments: circleSegments
+                )
+                appendPolyline(points, closed: true, plane, &out)
+            case let .polygon(_, center, radius, sides, rotation):
+                let points = SketchEntity.polygonPoints(
+                    center: center, radius: radius, sides: sides, rotation: rotation
+                )
+                appendPolyline(points, closed: true, plane, &out)
             }
         }
         return out
+    }
+
+    private static func appendPolyline(
+        _ points: [SIMD2<Double>], closed: Bool,
+        _ plane: SketchPlane, _ out: inout [SIMD3<Float>]
+    ) {
+        guard points.count >= 2 else { return }
+        for i in 1..<points.count {
+            appendSegment(points[i - 1], points[i], plane, &out)
+        }
+        if closed {
+            appendSegment(points[points.count - 1], points[0], plane, &out)
+        }
     }
 
     private static func appendSegment(

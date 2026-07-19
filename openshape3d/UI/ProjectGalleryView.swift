@@ -147,6 +147,11 @@ struct ProjectGalleryView: View {
             sketchCopy.project = copy
             modelContext.insert(sketchCopy)
         }
+        for plane in project.planes {
+            let planeCopy = PersistedPlane(planeID: UUID(), planeData: plane.planeData)
+            planeCopy.project = copy
+            modelContext.insert(planeCopy)
+        }
     }
 }
 

@@ -13,6 +13,7 @@ struct openshape3dApp: App {
             Project.self,
             PersistedBody.self,
             PersistedSketch.self,
+            PersistedPlane.self,
         ])
         let modelConfiguration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: false)
 
