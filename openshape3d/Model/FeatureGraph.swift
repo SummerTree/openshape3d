@@ -95,6 +95,42 @@ nonisolated struct FeatureNode: Codable, Identifiable, Sendable {
     }
 }
 
+nonisolated extension FeatureNode {
+    /// Every sketch this node reads — the union of its profile/extra-profile/loft-
+    /// section `ProfileRef.sketchID`s, its `PlaneRef.sketch(sid)` build plane, and
+    /// its `AxisRef.sketchLine(sid,_)` axis. `DocumentSession.rebuildForSketchChange`
+    /// uses this to skip nodes a given sketch edit does not touch.
+    var referencedSketchIDs: Set<SketchID> {
+        var ids = Set<SketchID>()
+        func addPlane(_ ref: PlaneRef) {
+            if case let .sketch(sid) = ref.source { ids.insert(sid) }
+        }
+        func addAxis(_ ref: AxisRef) {
+            if case let .sketchLine(sid, _) = ref.source { ids.insert(sid) }
+        }
+        switch kind {
+        case let .extrude(profile, plane, _, _, _, extraProfiles):
+            ids.insert(profile.sketchID)
+            for extra in extraProfiles { ids.insert(extra.sketchID) }
+            addPlane(plane)
+        case let .revolve(profile, plane, axis, _, _):
+            ids.insert(profile.sketchID)
+            addPlane(plane)
+            addAxis(axis)
+        case let .sweep(profile, plane, _, _):
+            ids.insert(profile.sketchID)
+            addPlane(plane)
+        case let .loft(sections, _):
+            for ref in sections { ids.insert(ref.sketchID) }
+        case let .mirror(_, plane, _):
+            addPlane(plane)
+        case .primitive, .boolean, .transform, .pattern, .pushPull:
+            break
+        }
+        return ids
+    }
+}
+
 /// The ordered feature history. `evaluate` is a pure function of the graph plus
 /// the sketches/planes the profiles/planes reference.
 nonisolated struct FeatureGraph: Codable, Sendable {
@@ -195,18 +231,24 @@ nonisolated extension FeatureGraph {
             evalBoolean(node, kind: kind, target: target, tools: tools, into: &state, next: nextRevision)
         case let .pushPull(face, distance, mode):
             evalPushPull(node, face: face, distance: distance, mode: mode, into: &state, next: nextRevision)
+        case let .revolve(profile, plane, axis, angle, boolean):
+            evalRevolve(
+                node, profileRef: profile, planeRef: plane, axisRef: axis,
+                angle: angle, boolean: boolean, into: &state, next: nextRevision)
+        case let .sweep(profile, plane, spine, boolean):
+            evalSweep(
+                node, profileRef: profile, planeRef: plane, spine: spine,
+                boolean: boolean, into: &state, next: nextRevision)
+        case let .loft(sections, boolean):
+            evalLoft(node, sectionRefs: sections, boolean: boolean, into: &state, next: nextRevision)
+        case let .mirror(body, plane, keepOriginal):
+            evalMirror(
+                node, bodyRef: body, planeRef: plane, keepOriginal: keepOriginal,
+                into: &state, next: nextRevision)
 
-        // Defined but not evaluated in tranche 1 — keep the graph total.
-        case .revolve:
-            state.errors[node.id] = .kernelFailure("revolve evaluation is tranche 2")
-        case .sweep:
-            state.errors[node.id] = .kernelFailure("sweep evaluation is tranche 2")
-        case .loft:
-            state.errors[node.id] = .kernelFailure("loft evaluation is tranche 2")
+        // Defined but not evaluated yet — keep the graph total.
         case .transform:
             state.errors[node.id] = .kernelFailure("transform evaluation is tranche 2")
-        case .mirror:
-            state.errors[node.id] = .kernelFailure("mirror evaluation is tranche 2")
         case .pattern:
             state.errors[node.id] = .kernelFailure("pattern evaluation is tranche 2")
         }
@@ -427,6 +469,185 @@ nonisolated extension FeatureGraph {
         }
         state.put(result, table: newTable)
     }
+
+    // MARK: Revolve / Sweep / Loft (full-solid ops)
+
+    /// Emit a freshly built world-space `mesh` as either a NEW body or a boolean
+    /// into an existing target. Unlike extrude's cut (which uses a padded overlap
+    /// prism), revolve/sweep/loft merge the FULL solid: the tool is `mesh` wrapped
+    /// in an identity `Body` and fed straight to `KernelOps.boolean`.
+    private func emitFullSolid(
+        _ node: FeatureNode,
+        mesh: Euclid.Mesh,
+        boolean: BooleanIntent,
+        scheme: FaceScheme,
+        into state: inout EvalState,
+        next nextRevision: () -> UInt64
+    ) {
+        guard !mesh.polygons.isEmpty else {
+            state.errors[node.id] = .emptyGeometry
+            return
+        }
+
+        if boolean.op == .newBody {
+            guard let id = node.outputBodyIDs.first else {
+                state.errors[node.id] = .brokenRef("node has no output BodyID")
+                return
+            }
+            let body = Body(
+                id: id, name: node.name, transform: .identity, primitive: nil,
+                euclidMesh: mesh, revision: nextRevision())
+            let table = state.naming.faceTable(for: body, createdBy: node.id, scheme: scheme)
+            state.put(body, table: table)
+            return
+        }
+
+        guard let kind = boolean.op.kernelKind else {
+            state.errors[node.id] = .kernelFailure("unsupported boolean op")
+            return
+        }
+        guard let targetRef = boolean.resolvedTargets.first,
+              let target = state.bodies[targetRef.bodyID] else {
+            state.errors[node.id] = .brokenRef("boolean target unresolved")
+            return
+        }
+        // The full solid, wrapped identity so KernelOps.boolean bakes no extra
+        // transform (mesh already lives in the shared world space).
+        let toolBody = Body(
+            id: BodyID(), name: "\(node.name) tool", transform: .identity, primitive: nil,
+            euclidMesh: mesh, revision: 0)
+        let toolTable = state.naming.faceTable(for: toolBody, createdBy: node.id, scheme: scheme)
+        let resultMesh = KernelOps.boolean(kind, target: target, tool: toolBody)
+        guard !resultMesh.polygons.isEmpty else {
+            state.errors[node.id] = .emptyGeometry
+            return
+        }
+        let result = Body(
+            id: target.id, name: target.name, transform: .identity, primitive: nil,
+            euclidMesh: resultMesh, revision: nextRevision())
+        let inputTables = [state.faceTables[target.id], toolTable].compactMap { $0 }
+        let table = state.naming.propagate(inputs: inputTables, output: result, op: .boolean(kind))
+        state.put(result, table: table)
+    }
+
+    private func evalRevolve(
+        _ node: FeatureNode,
+        profileRef: ProfileRef,
+        planeRef: PlaneRef,
+        axisRef: AxisRef,
+        angle: Expr,
+        boolean: BooleanIntent,
+        into state: inout EvalState,
+        next nextRevision: () -> UInt64
+    ) {
+        guard let plane = state.resolvePlane(planeRef) else {
+            state.errors[node.id] = .brokenRef("revolve plane unresolved")
+            return
+        }
+        guard let (outer, holes) = state.resolveProfile(profileRef) else {
+            state.errors[node.id] = .brokenRef("revolve profile unresolved")
+            return
+        }
+        guard let axis = state.resolveAxis(axisRef) else {
+            state.errors[node.id] = .brokenRef("revolve axis unresolved")
+            return
+        }
+        // KernelOps.revolve returns an EMPTY mesh when the profile crosses/collapses
+        // onto the axis — emitFullSolid maps that to .emptyGeometry.
+        let mesh = KernelOps.revolve(
+            profile: outer, holes: holes, in: plane, axis: axis, angle: angle.value)
+        emitFullSolid(node, mesh: mesh, boolean: boolean, scheme: .revolve, into: &state, next: nextRevision)
+    }
+
+    private func evalSweep(
+        _ node: FeatureNode,
+        profileRef: ProfileRef,
+        planeRef: PlaneRef,
+        spine: [PointWrapper],
+        boolean: BooleanIntent,
+        into state: inout EvalState,
+        next nextRevision: () -> UInt64
+    ) {
+        guard let plane = state.resolvePlane(planeRef) else {
+            state.errors[node.id] = .brokenRef("sweep plane unresolved")
+            return
+        }
+        guard let (outer, holes) = state.resolveProfile(profileRef) else {
+            state.errors[node.id] = .brokenRef("sweep profile unresolved")
+            return
+        }
+        let spinePts = spine.map(\.point)   // WORLD-space 3D points
+        let mesh = SweepLoftKit.sweep(profile: outer, holes: holes, in: plane, alongPath: spinePts)
+        emitFullSolid(node, mesh: mesh, boolean: boolean, scheme: .generic, into: &state, next: nextRevision)
+    }
+
+    private func evalLoft(
+        _ node: FeatureNode,
+        sectionRefs: [ProfileRef],
+        boolean: BooleanIntent,
+        into state: inout EvalState,
+        next nextRevision: () -> UInt64
+    ) {
+        // Resolve each section's profile (outer + holes) AND its plane, in order.
+        // ANY unresolvable section is a broken reference: error out rather than
+        // silently lofting a subset (e.g. deleting a middle section's sketch must
+        // surface a broken-ref badge, not reshape the body into an A->C loft the
+        // user never authored). Matches revolve/sweep/mirror's error contract.
+        var sections: [(profile: Profile, holes: [Profile], plane: SketchPlane)] = []
+        for ref in sectionRefs {
+            guard let (outer, holes) = state.resolveProfile(ref),
+                  let plane = state.resolvePlane(PlaneRef(source: .sketch(ref.sketchID))) else {
+                state.errors[node.id] = .brokenRef("loft section profile/plane unresolved")
+                return
+            }
+            sections.append((outer, holes, plane))
+        }
+        guard sections.count >= 2 else {
+            state.errors[node.id] = .brokenRef("loft needs >= 2 sections")
+            return
+        }
+        let mesh = SweepLoftKit.loft(profiles: sections)
+        emitFullSolid(node, mesh: mesh, boolean: boolean, scheme: .generic, into: &state, next: nextRevision)
+    }
+
+    // MARK: Mirror
+
+    private func evalMirror(
+        _ node: FeatureNode,
+        bodyRef: BodyRef,
+        planeRef: PlaneRef,
+        keepOriginal: Bool,
+        into state: inout EvalState,
+        next nextRevision: () -> UInt64
+    ) {
+        guard let input = state.bodies[bodyRef.bodyID] else {
+            state.errors[node.id] = .brokenRef("mirror body unresolved")
+            return
+        }
+        guard let plane = state.resolvePlane(planeRef) else {
+            state.errors[node.id] = .brokenRef("mirror plane unresolved")
+            return
+        }
+        // Reflect the input in world space (its transform is identity in replay,
+        // but bake it in to stay correct if that ever changes).
+        let worldInput = input.euclidMesh().transformed(by: input.transform.euclid)
+        let mirrored = KernelOps.mirror(mesh: worldInput, across: plane)
+        guard !mirrored.polygons.isEmpty else {
+            state.errors[node.id] = .emptyGeometry
+            return
+        }
+        guard let id = node.outputBodyIDs.first else {
+            state.errors[node.id] = .brokenRef("mirror node has no output BodyID")
+            return
+        }
+        // keepOriginal is effectively true in v1: the mirror node only ADDS its own
+        // output body; the source stays put (never removed here).
+        let body = Body(
+            id: id, name: node.name, transform: .identity, primitive: nil,
+            euclidMesh: mirrored, revision: nextRevision())
+        let table = state.naming.faceTable(for: body, createdBy: node.id, scheme: .generic)
+        state.put(body, table: table)
+    }
 }
 
 // MARK: - Live evaluation state
@@ -507,6 +728,24 @@ private struct EvalState {
             }
         }
         return (outer, holes)
+    }
+
+    /// An `AxisRef` → a plane-local `RevolveAxis`. `.explicit` passes through;
+    /// `.sketchLine` finds the named `.line` entity in the referenced sketch and
+    /// builds an axis from its endpoints: point = a, direction = b − a.
+    func resolveAxis(_ ref: AxisRef) -> RevolveAxis? {
+        switch ref.source {
+        case let .explicit(axis):
+            return axis
+        case let .sketchLine(sid, entityID):
+            guard let sketch = sketch(sid) else { return nil }
+            for entity in sketch.entities {
+                if case let .line(id, a, b) = entity, id == entityID {
+                    return RevolveAxis(point: a, direction: b - a)
+                }
+            }
+            return nil
+        }
     }
 
     private func sketch(_ id: SketchID) -> Sketch? {

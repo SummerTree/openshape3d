@@ -1326,6 +1326,23 @@ final class EditorViewModel {
             )
             document.bodies.append(copy) // keeps the next name unique
             commands.append(AddBodyCommand(body: copy, title: "Mirror"))
+            // Phase D: record a `.mirror` history node for a feature-owned source
+            // so the reflected copy rebuilds associatively. Bundled into the same
+            // command list (one CompositeCommand) so a single undo drops the copy
+            // and its node together. Non-feature sources (import/seed) can't be
+            // replayed, so they're mirrored geometry-only.
+            if let owner = featureNode(owning: id) {
+                let mirrorNode = FeatureNode(
+                    name: "Mirror",
+                    kind: .mirror(
+                        body: BodyRef(producer: owner.id, bodyID: id),
+                        plane: PlaneRef(source: .explicit(plane)),
+                        keepOriginal: true
+                    ),
+                    outputBodyIDs: [copy.id]
+                )
+                commands.append(AppendFeatureCommand(node: mirrorNode))
+            }
             ids.insert(copy.id)
         }
         guard !commands.isEmpty else {
@@ -1724,6 +1741,9 @@ final class EditorViewModel {
             guard !selectedSketchEntityIDs.isEmpty, let sketch = activeSketch else { return }
             session.perform(RemoveSketchEntitiesCommand(ids: selectedSketchEntityIDs, sketch: sketch))
             selectedSketchEntityIDs.removeAll()
+            // Phase D: deleting sketch entities changes referenced profiles —
+            // rebuild dependent features.
+            session.rebuildForSketchChange(sketch.id)
             return
         }
         if let image = selectedImage {
@@ -3433,13 +3453,14 @@ final class EditorViewModel {
         if let hide = consumedSketchHideCommand(context) {
             commands.append(hide)
         }
-        // Phase D (Task C2): record an `.extrude` feature node with the resolved
-        // boolean intent, but only for a SINGLE feature-owned target — the
-        // tranche-1 extrude evaluator applies one boolean into one target, so a
-        // multi-body cut or a non-feature target couldn't be faithfully replayed.
+        // Phase D: record the tool's feature node (extrude in tranche 1;
+        // revolve / sweep / loft in tranche 2) with the resolved boolean intent,
+        // but only for a SINGLE feature-owned target — the evaluators apply one
+        // boolean into one target, so a multi-body cut or a non-feature target
+        // couldn't be faithfully replayed.
         if targets.count == 1,
            let targetOwner = featureNode(owning: targets[0].target.id),
-           let node = extrudeFeatureNode(
+           let node = toolFeatureNode(
                context: context,
                boolean: BooleanIntent(
                    op: kind.featureOp,
@@ -3482,10 +3503,9 @@ final class EditorViewModel {
         if let hide = consumedSketchHideCommand(context) {
             commands.append(hide)
         }
-        // Phase D (Task C2): a new stand-alone extrude body becomes a
-        // `.extrude(boolean: .newBody)` history node (skipped for revolve/sweep/
-        // loft, which are recorded/evaluated in tranche 2).
-        if let node = extrudeFeatureNode(
+        // Phase D: a new stand-alone tool body becomes a `.newBody` history node
+        // — extrude in tranche 1, or revolve / sweep / loft in tranche 2.
+        if let node = toolFeatureNode(
             context: context,
             boolean: BooleanIntent(op: .newBody, resolvedTargets: []),
             outputBodyIDs: [body.id]) {
@@ -4382,6 +4402,8 @@ final class EditorViewModel {
         session.perform(TrimCommand(
             sketchID: sketchID, index: index, removed: hit.entity, fragments: fragments
         ))
+        // Phase D: trimming edits sketch geometry — rebuild dependent features.
+        session.rebuildForSketchChange(sketchID)
     }
 
     /// A drag landing on an entity edits it instead of drawing: control
@@ -4654,7 +4676,11 @@ final class EditorViewModel {
         selectedSketchPoints.removeAll()
         selectedConstraintID = nil
         selectedDimensionID = nil
-        if case .sketching = mode {
+        if case .sketching(let sketchID, _) = mode {
+            // Phase D (belt-and-suspenders): rebuild dependent features on the
+            // way out of the sketch, so any edit not caught at its own commit
+            // boundary still propagates. No-op when nothing references it.
+            session.rebuildForSketchChange(sketchID)
             mode = .idle
         }
         session.save()
@@ -4793,6 +4819,10 @@ final class EditorViewModel {
             // point adds an explicit coincident (its own undo step, guarded).
             maybeAddDragCoincident(drag)
             sketchEntityDrag = nil // move command already pushed/amended live
+            // Phase D: an entity move reshapes any profile a feature reads —
+            // rebuild dependent features at the drag-commit boundary (cheap when
+            // nothing downstream references this sketch).
+            session.rebuildForSketchChange(drag.sketchID)
             return
         }
         guard case .sketching(let sketchID, let tool) = mode,
@@ -5298,6 +5328,9 @@ final class EditorViewModel {
         session.perform(commands.count == 1
             ? commands[0]
             : CompositeCommand(title: title, commands: commands))
+        // Phase D: a constraint can re-solve entity positions — rebuild
+        // dependent features.
+        session.rebuildForSketchChange(sketchID)
         session.save()
     }
 
@@ -5909,6 +5942,9 @@ final class EditorViewModel {
         session.perform(commands.count == 1
             ? commands[0]
             : CompositeCommand(title: "Dimension", commands: commands))
+        // Phase D: a dimension re-solves entity positions — rebuild dependent
+        // features.
+        session.rebuildForSketchChange(sketchID)
         session.save()
     }
 
@@ -6546,6 +6582,95 @@ final class EditorViewModel {
                 boolean: boolean,
                 extraProfiles: extras
             ),
+            outputBodyIDs: outputBodyIDs
+        )
+    }
+
+    /// Build the history node for the committing tool, dispatching on
+    /// `context.kind`: extrude (tranche 1) OR revolve / sweep / loft (tranche 2).
+    /// Returns nil when the operation isn't a recordable sketch feature (face
+    /// push/pull, offset plane, or a builder's preconditions aren't met) — the
+    /// caller then records no node rather than a broken one.
+    private func toolFeatureNode(
+        context: ToolContext, boolean: BooleanIntent, outputBodyIDs: [BodyID]
+    ) -> FeatureNode? {
+        switch context.kind {
+        case .extrude:
+            return extrudeFeatureNode(
+                context: context, boolean: boolean, outputBodyIDs: outputBodyIDs)
+        case .revolve:
+            return revolveFeatureNode(
+                context: context, boolean: boolean, outputBodyIDs: outputBodyIDs)
+        case .sweep:
+            return sweepFeatureNode(
+                context: context, boolean: boolean, outputBodyIDs: outputBodyIDs)
+        case .loft:
+            return loftFeatureNode(
+                context: context, boolean: boolean, outputBodyIDs: outputBodyIDs)
+        case .offsetPlane:
+            return nil
+        }
+    }
+
+    /// Build a `.revolve` feature node from the committing tool context. The
+    /// axis is the `RevolveAxis` captured in `context.kind` (sketch-plane-local),
+    /// recorded as an explicit axis so replay is deterministic; nil for a
+    /// non-revolve context or a face operation with no sketch.
+    private func revolveFeatureNode(
+        context: ToolContext, boolean: BooleanIntent, outputBodyIDs: [BodyID]
+    ) -> FeatureNode? {
+        guard case .revolve(let axis, let angle) = context.kind,
+              let sketchID = context.sketchID
+        else { return nil }
+        let outer = profileRef(profile: context.profile, holes: context.holes, sketchID: sketchID)
+        return FeatureNode(
+            name: "Revolve",
+            kind: .revolve(
+                profile: outer,
+                plane: PlaneRef(source: .sketch(sketchID)),
+                axis: AxisRef(source: .explicit(axis)),
+                angle: Expr(value: angle),
+                boolean: boolean
+            ),
+            outputBodyIDs: outputBodyIDs
+        )
+    }
+
+    /// Build a `.sweep` feature node: the armed profile swept along the world-
+    /// space polyline spine captured in `context.kind`. Nil for a non-sweep
+    /// context or one lacking a sketch.
+    private func sweepFeatureNode(
+        context: ToolContext, boolean: BooleanIntent, outputBodyIDs: [BodyID]
+    ) -> FeatureNode? {
+        guard case .sweep(let spine) = context.kind,
+              let sketchID = context.sketchID
+        else { return nil }
+        let outer = profileRef(profile: context.profile, holes: context.holes, sketchID: sketchID)
+        return FeatureNode(
+            name: "Sweep",
+            kind: .sweep(
+                profile: outer,
+                plane: PlaneRef(source: .sketch(sketchID)),
+                spine: spine.map { PointWrapper($0) },
+                boolean: boolean
+            ),
+            outputBodyIDs: outputBodyIDs
+        )
+    }
+
+    /// Build a `.loft` feature node from the ordered loft sections, each pinned
+    /// to its own sketch profile. Nil unless the context is a loft with the ≥2
+    /// sections the evaluator requires.
+    private func loftFeatureNode(
+        context: ToolContext, boolean: BooleanIntent, outputBodyIDs: [BodyID]
+    ) -> FeatureNode? {
+        guard case .loft = context.kind, context.loftProfiles.count >= 2 else { return nil }
+        let sections = context.loftProfiles.map {
+            profileRef(profile: $0.profile, holes: $0.holes, sketchID: $0.sketchID)
+        }
+        return FeatureNode(
+            name: "Loft",
+            kind: .loft(sections: sections, boolean: boolean),
             outputBodyIDs: outputBodyIDs
         )
     }

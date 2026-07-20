@@ -43,6 +43,13 @@ final class FeatureGraphEvalTests: XCTestCase {
         MeasureKit.bodyVolume(body.render, scale: 1)
     }
 
+    /// Mean vertex x of a body's render mesh — the geometric center for the
+    /// symmetric solids these tests build (box/ring), enough to check a reflection.
+    private func centroidX(_ body: Body) -> Double {
+        let xs = body.render.positions.map { Double($0.x) }
+        return xs.isEmpty ? 0 : xs.reduce(0, +) / Double(xs.count)
+    }
+
     /// The single planar face of `table` whose normal points most strongly +Z.
     private func plusZEntry(_ table: FaceTable) -> FaceTable.Entry? {
         table.entries
@@ -368,5 +375,323 @@ final class FeatureGraphEvalTests: XCTestCase {
         let xs = body.render.positions.map { $0.x }
         let meanX = xs.reduce(0, +) / Float(xs.count)
         XCTAssertEqual(meanX, 50, accuracy: 0.5, "eval bakes the world position into the mesh")
+    }
+
+    // MARK: Tranche 2 — revolve / sweep / loft / mirror
+
+    /// (1) A 360° revolve of an OFF-AXIS rectangle → a watertight rectangular ring.
+    func testRevolveOffAxisRectMakesWatertightRing() throws {
+        let revolveFeature = FeatureID()
+        let bodyID = BodyID()
+        let sketchID = SketchID(), rectEntity = UUID(), axisEntity = UUID()
+        // Rect on the +x side of the axis (x∈[2,4], y∈[-1,1], area 4); the axis is
+        // a vertical sketch line at x=0. resolveAxis(.sketchLine) is exercised here.
+        let sketch = Sketch(id: sketchID, name: "S", plane: .ground, entities: [
+            .rect(id: rectEntity, min: SIMD2(2, -1), max: SIMD2(4, 1)),
+            .line(id: axisEntity, a: SIMD2(0, -5), b: SIMD2(0, 5)),
+        ])
+        let graph = FeatureGraph(nodes: [
+            FeatureNode(id: revolveFeature, name: "Revolve",
+                kind: .revolve(
+                    profile: ProfileRef(sketchID: sketchID, entityIDs: [rectEntity],
+                                        holeEntityIDs: [], seedPoint: SIMD2(3, 0)),
+                    plane: PlaneRef(source: .sketch(sketchID)),
+                    axis: AxisRef(source: .sketchLine(sketchID, axisEntity)),
+                    angle: Expr(value: 360),
+                    boolean: BooleanIntent(op: .newBody, resolvedTargets: [])),
+                outputBodyIDs: [bodyID]),
+        ])
+        let result = graph.evaluate(sketches: [sketch], planes: [],
+                                    naming: SignatureNaming(), nextRevision: RevisionSource().next)
+        XCTAssertNil(result.errors[revolveFeature], "revolve must evaluate: \(result.errors)")
+        let body = try XCTUnwrap(result.bodies.first { $0.id == bodyID })
+        XCTAssertTrue(body.euclidMesh().isWatertight, "revolved ring must be watertight")
+        XCTAssertEqual(body.transform, .identity, "eval emits an identity transform")
+        // Pappus: V = 2π·R_centroid·A = 2π·3·4 = 24π (48-slice lathe → ~0.3% low).
+        XCTAssertEqual(volume(body), 24 * .pi, accuracy: 24 * .pi * 0.02)
+    }
+
+    /// A profile that CROSSES the axis → empty kernel mesh → `.emptyGeometry`, no crash.
+    func testRevolveAcrossAxisReportsEmptyGeometry() throws {
+        let revolveFeature = FeatureID()
+        let bodyID = BodyID()
+        let sketchID = SketchID(), rectEntity = UUID()
+        // Rect straddles x=0 (x∈[-2,2]) — KernelOps.revolve rejects it.
+        let sketch = Sketch(id: sketchID, name: "S", plane: .ground, entities: [
+            .rect(id: rectEntity, min: SIMD2(-2, -1), max: SIMD2(2, 1)),
+        ])
+        let graph = FeatureGraph(nodes: [
+            FeatureNode(id: revolveFeature, name: "Revolve",
+                kind: .revolve(
+                    profile: ProfileRef(sketchID: sketchID, entityIDs: [rectEntity],
+                                        holeEntityIDs: [], seedPoint: .zero),
+                    plane: PlaneRef(source: .sketch(sketchID)),
+                    axis: AxisRef(source: .explicit(RevolveAxis(point: .zero, direction: SIMD2(0, 1)))),
+                    angle: Expr(value: 360),
+                    boolean: BooleanIntent(op: .newBody, resolvedTargets: [])),
+                outputBodyIDs: [bodyID]),
+        ])
+        let result = graph.evaluate(sketches: [sketch], planes: [],
+                                    naming: SignatureNaming(), nextRevision: RevisionSource().next)
+        XCTAssertEqual(result.errors[revolveFeature], .emptyGeometry)
+        XCTAssertTrue(result.bodies.isEmpty, "no body is emitted for an axis-crossing revolve")
+    }
+
+    /// (2) A sweep of a rect along a straight 3-point spine → a watertight prism.
+    func testSweepRectAlongStraightSpineMakesWatertightPrism() throws {
+        let sweepFeature = FeatureID()
+        let bodyID = BodyID()
+        let sketchID = SketchID(), rectEntity = UUID()
+        // 2×2 rect on the world XY plane; straight 3-point spine climbing +z by 10.
+        let sketch = Sketch(id: sketchID, name: "S", plane: .worldXY,
+                            entities: [.rect(id: rectEntity, min: SIMD2(-1, -1), max: SIMD2(1, 1))])
+        let graph = FeatureGraph(nodes: [
+            FeatureNode(id: sweepFeature, name: "Sweep",
+                kind: .sweep(
+                    profile: ProfileRef(sketchID: sketchID, entityIDs: [rectEntity],
+                                        holeEntityIDs: [], seedPoint: .zero),
+                    plane: PlaneRef(source: .sketch(sketchID)),
+                    spine: [PointWrapper(SIMD3(0, 0, 0)), PointWrapper(SIMD3(0, 0, 5)),
+                            PointWrapper(SIMD3(0, 0, 10))],
+                    boolean: BooleanIntent(op: .newBody, resolvedTargets: [])),
+                outputBodyIDs: [bodyID]),
+        ])
+        let result = graph.evaluate(sketches: [sketch], planes: [],
+                                    naming: SignatureNaming(), nextRevision: RevisionSource().next)
+        XCTAssertNil(result.errors[sweepFeature], "sweep must evaluate: \(result.errors)")
+        let body = try XCTUnwrap(result.bodies.first { $0.id == bodyID })
+        XCTAssertTrue(body.euclidMesh().isWatertight, "swept prism must be watertight")
+        XCTAssertEqual(body.transform, .identity)
+        XCTAssertEqual(volume(body), 2 * 2 * 10, accuracy: 1e-2)
+    }
+
+    /// (3) A loft between two parallel rect sections → watertight; 1 section errors.
+    func testLoftTwoParallelRectsIsWatertightAndNeedsTwoSections() throws {
+        let loftFeature = FeatureID(), oneLoftFeature = FeatureID()
+        let bodyID = BodyID(), oneBodyID = BodyID()
+        let sketchAID = SketchID(), sketchBID = SketchID()
+        let rectA = UUID(), rectB = UUID()
+        // Two 4×4 squares on parallel planes 10 apart → a 4×4×10 box (V = 160).
+        let sketchA = Sketch(id: sketchAID, name: "A", plane: .worldXY,
+                             entities: [.rect(id: rectA, min: SIMD2(-2, -2), max: SIMD2(2, 2))])
+        let planeB = SketchPlane(origin: SIMD3(0, 0, 10), xAxis: SIMD3(1, 0, 0), yAxis: SIMD3(0, 1, 0))
+        let sketchB = Sketch(id: sketchBID, name: "B", plane: planeB,
+                             entities: [.rect(id: rectB, min: SIMD2(-2, -2), max: SIMD2(2, 2))])
+
+        func sectionRef(_ sid: SketchID, _ e: UUID) -> ProfileRef {
+            ProfileRef(sketchID: sid, entityIDs: [e], holeEntityIDs: [], seedPoint: .zero)
+        }
+
+        let graph = FeatureGraph(nodes: [
+            FeatureNode(id: loftFeature, name: "Loft",
+                kind: .loft(sections: [sectionRef(sketchAID, rectA), sectionRef(sketchBID, rectB)],
+                            boolean: BooleanIntent(op: .newBody, resolvedTargets: [])),
+                outputBodyIDs: [bodyID]),
+        ])
+        let result = graph.evaluate(sketches: [sketchA, sketchB], planes: [],
+                                    naming: SignatureNaming(), nextRevision: RevisionSource().next)
+        XCTAssertNil(result.errors[loftFeature], "2-section loft must evaluate: \(result.errors)")
+        let body = try XCTUnwrap(result.bodies.first { $0.id == bodyID })
+        XCTAssertTrue(body.euclidMesh().isWatertight, "lofted solid must be watertight")
+        XCTAssertEqual(volume(body), 4 * 4 * 10, accuracy: 4 * 4 * 10 * 0.02)
+
+        // A single-section loft is under-specified → error, no crash, no body.
+        let single = FeatureGraph(nodes: [
+            FeatureNode(id: oneLoftFeature, name: "Loft1",
+                kind: .loft(sections: [sectionRef(sketchAID, rectA)],
+                            boolean: BooleanIntent(op: .newBody, resolvedTargets: [])),
+                outputBodyIDs: [oneBodyID]),
+        ])
+        let singleResult = single.evaluate(sketches: [sketchA, sketchB], planes: [],
+                                            naming: SignatureNaming(), nextRevision: RevisionSource().next)
+        switch singleResult.errors[oneLoftFeature] {
+        case .brokenRef, .emptyGeometry: break
+        default: XCTFail("1-section loft must error, got \(String(describing: singleResult.errors[oneLoftFeature]))")
+        }
+        XCTAssertTrue(singleResult.bodies.isEmpty, "a 1-section loft emits no body")
+    }
+
+    func testLoftWithUnresolvableMiddleSectionErrorsInsteadOfLoftingSubset() throws {
+        // A 3-section loft A→B→C where B's sketch is deleted must surface a
+        // broken-ref (like revolve/sweep), NOT silently loft A→C into the body.
+        let loftFeature = FeatureID()
+        let bodyID = BodyID()
+        let sketchAID = SketchID(), missingID = SketchID(), sketchCID = SketchID()
+        let rectA = UUID(), missingEntity = UUID(), rectC = UUID()
+        let sketchA = Sketch(id: sketchAID, name: "A", plane: .worldXY,
+                             entities: [.rect(id: rectA, min: SIMD2(-2, -2), max: SIMD2(2, 2))])
+        let planeC = SketchPlane(origin: SIMD3(0, 0, 20), xAxis: SIMD3(1, 0, 0), yAxis: SIMD3(0, 1, 0))
+        let sketchC = Sketch(id: sketchCID, name: "C", plane: planeC,
+                             entities: [.rect(id: rectC, min: SIMD2(-2, -2), max: SIMD2(2, 2))])
+        func sectionRef(_ sid: SketchID, _ e: UUID) -> ProfileRef {
+            ProfileRef(sketchID: sid, entityIDs: [e], holeEntityIDs: [], seedPoint: .zero)
+        }
+        let graph = FeatureGraph(nodes: [
+            FeatureNode(id: loftFeature, name: "Loft",
+                kind: .loft(sections: [sectionRef(sketchAID, rectA),
+                                       sectionRef(missingID, missingEntity),   // deleted middle
+                                       sectionRef(sketchCID, rectC)],
+                            boolean: BooleanIntent(op: .newBody, resolvedTargets: [])),
+                outputBodyIDs: [bodyID]),
+        ])
+        // Only A and C are supplied — B's sketch is gone.
+        let result = graph.evaluate(sketches: [sketchA, sketchC], planes: [],
+                                    naming: SignatureNaming(), nextRevision: RevisionSource().next)
+        switch result.errors[loftFeature] {
+        case .brokenRef: break
+        default: XCTFail("unresolvable middle section must brokenRef, got \(String(describing: result.errors[loftFeature]))")
+        }
+        XCTAssertNil(result.bodies.first { $0.id == bodyID },
+                     "a partially-broken loft emits NO body, not a silently-different A→C solid")
+    }
+
+    func testReevaluatingWithAnEditedSketchRebuildsTheDependentBody() throws {
+        // Associativity engine: an extrude references sketch S by entity id. When
+        // S's rectangle is resized (SAME entity id) and the SAME graph is
+        // re-evaluated against the new sketch, the dependent body must rebuild to
+        // the new size — this is what rebuildForSketchChange relies on.
+        let extrudeFeature = FeatureID()
+        let bodyID = BodyID()
+        let sketchID = SketchID(), rectEntity = UUID()
+        func graph() -> FeatureGraph {
+            FeatureGraph(nodes: [
+                FeatureNode(id: extrudeFeature, name: "Extrude",
+                    kind: .extrude(
+                        profile: ProfileRef(sketchID: sketchID, entityIDs: [rectEntity],
+                                            holeEntityIDs: [], seedPoint: .zero),
+                        plane: PlaneRef(source: .sketch(sketchID)),
+                        distance: Expr(value: 5), symmetric: false,
+                        boolean: BooleanIntent(op: .newBody, resolvedTargets: []),
+                        extraProfiles: []),
+                    outputBodyIDs: [bodyID]),
+            ])
+        }
+        let small = [rectSketch(id: sketchID, entityID: rectEntity,
+                                min: SIMD2(-2, -2), max: SIMD2(2, 2))]   // 4×4 → V = 80
+        let big = [rectSketch(id: sketchID, entityID: rectEntity,
+                              min: SIMD2(-3, -3), max: SIMD2(3, 3))]     // 6×6 → V = 180
+
+        let r1 = graph().evaluate(sketches: small, planes: [],
+                                  naming: SignatureNaming(), nextRevision: RevisionSource().next)
+        let b1 = try XCTUnwrap(r1.bodies.first { $0.id == bodyID })
+        XCTAssertEqual(volume(b1), 4 * 4 * 5, accuracy: 1e-2)
+
+        // Same graph, edited sketch (same entity id): body rebuilds larger, id stable.
+        let r2 = graph().evaluate(sketches: big, planes: [],
+                                  naming: SignatureNaming(), nextRevision: RevisionSource().next)
+        let b2 = try XCTUnwrap(r2.bodies.first { $0.id == bodyID })
+        XCTAssertEqual(volume(b2), 6 * 6 * 5, accuracy: 1e-2)
+        XCTAssertEqual(b1.id, b2.id, "the dependent body keeps its identity across a sketch-driven rebuild")
+    }
+
+    /// (4) A mirror of an off-origin box across the world YZ plane (x=0): a fresh
+    /// watertight body whose centroid x is negated; the source is kept.
+    func testMirrorOffOriginBoxAcrossYZNegatesCentroidX() throws {
+        let boxFeature = FeatureID(), mirrorFeature = FeatureID()
+        let boxID = BodyID(), mirrorID = BodyID()
+        let graph = FeatureGraph(nodes: [
+            FeatureNode(id: boxFeature, name: "Box",
+                kind: .primitive(spec: .box(width: 4, depth: 4, height: 4),
+                                 placement: Transform3D(translation: SIMD3(20, 0, 0))),
+                outputBodyIDs: [boxID]),
+            FeatureNode(id: mirrorFeature, name: "Mirror",
+                kind: .mirror(body: BodyRef(producer: boxFeature, bodyID: boxID),
+                              plane: PlaneRef(source: .explicit(.worldYZ)),
+                              keepOriginal: true),
+                outputBodyIDs: [mirrorID]),
+        ])
+        let result = graph.evaluate(sketches: [], planes: [],
+                                    naming: SignatureNaming(), nextRevision: RevisionSource().next)
+        XCTAssertNil(result.errors[mirrorFeature], "mirror must evaluate: \(result.errors)")
+        // keepOriginal ⇒ the source stays AND the mirror is added (fresh BodyID).
+        XCTAssertEqual(Set(result.bodies.map(\.id)), [boxID, mirrorID])
+        let source = try XCTUnwrap(result.bodies.first { $0.id == boxID })
+        let mirror = try XCTUnwrap(result.bodies.first { $0.id == mirrorID })
+        XCTAssertNotEqual(source.id, mirror.id, "the mirror gets its own output BodyID")
+        XCTAssertTrue(mirror.euclidMesh().isWatertight, "mirrored body must be watertight")
+        XCTAssertEqual(mirror.transform, .identity)
+        XCTAssertEqual(centroidX(source), 20, accuracy: 1e-3)
+        XCTAssertEqual(centroidX(mirror), -20, accuracy: 1e-3, "centroid x is reflected across x=0")
+    }
+
+    /// (5) referencedSketchIDs unions the profile / plane / axis sketches per kind.
+    func testReferencedSketchIDsCoversProfilePlaneAxis() {
+        let sA = SketchID(), sB = SketchID(), sC = SketchID()
+        let e = UUID(), axisE = UUID()
+
+        let revolve = FeatureNode(id: FeatureID(), name: "R",
+            kind: .revolve(
+                profile: ProfileRef(sketchID: sA, entityIDs: [e], holeEntityIDs: [], seedPoint: nil),
+                plane: PlaneRef(source: .sketch(sB)),
+                axis: AxisRef(source: .sketchLine(sC, axisE)),
+                angle: Expr(value: 360),
+                boolean: BooleanIntent(op: .newBody, resolvedTargets: [])),
+            outputBodyIDs: [BodyID()])
+        XCTAssertEqual(revolve.referencedSketchIDs, [sA, sB, sC])
+
+        let sweep = FeatureNode(id: FeatureID(), name: "S",
+            kind: .sweep(
+                profile: ProfileRef(sketchID: sA, entityIDs: [e], holeEntityIDs: [], seedPoint: nil),
+                plane: PlaneRef(source: .sketch(sB)),
+                spine: [PointWrapper(.zero)],
+                boolean: BooleanIntent(op: .newBody, resolvedTargets: [])),
+            outputBodyIDs: [BodyID()])
+        XCTAssertEqual(sweep.referencedSketchIDs, [sA, sB])
+
+        let loft = FeatureNode(id: FeatureID(), name: "L",
+            kind: .loft(
+                sections: [ProfileRef(sketchID: sA, entityIDs: [e], holeEntityIDs: [], seedPoint: nil),
+                           ProfileRef(sketchID: sB, entityIDs: [e], holeEntityIDs: [], seedPoint: nil)],
+                boolean: BooleanIntent(op: .newBody, resolvedTargets: [])),
+            outputBodyIDs: [BodyID()])
+        XCTAssertEqual(loft.referencedSketchIDs, [sA, sB])
+    }
+
+    /// (6) Edit a revolve's angle 360°→180° and re-evaluate: geometry changes,
+    /// the revolve's output BodyID stays stable across the rebuild.
+    func testEditingRevolveAngleRebuildsWithStableBodyID() throws {
+        let boxFeature = FeatureID(), revolveFeature = FeatureID()
+        let boxID = BodyID(), revolveID = BodyID()
+        let sketchID = SketchID(), rectEntity = UUID(), axisEntity = UUID()
+        let sketch = Sketch(id: sketchID, name: "S", plane: .ground, entities: [
+            .rect(id: rectEntity, min: SIMD2(2, -1), max: SIMD2(4, 1)),
+            .line(id: axisEntity, a: SIMD2(0, -5), b: SIMD2(0, 5)),
+        ])
+        func graph(angle: Double) -> FeatureGraph {
+            FeatureGraph(nodes: [
+                FeatureNode(id: boxFeature, name: "Box",
+                    kind: .primitive(spec: .box(width: 2, depth: 2, height: 2), placement: .identity),
+                    outputBodyIDs: [boxID]),
+                FeatureNode(id: revolveFeature, name: "Revolve",
+                    kind: .revolve(
+                        profile: ProfileRef(sketchID: sketchID, entityIDs: [rectEntity],
+                                            holeEntityIDs: [], seedPoint: SIMD2(3, 0)),
+                        plane: PlaneRef(source: .sketch(sketchID)),
+                        axis: AxisRef(source: .sketchLine(sketchID, axisEntity)),
+                        angle: Expr(value: angle),
+                        boolean: BooleanIntent(op: .newBody, resolvedTargets: [])),
+                    outputBodyIDs: [revolveID]),
+            ])
+        }
+
+        let full = graph(angle: 360).evaluate(sketches: [sketch], planes: [],
+            naming: SignatureNaming(), nextRevision: RevisionSource().next)
+        XCTAssertNil(full.errors[revolveFeature], "\(full.errors)")
+        let fullBody = try XCTUnwrap(full.bodies.first { $0.id == revolveID })
+        let fullVolume = volume(fullBody)
+
+        // EDIT: half the sweep.
+        let half = graph(angle: 180).evaluate(sketches: [sketch], planes: [],
+            naming: SignatureNaming(), nextRevision: RevisionSource().next)
+        XCTAssertNil(half.errors[revolveFeature], "\(half.errors)")
+        let halfBody = try XCTUnwrap(half.bodies.first { $0.id == revolveID })
+
+        XCTAssertTrue(halfBody.euclidMesh().isWatertight, "the 180° wedge must be watertight")
+        // The revolve BodyID is reused on rebuild, never re-minted.
+        XCTAssertEqual(halfBody.id, revolveID)
+        XCTAssertEqual(fullBody.id, halfBody.id)
+        // Geometry actually changed: half the angle ≈ half the ring volume.
+        XCTAssertEqual(volume(halfBody), fullVolume / 2, accuracy: fullVolume * 0.05)
+        XCTAssertLessThan(volume(halfBody), fullVolume - 1, "the downstream body must rebuild")
     }
 }

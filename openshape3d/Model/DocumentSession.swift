@@ -147,6 +147,33 @@ final class DocumentSession {
         performRebuild(edited, leadingCommands: [cmd], title: cmd.title)
     }
 
+    /// Guards `performRebuild` against re-entrancy. `performRebuild` ends by
+    /// `perform`ing one internal `CompositeCommand`; that document mutation must
+    /// never start a nested replay (e.g. via a sketch-driven rebuild). Set for
+    /// the duration of `performRebuild`'s body (see the `defer` there).
+    private var isRebuilding = false
+
+    /// Sketch-edit hook: after a sketch-mutating command has already run (so
+    /// `document.sketches` holds the NEW geometry), replay the feature graph if —
+    /// and only if — some node references `sketchID`. A node's
+    /// `referencedSketchIDs` union covers its profile / extra-profile / loft-section
+    /// / plane / revolve-axis references, so this fires exactly when the edited
+    /// sketch feeds a downstream feature.
+    ///
+    /// Because `performRebuild` evaluates against the current (already-mutated)
+    /// `document.sketches`, the replay picks up the new geometry with NO graph
+    /// edit and `leadingCommands` is empty. Skips entirely when nothing depends on
+    /// the sketch (no undo noise) and when a rebuild is already in flight. This
+    /// lands as its own undo step, SEPARATE from the sketch edit — atomic
+    /// single-step bundling is a later tranche.
+    func rebuildForSketchChange(_ sketchID: SketchID) {
+        guard !isRebuilding else { return }
+        guard document.features.nodes.contains(where: {
+            $0.referencedSketchIDs.contains(sketchID)
+        }) else { return }
+        performRebuild(document.features, leadingCommands: [], title: "Update Sketch")
+    }
+
     /// Core of every graph-driven rebuild: replay `editedGraph`, diff the
     /// produced bodies against the current feature-owned bodies, and commit the
     /// mesh changes plus `leadingCommands` (the graph mutation itself) as ONE
@@ -155,6 +182,17 @@ final class DocumentSession {
     private func performRebuild(
         _ editedGraph: FeatureGraph, leadingCommands: [DocumentCommand], title: String
     ) {
+        // Re-entrancy guard: this method ends by `perform`ing one internal
+        // `CompositeCommand`; if that mutation ever routes back into a rebuild
+        // (e.g. a sketch-change hook observing the change), we must NOT start a
+        // nested replay. Normal callers — rebuildFrom / setSuppressed /
+        // deleteFeature / rebuildForSketchChange — are unaffected: the flag is
+        // false on entry, so each performs exactly as before; the guard only
+        // short-circuits a RE-ENTRANT (nested) call.
+        guard !isRebuilding else { return }
+        isRebuilding = true
+        defer { isRebuilding = false }
+
         // Replay. `nextRevision` advances the REAL document counter so every
         // emitted revision is globally unique (added bodies keep theirs; replaced
         // bodies get a fresh one again in ReplaceBodyCommand.apply).
