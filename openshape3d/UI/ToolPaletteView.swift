@@ -359,18 +359,32 @@ struct ToolPaletteView: View {
     /// re-solves the sketch and commits the moved geometry in one undo step.
     private var constraintsMenu: some View {
         Menu {
-            constraintItem("Coincident", .coincident)
-            constraintItem("Horizontal", .horizontal)
-            constraintItem("Vertical", .vertical)
-            constraintItem("Parallel", .parallel)
-            constraintItem("Perpendicular", .perpendicular)
-            constraintItem("Equal Length", .equalLength)
-            constraintItem("Equal Radius", .equalRadius)
-            constraintItem("Concentric", .concentric)
-            constraintItem("Midpoint", .midpoint)
-            constraintItem("Symmetric", .symmetric)
-            constraintItem("Tangent", .tangent)
-            constraintItem("Lock", .fixed)
+            constraintItem("Coincident", .coincident, key: "c")
+            constraintItem("Horizontal", .horizontal, key: "h")
+            constraintItem("Vertical", .vertical, key: "v")
+            constraintItem("Parallel", .parallel, key: "p")
+            constraintItem("Perpendicular", .perpendicular, key: "e")
+            constraintItem("Equal Length", .equalLength, key: "q")
+            constraintItem("Equal Radius", .equalRadius, key: "r")
+            constraintItem("Concentric", .concentric, key: "o")
+            constraintItem("Midpoint", .midpoint, key: "m")
+            constraintItem("Symmetric", .symmetric, key: "y")
+            constraintItem("Tangent", .tangent, key: "t")
+            constraintItem("Colinear", .colinear, key: "l")
+            constraintItem("Lock", .fixed, key: "k")
+
+            Divider()
+            Button("Delete Constraint") {
+                viewModel.deleteSelectedConstraint()
+            }
+            .disabled(viewModel.selectedConstraintID == nil)
+            .accessibilityIdentifier("DeleteConstraintItem")
+
+            Divider()
+            Button("Auto-Constrain Settings…") {
+                viewModel.showConstraintSettings = true
+            }
+            .accessibilityIdentifier("ConstraintSettingsItem")
         } label: {
             paletteIcon("link", label: "Constrain")
                 .foregroundStyle(Color.primary)
@@ -394,10 +408,18 @@ struct ToolPaletteView: View {
         .accessibilityIdentifier("DimensionButton")
     }
 
-    private func constraintItem(_ label: String, _ kind: SketchConstraintKind) -> some View {
-        Button(label) {
+    /// One constraint-kind entry: leading glyph (from
+    /// `EditorViewModel.constraintCode`) + name, a ⇧-modified hardware-keyboard
+    /// shortcut, enabled only when the current selection supports the kind.
+    /// A `Text` label with the glyph prefixed to the title renders reliably in
+    /// a `Menu` (the icon slot of `Label` drops non-`Image` content there).
+    private func constraintItem(_ label: String, _ kind: SketchConstraintKind, key: KeyEquivalent) -> some View {
+        Button {
             viewModel.applyConstraint(kind)
+        } label: {
+            Text("\(EditorViewModel.constraintCode(kind))   \(label)")
         }
+        .keyboardShortcut(key, modifiers: [.shift])
         .disabled(!viewModel.canApplyConstraint(kind))
         .accessibilityIdentifier("Constraint_\(label.replacingOccurrences(of: " ", with: ""))")
     }

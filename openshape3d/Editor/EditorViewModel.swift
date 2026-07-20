@@ -62,6 +62,7 @@ final class EditorViewModel {
 
     init(project: Project, modelContext: ModelContext) {
         self.session = DocumentSession(project: project, modelContext: modelContext)
+        loadAutoConstrainSettings()
     }
 
     // MARK: - Scene for the viewport
@@ -439,6 +440,19 @@ final class EditorViewModel {
                     segments: sketchGizmoSegments(centroid: centroid, plane: sketch.plane),
                     color: selectedColor
                 ))
+            }
+            // Live auto-constraint guides (plan §B): violet reference lines for
+            // the relationships being inferred for the in-progress stroke.
+            if !activeGuides.isEmpty {
+                let guideColor = SIMD4<Float>(0.55, 0.30, 0.95, 1)
+                var segs: [SIMD3<Float>] = []
+                for guide in activeGuides {
+                    let a = sketch.plane.toWorld(guide.a)
+                    let b = sketch.plane.toWorld(guide.b)
+                    segs.append(SIMD3<Float>(Float(a.x), Float(a.y), Float(a.z)))
+                    segs.append(SIMD3<Float>(Float(b.x), Float(b.y), Float(b.z)))
+                }
+                scene.sketchLines.append(SketchLineBatch(segments: segs, color: guideColor))
             }
         }
 
@@ -3869,6 +3883,87 @@ final class EditorViewModel {
     var pendingEntity: SketchEntity?
     private var sketchStrokeStart: SIMD2<Double>?
 
+    // MARK: - Auto-constraint / inference (plan §B, spec §3, contract D)
+
+    /// Live auto-constraint inference settings, persisted across launches via
+    /// UserDefaults (saved on every mutation).
+    var autoConstrainSettings = AutoConstraintSettings() {
+        didSet { saveAutoConstrainSettings() }
+    }
+
+    /// Presents the auto-constrain settings panel (sheet).
+    var showConstraintSettings = false
+
+    /// Inference guides to render while the current stroke is drawn (violet
+    /// reference lines). Cleared when the stroke ends/cancels.
+    var activeGuides: [AutoConstraintEngine.Guide] = []
+
+    /// Constraints inferred for the in-progress stroke; emitted (defensively,
+    /// never over-constraining) when the stroke commits.
+    private var pendingInferredConstraints: [AutoConstraintEngine.Inferred] = []
+
+    private static let autoConstrainDefaultsKey = "autoConstrainSettings"
+
+    private func saveAutoConstrainSettings() {
+        if let data = try? JSONEncoder().encode(autoConstrainSettings) {
+            UserDefaults.standard.set(data, forKey: Self.autoConstrainDefaultsKey)
+        }
+    }
+
+    private func loadAutoConstrainSettings() {
+        guard let data = UserDefaults.standard.data(forKey: Self.autoConstrainDefaultsKey),
+              let decoded = try? JSONDecoder().decode(AutoConstraintSettings.self, from: data)
+        else { return }
+        autoConstrainSettings = decoded
+    }
+
+    /// A per-point DOF marker for the active sketch overlay (contract D): blue
+    /// hollow = free, green = constrained, blue square = locked.
+    struct SketchPointMarker: Identifiable, Sendable {
+        var id: String
+        var world: SIMD3<Float>
+        var state: SketchPointState
+    }
+
+    /// Memoized `sketchPointMarkers`, keyed on the document revision and active
+    /// sketch. `@ObservationIgnored` so writing it from the getter never itself
+    /// triggers observation. Point states depend only on the sketch, never the
+    /// camera — so an orbit/pan (which re-runs the overlay via `cameraEpoch`)
+    /// hits this cache instead of re-solving.
+    @ObservationIgnored
+    private var pointMarkerCache: (changeCount: Int, sketchID: SketchID?, markers: [SketchPointMarker])?
+
+    /// DOF markers for every point of the ACTIVE sketch (empty when not
+    /// sketching or no active sketch). Reuses `SketchSolverBridge.pointStates`
+    /// (a full solve + null-space eigen decomposition), memoized per document
+    /// revision; the overlay reprojects each cached marker on camera moves.
+    var sketchPointMarkers: [SketchPointMarker] {
+        let cc = session.changeCount
+        guard let sketch = activeSketch else {
+            pointMarkerCache = nil
+            return []
+        }
+        if let cache = pointMarkerCache, cache.changeCount == cc, cache.sketchID == sketch.id {
+            return cache.markers
+        }
+        let states = SketchSolverBridge.pointStates(sketch)
+        var out: [SketchPointMarker] = []
+        out.reserveCapacity(states.count)
+        for (key, state) in states {
+            guard let local = localPoint(
+                ConstraintRef(entityID: key.entityID, role: key.role), in: sketch
+            ) else { continue }
+            let w = sketch.plane.toWorld(local)
+            out.append(SketchPointMarker(
+                id: "\(key.entityID):\(key.role.rawValue)",
+                world: SIMD3<Float>(Float(w.x), Float(w.y), Float(w.z)),
+                state: state
+            ))
+        }
+        pointMarkerCache = (cc, sketch.id, out)
+        return out
+    }
+
     // MARK: - Sketch element selection + drag-editing
 
     /// Selected entities of the active sketch (accent highlight; palette
@@ -4491,6 +4586,8 @@ final class EditorViewModel {
         pendingSymbolID = nil
         pendingEntity = nil
         sketchStrokeStart = nil
+        activeGuides = []
+        pendingInferredConstraints = []
         adjustingArcBulge = false
         sketchEntityDrag = nil
         sketchGizmoDrag = nil
@@ -4597,8 +4694,24 @@ final class EditorViewModel {
             return
         }
         guard let start = sketchStrokeStart,
-              let current = sketchPoint(from: ray)
+              var current = sketchPoint(from: ray)
         else { return }
+        // Live auto-constraint inference (plan §B): snap the moving endpoint,
+        // collect the guides to render, and stash the constraints to emit if
+        // the stroke commits. `existing` = committed entities (the in-progress
+        // entity is `pendingEntity`, not yet in the sketch).
+        if autoConstrainSettings.enabled, let sketch = activeSketch {
+            let result = AutoConstraintEngine.infer(
+                tool: tool, anchor: start, current: current,
+                existing: sketch.entities, settings: autoConstrainSettings
+            )
+            current = result.snappedPoint
+            activeGuides = result.guides
+            pendingInferredConstraints = result.constraints
+        } else {
+            activeGuides = []
+            pendingInferredConstraints = []
+        }
         pendingEntity = makeEntity(tool: tool, from: start, to: current)
     }
 
@@ -4606,6 +4719,8 @@ final class EditorViewModel {
         defer {
             pendingEntity = nil
             sketchStrokeStart = nil
+            activeGuides = []
+            pendingInferredConstraints = []
         }
         if adjustingArcBulge {
             adjustingArcBulge = false
@@ -4615,21 +4730,48 @@ final class EditorViewModel {
             sketchGizmoDrag = nil // commands already pushed/amended live
             return
         }
-        if sketchEntityDrag != nil {
-            sketchEntityDrag = nil // command already pushed/amended live
+        if let drag = sketchEntityDrag {
+            // Drop-to-weld (plan §B): releasing a control point onto a nearby
+            // point adds an explicit coincident (its own undo step, guarded).
+            maybeAddDragCoincident(drag)
+            sketchEntityDrag = nil // move command already pushed/amended live
             return
         }
         guard case .sketching(let sketchID, let tool) = mode,
-              let start = sketchStrokeStart
+              let start = sketchStrokeStart,
+              let sketch = activeSketch
         else { return }
-        let end = sketchPoint(from: ray) ?? start
+        var end = sketchPoint(from: ray) ?? start
+        // Re-run inference at the release point so the committed geometry and
+        // the emitted constraints stay consistent with the on-screen preview.
+        if autoConstrainSettings.enabled {
+            let result = AutoConstraintEngine.infer(
+                tool: tool, anchor: start, current: end,
+                existing: sketch.entities, settings: autoConstrainSettings
+            )
+            end = result.snappedPoint
+            pendingInferredConstraints = result.constraints
+        }
         guard let entity = makeEntity(tool: tool, from: start, to: end) else { return }
         if tool == .arc {
             // Held as pending so a follow-up drag can adjust the bulge.
             pendingArc = PendingArc(a: start, b: end, sagitta: Self.defaultSagitta(a: start, b: end))
             return
         }
-        session.perform(AddSketchEntityCommand(sketchID: sketchID, entity: entity))
+        // Fold any auto-inferred constraints into the SAME undo step as the
+        // entity add (plan §B); each survivor is checked so it never
+        // over-constrains, then the accepted set is solved so geometry settles.
+        let addEntity = AddSketchEntityCommand(sketchID: sketchID, entity: entity)
+        let constraintCommands = inferredConstraintCommands(
+            for: entity, sketchID: sketchID, in: sketch
+        )
+        if constraintCommands.isEmpty {
+            session.perform(addEntity)
+        } else {
+            var commands: [DocumentCommand] = [addEntity]
+            commands.append(contentsOf: constraintCommands)
+            session.perform(CompositeCommand(title: "Draw", commands: commands))
+        }
         if tool == .line {
             let first = chainStart ?? start
             if simd_length(end - first) <= 1e-9 {
@@ -4731,6 +4873,136 @@ final class EditorViewModel {
         case .trim, .text, .project:
             return nil // These tools never rubber-band draw.
         }
+    }
+
+    // MARK: - Auto-constraint emission on commit (plan §B)
+
+    /// Build the commands for the auto-inferred constraints of a freshly
+    /// committed entity. Each candidate is accepted only if it does not
+    /// over-constrain the sketch (residual guard, matching `applyConstraint`),
+    /// then the accepted system is solved so under-defined geometry settles
+    /// onto the inferred relationships. Returns `[]` when nothing survives.
+    private func inferredConstraintCommands(
+        for entity: SketchEntity, sketchID: SketchID, in sketch: Sketch
+    ) -> [DocumentCommand] {
+        guard !pendingInferredConstraints.isEmpty else { return [] }
+        // Proposed sketch = committed sketch + the new entity; candidates are
+        // added one at a time so each is validated against the accumulated set.
+        var proposed = sketch
+        proposed.entities.append(entity)
+        var accepted: [SketchConstraint] = []
+        for inferred in pendingInferredConstraints {
+            let refs = inferredRefs(inferred, newEntityID: entity.id)
+            guard !refs.isEmpty else { continue }
+            let constraint = SketchConstraint(kind: inferred.kind, refs: refs)
+            var trial = proposed
+            trial.constraints.append(constraint)
+            if SketchSolverBridge.residualNorm(trial) > Self.overConstraintTolerance {
+                continue // would conflict — skip defensively
+            }
+            proposed = trial
+            accepted.append(constraint)
+        }
+        guard !accepted.isEmpty else { return [] }
+        var commands: [DocumentCommand] = accepted.map {
+            AddSketchConstraintCommand(sketchID: sketchID, constraint: $0)
+        }
+        // Solve the accepted system so geometry settles; emit an update for
+        // each moved entity (the new entity included — it is appended last).
+        let (solved, _) = SketchSolverBridge.solve(proposed, movingEntity: nil, dragTarget: nil)
+        for (before, after) in zip(proposed.entities, solved) where before != after {
+            commands.append(UpdateSketchEntityCommand(
+                sketchID: sketchID, before: before, after: after
+            ))
+        }
+        return commands
+    }
+
+    /// Resolve an inferred relationship to concrete constraint refs: `selfRole`
+    /// addresses the NEW entity; a non-nil target addresses an existing entity.
+    /// A nil target is a pure axis constraint (horizontal / vertical).
+    private func inferredRefs(
+        _ inferred: AutoConstraintEngine.Inferred, newEntityID: UUID
+    ) -> [ConstraintRef] {
+        let selfRef = ConstraintRef(entityID: newEntityID, role: inferred.selfRole)
+        if let targetID = inferred.targetEntityID {
+            return [selfRef, ConstraintRef(entityID: targetID, role: inferred.targetRole ?? .whole)]
+        }
+        return [selfRef]
+    }
+
+    /// On releasing a control-point drag, weld it to a nearby point with an
+    /// explicit coincident constraint (plan §B) — its own undo step, guarded
+    /// against over-constraint, and skipped when already coincident.
+    private func maybeAddDragCoincident(_ drag: SketchEntityDrag) {
+        guard let control = drag.control,
+              let role = Self.pointRole(for: control),
+              case .sketching(let sketchID, _) = mode,
+              let sketch = activeSketch,
+              let dragged = sketch.entities.first(where: { $0.id == drag.before.id }),
+              let point = SketchHitTester.modelPoints(of: dragged)
+                  .first(where: { $0.role == role })?.point
+        else { return }
+        // Nearest point on any OTHER entity, within snap tolerance.
+        let others = sketch.entities.filter { $0.id != dragged.id }
+        guard let hit = SketchHitTester.nearestPoint(
+            to: point, in: others, tolerance: SnapEngine.pointTolerance
+        ) else { return }
+        let a = SketchPointSelection(entityID: dragged.id, role: role)
+        let b = SketchPointSelection(entityID: hit.entityID, role: hit.role)
+        // Skip if these two points are already welded by a coincident.
+        if sketch.constraints.contains(where: { Self.isCoincidentBetween($0, a, b) }) { return }
+        // Skip if they were already a shared joint BEFORE the drag — welded by
+        // proximity (e.g. an existing rectangle corner) rather than an explicit
+        // constraint. Drop-to-weld only links points the drag brought together
+        // from genuinely separate locations, never a point to its own
+        // already-coincident neighbour.
+        if let bd = Self.baselinePoint(drag.baseline, a),
+           let bh = Self.baselinePoint(drag.baseline, b) {
+            let d = bd - bh
+            if d.x * d.x + d.y * d.y < 1e-12 { return }
+        }
+        let constraint = SketchConstraint(kind: .coincident, refs: [
+            ConstraintRef(entityID: a.entityID, role: a.role),
+            ConstraintRef(entityID: b.entityID, role: b.role),
+        ])
+        var proposed = sketch
+        proposed.constraints.append(constraint)
+        if SketchSolverBridge.residualNorm(proposed) > Self.overConstraintTolerance { return }
+        session.perform(AddSketchConstraintCommand(sketchID: sketchID, constraint: constraint))
+        session.save()
+    }
+
+    /// The solver `PointRole` a draggable control point maps to, or nil for
+    /// handles the solver treats as derived (rim / radius / arc endpoints /
+    /// off-diagonal rect corners) that carry no coincident-addressable point.
+    private static func pointRole(for control: SketchHitTester.ControlKind) -> PointRole? {
+        switch control {
+        case .lineStart: return .endpointA
+        case .lineEnd: return .endpointB
+        case .center: return .center
+        case .rectCorner(0): return .endpointA
+        case .rectCorner(2): return .endpointB
+        default: return nil
+        }
+    }
+
+    /// The plane-local coordinate of `sel` in a pre-drag baseline snapshot.
+    private static func baselinePoint(
+        _ baseline: [SketchEntity], _ sel: SketchPointSelection
+    ) -> SIMD2<Double>? {
+        guard let e = baseline.first(where: { $0.id == sel.entityID }) else { return nil }
+        return SketchHitTester.modelPoints(of: e).first { $0.role == sel.role }?.point
+    }
+
+    /// True when `c` is a coincident constraint welding exactly points `a`↔`b`.
+    private static func isCoincidentBetween(
+        _ c: SketchConstraint, _ a: SketchPointSelection, _ b: SketchPointSelection
+    ) -> Bool {
+        guard c.kind == .coincident, c.refs.count == 2 else { return false }
+        let refA = SketchPointSelection(entityID: c.refs[0].entityID, role: c.refs[0].role)
+        let refB = SketchPointSelection(entityID: c.refs[1].entityID, role: c.refs[1].role)
+        return (refA == a && refB == b) || (refA == b && refB == a)
     }
 
     // MARK: - Text tool (plan §B7, spec §1.12 v1)
@@ -5155,6 +5427,50 @@ final class EditorViewModel {
         session.perform(RemoveSketchConstraintCommand(
             sketchID: sketchID, constraint: constraint, index: index
         ))
+        session.save()
+    }
+
+    /// Delete the currently selected constraint glyph (contract D): palette /
+    /// keyboard Delete route here. `deleteConstraint` clears the selection and
+    /// re-solves the relaxed sketch.
+    func deleteSelectedConstraint() {
+        guard let id = selectedConstraintID else { return }
+        deleteConstraint(id)
+    }
+
+    // MARK: - Sketch mirror (plan §B, contract D)
+
+    /// The single selected `.line` that can serve as a mirror axis plus the
+    /// other selected entities to reflect across it, or nil when the selection
+    /// has no unambiguous axis (zero or ≥2 lines) or nothing to mirror.
+    private var sketchMirrorAxisAndSources: (axis: UUID, sources: [UUID])? {
+        guard mode.isSketching, let sketch = activeSketch else { return nil }
+        let selected = sketch.entities.filter { selectedSketchEntityIDs.contains($0.id) }
+        let lines = selected.filter { if case .line = $0 { return true } else { return false } }
+        guard lines.count == 1 else { return nil } // need exactly one axis line
+        let axis = lines[0].id
+        let sources = selected.map(\.id).filter { $0 != axis }
+        guard !sources.isEmpty else { return nil }  // need something to mirror
+        return (axis, sources)
+    }
+
+    /// True when the sketch selection has a single line axis and ≥1 other
+    /// entity to mirror across it (contract D).
+    var canMirrorSketchSelection: Bool { sketchMirrorAxisAndSources != nil }
+
+    /// Mirror the selected entities across the single selected line, linking
+    /// each original point to its mirror with a `.symmetric` constraint
+    /// (contract D). One undoable `MirrorSketchEntitiesCommand`.
+    func mirrorSketchSelection() {
+        guard case .sketching(let sketchID, _) = mode,
+              let sketch = activeSketch,
+              let sel = sketchMirrorAxisAndSources,
+              let command = MirrorSketchEntitiesCommand(
+                  sketchID: sketchID, sourceEntityIDs: sel.sources,
+                  axisEntityID: sel.axis, sketch: sketch
+              )
+        else { return }
+        session.perform(command)
         session.save()
     }
 

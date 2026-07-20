@@ -626,3 +626,110 @@ nonisolated enum SketchSolverBridge {
         return (values, vectors)
     }
 }
+
+// MARK: - Per-point solve state (A2)
+
+/// Identifies a single solver point: an entity plus which of its points.
+/// Two coincident (welded) points have DIFFERENT keys but resolve to the same
+/// solver variables, so they report the same `SketchPointState`.
+nonisolated struct SketchPointKey: Hashable, Sendable {
+    var entityID: UUID
+    var role: PointRole
+}
+
+/// Determinacy of one sketch point, for the on-canvas DOF markers.
+/// - `free`: still has null-space motion (under-defined / movable).
+/// - `constrained`: fully determined by constraints + dimensions (no motion).
+/// - `locked`: pinned by a `.fixed` (Lock) constraint, or welded to a point
+///   whose every variable is in the solver's fixed set.
+nonisolated enum SketchPointState: Sendable, Equatable {
+    case free
+    case constrained
+    case locked
+}
+
+nonisolated extension SketchSolverBridge {
+
+    /// Per-point determinacy for every point of every entity in `sketch`, keyed
+    /// by (entityID, role). Reuses the SAME build → solve → null-space path as
+    /// `entityStates`, but reports at (entity, role) granularity instead of one
+    /// bool per entity. Coincident (welded) points share solver variables and
+    /// therefore report identical states — desired for showing connected joints.
+    static func pointStates(_ sketch: Sketch) -> [SketchPointKey: SketchPointState] {
+        var out: [SketchPointKey: SketchPointState] = [:]
+
+        // Which points an explicit `.fixed` (Lock) constraint pins. A `.whole`
+        // ref pins every point (and radius) of that entity; a point ref pins
+        // just that (entity, role). Mirrors buildSystem's `.fixed` handling.
+        var lockedWholeEntities = Set<UUID>()
+        var lockedPoints = Set<SketchPointKey>()
+        for c in sketch.constraints where c.kind == .fixed {
+            for ref in c.refs {
+                if ref.role == .whole {
+                    lockedWholeEntities.insert(ref.entityID)
+                } else {
+                    lockedPoints.insert(SketchPointKey(entityID: ref.entityID, role: ref.role))
+                }
+            }
+        }
+        func explicitlyLocked(_ id: UUID, _ role: PointRole) -> Bool {
+            lockedWholeEntities.contains(id)
+                || lockedPoints.contains(SketchPointKey(entityID: id, role: role))
+        }
+
+        let sys = buildSystem(from: sketch, movingEntity: nil, dragTarget: nil)
+
+        // Degenerate (no variables / no entities): every enumerated point is as
+        // determined as it can be — locked if pinned, else constrained (matches
+        // `entityStates` returning `true` for an empty system).
+        guard !sys.initial.isEmpty else {
+            for e in sketch.entities {
+                for slot in mutableSlots(e) {
+                    let key = SketchPointKey(entityID: slot.entityID, role: slot.role)
+                    out[key] = explicitlyLocked(slot.entityID, slot.role) ? .locked : .constrained
+                }
+            }
+            return out
+        }
+
+        let solved = ConstraintSolver.solve(
+            initial: sys.initial,
+            fixed: sys.fixed,
+            constraints: sys.solveConstraints
+        ).variables
+        let determined = nullSpaceAnalysis(sys, at: solved).determined
+
+        for e in sketch.entities {
+            for slot in mutableSlots(e) {
+                let key = SketchPointKey(entityID: slot.entityID, role: slot.role)
+                guard let pi = sys.pointIndex[SlotKey(entityID: slot.entityID, role: slot.role)] else {
+                    out[key] = explicitlyLocked(slot.entityID, slot.role) ? .locked : .free
+                    continue
+                }
+                // The point's own position variables (its welded x,y pair).
+                let posVars = [2 * pi, 2 * pi + 1]
+                // A circle/arc/polygon `.center` also carries the entity's
+                // radius scalar — the round entity is not fully *defined* until
+                // its radius is, but the radius does not affect whether the
+                // point itself can move.
+                var definingVars = posVars
+                if slot.role == .center, let rv = sys.radiusVar[slot.entityID] {
+                    definingVars.append(rv)
+                }
+                // `.locked` is about immobility of the POINT: an explicit lock,
+                // or every POSITION variable pinned in the solver's fixed set —
+                // a centre welded onto a fixed point is locked even while its
+                // radius is still free.
+                if explicitlyLocked(slot.entityID, slot.role)
+                    || posVars.allSatisfy({ sys.fixed.contains($0) }) {
+                    out[key] = .locked
+                } else if definingVars.allSatisfy({ $0 < determined.count && determined[$0] }) {
+                    out[key] = .constrained
+                } else {
+                    out[key] = .free
+                }
+            }
+        }
+        return out
+    }
+}

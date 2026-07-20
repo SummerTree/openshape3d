@@ -465,6 +465,83 @@ struct TrimCommand: DocumentCommand {
     }
 }
 
+/// Mirror (spec §3): reflect a set of sketch entities across an axis line and
+/// link each original point to its mirror with a `.symmetric` SketchConstraint,
+/// so the copies keep tracking their sources under later solves. The mirrored
+/// entities and their constraints are snapshotted with stable UUIDs at init
+/// (via `mirroredSketchEntity`), so apply/revert are deterministic across
+/// undo/redo and revert removes exactly what apply added.
+struct MirrorSketchEntitiesCommand: DocumentCommand {
+    let title = "Mirror"
+    let sketchID: SketchID
+    /// Mirrored copies (fresh IDs), one per valid source entity.
+    let addedEntities: [SketchEntity]
+    /// `.symmetric` constraints: refs = [source point, mirror point, axis line
+    /// `.whole`] — the layout `SketchSolverBridge` lowers for `.symmetric`.
+    let addedConstraints: [SketchConstraint]
+
+    /// Fails when the axis entity is not a line in the sketch, or no source
+    /// entity (other than the axis itself) resolves.
+    init?(sketchID: SketchID, sourceEntityIDs: [UUID], axisEntityID: UUID, sketch: Sketch) {
+        guard case let .line(_, axisA, axisB)? =
+            sketch.entities.first(where: { $0.id == axisEntityID })
+        else { return nil }
+
+        let axisRef = ConstraintRef(entityID: axisEntityID, role: .whole)
+        var entities: [SketchEntity] = []
+        var constraints: [SketchConstraint] = []
+
+        for id in sourceEntityIDs where id != axisEntityID {
+            guard let source = sketch.entities.first(where: { $0.id == id }) else { continue }
+            let mirror = mirroredSketchEntity(source, acrossA: axisA, b: axisB)
+            entities.append(mirror)
+            for role in source.symmetricPointRoles {
+                // Only link a role pair when the mirror point is genuinely the
+                // reflection of the source point across this axis. A rect's
+                // corners are re-sorted into min/max by `mirroredSketchEntity`,
+                // so an `.endpointA`↔`.endpointA` pairing there is geometrically
+                // inconsistent (the `.symmetric` residual is nonzero from the
+                // outset). Emitting it would make the next solve deform BOTH
+                // rectangles, so those pairs are skipped — the mirror copy is
+                // still placed correctly, just without a live link. Lines and
+                // centre-based entities reflect role-for-role and are linked.
+                guard let sp = source.symmetricPoint(for: role),
+                      let mp = mirror.symmetricPoint(for: role)
+                else { continue }
+                let d = reflectPoint(sp, acrossA: axisA, b: axisB) - mp
+                guard d.x * d.x + d.y * d.y <= 1e-12 else { continue }
+                constraints.append(SketchConstraint(
+                    kind: .symmetric,
+                    refs: [
+                        ConstraintRef(entityID: source.id, role: role),
+                        ConstraintRef(entityID: mirror.id, role: role),
+                        axisRef,
+                    ]
+                ))
+            }
+        }
+        guard !entities.isEmpty else { return nil }
+
+        self.sketchID = sketchID
+        self.addedEntities = entities
+        self.addedConstraints = constraints
+    }
+
+    func apply(to document: inout DesignDocument) {
+        guard let index = document.sketches.firstIndex(where: { $0.id == sketchID }) else { return }
+        document.sketches[index].entities.append(contentsOf: addedEntities)
+        document.sketches[index].constraints.append(contentsOf: addedConstraints)
+    }
+
+    func revert(in document: inout DesignDocument) {
+        guard let index = document.sketches.firstIndex(where: { $0.id == sketchID }) else { return }
+        let entityIDs = Set(addedEntities.map(\.id))
+        let constraintIDs = Set(addedConstraints.map(\.id))
+        document.sketches[index].entities.removeAll { entityIDs.contains($0.id) }
+        document.sketches[index].constraints.removeAll { constraintIDs.contains($0.id) }
+    }
+}
+
 // MARK: - Items Manager (spec §11)
 
 /// A row in the Items Manager: any document item addressable by ID.

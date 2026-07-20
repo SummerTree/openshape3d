@@ -556,12 +556,23 @@ struct EditorView: View {
                 marqueeOverlay(viewModel)
             }
             .overlay {
+                // Constraint glyphs: tap to select, Delete removes (plan §C3).
+                // Below the dimension overlay so that when an auto-constraint
+                // glyph and a dimension label share an anchor (e.g. a horizontal
+                // line's "H" glyph over its length label), tapping opens the
+                // dimension editor — the primary interaction — rather than
+                // selecting the glyph (which is also deletable via the Items
+                // panel).
+                SketchConstraintOverlay(viewModel: viewModel)
+            }
+            .overlay {
                 // Sketch dimension annotations + inline editors (plan §C2).
                 SketchDimensionOverlay(viewModel: viewModel)
             }
             .overlay {
-                // Constraint glyphs: tap to select, Delete removes (plan §C3).
-                SketchConstraintOverlay(viewModel: viewModel)
+                // Per-point DOF markers: blue hollow = free, green =
+                // constrained, blue square = locked. Non-interactive (plan §C4).
+                SketchPointStateOverlay(viewModel: viewModel)
             }
             .overlay {
                 // Shapr3D on-arrow value pill for extrude / diameter (§4.1).
@@ -1133,6 +1144,13 @@ struct EditorView: View {
                 MaterialSheet(initial: viewModel.materialForSelection) { spec in
                     viewModel.applyMaterial(spec)
                 }
+            }
+            .sheet(isPresented: Binding(
+                get: { viewModel.showConstraintSettings },
+                set: { viewModel.showConstraintSettings = $0 }
+            )) {
+                // Auto-constrain inference settings (plan §B, contract D).
+                ConstraintSettingsView(viewModel: viewModel)
             }
             .fileExporter(
                 isPresented: Binding(
