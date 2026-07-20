@@ -152,6 +152,19 @@ final class ViewportCoordinator: NSObject, ViewportGestureDelegate, ViewportCame
     /// A one-finger drag drawing the select-mode marquee (plan §B13).
     private var marqueeActive = false
 
+    /// True when `ray` passes within a touch-friendly radius of the pull-arrow
+    /// handle (which floats off the surface along the pull direction). `scale` is
+    /// the gizmo's constant-screen-size factor, so the world radius stays a fixed
+    /// on-screen size. Matches the handle centre in `GizmoRenderer.drawPullArrow`.
+    private static func hitsPullArrow(ray: Ray, arrow: PullArrowState, scale: Float) -> Bool {
+        let dir = simd_normalize(arrow.direction)
+        let center = arrow.origin + dir * (0.78 * scale)   // between the two chevrons
+        let along = simd_dot(center - ray.origin, ray.direction)
+        guard along > 0 else { return false }
+        let closest = ray.origin + ray.direction * along
+        return simd_length(center - closest) < 0.6 * scale
+    }
+
     func gestureDragBegan(at point: CGPoint) -> Bool {
         guard let ray = ray(at: point) else { return false }
         dragStartPoint = point
@@ -217,8 +230,16 @@ final class ViewportCoordinator: NSObject, ViewportGestureDelegate, ViewportCame
             return true
         }
 
-        // Face selected: dragging the face pushes/pulls it.
+        // Face selected: dragging the face — OR grabbing its floating pull-arrow
+        // handle (which sits off the surface, so its touch never lands on the
+        // face below) — pushes/pulls it.
         if case .faceSelected = viewModel.mode {
+            if let arrow = viewModel.scene.pullArrow, let renderer,
+               Self.hitsPullArrow(ray: ray, arrow: arrow, scale: renderer.gizmoScale(origin: arrow.origin)),
+               viewModel.beginToolDrag(ray: ray) {
+                pullActive = true
+                return true
+            }
             pullActive = viewModel.beginFacePull(ray: ray)
             if pullActive { return true }
             // Fall through — drags off the face orbit.

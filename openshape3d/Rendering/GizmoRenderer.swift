@@ -168,37 +168,34 @@ final class GizmoRenderer {
             encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: triangles.count)
         }
 
-        // A filled polygon (fan from `center`, both windings) → world triangles.
-        func poly(_ pts: [(Float, Float)], center: (Float, Float)) -> [SIMD3<Float>] {
-            var t: [SIMD3<Float>] = []
-            let c = world(center.0, center.1)
-            for i in 0..<pts.count {
-                let a = pts[i], b = pts[(i + 1) % pts.count]
-                let A = world(a.0, a.1), B = world(b.0, b.1)
-                t += [c, A, B, c, B, A]
-            }
-            return t
+        // One billboard triangle (both windings so it shows from either side).
+        func tri(_ a: (Float, Float), _ b: (Float, Float), _ c: (Float, Float)) -> [SIMD3<Float>] {
+            let A = world(a.0, a.1), B = world(b.0, b.1), C = world(c.0, c.1)
+            return [A, B, C, A, C, B]
+        }
+        // A convex quad as two triangles.
+        func quad(_ a: (Float, Float), _ b: (Float, Float), _ c: (Float, Float), _ d: (Float, Float)) -> [SIMD3<Float>] {
+            tri(a, b, c) + tri(a, c, d)
         }
 
-        let shaftLen: Float = 0.42, sw: Float = 0.03
-        let headLen: Float = 0.28, midH: Float = 0.24, W: Float = 0.30, w: Float = 0.11
-        let y0 = shaftLen                         // arrow's lower tip sits atop the shaft
+        let shaftLen: Float = 0.40, sw: Float = 0.028
+        let headLen: Float = 0.32, W: Float = 0.31, notch: Float = 0.11, gap: Float = 0.06
 
-        // Dark connector.
-        fill(poly([(-sw, 0), (sw, 0), (sw, shaftLen), (-sw, shaftLen)],
-                  center: (0, shaftLen * 0.5)), SIMD4(0.14, 0.15, 0.17, 1))
+        // Thin dark connector shaft off the moving cap.
+        fill(quad((-sw, 0), (sw, 0), (sw, shaftLen), (-sw, shaftLen)), SIMD4(0.14, 0.15, 0.17, 1))
 
-        // Blue double-arrow: down tip, up the right head/shaft, up tip, down the left.
-        let arrowPts: [(Float, Float)] = [
-            (0, y0),
-            (W, y0 + headLen), (w, y0 + headLen),
-            (w, y0 + headLen + midH), (W, y0 + headLen + midH),
-            (0, y0 + 2 * headLen + midH),
-            (-W, y0 + headLen + midH), (-w, y0 + headLen + midH),
-            (-w, y0 + headLen), (-W, y0 + headLen),
-        ]
+        // Two separate chevron arrowheads (↕) — each an outer triangle with a
+        // V-notch in its base, split into left/right wings at the tip↔notch seam.
         let handle: SIMD4<Float> = arrow.isValid ? SIMD4(0.31, 0.57, 0.98, 1) : SIMD4(0.90, 0.28, 0.28, 1)
-        fill(poly(arrowPts, center: (0, y0 + headLen + midH * 0.5)), handle)
+        // Down head (points down; base + notch on top; tip on the shaft).
+        let dBase = shaftLen + headLen
+        let dTip = (Float(0), shaftLen), dRW = (W, dBase), dLW = (-W, dBase), dNotch = (Float(0), dBase - notch)
+        var head = tri(dTip, dRW, dNotch) + tri(dTip, dNotch, dLW)
+        // Up head (points up; base + notch on the bottom).
+        let uBase = dBase + gap
+        let uTip = (Float(0), uBase + headLen), uRW = (W, uBase), uLW = (-W, uBase), uNotch = (Float(0), uBase + notch)
+        head += tri(uTip, uRW, uNotch) + tri(uTip, uNotch, uLW)
+        fill(head, handle)
     }
 
     /// Plane picker tiles: translucent bordered quads in world space. Tiny
