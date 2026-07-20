@@ -662,6 +662,82 @@ struct RemoveFeatureCommand: DocumentCommand {
     }
 }
 
+// MARK: - Document variables (Phase D, Task B1 / spec §6.6)
+
+/// Re-derive every variable's cached `.value` from its `.expression` in creation
+/// order (VariableTable). `.value` is a pure cache of `.expression`, so any
+/// command mutating `document.variables` re-resolves it here — keeping the cache
+/// consistent across apply / undo / redo. (A snapshot value stored on the command
+/// would go stale on redo, since redo re-applies the pre-edit `after.value`.)
+func resolveVariableCache(_ document: inout DesignDocument) {
+    let resolved = VariableTable.resolve(document.variables).resolved
+    for index in document.variables.indices where index < resolved.count {
+        document.variables[index].value = resolved[index].value
+    }
+}
+
+/// Append a user-defined document variable to `document.variables`. The VM calls
+/// `DocumentSession.variablesDidChange()` after performing this so the freshly
+/// resolved values and any dependent feature/sketch formulas rebuild.
+struct AddVariableCommand: DocumentCommand {
+    let title = "Add Variable"
+    let variable: Variable
+
+    func apply(to document: inout DesignDocument) {
+        document.variables.append(variable)
+        resolveVariableCache(&document)
+    }
+
+    func revert(in document: inout DesignDocument) {
+        document.variables.removeAll { $0.id == variable.id }
+        resolveVariableCache(&document)
+    }
+}
+
+/// Replace a variable's name/expression (same `id`) with a new snapshot. Full
+/// value snapshots both ways; `before`/`after` share the variable's identity, so
+/// this is a pure in-place replace located by `id`.
+struct EditVariableCommand: DocumentCommand {
+    let title = "Edit Variable"
+    let before: Variable
+    let after: Variable
+
+    private func set(_ variable: Variable, in document: inout DesignDocument) {
+        guard let index = document.variables.firstIndex(where: { $0.id == variable.id }) else { return }
+        document.variables[index] = variable
+    }
+
+    func apply(to document: inout DesignDocument) {
+        set(after, in: &document)
+        resolveVariableCache(&document)
+    }
+
+    func revert(in document: inout DesignDocument) {
+        set(before, in: &document)
+        resolveVariableCache(&document)
+    }
+}
+
+/// Remove a variable from `document.variables`. Undo re-inserts it at its
+/// original position so creation-order (and every downstream reference resolved
+/// against it) is restored exactly.
+struct RemoveVariableCommand: DocumentCommand {
+    let title = "Delete Variable"
+    let index: Int
+    let variable: Variable
+
+    func apply(to document: inout DesignDocument) {
+        document.variables.removeAll { $0.id == variable.id }
+        resolveVariableCache(&document)
+    }
+
+    func revert(in document: inout DesignDocument) {
+        let clamped = min(max(index, 0), document.variables.count)
+        document.variables.insert(variable, at: clamped)
+        resolveVariableCache(&document)
+    }
+}
+
 // MARK: - Items Manager (spec §11)
 
 /// A row in the Items Manager: any document item addressable by ID.

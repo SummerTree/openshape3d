@@ -615,6 +615,16 @@ struct EditorView: View {
                         .padding(.top, 8)
                 }
             }
+            .overlay(alignment: .bottomLeading) {
+                // Variables panel (Phase D, Task B3). Anchored bottom-leading so
+                // it clears the History panel (.topLeading) and Items
+                // (.topTrailing); the tool palette is inset above it.
+                if viewModel.showVariablesPanel {
+                    VariablesPanelView(viewModel: viewModel)
+                        .padding(.leading, 14)
+                        .padding(.bottom, 8)
+                }
+            }
             .overlay(alignment: .bottomTrailing) {
                 // Copy badge (spec §5.1): next gizmo drag moves a duplicate.
                 if viewModel.gizmoOrigin != nil {
@@ -993,6 +1003,13 @@ struct EditorView: View {
                         Label("History", systemImage: "clock.arrow.circlepath")
                     }
                     .accessibilityIdentifier("HistoryButton")
+
+                    Button {
+                        viewModel.showVariablesPanel.toggle()
+                    } label: {
+                        Label("Variables", systemImage: "function")
+                    }
+                    .accessibilityIdentifier("VariablesButton")
 
                     Button {
                         showItemsPanel.toggle()

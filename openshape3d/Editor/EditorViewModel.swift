@@ -5888,10 +5888,14 @@ final class EditorViewModel {
             return
         }
         editingDimension = nil
-        guard let parsed = ExpressionEvaluator.evaluate(rawText) else {
+        // Phase D: evaluate against document variables so a dimension can read
+        // e.g. "width/2"; store the raw text as the driving formula only when it
+        // references a variable/function (a plain number keeps `formula: nil`).
+        guard let parsed = ExpressionEvaluator.evaluate(rawText, variables: session.variableValues()) else {
             errorMessage = "Couldn't read \"\(rawText)\" as a number."
             return
         }
+        let formula = ExpressionEvaluator.identifiers(in: rawText).isEmpty ? nil : rawText
         // Linear dims must be positive; angles within (0, 180)°.
         switch edit.kind {
         case .angle:
@@ -5914,10 +5918,11 @@ final class EditorViewModel {
             let before = proposed.dimensions[idx]
             var after = before
             after.value = stored
+            after.formula = formula
             proposed.dimensions[idx] = after
             setup = UpdateSketchDimensionCommand(sketchID: sketchID, before: before, after: after)
         } else {
-            let dim = SketchDimension(kind: edit.kind, refs: edit.refs, value: stored)
+            let dim = SketchDimension(kind: edit.kind, refs: edit.refs, value: stored, formula: formula)
             proposed.dimensions.append(dim)
             setup = AddSketchDimensionCommand(sketchID: sketchID, dimension: dim)
         }
@@ -6744,6 +6749,87 @@ final class EditorViewModel {
         var errorText: String?
     }
 
+    // MARK: - Document variables (Phase D, Task B2 / spec §6.6)
+
+    /// One row in the Variables panel: the variable's identity, editable
+    /// name/expression, its resolved value, and any resolution error surfaced
+    /// from `VariableTable.resolve`.
+    struct VariableRow: Identifiable {
+        let id: VariableID
+        var name: String
+        var expression: String
+        var value: Double
+        var hasError: Bool
+        var errorText: String?
+    }
+
+    /// Whether the Variables panel is shown.
+    var showVariablesPanel = false
+
+    /// The ordered variable rows, derived from `document.variables` plus the
+    /// per-variable errors from `VariableTable.resolve` (creation-order rule).
+    var variableRows: [VariableRow] {
+        _ = session.changeCount // re-derive when the document changes
+        let errors = VariableTable.resolve(session.document.variables).errors
+        return session.document.variables.map { v in
+            let err = errors[v.id]
+            return VariableRow(
+                id: v.id,
+                name: v.name,
+                expression: v.expression,
+                value: v.value,
+                hasError: err != nil,
+                errorText: err
+            )
+        }
+    }
+
+    /// Append a new document variable with a unique default name ("var1",
+    /// "var2", …) and expression "0", then re-resolve + fan out to dependents.
+    func addVariable() {
+        let existing = Set(session.document.variables.map { $0.name })
+        var index = existing.count + 1
+        var name = "var\(index)"
+        while existing.contains(name) {
+            index += 1
+            name = "var\(index)"
+        }
+        let variable = Variable(name: name, expression: "0", value: 0)
+        session.perform(AddVariableCommand(variable: variable))
+        session.variablesDidChange()
+        session.save()
+    }
+
+    /// Edit a variable's name and/or expression. The name is validated via
+    /// `VariableTable.isValidName`; an invalid name sets `errorMessage` and
+    /// makes no change. On success re-resolves the table and rebuilds every
+    /// dependent feature/sketch formula.
+    func setVariable(_ id: VariableID, name: String, expression: String) {
+        guard let before = session.document.variables.first(where: { $0.id == id }) else { return }
+        let trimmedName = name.trimmingCharacters(in: .whitespaces)
+        guard VariableTable.isValidName(trimmedName) else {
+            errorMessage = "\"\(name)\" isn't a valid variable name."
+            return
+        }
+        guard before.name != trimmedName || before.expression != expression else { return }
+        var after = before
+        after.name = trimmedName
+        after.expression = expression
+        session.perform(EditVariableCommand(before: before, after: after))
+        session.variablesDidChange()
+        session.save()
+    }
+
+    /// Remove a variable, preserving its creation-order index for undo, then
+    /// re-resolve + rebuild dependents (formulas that referenced it error to 0).
+    func deleteVariable(_ id: VariableID) {
+        guard let index = session.document.variables.firstIndex(where: { $0.id == id }) else { return }
+        let variable = session.document.variables[index]
+        session.perform(RemoveVariableCommand(index: index, variable: variable))
+        session.variablesDidChange()
+        session.save()
+    }
+
     /// Whether the History panel is shown beside the Items panel.
     var showHistoryPanel = false
 
@@ -6835,20 +6921,46 @@ final class EditorViewModel {
     /// The same feature kind with its primary scalar replaced, or nil if it has
     /// none (primitive/boolean/etc. aren't distance-editable in the panel).
     private static func kind(_ kind: FeatureKind, replacingScalar value: Double) -> FeatureKind? {
+        Self.kind(kind, replacingExpr: Expr(value: value))
+    }
+
+    /// The same feature kind with its primary scalar `Expr` (value + optional
+    /// parametric `formula`) replaced, or nil if it has none. Phase D: lets a
+    /// distance/angle carry a formula that re-evaluates when variables change.
+    private static func kind(_ kind: FeatureKind, replacingExpr expr: Expr) -> FeatureKind? {
         switch kind {
         case let .extrude(profile, plane, _, symmetric, boolean, extras):
             return .extrude(
-                profile: profile, plane: plane, distance: Expr(value: value),
+                profile: profile, plane: plane, distance: expr,
                 symmetric: symmetric, boolean: boolean, extraProfiles: extras)
         case let .pushPull(face, _, mode):
-            return .pushPull(face: face, distance: Expr(value: value), mode: mode)
+            return .pushPull(face: face, distance: expr, mode: mode)
         case let .revolve(profile, plane, axis, _, boolean):
             return .revolve(
                 profile: profile, plane: plane, axis: axis,
-                angle: Expr(value: value), boolean: boolean)
+                angle: expr, boolean: boolean)
         default:
             return nil
         }
+    }
+
+    /// Edit a feature's primary scalar from RAW TEXT that may reference document
+    /// variables / functions (Phase D). Evaluates against the current variable
+    /// values; on parse failure sets `errorMessage` and makes no change. The
+    /// `formula` is stored only when the text references an identifier
+    /// (variable or function) — a plain number stores `formula: nil` so it
+    /// never re-evaluates. The evaluated value is stored directly (no unit
+    /// conversion), matching `editFeatureDistance`.
+    func editFeatureExpr(_ id: FeatureID, text: String) {
+        guard let node = session.document.features.node(id) else { return }
+        guard let value = ExpressionEvaluator.evaluate(text, variables: session.variableValues()) else {
+            errorMessage = "Couldn't read \"\(text)\" as a number."
+            return
+        }
+        let formula = ExpressionEvaluator.identifiers(in: text).isEmpty ? nil : text
+        guard let after = Self.kind(node.kind, replacingExpr: Expr(value: value, formula: formula)) else { return }
+        session.editFeature(id, to: after)
+        session.save()
     }
 
     /// Short label for a feature kind (History panel row subtitle).

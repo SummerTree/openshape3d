@@ -264,6 +264,140 @@ final class DocumentSession {
         rebuildFrom(id, edit: edit)
     }
 
+    // MARK: - Variables (Phase D, Task B1 / spec §6.6)
+
+    /// The current `[name: value]` map of successfully-resolved document
+    /// variables (creation-order rule; failed/forward refs are absent). Feature
+    /// `Expr` formulas and sketch `SketchDimension` formulas evaluate against this.
+    func variableValues() -> [String: Double] {
+        VariableTable.resolve(document.variables).values
+    }
+
+    /// Re-evaluate every formula-bearing `Expr` on `kind` against `values`,
+    /// returning a new kind if ANY of its values changed, or `nil` when nothing
+    /// changed (so callers only emit an edit for genuinely affected nodes).
+    /// `FeatureKind` is not Equatable, so change detection is per-`Expr` value.
+    /// The `formula` is always preserved on the rebuilt `Expr`.
+    static func reevaluatedKind(
+        _ kind: FeatureKind, with values: [String: Double]
+    ) -> FeatureKind? {
+        func updated(_ expr: Expr) -> Expr? {
+            guard let formula = expr.formula else { return nil }  // not variable-driven
+            // A formula that no longer resolves — its variable was deleted or
+            // renamed — errors to 0 (spec §6.6). Propagate the 0 so the breakage
+            // surfaces (the step goes empty/errored) rather than silently keeping
+            // the last resolved value with a now-dangling formula.
+            let v = ExpressionEvaluator.evaluate(formula, variables: values) ?? 0
+            guard v != expr.value else { return nil }
+            return Expr(value: v, formula: formula)
+        }
+        switch kind {
+        case let .extrude(profile, plane, distance, symmetric, boolean, extras):
+            guard let d = updated(distance) else { return nil }
+            return .extrude(
+                profile: profile, plane: plane, distance: d,
+                symmetric: symmetric, boolean: boolean, extraProfiles: extras)
+        case let .revolve(profile, plane, axis, angle, boolean):
+            guard let a = updated(angle) else { return nil }
+            return .revolve(profile: profile, plane: plane, axis: axis, angle: a, boolean: boolean)
+        case let .pushPull(face, distance, mode):
+            guard let d = updated(distance) else { return nil }
+            return .pushPull(face: face, distance: d, mode: mode)
+        default:
+            return nil
+        }
+    }
+
+    /// Pre-resolve feature `Expr` formulas against the current variable values,
+    /// writing the fresh `.value` into `document.features` IN PLACE. Optional hook
+    /// for a rebuild triggered by means OTHER than a variable edit (so it still
+    /// honours current variable values): `evaluate()` reads `Expr.value`, never
+    /// `.formula`, so the graph must already hold the resolved values before any
+    /// `performRebuild`. Not undoable — `.value` is a derived cache of `.formula`.
+    func resolveExprFormulas() {
+        let values = variableValues()
+        for index in document.features.nodes.indices {
+            if let newKind = Self.reevaluatedKind(document.features.nodes[index].kind, with: values) {
+                document.features.nodes[index].kind = newKind
+            }
+        }
+    }
+
+    /// Fan-out after any variable add/edit/delete (the VM performs the mutating
+    /// command, then calls this):
+    ///
+    /// (a) Re-resolve `document.variables` (creation-order rule) and write the
+    ///     resolved `.value` back into each variable — a derived cache, updated in
+    ///     place (not a separate undo step; undoing the triggering command restores
+    ///     the prior snapshots).
+    /// (b) FEATURE fan-out: recompute every feature `Expr` that carries a `formula`;
+    ///     the changed nodes' `EditFeatureCommand`s ride the SAME `performRebuild`
+    ///     as the downstream mesh diff, so one undo reverts the whole feature
+    ///     rebuild. The edited graph is pre-resolved so `evaluate()` reads the new
+    ///     `.value`.
+    /// (c) SKETCH fan-out: recompute every `SketchDimension` that carries a
+    ///     `formula`; each affected sketch re-solves (SketchSolverBridge) and
+    ///     rebuilds its dependents via `rebuildForSketchChange` — as its OWN undo
+    ///     step, SEPARATE from the feature rebuild (atomic bundling is a later
+    ///     tranche).
+    ///
+    /// Guarded by `isRebuilding` so a rebuild already in flight never re-enters.
+    func variablesDidChange() {
+        guard !isRebuilding else { return }
+
+        // (a) Resolve + cache values back into the variables.
+        let resolved = VariableTable.resolve(document.variables)
+        let values = resolved.values
+        for index in document.variables.indices where index < resolved.resolved.count {
+            document.variables[index].value = resolved.resolved[index].value
+        }
+        didChange()
+
+        // (b) Feature formulas -> one rebuild step.
+        var editedGraph = document.features
+        var editCommands: [DocumentCommand] = []
+        for (index, node) in document.features.nodes.enumerated() {
+            guard let newKind = Self.reevaluatedKind(node.kind, with: values) else { continue }
+            editCommands.append(EditFeatureCommand(
+                featureID: node.id, before: node.kind, after: newKind))
+            editedGraph.nodes[index].kind = newKind
+        }
+        if !editCommands.isEmpty {
+            performRebuild(editedGraph, leadingCommands: editCommands, title: "Variables")
+        }
+
+        // (c) Sketch dimension formulas -> one re-solve + rebuild step per sketch.
+        for sketchIndex in document.sketches.indices {
+            let sketch = document.sketches[sketchIndex]
+            var proposed = sketch
+            var dimCommands: [DocumentCommand] = []
+            for dimIndex in sketch.dimensions.indices {
+                let before = sketch.dimensions[dimIndex]
+                guard let formula = before.formula else { continue }
+                // Broken formula (deleted/renamed variable) errors to 0 — surface
+                // it rather than silently keeping the stale dimension value.
+                let v = ExpressionEvaluator.evaluate(formula, variables: values) ?? 0
+                guard v != before.value else { continue }
+                var after = before
+                after.value = v
+                proposed.dimensions[dimIndex] = after
+                dimCommands.append(UpdateSketchDimensionCommand(
+                    sketchID: sketch.id, before: before, after: after))
+            }
+            guard !dimCommands.isEmpty else { continue }
+
+            let (solvedEntities, _) = SketchSolverBridge.solve(
+                proposed, movingEntity: nil, dragTarget: nil)
+            var commands = dimCommands
+            for (before, after) in zip(sketch.entities, solvedEntities) where before != after {
+                commands.append(UpdateSketchEntityCommand(
+                    sketchID: sketch.id, before: before, after: after))
+            }
+            perform(CompositeCommand(title: "Variables", commands: commands))
+            rebuildForSketchChange(sketch.id)
+        }
+    }
+
     // MARK: - Persistence
 
     private func load() {
@@ -319,6 +453,14 @@ final class DocumentSession {
             if let node = decodeFeature(persisted) {
                 loaded.features.nodes.append(node)
             }
+        }
+        // Phase D variables (spec §6.6): ordered by `orderIndex` (SwiftData
+        // relationships are unordered) so the creation-order resolution rule
+        // survives the round-trip. Pre-tranche-3 projects have no PersistedVariable
+        // rows -> empty list. `try?`-per-item is defensive symmetry with the other
+        // decode loops (decodeVariable itself is non-throwing).
+        for persisted in project.variables.sorted(by: { $0.orderIndex < $1.orderIndex }) {
+            loaded.variables.append(decodeVariable(persisted))
         }
         document = loaded
         changeCount += 1
@@ -487,6 +629,32 @@ final class DocumentSession {
             }
         }
         for persisted in project.features where !liveFeatureIDs.contains(persisted.featureID) {
+            modelContext.delete(persisted)
+        }
+
+        // Phase D variables (spec §6.6): diff by variableID, mirroring the
+        // PersistedFeature block. `orderIndex` is the variable's array position so
+        // creation order survives the round-trip; name/expression/value map per
+        // column via the A2 helpers.
+        var persistedVariableByID = [UUID: PersistedVariable]()
+        for persisted in project.variables {
+            persistedVariableByID[persisted.variableID] = persisted
+        }
+        var liveVariableIDs = Set<UUID>()
+        for (index, variable) in document.variables.enumerated() {
+            liveVariableIDs.insert(variable.id.raw)
+            if let persisted = persistedVariableByID[variable.id.raw] {
+                persisted.orderIndex = index
+                persisted.name = variable.name
+                persisted.expression = variable.expression
+                persisted.value = variable.value
+            } else {
+                let persisted = encodeVariable(variable, orderIndex: index)
+                persisted.project = project
+                modelContext.insert(persisted)
+            }
+        }
+        for persisted in project.variables where !liveVariableIDs.contains(persisted.variableID) {
             modelContext.delete(persisted)
         }
 

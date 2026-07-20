@@ -34,6 +34,11 @@ final class Project {
     @Relationship(deleteRule: .cascade, inverse: \PersistedFeature.project)
     var features: [PersistedFeature] = []
 
+    /// Phase D parametric variables. Defaulted so pre-Phase-D stores migrate: an
+    /// old project loads with no variables.
+    @Relationship(deleteRule: .cascade, inverse: \PersistedVariable.project)
+    var variables: [PersistedVariable] = []
+
     init(name: String) {
         self.name = name
         self.createdAt = Date()
@@ -156,6 +161,64 @@ final class PersistedFeature {
         self.kindData = kindData
         self.outputBodyIDData = outputBodyIDData
     }
+}
+
+/// One Phase D parametric `Variable`, persisted.
+///
+/// All properties are defaulted so pre-Phase-D stores migrate without a
+/// `VersionedSchema` (repo convention). Columns map directly to `Variable`'s
+/// fields (no JSON blob needed); `orderIndex` records the variable's position in
+/// `DesignDocument.variables` so creation order — which drives resolution —
+/// survives a store round-trip (SwiftData relationships are unordered).
+@Model
+final class PersistedVariable {
+    @Attribute(.unique) var variableID: UUID = UUID()
+    var orderIndex: Int = 0
+    var name: String = ""
+    var expression: String = ""
+    var value: Double = 0
+    var project: Project?
+
+    init(variableID: UUID,
+         orderIndex: Int,
+         name: String,
+         expression: String,
+         value: Double) {
+        self.variableID = variableID
+        self.orderIndex = orderIndex
+        self.name = name
+        self.expression = expression
+        self.value = value
+    }
+}
+
+// MARK: - Variable encode/decode helpers
+//
+// Free functions bridging `Variable` (A1 model) <-> `PersistedVariable`. Called
+// by `DocumentSession.save`/`load` (wired in task B1). Per-column, no JSON blob:
+// id/name/expression/value map directly. Context insertion + `project` wiring are
+// the caller's job (mirrors `DocumentSession.save`'s PersistedFeature path).
+
+/// Build a fresh `PersistedVariable` from a `Variable`. `orderIndex` is the
+/// variable's position in `DesignDocument.variables`.
+func encodeVariable(_ v: Variable, orderIndex: Int) -> PersistedVariable {
+    PersistedVariable(
+        variableID: v.id.raw,
+        orderIndex: orderIndex,
+        name: v.name,
+        expression: v.expression,
+        value: v.value
+    )
+}
+
+/// Rebuild a `Variable` from a persisted row.
+func decodeVariable(_ pv: PersistedVariable) -> Variable {
+    Variable(
+        id: VariableID(raw: pv.variableID),
+        name: pv.name,
+        expression: pv.expression,
+        value: pv.value
+    )
 }
 
 // MARK: - Feature encode/decode helpers

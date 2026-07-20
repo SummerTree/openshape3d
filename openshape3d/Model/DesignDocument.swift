@@ -23,6 +23,12 @@ nonisolated struct DesignDocument: Sendable {
     /// rows, mirroring the `PersistedBody` path.
     var features = FeatureGraph(nodes: [])
 
+    /// Phase D (Task A2) parametric variables. Ordered by creation; each resolves
+    /// against earlier variables only (`VariableTable.resolve`). Empty for
+    /// pre-Phase-D projects. Serialized per-row into `PersistedVariable` by
+    /// `DocumentSession.save` (wired in task B1), mirroring the feature path.
+    var variables: [Variable] = []
+
     /// Monotonic revision source for mesh changes (GPU cache invalidation).
     private var revisionCounter: UInt64 = 0
 

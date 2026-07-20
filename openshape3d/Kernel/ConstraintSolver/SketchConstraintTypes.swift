@@ -81,11 +81,20 @@ nonisolated struct SketchDimension: Identifiable, Codable, Equatable, Sendable {
     var kind: DimensionKind
     var refs: [ConstraintRef]
     var value: Double
+    /// Phase D (Task A2): optional parametric formula string driving `value`.
+    /// nil for a plain numeric dimension. Decoded via the synthesized Codable's
+    /// `decodeIfPresent`, so pre-tranche-3 sketches (no "formula" key) load as nil.
+    var formula: String? = nil
 
-    init(id: UUID = UUID(), kind: DimensionKind, refs: [ConstraintRef], value: Double) {
+    init(id: UUID = UUID(),
+         kind: DimensionKind,
+         refs: [ConstraintRef],
+         value: Double,
+         formula: String? = nil) {
         self.id = id
         self.kind = kind
         self.refs = refs
         self.value = value
+        self.formula = formula
     }
 }
