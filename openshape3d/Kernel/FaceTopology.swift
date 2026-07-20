@@ -26,6 +26,18 @@ nonisolated struct PlanarFace {
     var holes: [[SIMD2<Double>]]
 }
 
+nonisolated extension FaceTopology {
+    /// `PlanarFace` lives at module scope; expose it under the `FaceTopology`
+    /// namespace so the feature graph / topo-naming layers can spell
+    /// `FaceTopology.PlanarFace` (frozen contract) without moving the type.
+    typealias PlanarFace = openshape3d.PlanarFace
+}
+
+/// `CylindricalFace`'s canonical home is `FaceTopology` (the frozen contract
+/// spelling `FaceTopology.CylindricalFace`); expose it at module scope too so
+/// enumeration callers can spell it unqualified, mirroring `PlanarFace`.
+typealias CylindricalFace = FaceTopology.CylindricalFace
+
 nonisolated enum FaceTopology {
     private static let normalTolerance: Float = 0.9995   // ~1.8°
     private static let planeTolerance: Float = 1e-3
@@ -447,6 +459,62 @@ nonisolated enum FaceTopology {
             t += 1
         }
         return abs(v)
+    }
+
+    // MARK: - Whole-mesh face enumeration
+
+    /// Partition every triangle of `mesh` into faces: cylindrical side surfaces
+    /// and planar faces. Each triangle is claimed by exactly one face (no
+    /// double-claim, no orphan).
+    ///
+    /// Strategy: walk triangles in index order and seed each one not yet claimed
+    /// by an earlier face. For a fresh seed, first try `cylindricalFace` (a
+    /// smooth flood across soft edges) — if it recognizes a clean cylindrical
+    /// surface, claim that run. Otherwise fall back to `planarFace` (a coplanar
+    /// flood) and claim the coplanar patch. A seed whose surface is neither
+    /// (degenerate triangle) is claimed on its own so enumeration terminates
+    /// with no orphaned triangles. Because faces meet at hard edges, only the
+    /// seed's own unclaimed region is ever claimed, and every seed advances the
+    /// frontier, so the loop covers all triangles in one pass.
+    static func enumerateFaces(in mesh: RenderMesh) -> (planar: [PlanarFace], cylindrical: [CylindricalFace]) {
+        var planar: [PlanarFace] = []
+        var cylindrical: [CylindricalFace] = []
+        let count = mesh.triangleCount
+        guard count > 0 else { return (planar, cylindrical) }
+
+        var claimed = [Bool](repeating: false, count: count)
+
+        for seed in 0..<count where !claimed[seed] {
+            // Cylindrical first: a smooth run of facets fitting a cylinder.
+            if let cyl = cylindricalFace(in: mesh, seedTriangle: seed) {
+                let fresh = cyl.triangles.filter { $0 >= 0 && $0 < count && !claimed[$0] }
+                if fresh.contains(seed), fresh.count >= 6 {
+                    for t in fresh { claimed[t] = true }
+                    var face = cyl
+                    face.triangles = fresh.sorted()
+                    cylindrical.append(face)
+                    continue
+                }
+            }
+
+            // Planar coplanar patch.
+            if let flat = planarFace(in: mesh, seedTriangle: seed) {
+                let fresh = flat.triangles.filter { $0 >= 0 && $0 < count && !claimed[$0] }
+                if fresh.contains(seed) {
+                    for t in fresh { claimed[t] = true }
+                    var face = flat
+                    face.triangles = fresh.sorted()
+                    planar.append(face)
+                    continue
+                }
+            }
+
+            // Neither recognized the surface (degenerate seed): claim it alone
+            // so the walk makes progress and leaves no orphan.
+            claimed[seed] = true
+        }
+
+        return (planar, cylindrical)
     }
 
     // MARK: - Small linear-algebra helpers

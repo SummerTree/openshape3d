@@ -74,6 +74,40 @@ nonisolated enum KernelOps {
         return solid.transformed(by: transform)
     }
 
+    /// A slightly overlapped extrude prism (union of all profile prisms) for use
+    /// as a boolean CUT tool: the prism is padded ~0.001–0.002 past the flush
+    /// extent so coplanar / flush cut faces merge cleanly instead of leaving
+    /// hanging thin walls. Shared by the live extrude-cut (EditorViewModel) and
+    /// the feature-graph replay so both produce identical cut geometry.
+    static func overlapExtrudeTool(
+        profile: Profile,
+        holes: [Profile],
+        extraProfiles: [(profile: Profile, holes: [Profile])],
+        in plane: SketchPlane,
+        distance: Double,
+        symmetric: Bool
+    ) -> Euclid.Mesh {
+        let n = plane.normal
+        let sign: Double = distance >= 0 ? 1 : -1
+        func tool(_ profile: Profile, _ holes: [Profile]) -> Euclid.Mesh {
+            if symmetric {
+                // Symmetric solids straddle the plane: pad both sides.
+                return extrude(
+                    profile: profile, holes: holes, in: plane,
+                    distance: distance + sign * 0.001, symmetric: true)
+            }
+            return extrude(
+                profile: profile, holes: holes, in: plane,
+                distance: distance + sign * 0.002
+            ).translated(by: Vector(-n.x * sign * 0.001, -n.y * sign * 0.001, -n.z * sign * 0.001))
+        }
+        var solid = tool(profile, holes)
+        for extra in extraProfiles {
+            solid = solid.union(tool(extra.profile, extra.holes))
+        }
+        return solid
+    }
+
     private static func extrudeLoop(_ profile: Profile, depth: Double) -> Euclid.Mesh {
         let path = closedPath(for: profile)
         return Euclid.Mesh.extrude(path, depth: depth)
@@ -271,5 +305,63 @@ nonisolated enum KernelOps {
         }
         // CSG can leave T-junction cracks along cut seams; heal them.
         return result.makeWatertight()
+    }
+}
+
+// MARK: - Planar face push/pull (feature-graph replay)
+
+nonisolated extension KernelOps {
+
+    /// Push/pull a body's planar `face` by `distance` along the face normal — the
+    /// pure-geometry core of `EditorViewModel.faceModifiedMesh`'s planar branch,
+    /// extracted so the feature graph can replay it.
+    ///
+    /// `mesh` and `face` must live in the SAME coordinate space (the face's
+    /// `origin`/`basisX`/`basisY`/`outline` were measured from `mesh`); unlike
+    /// the live tool there is no body transform to bake in.
+    ///
+    /// - `distance > 0` (outward pull): unions a flush prism extruded from the
+    ///   face outline (with holes) by `distance` along the normal.
+    /// - `distance < 0` (inward push): truncates the body with the half-space at
+    ///   the face plane moved `|distance|` inward, keeping the interior (−normal)
+    ///   side. The half-space cut is coincident-wall safe — it leaves no hanging
+    ///   walls the way a same-cross-section boolean subtract would.
+    /// - `distance == 0`: returns `mesh` unchanged.
+    static func pushPullPlanarFace(
+        mesh: Euclid.Mesh,
+        face: FaceTopology.PlanarFace,
+        distance: Double
+    ) -> Euclid.Mesh {
+        guard distance != 0 else { return mesh }
+
+        // Reconstruct the sketch plane + profile the live face push/pull builds
+        // from the picked planar face.
+        let plane = SketchPlane(
+            origin: face.origin, xAxis: face.basisX, yAxis: face.basisY
+        )
+        let profile = Profile(
+            loop: face.outline, kind: .polygonal, sourceEntityIDs: []
+        )
+        let holes = face.holes.map {
+            Profile(loop: $0, kind: .polygonal, sourceEntityIDs: [])
+        }
+        // plane.normal == basisX × basisY == the face normal (mirrors the
+        // viewmodel, which reads context.plane.normal).
+        let n = plane.normal
+
+        if distance < 0 {
+            // Move the face plane into the body; keep the interior (−n) side.
+            let cutOrigin = plane.origin + n * distance
+            let cutPlane = SketchPlane(
+                origin: cutOrigin, xAxis: plane.xAxis, yAxis: plane.yAxis
+            )
+            return SplitKit.split(mesh: mesh, byPlane: cutPlane).other
+        } else {
+            let prism = KernelOps.extrude(
+                profile: profile, holes: holes, in: plane, distance: distance
+            )
+            guard !prism.polygons.isEmpty else { return mesh }
+            return mesh.union(prism).makeWatertight()
+        }
     }
 }

@@ -606,6 +606,15 @@ struct EditorView: View {
                         .padding(.top, 8)
                 }
             }
+            .overlay(alignment: .topLeading) {
+                // Feature history / timeline panel (Phase D, Task C3). Anchored
+                // leading so it clears the Items panel at .topTrailing.
+                if viewModel.showHistoryPanel {
+                    HistoryPanelView(viewModel: viewModel)
+                        .padding(.leading, 14)
+                        .padding(.top, 8)
+                }
+            }
             .overlay(alignment: .bottomTrailing) {
                 // Copy badge (spec §5.1): next gizmo drag moves a duplicate.
                 if viewModel.gizmoOrigin != nil {
@@ -977,6 +986,13 @@ struct EditorView: View {
                         Label("Views", systemImage: "square.stack.3d.up")
                     }
                     .accessibilityIdentifier("ViewsMenu")
+
+                    Button {
+                        viewModel.showHistoryPanel.toggle()
+                    } label: {
+                        Label("History", systemImage: "clock.arrow.circlepath")
+                    }
+                    .accessibilityIdentifier("HistoryButton")
 
                     Button {
                         showItemsPanel.toggle()

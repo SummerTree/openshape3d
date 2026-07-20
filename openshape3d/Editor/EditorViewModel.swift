@@ -2484,7 +2484,26 @@ final class EditorViewModel {
               let currentSpec = body.primitive,
               currentSpec != newSpec
         else { return }
-        session.perform(ResizePrimitiveCommand(bodyID: id, beforeSpec: currentSpec, afterSpec: newSpec))
+        let resize = ResizePrimitiveCommand(bodyID: id, beforeSpec: currentSpec, afterSpec: newSpec)
+
+        // Phase D (Task C2): keep the owning primitive feature node in sync, or
+        // create one so the box/cylinder/sphere becomes an editable history step.
+        // `placement` is identity — the body's own transform carries its world
+        // placement across rebuilds (rebuildFrom preserves it), so the replayed
+        // (identity-transform, origin-local) primitive lands in the same spot.
+        if let node = featureNode(owning: id), case .primitive = node.kind {
+            let after = FeatureKind.primitive(spec: newSpec, placement: .identity)
+            let edit = EditFeatureCommand(featureID: node.id, before: node.kind, after: after)
+            session.perform(CompositeCommand(title: resize.title, commands: [resize, edit]))
+        } else {
+            let node = FeatureNode(
+                name: newSpec.displayName,
+                kind: .primitive(spec: newSpec, placement: .identity),
+                outputBodyIDs: [id]
+            )
+            session.perform(CompositeCommand(
+                title: resize.title, commands: [resize, AppendFeatureCommand(node: node)]))
+        }
     }
 
     func finishEditing() {
@@ -2558,13 +2577,24 @@ final class EditorViewModel {
                 }
                 return
             }
-            self.session.perform(BooleanCommand(
+            let boolean = BooleanCommand(
                 kind: kind,
                 targetBefore: target,
                 toolIndex: toolIndex,
                 toolBefore: tool,
                 result: result
-            ))
+            )
+            // Phase D (Task C2): record a `.boolean` feature node when BOTH the
+            // target and tool are feature-produced, so replay can reconstruct
+            // them before re-applying the CSG. If either is a non-feature body
+            // (import/copy), skip — the node couldn't be faithfully replayed.
+            if let node = self.booleanFeatureNode(kind: kind, target: target, tool: tool) {
+                self.session.perform(CompositeCommand(
+                    title: kind.rawValue.capitalized,
+                    commands: [boolean, AppendFeatureCommand(node: node)]))
+            } else {
+                self.session.perform(boolean)
+            }
             self.selection = [target.id]
             self.mode = .selected(target.id)
             self.session.save()
@@ -3225,33 +3255,17 @@ final class EditorViewModel {
     }
 
     /// Slightly overlapped tool (union of all profile prisms) so coplanar
-    /// seams merge cleanly.
+    /// seams merge cleanly. Delegates to `KernelOps.overlapExtrudeTool` so the
+    /// live cut and the feature-graph replay share one implementation.
     private func overlapExtrudeTool(_ context: ToolContext, distance: Double) -> Euclid.Mesh {
-        let n = context.plane.normal
-        let sign: Double = distance >= 0 ? 1 : -1
-        func tool(_ profile: Profile, _ holes: [Profile]) -> Euclid.Mesh {
-            if context.symmetric {
-                // Symmetric solids straddle the plane: pad both sides.
-                return KernelOps.extrude(
-                    profile: profile,
-                    holes: holes,
-                    in: context.plane,
-                    distance: distance + sign * 0.001,
-                    symmetric: true
-                )
-            }
-            return KernelOps.extrude(
-                profile: profile,
-                holes: holes,
-                in: context.plane,
-                distance: distance + sign * 0.002
-            ).translated(by: Vector(-n.x * sign * 0.001, -n.y * sign * 0.001, -n.z * sign * 0.001))
-        }
-        var solid = tool(context.profile, context.holes)
-        for extra in context.extraProfiles {
-            solid = solid.union(tool(extra.profile, extra.holes))
-        }
-        return solid
+        KernelOps.overlapExtrudeTool(
+            profile: context.profile,
+            holes: context.holes,
+            extraProfiles: context.extraProfiles,
+            in: context.plane,
+            distance: distance,
+            symmetric: context.symmetric
+        )
     }
 
     /// Commit a face push/pull: replace the source body with its truncated or
@@ -3280,7 +3294,26 @@ final class EditorViewModel {
             euclidMesh: localMesh,
             revision: 0
         )
-        session.perform(ReplaceBodyCommand(title: "Push/Pull", before: source, after: after))
+        let replace = ReplaceBodyCommand(title: "Push/Pull", before: source, after: after)
+
+        // Phase D (Task C2): record a `.pushPull(.planarAxial)` feature node when
+        // this is a PLANAR face op on a feature-produced body. The FaceRef pins
+        // the pushed face by geometric signature so it follows the geometry after
+        // an upstream edit. Cylinder-radial pulls (tranche 2) and face ops on
+        // non-feature bodies are skipped (couldn't be faithfully replayed).
+        if context.cylinderFace == nil,
+           let owner = featureNode(owning: sourceID),
+           let faceRef = pushPullFaceRef(context: context, source: source, creator: owner.id) {
+            let node = FeatureNode(
+                name: "Push/Pull",
+                kind: .pushPull(
+                    face: faceRef, distance: Expr(value: distance), mode: .planarAxial),
+                outputBodyIDs: [sourceID])
+            session.perform(CompositeCommand(
+                title: "Push/Pull", commands: [replace, AppendFeatureCommand(node: node)]))
+        } else {
+            session.perform(replace)
+        }
         toolContext = nil
         mode = .selected(source.id)
         selection = [source.id]
@@ -3400,6 +3433,21 @@ final class EditorViewModel {
         if let hide = consumedSketchHideCommand(context) {
             commands.append(hide)
         }
+        // Phase D (Task C2): record an `.extrude` feature node with the resolved
+        // boolean intent, but only for a SINGLE feature-owned target — the
+        // tranche-1 extrude evaluator applies one boolean into one target, so a
+        // multi-body cut or a non-feature target couldn't be faithfully replayed.
+        if targets.count == 1,
+           let targetOwner = featureNode(owning: targets[0].target.id),
+           let node = extrudeFeatureNode(
+               context: context,
+               boolean: BooleanIntent(
+                   op: kind.featureOp,
+                   resolvedTargets: [BodyRef(
+                       producer: targetOwner.id, bodyID: targets[0].target.id)]),
+               outputBodyIDs: [targets[0].target.id]) {
+            commands.append(AppendFeatureCommand(node: node))
+        }
         if commands.count == 1 {
             session.perform(commands[0])
         } else {
@@ -3430,13 +3478,23 @@ final class EditorViewModel {
             euclidMesh: localMesh,
             revision: preview.meshRevision
         )
+        var commands: [DocumentCommand] = [AddBodyCommand(body: body, title: title)]
         if let hide = consumedSketchHideCommand(context) {
-            session.perform(CompositeCommand(
-                title: title,
-                commands: [AddBodyCommand(body: body, title: title), hide]
-            ))
+            commands.append(hide)
+        }
+        // Phase D (Task C2): a new stand-alone extrude body becomes a
+        // `.extrude(boolean: .newBody)` history node (skipped for revolve/sweep/
+        // loft, which are recorded/evaluated in tranche 2).
+        if let node = extrudeFeatureNode(
+            context: context,
+            boolean: BooleanIntent(op: .newBody, resolvedTargets: []),
+            outputBodyIDs: [body.id]) {
+            commands.append(AppendFeatureCommand(node: node))
+        }
+        if commands.count == 1 {
+            session.perform(commands[0])
         } else {
-            session.perform(AddBodyCommand(body: body, title: title))
+            session.perform(CompositeCommand(title: title, commands: commands))
         }
         toolContext = nil
         mode = .selected(body.id)
@@ -6441,5 +6499,283 @@ final class EditorViewModel {
         session.perform(AddBodyCommand(body: body))
         selection = [body.id]
         mode = .editingPrimitive(body.id)
+    }
+
+    // MARK: - Feature graph recording (Phase D, Task C2)
+
+    /// The most recent feature node that produces `id` (last writer wins for a
+    /// BodyID owned by several nodes, e.g. a boolean that modifies its target in
+    /// place), or nil if `id` is a non-feature body (import / copy / seed).
+    private func featureNode(owning id: BodyID) -> FeatureNode? {
+        session.document.features.nodes.last { $0.outputBodyIDs.contains(id) }
+    }
+
+    /// A `ProfileRef` capturing the sketch loop (+ hole loops) so the extrude can
+    /// re-detect the same region on rebuild; the centroid is the seed-point
+    /// fallback when the entity ids don't uniquely match.
+    private func profileRef(profile: Profile, holes: [Profile], sketchID: SketchID) -> ProfileRef {
+        ProfileRef(
+            sketchID: sketchID,
+            entityIDs: Array(profile.sourceEntityIDs),
+            holeEntityIDs: holes.map { Array($0.sourceEntityIDs) },
+            seedPoint: profile.centroid
+        )
+    }
+
+    /// Build an `.extrude` feature node from the committing tool context, or nil
+    /// when this isn't a sketch-profile extrude (face push/pull, revolve, sweep,
+    /// loft — the latter three are tranche-2 features).
+    private func extrudeFeatureNode(
+        context: ToolContext, boolean: BooleanIntent, outputBodyIDs: [BodyID]
+    ) -> FeatureNode? {
+        guard case .extrude(let distance) = context.kind,
+              let sketchID = context.sketchID,
+              !context.isFaceOperation
+        else { return nil }
+        let outer = profileRef(profile: context.profile, holes: context.holes, sketchID: sketchID)
+        let extras = context.extraProfiles.map {
+            profileRef(profile: $0.profile, holes: $0.holes, sketchID: sketchID)
+        }
+        return FeatureNode(
+            name: "Extrude",
+            kind: .extrude(
+                profile: outer,
+                plane: PlaneRef(source: .sketch(sketchID)),
+                distance: Expr(value: distance),
+                symmetric: context.symmetric,
+                boolean: boolean,
+                extraProfiles: extras
+            ),
+            outputBodyIDs: outputBodyIDs
+        )
+    }
+
+    /// A `.boolean` node for an explicit target/tool CSG, or nil unless BOTH
+    /// bodies are feature-produced (only then can replay reconstruct them).
+    private func booleanFeatureNode(kind: BooleanKind, target: Body, tool: Body) -> FeatureNode? {
+        guard let targetOwner = featureNode(owning: target.id),
+              let toolOwner = featureNode(owning: tool.id)
+        else { return nil }
+        return FeatureNode(
+            name: kind.rawValue.capitalized,
+            kind: .boolean(
+                kind: kind,
+                target: BodyRef(producer: targetOwner.id, bodyID: target.id),
+                tools: [BodyRef(producer: toolOwner.id, bodyID: tool.id)]
+            ),
+            outputBodyIDs: [target.id]
+        )
+    }
+
+    /// A `FaceRef` pinning the pushed planar face by geometric signature, in the
+    /// source body's LOCAL space (matching `SignatureNaming`, which resolves
+    /// against `body.render`). Nil if the selected face isn't a recoverable
+    /// planar patch.
+    private func pushPullFaceRef(
+        context: ToolContext, source: Body, creator: FeatureID
+    ) -> FaceRef? {
+        guard let seed = context.faceTriangles.first,
+              let face = FaceTopology.planarFace(in: source.render, seedTriangle: seed)
+        else { return nil }
+        let n = SIMD3<Double>(Double(face.normal.x), Double(face.normal.y), Double(face.normal.z))
+        let centroid = face.origin
+        var area = abs(Profile.signedArea(face.outline))
+        for hole in face.holes { area -= abs(Profile.signedArea(hole)) }
+        let signature = FaceSignature(
+            kind: .planar, normal: n, centroid: centroid,
+            area: max(area, 0), planeOffset: simd_dot(n, centroid))
+        // Role is only a resolve tiebreak; box faces get a precise role, others
+        // fall back to derived (signature alone still resolves above threshold).
+        let role: FaceRole
+        if case .primitive(let spec, _)? = session.document.features.node(creator)?.kind,
+           case .box = spec {
+            role = .boxFace(Self.boxFace(for: n))
+        } else {
+            role = .derived(index: 0)
+        }
+        return FaceRef(
+            body: BodyRef(producer: creator, bodyID: source.id),
+            creator: creator, role: role, signature: signature)
+    }
+
+    /// The signed ±X/±Y/±Z box face a normal points most strongly along.
+    private static func boxFace(for n: SIMD3<Double>) -> BoxFace {
+        let ax = abs(n.x), ay = abs(n.y), az = abs(n.z)
+        if ax >= ay && ax >= az { return n.x >= 0 ? .px : .nx }
+        if ay >= az { return n.y >= 0 ? .py : .ny }
+        return n.z >= 0 ? .pz : .nz
+    }
+
+    // MARK: - History panel API (Phase D, Task C2)
+
+    /// One row in the History panel; a projection of a `FeatureNode` plus its
+    /// most-recent evaluation error.
+    struct FeatureRow: Identifiable {
+        let id: FeatureID
+        var name: String
+        var kindLabel: String
+        var suppressed: Bool
+        var hasError: Bool
+        var errorText: String?
+    }
+
+    /// Whether the History panel is shown beside the Items panel.
+    var showHistoryPanel = false
+
+    /// The ordered history rows, derived from the graph + last eval errors.
+    var historyRows: [FeatureRow] {
+        _ = session.changeCount // re-derive when the document changes
+        return session.document.features.nodes.map { node in
+            let error = session.lastEvalErrors[node.id]
+            return FeatureRow(
+                id: node.id,
+                name: node.name,
+                kindLabel: Self.kindLabel(node.kind),
+                suppressed: node.suppressed,
+                hasError: error != nil,
+                errorText: error.map(Self.errorText)
+            )
+        }
+    }
+
+    /// Select the bodies a feature owns, reusing the normal body-selection state.
+    func selectFeature(_ id: FeatureID) {
+        guard let node = session.document.features.node(id) else { return }
+        let ids = node.outputBodyIDs.filter { session.document.body(with: $0) != nil }
+        guard !ids.isEmpty else { return }
+        cancelTool()
+        selection = Set(ids)
+        if ids.count == 1, let first = ids.first {
+            mode = .selected(first)
+        }
+    }
+
+    /// Rename a history node (and its output bodies, so the Items panel stays in
+    /// sync) in one undo step.
+    func renameFeature(_ id: FeatureID, to newName: String) {
+        guard let node = session.document.features.node(id), node.name != newName else { return }
+        var commands: [DocumentCommand] = [
+            RenameFeatureCommand(featureID: id, before: node.name, after: newName)
+        ]
+        for bodyID in node.outputBodyIDs {
+            guard let body = session.document.body(with: bodyID) else { continue }
+            commands.append(RenameItemCommand(item: .body(bodyID), before: body.name, after: newName))
+        }
+        session.perform(commands.count == 1
+            ? commands[0]
+            : CompositeCommand(title: "Rename", commands: commands))
+        session.save()
+    }
+
+    /// Delete a history node and rebuild everything downstream in one undo step.
+    func deleteFeature(_ id: FeatureID) {
+        session.deleteFeature(id)
+        selection = selection.filter { session.document.body(with: $0) != nil }
+        session.save()
+    }
+
+    /// Suppress / un-suppress a history node and rebuild downstream.
+    func setFeatureSuppressed(_ id: FeatureID, _ value: Bool) {
+        session.setSuppressed(id, value)
+        session.save()
+    }
+
+    /// Fit the camera to the world AABB of a feature's output bodies.
+    func zoomToFeature(_ id: FeatureID) {
+        guard let node = session.document.features.node(id) else { return }
+        var lo = SIMD3<Float>(repeating: .infinity)
+        var hi = -lo
+        var found = false
+        for bodyID in node.outputBodyIDs {
+            guard let body = session.document.body(with: bodyID) else { continue }
+            let bounds = Self.worldBounds(of: body)
+            lo = simd_min(lo, SIMD3(Float(bounds.min.x), Float(bounds.min.y), Float(bounds.min.z)))
+            hi = simd_max(hi, SIMD3(Float(bounds.max.x), Float(bounds.max.y), Float(bounds.max.z)))
+            found = true
+        }
+        guard found else { return }
+        cameraControl?.fitTo(bounds: (lo, hi))
+    }
+
+    /// Edit a feature's primary scalar (extrude/push-pull distance, revolve
+    /// angle) and rebuild downstream via the session's `EditFeatureCommand` path.
+    func editFeatureDistance(_ id: FeatureID, _ value: Double) {
+        guard let node = session.document.features.node(id),
+              let after = Self.kind(node.kind, replacingScalar: value)
+        else { return }
+        session.editFeature(id, to: after)
+        session.save()
+    }
+
+    /// The same feature kind with its primary scalar replaced, or nil if it has
+    /// none (primitive/boolean/etc. aren't distance-editable in the panel).
+    private static func kind(_ kind: FeatureKind, replacingScalar value: Double) -> FeatureKind? {
+        switch kind {
+        case let .extrude(profile, plane, _, symmetric, boolean, extras):
+            return .extrude(
+                profile: profile, plane: plane, distance: Expr(value: value),
+                symmetric: symmetric, boolean: boolean, extraProfiles: extras)
+        case let .pushPull(face, _, mode):
+            return .pushPull(face: face, distance: Expr(value: value), mode: mode)
+        case let .revolve(profile, plane, axis, _, boolean):
+            return .revolve(
+                profile: profile, plane: plane, axis: axis,
+                angle: Expr(value: value), boolean: boolean)
+        default:
+            return nil
+        }
+    }
+
+    /// Short label for a feature kind (History panel row subtitle).
+    private static func kindLabel(_ kind: FeatureKind) -> String {
+        switch kind {
+        case let .primitive(spec, _):
+            return spec.displayName
+        case let .extrude(_, _, distance, _, boolean, _):
+            let verb: String
+            switch boolean.op {
+            case .subtract: verb = "Cut"
+            case .union: verb = "Extrude +"
+            case .intersect: verb = "Extrude ∩"
+            case .newBody: verb = "Extrude"
+            }
+            return "\(verb) \(fmt(distance.value)) mm"
+        case let .boolean(op, _, _):
+            return op.rawValue.capitalized
+        case let .pushPull(_, distance, _):
+            return "Push/Pull \(fmt(distance.value)) mm"
+        case let .revolve(_, _, _, angle, _):
+            return "Revolve \(fmt(angle.value))°"
+        case .sweep: return "Sweep"
+        case .loft: return "Loft"
+        case .transform: return "Move"
+        case .mirror: return "Mirror"
+        case .pattern: return "Pattern"
+        }
+    }
+
+    private static func fmt(_ v: Double) -> String {
+        String(format: "%g", (v * 1000).rounded() / 1000)
+    }
+
+    private static func errorText(_ error: FeatureError) -> String {
+        switch error {
+        case let .brokenRef(message): return "Broken reference: \(message)"
+        case .emptyGeometry: return "Empty geometry"
+        case let .kernelFailure(message): return message
+        }
+    }
+}
+
+// MARK: - Boolean intent mapping (Phase D, Task C2)
+
+nonisolated extension BooleanKind {
+    /// The parametric `BooleanIntent` op corresponding to this kernel boolean.
+    var featureOp: BooleanIntent.Op {
+        switch self {
+        case .union: .union
+        case .subtract: .subtract
+        case .intersect: .intersect
+        }
     }
 }

@@ -28,6 +28,12 @@ final class Project {
     @Relationship(deleteRule: .cascade, inverse: \PersistedSymbol.project)
     var symbols: [PersistedSymbol] = []
 
+    /// Phase D feature graph. Defaulted so pre-Phase-D stores migrate: an old
+    /// project loads with an empty graph and renders from its baked
+    /// `PersistedBody` meshes until the first parametric edit.
+    @Relationship(deleteRule: .cascade, inverse: \PersistedFeature.project)
+    var features: [PersistedFeature] = []
+
     init(name: String) {
         self.name = name
         self.createdAt = Date()
@@ -115,4 +121,93 @@ final class PersistedPlane {
         self.planeID = planeID
         self.planeData = planeData
     }
+}
+
+/// One node of the Phase D feature graph (`FeatureNode`), persisted.
+///
+/// All properties are defaulted so pre-Phase-D stores migrate without a
+/// `VersionedSchema` (repo convention). `kindData` is the JSON-encoded
+/// `FeatureKind` and `outputBodyIDData` the JSON-encoded `[BodyID]`; both are
+/// produced/consumed by `encodeFeature`/`decodeFeature` below. `orderIndex`
+/// records the node's position in `FeatureGraph.nodes` so replay order survives
+/// a store round-trip (SwiftData relationships are unordered).
+@Model
+final class PersistedFeature {
+    @Attribute(.unique) var featureID: UUID = UUID()
+    var orderIndex: Int = 0
+    var name: String = "Feature"
+    var suppressed: Bool = false
+    /// JSON-encoded `FeatureKind`.
+    @Attribute(.externalStorage) var kindData: Data = Data()
+    /// JSON-encoded `[BodyID]` (the node's minted-once output body IDs).
+    var outputBodyIDData: Data = Data()
+    var project: Project?
+
+    init(featureID: UUID,
+         orderIndex: Int,
+         name: String,
+         suppressed: Bool,
+         kindData: Data,
+         outputBodyIDData: Data) {
+        self.featureID = featureID
+        self.orderIndex = orderIndex
+        self.name = name
+        self.suppressed = suppressed
+        self.kindData = kindData
+        self.outputBodyIDData = outputBodyIDData
+    }
+}
+
+// MARK: - Feature encode/decode helpers
+//
+// Free functions bridging `FeatureNode` (B1 graph model) <-> `PersistedFeature`.
+// Called by `DocumentSession.save`/`load` (wired in a later step). The pure JSON
+// helpers are `nonisolated` so they can be exercised off the main actor and unit
+// tested without touching SwiftData.
+
+/// JSON-encode a `FeatureKind`; `Data()` on failure (empty decodes back to nil).
+nonisolated func encodeFeatureKind(_ kind: FeatureKind) -> Data {
+    (try? JSONEncoder().encode(kind)) ?? Data()
+}
+
+/// JSON-decode a `FeatureKind`; nil if the blob is empty/corrupt.
+nonisolated func decodeFeatureKind(_ data: Data) -> FeatureKind? {
+    try? JSONDecoder().decode(FeatureKind.self, from: data)
+}
+
+/// JSON-encode a node's `[BodyID]`; `Data()` on failure.
+nonisolated func encodeBodyIDs(_ ids: [BodyID]) -> Data {
+    (try? JSONEncoder().encode(ids)) ?? Data()
+}
+
+/// JSON-decode `[BodyID]`; nil if the blob is empty/corrupt (caller uses `?? []`).
+nonisolated func decodeBodyIDs(_ data: Data) -> [BodyID]? {
+    try? JSONDecoder().decode([BodyID].self, from: data)
+}
+
+/// Build a fresh `PersistedFeature` from a graph node. `orderIndex` is the node's
+/// position in `FeatureGraph.nodes`. Context insertion + `project` wiring are the
+/// caller's job (mirrors `DocumentSession.save`'s PersistedBody path).
+func encodeFeature(_ node: FeatureNode, orderIndex: Int) -> PersistedFeature {
+    PersistedFeature(
+        featureID: node.id.raw,
+        orderIndex: orderIndex,
+        name: node.name,
+        suppressed: node.suppressed,
+        kindData: encodeFeatureKind(node.kind),
+        outputBodyIDData: encodeBodyIDs(node.outputBodyIDs)
+    )
+}
+
+/// Rebuild a `FeatureNode` from a persisted row; nil if the kind blob won't
+/// decode (a broken/forward-incompatible node is skipped rather than crashing).
+func decodeFeature(_ pf: PersistedFeature) -> FeatureNode? {
+    guard let kind = decodeFeatureKind(pf.kindData) else { return nil }
+    return FeatureNode(
+        id: FeatureID(raw: pf.featureID),
+        name: pf.name,
+        kind: kind,
+        suppressed: pf.suppressed,
+        outputBodyIDs: decodeBodyIDs(pf.outputBodyIDData) ?? []
+    )
 }

@@ -542,6 +542,126 @@ struct MirrorSketchEntitiesCommand: DocumentCommand {
     }
 }
 
+// MARK: - Feature graph (Phase D, Task C1)
+
+/// Append a `FeatureNode` to the document's feature history as an undoable step.
+///
+/// This is the composable primitive the editor bundles into the SAME
+/// `CompositeCommand` as the geometry command that created the body (e.g.
+/// `AddBodyCommand` + `AppendFeatureCommand`), so a single user undo drops BOTH
+/// the mesh and the history node — no orphan node survives the undo.
+/// `DocumentSession.record(_:)` performs one of these standalone.
+struct AppendFeatureCommand: DocumentCommand {
+    let title: String
+    let node: FeatureNode
+
+    init(node: FeatureNode, title: String = "Add Feature") {
+        self.node = node
+        self.title = title
+    }
+
+    func apply(to document: inout DesignDocument) {
+        document.features.nodes.append(node)
+    }
+
+    func revert(in document: inout DesignDocument) {
+        document.features.nodes.removeAll { $0.id == node.id }
+    }
+}
+
+/// Change a feature node's operation parameters (e.g. an extrude distance edit).
+/// Bundled inside the rebuild `CompositeCommand` (see
+/// `DocumentSession.rebuildFrom`) together with the `ReplaceBody`/`AddBody`/
+/// `DeleteBodies` commands the re-evaluation produced, so ONE undo reverts both
+/// the parameter change and every downstream mesh it rebuilt.
+struct EditFeatureCommand: DocumentCommand {
+    let title = "Edit Feature"
+    let featureID: FeatureID
+    let before: FeatureKind
+    let after: FeatureKind
+
+    private func set(_ kind: FeatureKind, in document: inout DesignDocument) {
+        guard let index = document.features.index(of: featureID) else { return }
+        document.features.nodes[index].kind = kind
+    }
+
+    func apply(to document: inout DesignDocument) {
+        set(after, in: &document)
+    }
+
+    func revert(in document: inout DesignDocument) {
+        set(before, in: &document)
+    }
+}
+
+/// Toggle a feature node's suppress flag. Bundled with the rebuild body diff in
+/// a `CompositeCommand` (same shape as `EditFeatureCommand`) so suppressing or
+/// un-suppressing a step is one undo that also restores the affected meshes.
+struct SetFeatureSuppressedCommand: DocumentCommand {
+    let title: String
+    let featureID: FeatureID
+    let before: Bool
+    let after: Bool
+
+    init(featureID: FeatureID, before: Bool, after: Bool) {
+        self.featureID = featureID
+        self.before = before
+        self.after = after
+        self.title = after ? "Suppress Feature" : "Unsuppress Feature"
+    }
+
+    private func set(_ value: Bool, in document: inout DesignDocument) {
+        guard let index = document.features.index(of: featureID) else { return }
+        document.features.nodes[index].suppressed = value
+    }
+
+    func apply(to document: inout DesignDocument) {
+        set(after, in: &document)
+    }
+
+    func revert(in document: inout DesignDocument) {
+        set(before, in: &document)
+    }
+}
+
+/// Rename a feature history node (History panel). Standalone (not bundled with a
+/// rebuild) — changing a node's display name never affects geometry. The VM
+/// bundles this with `RenameItemCommand`s so the node and its bodies rename in
+/// one undo step.
+struct RenameFeatureCommand: DocumentCommand {
+    let title = "Rename Feature"
+    let featureID: FeatureID
+    let before: String
+    let after: String
+
+    private func set(_ name: String, in document: inout DesignDocument) {
+        guard let index = document.features.index(of: featureID) else { return }
+        document.features.nodes[index].name = name
+    }
+
+    func apply(to document: inout DesignDocument) { set(after, in: &document) }
+    func revert(in document: inout DesignDocument) { set(before, in: &document) }
+}
+
+/// Remove a feature node from the history (History panel delete). Bundled inside
+/// the rebuild `CompositeCommand` (see `DocumentSession.deleteFeature`) with the
+/// `ReplaceBody`/`DeleteBodies` commands the re-evaluation produced, so one undo
+/// restores both the node (at its original position) and every affected mesh.
+struct RemoveFeatureCommand: DocumentCommand {
+    let title = "Delete Feature"
+    let index: Int
+    let node: FeatureNode
+
+    func apply(to document: inout DesignDocument) {
+        document.features.nodes.removeAll { $0.id == node.id }
+    }
+
+    func revert(in document: inout DesignDocument) {
+        let clamped = min(max(index, 0), document.features.nodes.count)
+        document.features.nodes.insert(node, at: clamped)
+    }
+}
+
 // MARK: - Items Manager (spec §11)
 
 /// A row in the Items Manager: any document item addressable by ID.

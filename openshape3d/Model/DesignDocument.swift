@@ -15,6 +15,14 @@ nonisolated struct DesignDocument: Sendable {
     var images: [InsertedImage] = []
     var symbols: [Symbol] = []
 
+    /// Phase D (Task C1) parametric feature history. Lives on the document so
+    /// undoable commands mutate it via `inout document` like every other piece
+    /// of model state. Empty for pre-Phase-D projects (they render from their
+    /// baked `PersistedBody` meshes until the first parametric edit). Not
+    /// serialized whole — `DocumentSession.save` diffs it into `PersistedFeature`
+    /// rows, mirroring the `PersistedBody` path.
+    var features = FeatureGraph(nodes: [])
+
     /// Monotonic revision source for mesh changes (GPU cache invalidation).
     private var revisionCounter: UInt64 = 0
 
