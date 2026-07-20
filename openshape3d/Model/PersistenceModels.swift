@@ -39,6 +39,14 @@ final class Project {
     @Relationship(deleteRule: .cascade, inverse: \PersistedVariable.project)
     var variables: [PersistedVariable] = []
 
+    /// Phase D (Tranche 5) feature-graph rollback marker: the number of ACTIVE
+    /// (leading) feature nodes. `nil` means all nodes are active (no rollback).
+    /// A scalar column, defaulted so pre-Tranche-5 stores migrate without a
+    /// `VersionedSchema` (repo convention) — an old project loads with
+    /// `rollbackIndex == nil`. Load/save wiring into/out of
+    /// `document.features.rollbackIndex` lives in task B1.
+    var rollbackIndex: Int? = nil
+
     init(name: String) {
         self.name = name
         self.createdAt = Date()

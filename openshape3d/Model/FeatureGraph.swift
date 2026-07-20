@@ -154,8 +154,16 @@ nonisolated extension FeatureNode {
 /// the sketches/planes the profiles/planes reference.
 nonisolated struct FeatureGraph: Codable, Sendable {
     var nodes: [FeatureNode]
+    /// Rollback marker: the number of ACTIVE (leading) nodes. `nil` = every node
+    /// active; `k` = `nodes[0..<k]` active, nodes at/after `k` rolled back (not
+    /// evaluated → their bodies are removed). Synthesized Codable decodes this via
+    /// `decodeIfPresent`, so pre-rollback blobs load with `rollbackIndex == nil`.
+    var rollbackIndex: Int? = nil
 
-    init(nodes: [FeatureNode] = []) { self.nodes = nodes }
+    init(nodes: [FeatureNode] = [], rollbackIndex: Int? = nil) {
+        self.nodes = nodes
+        self.rollbackIndex = rollbackIndex
+    }
 
     /// The node with `id`, if present.
     func node(_ id: FeatureID) -> FeatureNode? {
@@ -220,7 +228,10 @@ nonisolated extension FeatureGraph {
     ) -> EvalResult {
         var state = EvalState(sketches: sketches, planes: planes, naming: naming)
 
-        for node in nodes where !node.suppressed {
+        // Replay only the active prefix: nodes at/after the rollback marker are not
+        // evaluated (their bodies never enter the live set). `prefix` clamps to the
+        // node count, so an out-of-range marker is safe. `nil` = all nodes active.
+        for node in nodes.prefix(rollbackIndex ?? nodes.count) where !node.suppressed {
             evaluate(node, into: &state, nextRevision: nextRevision)
         }
 

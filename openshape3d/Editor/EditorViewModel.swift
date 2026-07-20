@@ -6786,6 +6786,9 @@ final class EditorViewModel {
         var suppressed: Bool
         var hasError: Bool
         var errorText: String?
+        /// True when this node sits at/after the rollback marker, so it is not
+        /// evaluated (its bodies are absent). The History panel dims these rows.
+        var isRolledBack: Bool = false
         /// The node's `PatternSpec` when this is a `.pattern` row, else nil.
         /// The panel keys off this to show pattern-specific fields (count,
         /// spacing for linear, angle for circular). `angleDegrees` re-exposes
@@ -6896,7 +6899,9 @@ final class EditorViewModel {
     /// The ordered history rows, derived from the graph + last eval errors.
     var historyRows: [FeatureRow] {
         _ = session.changeCount // re-derive when the document changes
-        return session.document.features.nodes.map { node in
+        let nodes = session.document.features.nodes
+        let cut = session.document.features.rollbackIndex ?? nodes.count
+        return nodes.enumerated().map { index, node in
             let error = session.lastEvalErrors[node.id]
             let patternSpec: PatternSpec?
             if case let .pattern(_, spec) = node.kind { patternSpec = spec } else { patternSpec = nil }
@@ -6907,9 +6912,34 @@ final class EditorViewModel {
                 suppressed: node.suppressed,
                 hasError: error != nil,
                 errorText: error.map(Self.errorText),
+                isRolledBack: index >= cut,
                 patternSpec: patternSpec
             )
         }
+    }
+
+    /// The graph's rollback marker: the number of leading (active) nodes, or
+    /// nil when every node is active (latest state). Nodes at/after this index
+    /// are rolled back — not evaluated, their bodies removed.
+    var rollbackIndex: Int? { session.document.features.rollbackIndex }
+
+    /// Roll the history back to just after `id`, so the target node still
+    /// evaluates but everything after it is suppressed. Rolled-back nodes'
+    /// bodies disappear, so clean up selection/mode the same way undo/redo do.
+    func rollbackToFeature(_ id: FeatureID) {
+        guard let idx = session.document.features.index(of: id) else { return }
+        session.setRollback(idx + 1)
+        sanitizeAfterHistoryChange()
+        session.save()
+    }
+
+    /// Clear the rollback marker, returning the model to its latest state
+    /// (all nodes active). Newly restored bodies don't invalidate selection,
+    /// but sanitize anyway for symmetry/safety.
+    func clearRollback() {
+        session.setRollback(nil)
+        sanitizeAfterHistoryChange()
+        session.save()
     }
 
     /// Select the bodies a feature owns, reusing the normal body-selection state.

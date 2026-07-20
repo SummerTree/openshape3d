@@ -21,7 +21,13 @@ struct HistoryPanelView: View {
                 if viewModel.historyRows.isEmpty {
                     emptyRow("No features yet")
                 }
-                ForEach(viewModel.historyRows) { row in
+                ForEach(Array(viewModel.historyRows.enumerated()), id: \.element.id) { index, row in
+                    // Subtle divider marking where rollback begins: the first
+                    // rolled-back row (the one whose predecessor is still active).
+                    if row.isRolledBack,
+                       index == 0 || viewModel.historyRows[index - 1].isRolledBack == false {
+                        rollbackDivider
+                    }
                     HistoryRowView(
                         icon: iconName(for: row.id),
                         row: row,
@@ -33,6 +39,7 @@ struct HistoryPanelView: View {
                         },
                         onZoom: { viewModel.zoomToFeature(row.id) },
                         onDelete: { viewModel.deleteFeature(row.id) },
+                        onRollbackHere: { viewModel.rollbackToFeature(row.id) },
                         onEditDistance: { viewModel.editFeatureDistance(row.id, $0) },
                         onEditPatternCount: { viewModel.editPatternCount(row.id, $0) },
                         onEditPatternSpacing: { viewModel.editPatternSpacing(row.id, $0) },
@@ -50,11 +57,44 @@ struct HistoryPanelView: View {
     }
 
     private func sectionHeader(_ title: String) -> some View {
-        Text(title)
-            .font(.caption.weight(.semibold))
-            .foregroundStyle(.secondary)
-            .padding(.top, 10)
-            .padding(.bottom, 2)
+        HStack(spacing: 6) {
+            Text(title)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+            Spacer(minLength: 4)
+            // When the timeline is rolled back, offer a one-tap return to the
+            // full (latest) history. Hidden when rollbackIndex is nil.
+            if viewModel.rollbackIndex != nil {
+                Button {
+                    viewModel.clearRollback()
+                } label: {
+                    Label("Return to Latest", systemImage: "arrow.uturn.forward")
+                        .font(.caption2.weight(.semibold))
+                        .labelStyle(.titleAndIcon)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.tint)
+                .accessibilityIdentifier("ReturnToLatest")
+            }
+        }
+        .padding(.top, 10)
+        .padding(.bottom, 2)
+    }
+
+    /// A thin dashed rule drawn just above the first rolled-back row to mark the
+    /// boundary between the active (evaluated) prefix and the rolled-back tail.
+    private var rollbackDivider: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "arrow.uturn.backward.circle")
+                .font(.system(size: 11))
+            Text("Rolled back")
+                .font(.caption2.weight(.semibold))
+            VStack { Divider() }
+        }
+        .foregroundStyle(.tint)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
+        .accessibilityIdentifier("RollbackDivider")
     }
 
     private func emptyRow(_ text: String) -> some View {
@@ -108,6 +148,7 @@ private struct HistoryRowView: View {
     let onToggleSuppressed: () -> Void
     let onZoom: () -> Void
     let onDelete: () -> Void
+    let onRollbackHere: () -> Void
     let onEditDistance: (Double) -> Void
     let onEditPatternCount: (Int) -> Void
     let onEditPatternSpacing: (Double) -> Void
@@ -119,23 +160,35 @@ private struct HistoryRowView: View {
     @State private var spacingText = ""
     @State private var angleText = ""
 
+    /// A row is visually de-emphasized when the node is suppressed OR sits at/
+    /// after the rollback marker (its bodies are absent either way).
+    private var dimmed: Bool { row.suppressed || row.isRolledBack }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 8) {
                 Image(systemName: icon)
                     .font(.system(size: 15))
                     .frame(width: 24)
-                    .foregroundStyle(row.suppressed ? .tertiary : .secondary)
+                    .foregroundStyle(dimmed ? .tertiary : .secondary)
                 VStack(alignment: .leading, spacing: 1) {
                     TextField("Name", text: $draft)
                         .textFieldStyle(.plain)
                         .autocorrectionDisabled()
                         .onSubmit { onRename(draft) }
-                        .foregroundStyle(row.suppressed ? Color.secondary : Color.primary)
+                        .foregroundStyle(dimmed ? Color.secondary : Color.primary)
                         .accessibilityIdentifier("HistoryName-\(row.name)")
-                    Text(row.kindLabel)
-                        .font(.caption2)
-                        .foregroundStyle(.tertiary)
+                    HStack(spacing: 4) {
+                        Text(row.kindLabel)
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
+                        if row.isRolledBack {
+                            Text("· rolled back")
+                                .font(.caption2.weight(.semibold))
+                                .foregroundStyle(.tint)
+                                .accessibilityIdentifier("HistoryRolledBack-\(row.name)")
+                        }
+                    }
                 }
                 Spacer(minLength: 4)
                 if row.hasError {
@@ -148,9 +201,10 @@ private struct HistoryRowView: View {
                 Button(action: onToggleSuppressed) {
                     Image(systemName: row.suppressed ? "eye.slash" : "eye")
                         .font(.system(size: 14))
-                        .foregroundStyle(row.suppressed ? Color.secondary : Color.primary)
+                        .foregroundStyle(dimmed ? Color.secondary : Color.primary)
                 }
                 .buttonStyle(.plain)
+                .disabled(row.isRolledBack)
                 .accessibilityIdentifier("HistorySuppress-\(row.name)")
                 Button(action: onDelete) {
                     Image(systemName: "trash")
@@ -193,6 +247,8 @@ private struct HistoryRowView: View {
                 .padding(.vertical, 3)
                 .background(.quaternary, in: RoundedRectangle(cornerRadius: 6))
                 .padding(.leading, 32)
+                // Editing a rolled-back node is a silent no-op; block the field.
+                .disabled(row.isRolledBack)
             }
 
             if row.isPattern {
@@ -280,6 +336,8 @@ private struct HistoryRowView: View {
                 .padding(.vertical, 3)
                 .background(.quaternary, in: RoundedRectangle(cornerRadius: 6))
                 .padding(.leading, 32)
+                // Editing a rolled-back node is a silent no-op; block the fields.
+                .disabled(row.isRolledBack)
             }
         }
         .padding(.vertical, 7)
@@ -292,6 +350,12 @@ private struct HistoryRowView: View {
             } label: {
                 Label("Zoom to", systemImage: "arrow.up.left.and.arrow.down.right")
             }
+            Button {
+                onRollbackHere()
+            } label: {
+                Label("Roll Back to Here", systemImage: "arrow.uturn.backward")
+            }
+            .accessibilityIdentifier("RollbackHere-\(row.name)")
             Button(role: .destructive) {
                 onDelete()
             } label: {

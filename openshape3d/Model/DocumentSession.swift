@@ -135,15 +135,35 @@ final class DocumentSession {
         performRebuild(edited, leadingCommands: [cmd], title: cmd.title)
     }
 
+    /// Move (or clear, `nil`) the feature-graph rollback marker and rebuild
+    /// everything downstream in one undo step (History panel roll-back). Nodes
+    /// at/after the marker are no longer replayed, so their bodies are removed by
+    /// the diff; returning to `nil` (latest) replays and restores them. Mirrors
+    /// `setSuppressed`: no-op if the marker is unchanged.
+    func setRollback(_ newIndex: Int?) {
+        guard document.features.rollbackIndex != newIndex else { return }
+        var edited = document.features
+        edited.rollbackIndex = newIndex
+        let cmd = SetRollbackCommand(before: document.features.rollbackIndex, after: newIndex)
+        performRebuild(edited, leadingCommands: [cmd], title: cmd.title)
+    }
+
     /// Delete a node from the history and rebuild everything downstream in one
     /// undo step (History panel delete). The node's exclusively-owned bodies are
     /// removed; bodies still produced by surviving nodes are replaced.
     func deleteFeature(_ id: FeatureID) {
         guard let node = document.features.node(id),
               let index = document.features.index(of: id) else { return }
+        let beforeRollback = document.features.rollbackIndex
         var edited = document.features
         edited.nodes.removeAll { $0.id == id }
-        let cmd = RemoveFeatureCommand(index: index, node: node)
+        // Keep the evaluation graph's marker consistent with what
+        // RemoveFeatureCommand.apply will set the live marker to: deleting an
+        // ACTIVE node shortens the active prefix. Without this, `evaluate`'s
+        // `prefix(rollbackIndex)` would pull a rolled-back node into the active
+        // set and spuriously re-add its body while the real marker drops.
+        if let cut = beforeRollback, index < cut { edited.rollbackIndex = cut - 1 }
+        let cmd = RemoveFeatureCommand(index: index, node: node, beforeRollback: beforeRollback)
         performRebuild(edited, leadingCommands: [cmd], title: cmd.title)
     }
 
@@ -502,10 +522,24 @@ final class DocumentSession {
         // skipped (decodeFeature -> nil), not fatal. Pre-Phase-D projects have no
         // PersistedFeature rows -> empty graph, and render from their baked
         // PersistedBody meshes until the first parametric edit.
-        for persisted in project.features.sorted(by: { $0.orderIndex < $1.orderIndex }) {
+        // The rollback marker is a positional count of active leading nodes. If a
+        // node that sat BEFORE the marker fails to decode and is skipped, the
+        // active prefix shrinks, so shift the marker down by the number of such
+        // skips to keep it on the same logical boundary.
+        let savedMarker = project.rollbackIndex
+        var skippedBeforeMarker = 0
+        for (position, persisted) in project.features
+            .sorted(by: { $0.orderIndex < $1.orderIndex }).enumerated() {
             if let node = decodeFeature(persisted) {
                 loaded.features.nodes.append(node)
+            } else if let marker = savedMarker, position < marker {
+                skippedBeforeMarker += 1
             }
+        }
+        // Phase D (Tranche 5) rollback marker: a scalar column on Project. Pre-
+        // rollback stores have `rollbackIndex == nil` (all nodes active).
+        loaded.features.rollbackIndex = savedMarker.map {
+            max(0, min($0 - skippedBeforeMarker, loaded.features.nodes.count))
         }
         // Phase D variables (spec §6.6): ordered by `orderIndex` (SwiftData
         // relationships are unordered) so the creation-order resolution rule
@@ -684,6 +718,9 @@ final class DocumentSession {
         for persisted in project.features where !liveFeatureIDs.contains(persisted.featureID) {
             modelContext.delete(persisted)
         }
+        // Phase D (Tranche 5) rollback marker: mirror the in-memory graph's marker
+        // onto the Project scalar column (nil = all nodes active).
+        project.rollbackIndex = document.features.rollbackIndex
 
         // Phase D variables (spec §6.6): diff by variableID, mirroring the
         // PersistedFeature block. `orderIndex` is the variable's array position so

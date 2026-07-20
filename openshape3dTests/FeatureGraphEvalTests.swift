@@ -877,4 +877,170 @@ final class FeatureGraphEvalTests: XCTestCase {
         XCTAssertEqual(doc.features.node(patternFeature)?.outputBodyIDs, [copyA, copyB, copyC],
                        "redo restores the grown output set (not a stale snapshot)")
     }
+
+    // MARK: Tranche 5 — rollback (active-prefix replay)
+
+    /// Node ids/handles for the 3-node rollback fixture:
+    ///   box (10³ new body) → extrude (4×4×5 = 80 new body) → pushPull (box +Z out 2).
+    private struct RollbackHandles {
+        let boxFeature = FeatureID()
+        let extrudeFeature = FeatureID()
+        let pushFeature = FeatureID()
+        let boxID = BodyID()
+        let extrudeID = BodyID()
+        let sketchID = SketchID()
+        let rectEntity = UUID()
+    }
+
+    /// box → extrude(NEW body) → pushPull(box's +Z face out by 2). Three nodes,
+    /// each producing/modifying a body, so the rollback slice is observable body-by-body.
+    private func rollbackGraph(h: RollbackHandles, face faceRef: FaceRef) -> FeatureGraph {
+        FeatureGraph(nodes: [
+            FeatureNode(id: h.boxFeature, name: "Box",
+                        kind: .primitive(spec: .box(width: 10, depth: 10, height: 10),
+                                         placement: .identity),
+                        outputBodyIDs: [h.boxID]),
+            FeatureNode(id: h.extrudeFeature, name: "Extrude",
+                        kind: .extrude(
+                            profile: ProfileRef(sketchID: h.sketchID, entityIDs: [h.rectEntity],
+                                                holeEntityIDs: [], seedPoint: .zero),
+                            plane: PlaneRef(source: .sketch(h.sketchID)),
+                            distance: Expr(value: 5), symmetric: false,
+                            boolean: BooleanIntent(op: .newBody, resolvedTargets: []),
+                            extraProfiles: []),
+                        outputBodyIDs: [h.extrudeID]),
+            FeatureNode(id: h.pushFeature, name: "PushPull",
+                        kind: .pushPull(face: faceRef, distance: Expr(value: 2), mode: .planarAxial),
+                        outputBodyIDs: []),
+        ])
+    }
+
+    /// The box's +Z FaceRef (face at z=5), captured against a box-only evaluation.
+    private func rollbackFaceRef(h: RollbackHandles) throws -> FaceRef {
+        let seed = FeatureGraph(nodes: [
+            FeatureNode(id: h.boxFeature, name: "Box",
+                        kind: .primitive(spec: .box(width: 10, depth: 10, height: 10),
+                                         placement: .identity),
+                        outputBodyIDs: [h.boxID]),
+        ]).evaluate(sketches: [], planes: [], naming: SignatureNaming(),
+                    nextRevision: RevisionSource().next)
+        let table = try XCTUnwrap(seed.faceTables[h.boxID])
+        let entry = try XCTUnwrap(plusZEntry(table))
+        return FaceRef(body: BodyRef(producer: h.boxFeature, bodyID: h.boxID),
+                       creator: h.boxFeature, role: entry.role, signature: entry.signature)
+    }
+
+    /// (1) rollbackIndex = nil → every node replays: box is pushed (1000+200) and
+    /// the extrude's new body (80) is present.
+    func testRollbackNilEvaluatesAllNodes() throws {
+        let h = RollbackHandles()
+        let sketches = [rectSketch(id: h.sketchID, entityID: h.rectEntity,
+                                   min: SIMD2(-2, -2), max: SIMD2(2, 2))]
+        let faceRef = try rollbackFaceRef(h: h)
+        var graph = rollbackGraph(h: h, face: faceRef)
+        graph.rollbackIndex = nil
+
+        let result = graph.evaluate(sketches: sketches, planes: [],
+                                    naming: SignatureNaming(), nextRevision: RevisionSource().next)
+        XCTAssertTrue(result.errors.isEmpty, "no node should error: \(result.errors)")
+        XCTAssertEqual(Set(result.bodies.map(\.id)), [h.boxID, h.extrudeID])
+        let box = try XCTUnwrap(result.bodies.first { $0.id == h.boxID })
+        XCTAssertEqual(volume(box), 1000 + 200, accuracy: 1e-2, "box was pushed by the 3rd node")
+        let extrude = try XCTUnwrap(result.bodies.first { $0.id == h.extrudeID })
+        XCTAssertEqual(volume(extrude), 4 * 4 * 5, accuracy: 1e-2)
+    }
+
+    /// (2) rollbackIndex = 2 → only the first 2 nodes replay; the pushPull is
+    /// rolled back, so the box is NOT modified. The produced geometry must match
+    /// evaluating a genuine 2-node (box + extrude) graph.
+    func testRollbackToTwoSkipsThirdNodeMatchingTwoNodeGraph() throws {
+        let h = RollbackHandles()
+        let sketches = [rectSketch(id: h.sketchID, entityID: h.rectEntity,
+                                   min: SIMD2(-2, -2), max: SIMD2(2, 2))]
+        let faceRef = try rollbackFaceRef(h: h)
+
+        var graph = rollbackGraph(h: h, face: faceRef)
+        graph.rollbackIndex = 2
+        let result = graph.evaluate(sketches: sketches, planes: [],
+                                    naming: SignatureNaming(), nextRevision: RevisionSource().next)
+
+        // The pushPull did not run: no error recorded and the box is the raw 10³.
+        XCTAssertNil(result.errors[h.pushFeature], "rolled-back node is not evaluated → no error")
+        XCTAssertEqual(Set(result.bodies.map(\.id)), [h.boxID, h.extrudeID])
+        let box = try XCTUnwrap(result.bodies.first { $0.id == h.boxID })
+        XCTAssertEqual(volume(box), 1000, accuracy: 1e-2, "the +Z face push was rolled back")
+
+        // Byte-for-geometry equivalent to a graph that only has the first 2 nodes.
+        var twoNode = graph
+        twoNode.rollbackIndex = nil
+        twoNode.nodes = Array(graph.nodes.prefix(2))
+        let twoResult = twoNode.evaluate(sketches: sketches, planes: [],
+                                         naming: SignatureNaming(), nextRevision: RevisionSource().next)
+        XCTAssertEqual(Set(twoResult.bodies.map(\.id)), Set(result.bodies.map(\.id)),
+                       "rollback-2 yields the same body set as a real 2-node graph")
+        for id in Set(result.bodies.map(\.id)) {
+            let a = try XCTUnwrap(result.bodies.first { $0.id == id })
+            let b = try XCTUnwrap(twoResult.bodies.first { $0.id == id })
+            XCTAssertEqual(volume(a), volume(b), accuracy: 1e-6,
+                           "rollback-2 geometry matches the 2-node graph for body \(id)")
+        }
+    }
+
+    /// (3) rollbackIndex = 0 → the active prefix is empty → no bodies at all.
+    func testRollbackToZeroProducesNoBodies() throws {
+        let h = RollbackHandles()
+        let sketches = [rectSketch(id: h.sketchID, entityID: h.rectEntity,
+                                   min: SIMD2(-2, -2), max: SIMD2(2, 2))]
+        let faceRef = try rollbackFaceRef(h: h)
+        var graph = rollbackGraph(h: h, face: faceRef)
+        graph.rollbackIndex = 0
+
+        let result = graph.evaluate(sketches: sketches, planes: [],
+                                    naming: SignatureNaming(), nextRevision: RevisionSource().next)
+        XCTAssertTrue(result.bodies.isEmpty, "rollbackIndex 0 → nothing evaluates")
+        XCTAssertTrue(result.errors.isEmpty, "no node ran, so no node errored")
+    }
+
+    /// (4) rollbackIndex beyond the node count is clamped by `prefix` → identical
+    /// to `nil` (all nodes), no crash.
+    func testRollbackBeyondCountIsClampedLikeNil() throws {
+        let h = RollbackHandles()
+        let sketches = [rectSketch(id: h.sketchID, entityID: h.rectEntity,
+                                   min: SIMD2(-2, -2), max: SIMD2(2, 2))]
+        let faceRef = try rollbackFaceRef(h: h)
+        var graph = rollbackGraph(h: h, face: faceRef)
+        graph.rollbackIndex = 99   // way past the 3 nodes
+
+        let result = graph.evaluate(sketches: sketches, planes: [],
+                                    naming: SignatureNaming(), nextRevision: RevisionSource().next)
+        XCTAssertTrue(result.errors.isEmpty, "out-of-range marker must not error: \(result.errors)")
+        XCTAssertEqual(Set(result.bodies.map(\.id)), [h.boxID, h.extrudeID])
+        let box = try XCTUnwrap(result.bodies.first { $0.id == h.boxID })
+        XCTAssertEqual(volume(box), 1000 + 200, accuracy: 1e-2,
+                       "an over-count marker replays every node, exactly like nil")
+    }
+
+    /// (5) suppression and rollback COMPOSE: with all nodes in the active prefix
+    /// (rollbackIndex = 3) a suppressed node inside that prefix is still skipped.
+    func testSuppressedNodeInsideActivePrefixIsStillSkipped() throws {
+        let h = RollbackHandles()
+        let sketches = [rectSketch(id: h.sketchID, entityID: h.rectEntity,
+                                   min: SIMD2(-2, -2), max: SIMD2(2, 2))]
+        let faceRef = try rollbackFaceRef(h: h)
+        var graph = rollbackGraph(h: h, face: faceRef)
+        graph.rollbackIndex = 3   // every node active…
+        // …but suppress the extrude (node index 1), which sits INSIDE the prefix.
+        let idx = try XCTUnwrap(graph.index(of: h.extrudeFeature))
+        graph.nodes[idx].suppressed = true
+
+        let result = graph.evaluate(sketches: sketches, planes: [],
+                                    naming: SignatureNaming(), nextRevision: RevisionSource().next)
+        XCTAssertTrue(result.errors.isEmpty, "no node should error: \(result.errors)")
+        // The suppressed extrude produced no body; the box still ran and was pushed.
+        XCTAssertEqual(Set(result.bodies.map(\.id)), [h.boxID],
+                       "the suppressed node is skipped even though it is in the active prefix")
+        let box = try XCTUnwrap(result.bodies.first { $0.id == h.boxID })
+        XCTAssertEqual(volume(box), 1000 + 200, accuracy: 1e-2,
+                       "the pushPull (active, unsuppressed) still ran on the box")
+    }
 }

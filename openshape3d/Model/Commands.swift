@@ -560,12 +560,30 @@ struct AppendFeatureCommand: DocumentCommand {
         self.title = title
     }
 
+    /// With a rollback marker set, a newly-created feature must land at the
+    /// rollback point (right after the last ACTIVE node) — not tacked onto the
+    /// tail behind the rolled-back nodes — and the marker advances to keep the
+    /// new node active. When `rollbackIndex` is nil the behavior is byte-identical
+    /// to a plain append.
     func apply(to document: inout DesignDocument) {
-        document.features.nodes.append(node)
+        if let cut = document.features.rollbackIndex {
+            let at = min(cut, document.features.nodes.count)
+            document.features.nodes.insert(node, at: at)
+            document.features.rollbackIndex = cut + 1
+        } else {
+            document.features.nodes.append(node)
+        }
     }
 
     func revert(in document: inout DesignDocument) {
-        document.features.nodes.removeAll { $0.id == node.id }
+        guard let idx = document.features.nodes.firstIndex(where: { $0.id == node.id })
+        else { return }
+        document.features.nodes.remove(at: idx)
+        // The node counted toward the active prefix only if it sat before the
+        // marker; if so, pull the marker back so it and the array stay in lockstep.
+        if let cut = document.features.rollbackIndex, idx < cut {
+            document.features.rollbackIndex = cut - 1
+        }
     }
 }
 
@@ -685,14 +703,45 @@ struct RemoveFeatureCommand: DocumentCommand {
     let title = "Delete Feature"
     let index: Int
     let node: FeatureNode
+    /// The rollback marker BEFORE the removal, captured at construction so revert
+    /// restores it EXACTLY. Recomputing `index < cut` in revert is wrong at the
+    /// boundary `index == cut - 1` (the deleted node was the last active one):
+    /// apply has already decremented the marker, so `index < cut` reads false and
+    /// the marker is never pushed back — silently rolling the restored node back.
+    let beforeRollback: Int?
 
     func apply(to document: inout DesignDocument) {
         document.features.nodes.removeAll { $0.id == node.id }
+        // Removing an ACTIVE node (one before the marker) shortens the active
+        // prefix by one; a rolled-back node leaves it unchanged.
+        if let cut = beforeRollback {
+            document.features.rollbackIndex = index < cut ? cut - 1 : cut
+        }
     }
 
     func revert(in document: inout DesignDocument) {
         let clamped = min(max(index, 0), document.features.nodes.count)
         document.features.nodes.insert(node, at: clamped)
+        document.features.rollbackIndex = beforeRollback   // exact restore
+    }
+}
+
+/// Move (or clear) the feature-graph rollback marker (History panel "roll back to
+/// here" / "return to latest"). Rides `DocumentSession.performRebuild` with the
+/// downstream mesh diff so one undo restores both the marker and every body the
+/// rolled-back nodes had produced. Value snapshots both ways (`Int?`, nil = no
+/// rollback / all nodes active).
+struct SetRollbackCommand: DocumentCommand {
+    let before: Int?
+    let after: Int?
+    var title: String { after == nil ? "Return to Latest" : "Roll Back" }
+
+    func apply(to document: inout DesignDocument) {
+        document.features.rollbackIndex = after
+    }
+
+    func revert(in document: inout DesignDocument) {
+        document.features.rollbackIndex = before
     }
 }
 
