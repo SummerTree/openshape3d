@@ -33,7 +33,10 @@ struct HistoryPanelView: View {
                         },
                         onZoom: { viewModel.zoomToFeature(row.id) },
                         onDelete: { viewModel.deleteFeature(row.id) },
-                        onEditDistance: { viewModel.editFeatureDistance(row.id, $0) }
+                        onEditDistance: { viewModel.editFeatureDistance(row.id, $0) },
+                        onEditPatternCount: { viewModel.editPatternCount(row.id, $0) },
+                        onEditPatternSpacing: { viewModel.editPatternSpacing(row.id, $0) },
+                        onEditPatternAngle: { viewModel.editPatternAngle(row.id, $0) }
                     )
                 }
             }
@@ -106,9 +109,15 @@ private struct HistoryRowView: View {
     let onZoom: () -> Void
     let onDelete: () -> Void
     let onEditDistance: (Double) -> Void
+    let onEditPatternCount: (Int) -> Void
+    let onEditPatternSpacing: (Double) -> Void
+    let onEditPatternAngle: (Double) -> Void
 
     @State private var draft = ""
     @State private var distanceText = ""
+    @State private var countText = ""
+    @State private var spacingText = ""
+    @State private var angleText = ""
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
@@ -185,6 +194,93 @@ private struct HistoryRowView: View {
                 .background(.quaternary, in: RoundedRectangle(cornerRadius: 6))
                 .padding(.leading, 32)
             }
+
+            if row.isPattern {
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack(spacing: 4) {
+                        Text("Count")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                        TextField("", text: $countText)
+                            .textFieldStyle(.plain)
+                            .keyboardType(.numberPad)
+                            .autocorrectionDisabled()
+                            .submitLabel(.done)
+                            .frame(width: 44)
+                            .onSubmit(commitCount)
+                            .accessibilityIdentifier("PatternCountField-\(row.name)")
+                        Stepper(
+                            "",
+                            value: Binding(
+                                get: { Int(countText) ?? row.patternCount ?? 1 },
+                                set: { countText = String($0); onEditPatternCount($0) }
+                            ),
+                            in: 1...999
+                        )
+                        .labelsHidden()
+                        .accessibilityIdentifier("PatternCountStepper-\(row.name)")
+                        Button(action: commitCount) {
+                            Image(systemName: "checkmark.circle.fill")
+                                .font(.system(size: 14))
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityIdentifier("PatternCountCommit-\(row.name)")
+                    }
+
+                    if row.patternIsCircular == true {
+                        HStack(spacing: 4) {
+                            Text("Angle")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                            TextField("", text: $angleText)
+                                .textFieldStyle(.plain)
+                                .keyboardType(.numbersAndPunctuation)
+                                .autocorrectionDisabled()
+                                .submitLabel(.done)
+                                .frame(width: 60)
+                                .onSubmit(commitAngle)
+                                .accessibilityIdentifier("PatternAngleField-\(row.name)")
+                            Text("°")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                            Button(action: commitAngle) {
+                                Image(systemName: "checkmark.circle.fill")
+                                    .font(.system(size: 14))
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityIdentifier("PatternAngleCommit-\(row.name)")
+                        }
+                    } else {
+                        HStack(spacing: 4) {
+                            Text("Spacing")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                            TextField("", text: $spacingText)
+                                .textFieldStyle(.plain)
+                                .keyboardType(.numbersAndPunctuation)
+                                .autocorrectionDisabled()
+                                .submitLabel(.done)
+                                .frame(width: 60)
+                                .onSubmit(commitSpacing)
+                                .accessibilityIdentifier("PatternSpacingField-\(row.name)")
+                            Text("mm")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                            Button(action: commitSpacing) {
+                                Image(systemName: "checkmark.circle.fill")
+                                    .font(.system(size: 14))
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityIdentifier("PatternSpacingCommit-\(row.name)")
+                        }
+                    }
+                }
+                .font(.caption.weight(.semibold))
+                .padding(.horizontal, 6)
+                .padding(.vertical, 3)
+                .background(.quaternary, in: RoundedRectangle(cornerRadius: 6))
+                .padding(.leading, 32)
+            }
         }
         .padding(.vertical, 7)
         .padding(.horizontal, 8)
@@ -207,17 +303,49 @@ private struct HistoryRowView: View {
         .onAppear {
             draft = row.name
             distanceText = distance.map(Self.fmt) ?? ""
+            seedPatternText()
         }
         .onChange(of: row.name) { _, updated in draft = updated }
         .onChange(of: distance) { _, updated in
             distanceText = updated.map(Self.fmt) ?? ""
         }
+        .onChange(of: row.patternCount) { _, updated in
+            countText = updated.map { String($0) } ?? ""
+        }
+        .onChange(of: row.patternSpacing) { _, updated in
+            spacingText = updated.map(Self.fmt) ?? ""
+        }
+        .onChange(of: row.patternAngleDegrees) { _, updated in
+            angleText = updated.map(Self.fmt) ?? ""
+        }
+    }
+
+    private func seedPatternText() {
+        countText = row.patternCount.map { String($0) } ?? ""
+        spacingText = row.patternSpacing.map(Self.fmt) ?? ""
+        angleText = row.patternAngleDegrees.map(Self.fmt) ?? ""
     }
 
     private func commitDistance() {
         // Accept plain numbers and simple arithmetic ("25.4/2").
         guard let value = ExpressionEvaluator.evaluate(distanceText) else { return }
         onEditDistance(value)
+    }
+
+    private func commitCount() {
+        // Accept plain integers and simple arithmetic; round to nearest int.
+        guard let value = ExpressionEvaluator.evaluate(countText) else { return }
+        onEditPatternCount(Int(value.rounded()))
+    }
+
+    private func commitSpacing() {
+        guard let value = ExpressionEvaluator.evaluate(spacingText) else { return }
+        onEditPatternSpacing(value)
+    }
+
+    private func commitAngle() {
+        guard let value = ExpressionEvaluator.evaluate(angleText) else { return }
+        onEditPatternAngle(value)
     }
 
     private static func fmt(_ v: Double) -> String {

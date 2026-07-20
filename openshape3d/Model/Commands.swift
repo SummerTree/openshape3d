@@ -594,6 +594,40 @@ struct EditFeatureCommand: DocumentCommand {
     }
 }
 
+/// Change a feature node's operation parameters AND the set of body IDs it owns
+/// in one step. Needed by pattern-count edits: bumping a linear/circular
+/// pattern's `count` changes how many instance bodies the node produces, so the
+/// node's `outputBodyIDs` must grow (fresh IDs the diff `AddBody`s) or shrink
+/// (dropped IDs the diff `DeleteBodies`s) atomically with the spec change.
+///
+/// Like `EditFeatureCommand` (kind swap) but also swaps `outputBodyIDs`. Bundled
+/// inside the rebuild `CompositeCommand` (see `DocumentSession.editPatternFeature`)
+/// together with the `ReplaceBody`/`AddBody`/`DeleteBodies` commands the
+/// re-evaluation produced, so ONE undo reverts the spec, the ownership change,
+/// and every affected mesh.
+struct EditFeatureOutputsCommand: DocumentCommand {
+    let title = "Edit Feature"
+    let featureID: FeatureID
+    let beforeKind: FeatureKind
+    let afterKind: FeatureKind
+    let beforeOutputs: [BodyID]
+    let afterOutputs: [BodyID]
+
+    private func set(_ kind: FeatureKind, _ outputs: [BodyID], in document: inout DesignDocument) {
+        guard let index = document.features.index(of: featureID) else { return }
+        document.features.nodes[index].kind = kind
+        document.features.nodes[index].outputBodyIDs = outputs
+    }
+
+    func apply(to document: inout DesignDocument) {
+        set(afterKind, afterOutputs, in: &document)
+    }
+
+    func revert(in document: inout DesignDocument) {
+        set(beforeKind, beforeOutputs, in: &document)
+    }
+}
+
 /// Toggle a feature node's suppress flag. Bundled with the rebuild body diff in
 /// a `CompositeCommand` (same shape as `EditFeatureCommand`) so suppressing or
 /// un-suppressing a step is one undo that also restores the affected meshes.

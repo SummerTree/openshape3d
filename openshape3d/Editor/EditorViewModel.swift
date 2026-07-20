@@ -1649,6 +1649,11 @@ final class EditorViewModel {
         var document = session.document // local: unique names + revisions
         var commands: [DocumentCommand] = []
         var ids: Set<BodyID> = [body.id]
+        // Ordered copy ids (instance 1..<count) so the recorded feature node's
+        // outputBodyIDs line up with `evalPattern`, which emits copies at
+        // outputBodyIDs[i-1] for transform i. Same ids are used for both the
+        // AddBodyCommand geometry and the recorded node, so replay reuses them.
+        var copyIDs: [BodyID] = []
         for transform in patternTransforms(state).dropFirst() {
             var copy = Body(
                 id: BodyID(),
@@ -1662,8 +1667,25 @@ final class EditorViewModel {
             document.bodies.append(copy) // keeps the next name unique
             commands.append(AddBodyCommand(body: copy, title: "Pattern"))
             ids.insert(copy.id)
+            copyIDs.append(copy.id)
         }
         guard !commands.isEmpty else { return }
+        // Phase D: record a `.pattern` history node when the SOURCE body is
+        // feature-owned, so the copies rebuild associatively (and the panel can
+        // edit count/spacing/angle). Bundled into the SAME CompositeCommand so a
+        // single undo drops every copy + the node. A pattern of an imported /
+        // copied body can't be replayed, so it stays geometry-only.
+        if let owner = featureNode(owning: bodyID) {
+            let patternNode = FeatureNode(
+                name: "Pattern",
+                kind: .pattern(
+                    body: BodyRef(producer: owner.id, bodyID: bodyID),
+                    spec: Self.patternSpec(from: state)
+                ),
+                outputBodyIDs: copyIDs
+            )
+            commands.append(AppendFeatureCommand(node: patternNode))
+        }
         session.perform(CompositeCommand(title: "Pattern", commands: commands))
         patternState = nil
         selection = ids
@@ -6680,6 +6702,23 @@ final class EditorViewModel {
         )
     }
 
+    /// Translate the interactive `PatternState` into the persisted `PatternSpec`.
+    /// `axis` is the world direction (linear) / rotation axis (circular);
+    /// `count` is total instances incl. the original; `totalAngle` is stored in
+    /// RADIANS (the state carries degrees); `rotateInstances` matches the live
+    /// circular transform call (always true). Used both when recording a pattern
+    /// commit and — via the panel edit API — when rebuilding a spec field-by-field.
+    private static func patternSpec(from state: PatternState) -> PatternSpec {
+        PatternSpec(
+            kind: state.kind == .linear ? .linear : .circular,
+            axis: state.axis.direction,
+            count: state.count,
+            spacing: state.spacing,
+            totalAngle: state.totalAngle * .pi / 180,
+            rotateInstances: true
+        )
+    }
+
     /// A `.boolean` node for an explicit target/tool CSG, or nil unless BOTH
     /// bodies are feature-produced (only then can replay reconstruct them).
     private func booleanFeatureNode(kind: BooleanKind, target: Body, tool: Body) -> FeatureNode? {
@@ -6747,6 +6786,27 @@ final class EditorViewModel {
         var suppressed: Bool
         var hasError: Bool
         var errorText: String?
+        /// The node's `PatternSpec` when this is a `.pattern` row, else nil.
+        /// The panel keys off this to show pattern-specific fields (count,
+        /// spacing for linear, angle for circular). `angleDegrees` re-exposes
+        /// `spec.totalAngle` (radians) in the panel's degree units.
+        var patternSpec: PatternSpec?
+
+        /// True when this row edits a linear/circular pattern.
+        var isPattern: Bool { patternSpec != nil }
+        /// Total instance count (incl. original), or nil for non-pattern rows.
+        var patternCount: Int? { patternSpec?.count }
+        /// Adjacent-center spacing (linear patterns), or nil otherwise.
+        var patternSpacing: Double? { patternSpec?.spacing }
+        /// First→last sweep in DEGREES (circular patterns), or nil otherwise.
+        var patternAngleDegrees: Double? {
+            patternSpec.map { $0.totalAngle * 180 / .pi }
+        }
+        /// True when the pattern is circular (angle field applies), false linear
+        /// (spacing field applies); nil for non-pattern rows.
+        var patternIsCircular: Bool? {
+            patternSpec.map { $0.kind == .circular }
+        }
     }
 
     // MARK: - Document variables (Phase D, Task B2 / spec §6.6)
@@ -6838,13 +6898,16 @@ final class EditorViewModel {
         _ = session.changeCount // re-derive when the document changes
         return session.document.features.nodes.map { node in
             let error = session.lastEvalErrors[node.id]
+            let patternSpec: PatternSpec?
+            if case let .pattern(_, spec) = node.kind { patternSpec = spec } else { patternSpec = nil }
             return FeatureRow(
                 id: node.id,
                 name: node.name,
                 kindLabel: Self.kindLabel(node.kind),
                 suppressed: node.suppressed,
                 hasError: error != nil,
-                errorText: error.map(Self.errorText)
+                errorText: error.map(Self.errorText),
+                patternSpec: patternSpec
             )
         }
     }
@@ -6963,6 +7026,50 @@ final class EditorViewModel {
         session.save()
     }
 
+    /// The current `PatternSpec` of a `.pattern` node, or nil if `id` isn't a
+    /// pattern (the three panel edit APIs all rebuild from this base spec).
+    private func patternSpec(of id: FeatureID) -> PatternSpec? {
+        guard let node = session.document.features.node(id),
+              case let .pattern(_, spec) = node.kind else { return nil }
+        return spec
+    }
+
+    /// History-panel edit: change a pattern's total instance count (incl. the
+    /// original). Rebuilds the full spec with the one field changed and routes
+    /// through `session.editPatternFeature`, which resizes the node's
+    /// outputBodyIDs (grow/shrink) and rebuilds every downstream mesh in one
+    /// undo step. No-op unless `id` is a pattern.
+    func editPatternCount(_ id: FeatureID, _ count: Int) {
+        guard var spec = patternSpec(of: id) else { return }
+        let clamped = max(1, count)
+        guard clamped != spec.count else { return }
+        spec.count = clamped
+        session.editPatternFeature(id, spec: spec)
+        session.save()
+    }
+
+    /// History-panel edit: change a linear pattern's adjacent-center spacing.
+    /// No-op unless `id` is a pattern.
+    func editPatternSpacing(_ id: FeatureID, _ v: Double) {
+        guard var spec = patternSpec(of: id) else { return }
+        guard v != spec.spacing else { return }
+        spec.spacing = v
+        session.editPatternFeature(id, spec: spec)
+        session.save()
+    }
+
+    /// History-panel edit: change a circular pattern's first→last sweep, given
+    /// in DEGREES (converted to the radians the spec stores). No-op unless `id`
+    /// is a pattern.
+    func editPatternAngle(_ id: FeatureID, _ deg: Double) {
+        guard var spec = patternSpec(of: id) else { return }
+        let radians: Double = deg * Double.pi / 180
+        guard radians != spec.totalAngle else { return }
+        spec.totalAngle = radians
+        session.editPatternFeature(id, spec: spec)
+        session.save()
+    }
+
     /// Short label for a feature kind (History panel row subtitle).
     private static func kindLabel(_ kind: FeatureKind) -> String {
         switch kind {
@@ -6987,7 +7094,7 @@ final class EditorViewModel {
         case .loft: return "Loft"
         case .transform: return "Move"
         case .mirror: return "Mirror"
-        case .pattern: return "Pattern"
+        case let .pattern(_, spec): return "Pattern ×\(spec.count)"
         }
     }
 

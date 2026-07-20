@@ -28,14 +28,33 @@ import Euclid
 
 // MARK: - Placeholder value types (tranche-2 payloads)
 
-/// Minimal pattern descriptor so `FeatureKind.pattern` is Codable now; the real
-/// linear/circular pattern spec + evaluation lands in tranche 2.
+/// Linear/circular 3D body-pattern descriptor (tranche 4). `count` is the TOTAL
+/// number of instances including the original, so a pattern EMITS `count − 1`
+/// copies; `axis` is the linear direction or the circular rotation axis (world);
+/// `totalAngle` is the circular first→last sweep in RADIANS.
 nonisolated struct PatternSpec: Codable, Hashable, Sendable {
-    var count: Int
-    var offset: SIMD3<Double>
-    init(count: Int = 1, offset: SIMD3<Double> = .zero) {
+    enum Kind: String, Codable, Hashable, Sendable { case linear, circular }
+    var kind: Kind
+    var axis: SIMD3<Double>       // linear: direction; circular: rotation axis (world)
+    var count: Int                // TOTAL instances incl. the original (>=1)
+    var spacing: Double           // linear: adjacent-center distance
+    var totalAngle: Double        // circular: first->last sweep in RADIANS
+    var rotateInstances: Bool
+
+    init(
+        kind: Kind = .linear,
+        axis: SIMD3<Double> = SIMD3(1, 0, 0),
+        count: Int = 1,
+        spacing: Double = 0,
+        totalAngle: Double = 2 * .pi,
+        rotateInstances: Bool = true
+    ) {
+        self.kind = kind
+        self.axis = axis
         self.count = count
-        self.offset = offset
+        self.spacing = spacing
+        self.totalAngle = totalAngle
+        self.rotateInstances = rotateInstances
     }
 }
 
@@ -245,12 +264,12 @@ nonisolated extension FeatureGraph {
             evalMirror(
                 node, bodyRef: body, planeRef: plane, keepOriginal: keepOriginal,
                 into: &state, next: nextRevision)
+        case let .pattern(body, spec):
+            evalPattern(node, bodyRef: body, spec: spec, into: &state, next: nextRevision)
 
         // Defined but not evaluated yet — keep the graph total.
         case .transform:
             state.errors[node.id] = .kernelFailure("transform evaluation is tranche 2")
-        case .pattern:
-            state.errors[node.id] = .kernelFailure("pattern evaluation is tranche 2")
         }
     }
 
@@ -647,6 +666,70 @@ nonisolated extension FeatureGraph {
             euclidMesh: mirrored, revision: nextRevision())
         let table = state.naming.faceTable(for: body, createdBy: node.id, scheme: .generic)
         state.put(body, table: table)
+    }
+
+    // MARK: Pattern
+
+    /// Linear/circular body pattern. The source body (already in `state`) stays
+    /// PUT; the pattern only ADDS `count − 1` copies. Each copy reuses one of the
+    /// node's pre-allocated `outputBodyIDs` (the recording/edit layer owns id
+    /// allocation — never mint here), carries the composed instance transform, and
+    /// reuses the source's LOCAL mesh (the app's live pattern does the same:
+    /// copy transform = composed(instanceₙ, base: source.transform), mesh = source
+    /// local mesh). If fewer `outputBodyIDs` are supplied than copies are needed,
+    /// only the ids we have are emitted.
+    private func evalPattern(
+        _ node: FeatureNode,
+        bodyRef: BodyRef,
+        spec: PatternSpec,
+        into state: inout EvalState,
+        next nextRevision: () -> UInt64
+    ) {
+        guard let source = state.bodies[bodyRef.bodyID] else {
+            state.errors[node.id] = .brokenRef("pattern body unresolved")
+            return
+        }
+        // Instance transforms; element 0 is identity (the original / source body,
+        // which is NOT re-emitted). Matches EditorViewModel.patternTransforms.
+        let transforms: [Transform3D]
+        switch spec.kind {
+        case .linear:
+            transforms = PatternKit.linearTransforms(
+                direction: spec.axis, spacing: spec.spacing, count: max(1, spec.count))
+        case .circular:
+            transforms = PatternKit.circularTransforms(
+                center: .zero, axis: spec.axis, count: max(1, spec.count),
+                totalAngle: spec.totalAngle, rotateInstances: spec.rotateInstances)
+        }
+
+        let localMesh = source.euclidMesh()  // source stays put; copies reuse its local mesh
+        for i in 1..<transforms.count {
+            let idIndex = i - 1
+            guard idIndex < node.outputBodyIDs.count else { break } // never mint ids in eval
+            let copy = Body(
+                id: node.outputBodyIDs[idIndex],
+                name: node.name,
+                transform: Self.composePatternTransform(transforms[i], base: source.transform),
+                primitive: nil,
+                euclidMesh: localMesh,
+                revision: nextRevision())
+            let table = state.naming.faceTable(for: copy, createdBy: node.id, scheme: .generic)
+            state.put(copy, table: table)
+        }
+    }
+
+    /// Compose a pattern instance transform onto the source's base transform:
+    /// world = pattern.rotation.act(base(x)) + pattern.translation, so rotation
+    /// and translation pre-compose. Mirrors
+    /// `EditorViewModel.composedPatternTransform` (kept here so eval stays
+    /// `nonisolated` and free of the Editor layer).
+    private static func composePatternTransform(
+        _ pattern: Transform3D, base: Transform3D
+    ) -> Transform3D {
+        var result = base
+        result.rotation = simd_normalize(pattern.rotation * base.rotation)
+        result.translation = pattern.rotation.act(base.translation) + pattern.translation
+        return result
     }
 }
 

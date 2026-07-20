@@ -264,6 +264,59 @@ final class DocumentSession {
         rebuildFrom(id, edit: edit)
     }
 
+    /// Edit a pattern feature's `PatternSpec` and rebuild everything downstream in
+    /// one undo step. Unlike `editFeature`, a pattern edit can change how many
+    /// instance bodies the node owns (its `count`), so this resizes the node's
+    /// `outputBodyIDs` alongside the spec:
+    ///
+    /// - `desiredCopies = max(0, spec.count - 1)` (the original is the source body,
+    ///   not an emitted copy — see `evalPattern`, which emits ids `1..<count`).
+    /// - GROW: append fresh `BodyID()`s to the node's current `outputBodyIDs` until
+    ///   it holds `desiredCopies`. The extra ids aren't in the live graph's owned
+    ///   set, so `performRebuild`'s diff sees them only in the produced bodies →
+    ///   `AddBody`.
+    /// - SHRINK: `prefix(desiredCopies)` the current ids; the dropped tail ids stay
+    ///   in the live node's `outputBodyIDs`, so `performRebuild` unions them into
+    ///   `ownedIDs`, finds the replay no longer produces them → `DeleteBodies`.
+    ///
+    /// The `EditFeatureOutputsCommand` (swapping BOTH kind and outputBodyIDs) rides
+    /// the SAME `performRebuild` as the mesh diff — so one undo reverts the spec,
+    /// the ownership change, and every instance mesh. The graph copy handed to
+    /// `performRebuild` has both the new spec and the resized ids, so `evaluate`
+    /// has exactly enough ids to emit `desiredCopies` instances. No-op unless the
+    /// node exists and is a `.pattern`.
+    func editPatternFeature(_ id: FeatureID, spec: PatternSpec) {
+        guard let node = document.features.node(id),
+              case let .pattern(bodyRef, _) = node.kind else { return }
+
+        let desiredCopies = max(0, spec.count - 1)
+        var afterOutputs = node.outputBodyIDs
+        if afterOutputs.count > desiredCopies {
+            afterOutputs = Array(afterOutputs.prefix(desiredCopies))
+        } else {
+            while afterOutputs.count < desiredCopies { afterOutputs.append(BodyID()) }
+        }
+
+        let afterKind = FeatureKind.pattern(body: bodyRef, spec: spec)
+        let cmd = EditFeatureOutputsCommand(
+            featureID: id,
+            beforeKind: node.kind,
+            afterKind: afterKind,
+            beforeOutputs: node.outputBodyIDs,
+            afterOutputs: afterOutputs
+        )
+
+        // Graph copy with the new spec AND resized ids so `evaluate` sees the new
+        // parameters and has exactly enough ids to emit `desiredCopies` copies —
+        // mirroring `rebuildFrom`'s edited-graph pattern.
+        var editedGraph = document.features
+        if let index = editedGraph.index(of: id) {
+            editedGraph.nodes[index].kind = afterKind
+            editedGraph.nodes[index].outputBodyIDs = afterOutputs
+        }
+        performRebuild(editedGraph, leadingCommands: [cmd], title: cmd.title)
+    }
+
     // MARK: - Variables (Phase D, Task B1 / spec §6.6)
 
     /// The current `[name: value]` map of successfully-resolved document

@@ -694,4 +694,187 @@ final class FeatureGraphEvalTests: XCTestCase {
         XCTAssertEqual(volume(halfBody), fullVolume / 2, accuracy: fullVolume * 0.05)
         XCTAssertLessThan(volume(halfBody), fullVolume - 1, "the downstream body must rebuild")
     }
+
+    // MARK: Tranche 4 — pattern (linear / circular body patterns)
+
+    /// Build a graph: a box (10³ at the origin) then a pattern of that box with
+    /// `spec` writing into `copyIDs`.
+    private func patternGraph(
+        boxFeature: FeatureID, boxID: BodyID,
+        patternFeature: FeatureID, copyIDs: [BodyID],
+        spec: PatternSpec
+    ) -> FeatureGraph {
+        FeatureGraph(nodes: [
+            FeatureNode(id: boxFeature, name: "Box",
+                        kind: .primitive(spec: .box(width: 10, depth: 10, height: 10),
+                                         placement: .identity),
+                        outputBodyIDs: [boxID]),
+            FeatureNode(id: patternFeature, name: "Pattern",
+                        kind: .pattern(body: BodyRef(producer: boxFeature, bodyID: boxID),
+                                       spec: spec),
+                        outputBodyIDs: copyIDs),
+        ])
+    }
+
+    /// (1) Linear pattern, count 3, spacing 10 along +X → 2 copies at x=10 and
+    /// x=20; each watertight; the source is unchanged; the copy BodyIDs are the
+    /// supplied (stable) ids.
+    func testLinearPatternEmitsWatertightCopiesAndKeepsSource() throws {
+        let boxFeature = FeatureID(), patternFeature = FeatureID()
+        let boxID = BodyID()
+        let copyA = BodyID(), copyB = BodyID()
+        let spec = PatternSpec(kind: .linear, axis: SIMD3(1, 0, 0), count: 3,
+                               spacing: 10, rotateInstances: true)
+        let graph = patternGraph(boxFeature: boxFeature, boxID: boxID,
+                                 patternFeature: patternFeature, copyIDs: [copyA, copyB],
+                                 spec: spec)
+        let result = graph.evaluate(sketches: [], planes: [],
+                                    naming: SignatureNaming(), nextRevision: RevisionSource().next)
+
+        XCTAssertNil(result.errors[patternFeature], "pattern must evaluate: \(result.errors)")
+        // Source + 2 copies, exactly the supplied ids.
+        XCTAssertEqual(Set(result.bodies.map(\.id)), [boxID, copyA, copyB])
+
+        let source = try XCTUnwrap(result.bodies.first { $0.id == boxID })
+        XCTAssertEqual(source.transform, .identity, "the source body stays put")
+        XCTAssertEqual(volume(source), 1000, accuracy: 1e-3)
+
+        let a = try XCTUnwrap(result.bodies.first { $0.id == copyA })
+        let b = try XCTUnwrap(result.bodies.first { $0.id == copyB })
+        XCTAssertEqual(a.transform.translation.x, 10, accuracy: 1e-9, "first copy at x=10")
+        XCTAssertEqual(b.transform.translation.x, 20, accuracy: 1e-9, "second copy at x=20")
+        // Copies reuse the source's local mesh → same watertight box volume.
+        XCTAssertTrue(a.euclidMesh().isWatertight)
+        XCTAssertTrue(b.euclidMesh().isWatertight)
+        XCTAssertEqual(volume(a), 1000, accuracy: 1e-3)
+        XCTAssertEqual(volume(b), 1000, accuracy: 1e-3)
+    }
+
+    /// (2) Editing the spec (count 3 → 4) with an extra supplied outputBodyID
+    /// emits 3 copies at x=10, 20, 30.
+    func testLinearPatternCountFourEmitsThreeCopies() throws {
+        let boxFeature = FeatureID(), patternFeature = FeatureID()
+        let boxID = BodyID()
+        let ids = [BodyID(), BodyID(), BodyID()]
+        let spec = PatternSpec(kind: .linear, axis: SIMD3(1, 0, 0), count: 4, spacing: 10)
+        let graph = patternGraph(boxFeature: boxFeature, boxID: boxID,
+                                 patternFeature: patternFeature, copyIDs: ids, spec: spec)
+        let result = graph.evaluate(sketches: [], planes: [],
+                                    naming: SignatureNaming(), nextRevision: RevisionSource().next)
+
+        XCTAssertNil(result.errors[patternFeature], "\(result.errors)")
+        XCTAssertEqual(Set(result.bodies.map(\.id)), Set([boxID] + ids))
+        let xs = ids.map { id in
+            (result.bodies.first { $0.id == id })?.transform.translation.x ?? .nan
+        }.sorted()
+        XCTAssertEqual(xs, [10, 20, 30], "three copies at x=10,20,30")
+    }
+
+    /// (3) Circular pattern, count 4 over a full 2π turn about +Z → 3 copies,
+    /// each watertight and rotated by π/2, π, 3π/2 about the axis.
+    func testCircularPatternEmitsThreeRotatedCopies() throws {
+        let boxFeature = FeatureID(), patternFeature = FeatureID()
+        let boxID = BodyID()
+        let ids = [BodyID(), BodyID(), BodyID()]
+        let spec = PatternSpec(kind: .circular, axis: SIMD3(0, 0, 1), count: 4,
+                               totalAngle: 2 * .pi, rotateInstances: true)
+        let graph = patternGraph(boxFeature: boxFeature, boxID: boxID,
+                                 patternFeature: patternFeature, copyIDs: ids, spec: spec)
+        let result = graph.evaluate(sketches: [], planes: [],
+                                    naming: SignatureNaming(), nextRevision: RevisionSource().next)
+
+        XCTAssertNil(result.errors[patternFeature], "\(result.errors)")
+        XCTAssertEqual(Set(result.bodies.map(\.id)), Set([boxID] + ids))
+        // Full turn over count=4 → adjacent step π/2; copies at π/2, π, 3π/2.
+        let angles = ids.map { id -> Double in
+            let body = result.bodies.first { $0.id == id }!
+            return body.transform.rotation.angle
+        }
+        for (copyIndex, angle) in angles.enumerated() {
+            let body = try XCTUnwrap(result.bodies.first { $0.id == ids[copyIndex] })
+            XCTAssertTrue(body.euclidMesh().isWatertight, "circular copy must be watertight")
+            XCTAssertNotEqual(angle, 0, accuracy: 1e-9, "each copy is actually rotated")
+        }
+        // At least one copy is a quarter turn (π/2) — proves the step is correct.
+        XCTAssertTrue(angles.contains { abs($0 - .pi / 2) < 1e-6 },
+                      "one copy is rotated a quarter turn about the axis")
+    }
+
+    /// (4) A pattern node with NO supplied outputBodyIDs emits no copies and does
+    /// not crash — eval never mints ids.
+    func testPatternWithNoOutputIDsEmitsNoCopies() throws {
+        let boxFeature = FeatureID(), patternFeature = FeatureID()
+        let boxID = BodyID()
+        let spec = PatternSpec(kind: .linear, axis: SIMD3(1, 0, 0), count: 3, spacing: 10)
+        let graph = patternGraph(boxFeature: boxFeature, boxID: boxID,
+                                 patternFeature: patternFeature, copyIDs: [], spec: spec)
+        let result = graph.evaluate(sketches: [], planes: [],
+                                    naming: SignatureNaming(), nextRevision: RevisionSource().next)
+
+        XCTAssertNil(result.errors[patternFeature], "empty outputBodyIDs is not an error")
+        XCTAssertEqual(result.bodies.map(\.id), [boxID], "only the source body survives")
+    }
+
+    /// (5) A pattern whose source BodyRef cannot be resolved → `.brokenRef`, no crash.
+    func testPatternWithMissingSourceReportsBrokenRef() throws {
+        let patternFeature = FeatureID()
+        let missing = BodyID(), copyID = BodyID()
+        let graph = FeatureGraph(nodes: [
+            FeatureNode(id: patternFeature, name: "Pattern",
+                        kind: .pattern(body: BodyRef(producer: FeatureID(), bodyID: missing),
+                                       spec: PatternSpec(kind: .linear, axis: SIMD3(1, 0, 0),
+                                                         count: 3, spacing: 10)),
+                        outputBodyIDs: [copyID]),
+        ])
+        let result = graph.evaluate(sketches: [], planes: [],
+                                    naming: SignatureNaming(), nextRevision: RevisionSource().next)
+
+        switch result.errors[patternFeature] {
+        case .brokenRef: break
+        default: XCTFail("missing source must brokenRef, got \(String(describing: result.errors[patternFeature]))")
+        }
+        XCTAssertTrue(result.bodies.isEmpty, "no body is emitted for a broken pattern source")
+    }
+
+    /// (6) EditFeatureOutputsCommand (the pattern count-edit command) swaps BOTH
+    /// kind and outputBodyIDs consistently across apply / undo / REDO — carrying
+    /// explicit before/after so redo never restores a stale output set (the
+    /// tranche-3 variable-redo bug class).
+    func testEditFeatureOutputsCommandIsConsistentAcrossRedo() {
+        let patternFeature = FeatureID()
+        let boxFeature = FeatureID(), boxID = BodyID()
+        let copyA = BodyID(), copyB = BodyID(), copyC = BodyID()
+        let bodyRef = BodyRef(producer: boxFeature, bodyID: boxID)
+        let beforeSpec = PatternSpec(kind: .linear, axis: SIMD3(1, 0, 0), count: 3, spacing: 10)
+        let afterSpec = PatternSpec(kind: .linear, axis: SIMD3(1, 0, 0), count: 4, spacing: 10)
+
+        var doc = DesignDocument()
+        doc.features = FeatureGraph(nodes: [
+            FeatureNode(id: patternFeature, name: "Pattern",
+                        kind: .pattern(body: bodyRef, spec: beforeSpec),
+                        outputBodyIDs: [copyA, copyB]),   // count 3 → 2 copies
+        ])
+        let cmd = EditFeatureOutputsCommand(
+            featureID: patternFeature,
+            beforeKind: .pattern(body: bodyRef, spec: beforeSpec),
+            afterKind: .pattern(body: bodyRef, spec: afterSpec),
+            beforeOutputs: [copyA, copyB],
+            afterOutputs: [copyA, copyB, copyC])          // grown to 3 copies
+
+        func spec(_ d: DesignDocument) -> PatternSpec? {
+            if case let .pattern(_, s)? = d.features.node(patternFeature)?.kind { return s }
+            return nil
+        }
+
+        cmd.apply(to: &doc)
+        XCTAssertEqual(spec(doc)?.count, 4)
+        XCTAssertEqual(doc.features.node(patternFeature)?.outputBodyIDs, [copyA, copyB, copyC])
+        cmd.revert(in: &doc)
+        XCTAssertEqual(spec(doc)?.count, 3)
+        XCTAssertEqual(doc.features.node(patternFeature)?.outputBodyIDs, [copyA, copyB])
+        cmd.apply(to: &doc)   // redo
+        XCTAssertEqual(spec(doc)?.count, 4, "redo restores the new count")
+        XCTAssertEqual(doc.features.node(patternFeature)?.outputBodyIDs, [copyA, copyB, copyC],
+                       "redo restores the grown output set (not a stale snapshot)")
+    }
 }
