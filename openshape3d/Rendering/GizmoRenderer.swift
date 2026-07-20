@@ -114,7 +114,11 @@ final class GizmoRenderer {
         }
     }
 
-    /// Single accent arrow along `direction` — the extrude pull affordance.
+    /// Shapr3D-style pull affordance: a flat, camera-facing blue DOUBLE-HEADED
+    /// arrow (↕) — the touch/grab surface that drags the face in or out — riding a
+    /// thin dark connector off the moving cap. Billboarded so it always shows the
+    /// chevron profile; its "up" is the pull direction so it points along the
+    /// extrude axis. Turns red when the pending result would fail (spec §18).
     func drawPullArrow(
         encoder: MTLRenderCommandEncoder,
         pipelines: PipelineStore,
@@ -122,38 +126,79 @@ final class GizmoRenderer {
         arrow: PullArrowState,
         scale: Float
     ) {
-        guard let vertexBuffer, let yPart = parts.first(where: { $0.part == .yAxis }) else {
-            return
-        }
+        let origin = arrow.origin
+        let pullDir = simd_normalize(arrow.direction)
+        let camPos = SIMD3<Float>(frame.cameraPosition.x, frame.cameraPosition.y, frame.cameraPosition.z)
+        let toCam = simd_normalize(camPos - origin)
 
-        // Rotate the +Y arrow onto the pull direction.
-        let rotation = simd_quatf(from: SIMD3(0, 1, 0), to: simd_normalize(arrow.direction))
-        var model = simd_float4x4(rotation)
-        model.columns.0 *= scale
-        model.columns.1 *= scale
-        model.columns.2 *= scale
-        model.columns.3 = SIMD4(arrow.origin, 1)
+        // Billboard basis: `up` = the pull direction projected into the plane
+        // facing the camera, `right` perpendicular to both. Degenerate only when
+        // looking straight down the pull axis, where a fallback basis is fine.
+        var up = pullDir - simd_dot(pullDir, toCam) * toCam
+        var right: SIMD3<Float>
+        if simd_length(up) > 1e-3 {
+            up = simd_normalize(up)
+            right = simd_normalize(simd_cross(toCam, up))
+        } else {
+            let ref: SIMD3<Float> = abs(toCam.y) < 0.9 ? SIMD3(0, 1, 0) : SIMD3(1, 0, 0)
+            right = simd_normalize(simd_cross(toCam, ref))
+            up = simd_normalize(simd_cross(right, toCam))
+        }
+        func world(_ x: Float, _ y: Float) -> SIMD3<Float> {
+            origin + right * (x * scale) + up * (y * scale)
+        }
 
         encoder.setRenderPipelineState(pipelines.unlitColor)
         encoder.setDepthStencilState(pipelines.depthReadWrite)
-        encoder.setVertexBuffer(vertexBuffer, offset: 0, index: Int(BufferIndexPositions.rawValue))
         encoder.setVertexBytes(&frame, length: MemoryLayout<FrameUniforms>.stride,
                                index: Int(BufferIndexFrameUniforms.rawValue))
 
         var body = BodyUniforms()
-        body.modelMatrix = model
-        // Thin dark arrow (Shapr3D). Validity feedback: red when the pending
-        // result would fail (spec §18).
-        body.baseColor = arrow.isValid ? SIMD4(0.14, 0.15, 0.17, 1) : SIMD4(0.88, 0.20, 0.20, 1)
-        encoder.setVertexBytes(&body, length: MemoryLayout<BodyUniforms>.stride,
-                               index: Int(BufferIndexBodyUniforms.rawValue))
-        encoder.setFragmentBytes(&body, length: MemoryLayout<BodyUniforms>.stride,
-                                 index: Int(BufferIndexBodyUniforms.rawValue))
-        encoder.drawPrimitives(
-            type: .triangle,
-            vertexStart: yPart.vertexRange.lowerBound,
-            vertexCount: yPart.vertexRange.count
-        )
+        body.modelMatrix = matrix_identity_float4x4   // vertices are already world-space
+        func fill(_ triangles: [SIMD3<Float>], _ color: SIMD4<Float>) {
+            body.baseColor = color
+            encoder.setVertexBytes(&body, length: MemoryLayout<BodyUniforms>.stride,
+                                   index: Int(BufferIndexBodyUniforms.rawValue))
+            encoder.setFragmentBytes(&body, length: MemoryLayout<BodyUniforms>.stride,
+                                     index: Int(BufferIndexBodyUniforms.rawValue))
+            triangles.withUnsafeBytes { raw in
+                encoder.setVertexBytes(raw.baseAddress!, length: raw.count,
+                                       index: Int(BufferIndexPositions.rawValue))
+            }
+            encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: triangles.count)
+        }
+
+        // A filled polygon (fan from `center`, both windings) → world triangles.
+        func poly(_ pts: [(Float, Float)], center: (Float, Float)) -> [SIMD3<Float>] {
+            var t: [SIMD3<Float>] = []
+            let c = world(center.0, center.1)
+            for i in 0..<pts.count {
+                let a = pts[i], b = pts[(i + 1) % pts.count]
+                let A = world(a.0, a.1), B = world(b.0, b.1)
+                t += [c, A, B, c, B, A]
+            }
+            return t
+        }
+
+        let shaftLen: Float = 0.42, sw: Float = 0.03
+        let headLen: Float = 0.28, midH: Float = 0.24, W: Float = 0.30, w: Float = 0.11
+        let y0 = shaftLen                         // arrow's lower tip sits atop the shaft
+
+        // Dark connector.
+        fill(poly([(-sw, 0), (sw, 0), (sw, shaftLen), (-sw, shaftLen)],
+                  center: (0, shaftLen * 0.5)), SIMD4(0.14, 0.15, 0.17, 1))
+
+        // Blue double-arrow: down tip, up the right head/shaft, up tip, down the left.
+        let arrowPts: [(Float, Float)] = [
+            (0, y0),
+            (W, y0 + headLen), (w, y0 + headLen),
+            (w, y0 + headLen + midH), (W, y0 + headLen + midH),
+            (0, y0 + 2 * headLen + midH),
+            (-W, y0 + headLen + midH), (-w, y0 + headLen + midH),
+            (-w, y0 + headLen), (-W, y0 + headLen),
+        ]
+        let handle: SIMD4<Float> = arrow.isValid ? SIMD4(0.31, 0.57, 0.98, 1) : SIMD4(0.90, 0.28, 0.28, 1)
+        fill(poly(arrowPts, center: (0, y0 + headLen + midH * 0.5)), handle)
     }
 
     /// Plane picker tiles: translucent bordered quads in world space. Tiny
