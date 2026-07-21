@@ -345,6 +345,24 @@ final class EditorViewModel {
             }
         }
 
+        // Selected blend edges (Chamfer/Fillet): draw the picked edges as thick
+        // vivid-blue world lines so the user sees the selection set.
+        if case .pickingBlendEdges = mode, let bodyID = blendBodyID,
+           let body = session.document.body(with: bodyID) {
+            let matrix = body.transform.matrixFloat
+            var segs: [SIMD3<Float>] = []
+            for edge in blendSelectedEdges {
+                for p in [edge.start, edge.end] {
+                    let w = matrix * SIMD4(p, 1)
+                    segs.append(SIMD3(w.x, w.y, w.z))
+                }
+            }
+            if !segs.isEmpty {
+                scene.sketchLines.append(SketchLineBatch(
+                    segments: segs, color: SIMD4(0.16, 0.55, 1.0, 1)))
+            }
+        }
+
         // Pull arrow — "these arrows are the interface for creating an
         // extrude" (Shapr3D tutorial). Sits at the moving cap of the pull;
         // for revolve it lies along the plane tangent at the centroid.
@@ -1397,6 +1415,139 @@ final class EditorViewModel {
         }
     }
 
+    // MARK: - Chamfer / Fillet (Phase E, spec §4.3)
+
+    /// The body whose edges the current blend picks are on (a blend is
+    /// single-body v1). Cleared when the pick starts fresh on a new body.
+    var blendBodyID: BodyID?
+    /// Convex edges (body-LOCAL space) the user has toggled for the blend.
+    var blendSelectedEdges: [SelectableEdge] = []
+    /// The blend size (setback for chamfer, radius for fillet), in mm.
+    var blendValue: Double = 1
+
+    /// Arm Chamfer/Fillet from the Modify palette: the next taps toggle the
+    /// convex edges of a body. A body must already be selected or tappable.
+    func beginBlend(_ kind: BlendKind) {
+        cancelTransientPicks()
+        cancelTool()
+        blendSelectedEdges = []
+        blendBodyID = selection.count == 1 ? selection.first : nil
+        blendValue = 1
+        mode = .pickingBlendEdges(kind)
+    }
+
+    func cancelBlend() {
+        if case .pickingBlendEdges = mode {
+            blendSelectedEdges = []
+            blendBodyID = nil
+            mode = blendBodyID.map { .selected($0) } ?? .idle
+        }
+    }
+
+    /// Whether the blend can be committed (edges picked on one body).
+    var canCommitBlend: Bool {
+        if case .pickingBlendEdges = mode { return !blendSelectedEdges.isEmpty }
+        return false
+    }
+
+    /// Tap while a blend is armed: pick the body, find the nearest convex edge to
+    /// the tap, and toggle it in the selection. Tapping a second body restarts
+    /// the pick on that body (a blend stays single-body).
+    private func handleBlendEdgeTap(ray: Ray, kind: BlendKind) {
+        guard let hit = HitTester.pickBody(ray: ray, in: scene),
+              let body = session.document.body(with: hit.bodyID)
+        else { return }
+
+        if blendBodyID != hit.bodyID {
+            blendBodyID = hit.bodyID
+            blendSelectedEdges = []
+        }
+        // Convert the world hit to body-local space (edges live in local space).
+        let inverse = simd_inverse(body.transform.matrixFloat)
+        let local4 = inverse * SIMD4(hit.worldPoint, 1)
+        let localPoint = SIMD3<Float>(local4.x, local4.y, local4.z)
+
+        let edges = EdgeTopology.selectableEdges(from: body.render).filter { $0.isConvex }
+        guard let nearest = edges.min(by: {
+            Self.pointSegmentDistance(localPoint, $0.start, $0.end)
+                < Self.pointSegmentDistance(localPoint, $1.start, $1.end)
+        }) else { return }
+
+        // Toggle: same edge (≈ midpoint) already picked → deselect.
+        if let idx = blendSelectedEdges.firstIndex(where: {
+            simd_length($0.midpoint - nearest.midpoint) < 1e-4
+        }) {
+            blendSelectedEdges.remove(at: idx)
+        } else {
+            blendSelectedEdges.append(nearest)
+        }
+    }
+
+    /// Apply the blend: build the new mesh live and record a `.chamfer`/`.fillet`
+    /// feature node so it rebuilds parametrically. The EdgeRefs pin each edge by
+    /// signature against the owning feature's body.
+    func commitBlend() {
+        guard case .pickingBlendEdges(let kind) = mode,
+              let bodyID = blendBodyID,
+              let source = session.document.body(with: bodyID),
+              !blendSelectedEdges.isEmpty
+        else { return }
+
+        func d3(_ v: SIMD3<Float>) -> SIMD3<Double> { SIMD3(Double(v.x), Double(v.y), Double(v.z)) }
+        var mesh = source.euclidMesh()
+        for edge in blendSelectedEdges {
+            let p0 = d3(edge.start), p1 = d3(edge.end)
+            let nA = d3(edge.normalA), nB = d3(edge.normalB)
+            mesh = kind == .fillet
+                ? KernelOps.filletEdge(mesh: mesh, p0: p0, p1: p1, normalA: nA, normalB: nB, radius: blendValue)
+                : KernelOps.chamferEdge(mesh: mesh, p0: p0, p1: p1, normalA: nA, normalB: nB, setback: blendValue)
+        }
+        guard !mesh.polygons.isEmpty else {
+            errorMessage = "The \(kind.title.lowercased()) produced no geometry."
+            cancelBlend()
+            return
+        }
+        let after = Body(
+            id: source.id, name: source.name, transform: source.transform,
+            primitive: nil, euclidMesh: mesh, revision: 0)
+        let replace = ReplaceBodyCommand(title: kind.title, before: source, after: after)
+
+        // Record a parametric node only for a feature-owned body (else geometry
+        // only, like mirror — a seed/import body can't be replayed).
+        if let owner = featureNode(owning: bodyID) {
+            let bodyRef = BodyRef(producer: owner.id, bodyID: bodyID)
+            let edgeRefs = blendSelectedEdges.map {
+                EdgeRef(body: bodyRef, signature: EdgeTopology.signature(of: $0))
+            }
+            let node = FeatureNode(
+                name: kind.title,
+                kind: kind == .fillet
+                    ? .fillet(body: bodyRef, edges: edgeRefs, radius: Expr(value: blendValue))
+                    : .chamfer(body: bodyRef, edges: edgeRefs, setback: Expr(value: blendValue)),
+                outputBodyIDs: [bodyID])
+            session.perform(CompositeCommand(
+                title: kind.title, commands: [replace, AppendFeatureCommand(node: node)]))
+        } else {
+            session.perform(replace)
+        }
+        blendSelectedEdges = []
+        blendBodyID = nil
+        mode = .selected(source.id)
+        selection = [source.id]
+        session.save()
+    }
+
+    /// Distance from a point to a segment (both body-local).
+    private static func pointSegmentDistance(
+        _ p: SIMD3<Float>, _ a: SIMD3<Float>, _ b: SIMD3<Float>
+    ) -> Float {
+        let ab = b - a
+        let len2 = simd_dot(ab, ab)
+        guard len2 > 1e-12 else { return simd_length(p - a) }
+        let t = max(0, min(1, simd_dot(p - a, ab) / len2))
+        return simd_length(p - (a + ab * t))
+    }
+
     /// Tap while the split pick is armed: plane tiles win over the body
     /// (cutter planes usually pass through it), then profile fills. Taps that
     /// miss every cutter keep the pick armed.
@@ -2167,6 +2318,8 @@ final class EditorViewModel {
             handleSectionPlanePick(ray: ray)
         case .pickingImagePlane:
             handleImagePlanePick(ray: ray)
+        case .pickingBlendEdges(let kind):
+            handleBlendEdgeTap(ray: ray, kind: kind)
         }
     }
 

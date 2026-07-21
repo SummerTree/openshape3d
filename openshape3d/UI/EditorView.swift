@@ -313,6 +313,44 @@ struct EditorView: View {
         .padding(.top, 8)
     }
 
+    /// Chamfer/Fillet bar (Phase E, spec §4.3): shows the pick prompt, the
+    /// size field (setback/radius), and Apply/Cancel.
+    private func blendBar(_ kind: BlendKind, _ viewModel: EditorViewModel) -> some View {
+        let value = Binding(
+            get: { viewModel.blendValue },
+            set: { viewModel.blendValue = max(0, $0) })
+        return HStack(spacing: 12) {
+            Image(systemName: kind == .chamfer ? "square.on.circle" : "circle.circle")
+            Text(viewModel.blendSelectedEdges.isEmpty
+                 ? "Tap edges to \(kind.title.lowercased())"
+                 : "\(viewModel.blendSelectedEdges.count) edge\(viewModel.blendSelectedEdges.count == 1 ? "" : "s") selected")
+                .font(.subheadline)
+            Divider().frame(height: 20)
+            Text(kind.valueLabel).font(.caption).foregroundStyle(.secondary)
+            TextField("mm", value: value, format: .number)
+                .textFieldStyle(.roundedBorder)
+                .frame(width: 64)
+                .multilineTextAlignment(.trailing)
+                .keyboardType(.decimalPad)
+                .accessibilityIdentifier("BlendValueField")
+            Text("mm").font(.caption).foregroundStyle(.secondary)
+            Button("Cancel") { viewModel.cancelBlend() }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .keyboardShortcut(.cancelAction)
+                .accessibilityIdentifier("BlendCancel")
+            Button("Apply") { viewModel.commitBlend() }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+                .disabled(!viewModel.canCommitBlend)
+                .accessibilityIdentifier("BlendApply")
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+        .background(.regularMaterial, in: Capsule())
+        .shadow(color: .black.opacity(0.15), radius: 8, y: 2)
+    }
+
     /// Marquee rectangle over the viewport (plan §B13, spec §8.2). Standard
     /// visual cue: solid border = window (L→R drag, fully-inside selects),
     /// dashed = crossing (R→L, touched selects). Screen points come straight
@@ -597,6 +635,13 @@ struct EditorView: View {
                 }
                 .padding(.horizontal, 20)
                 .padding(.bottom, 12)
+            }
+            .overlay(alignment: .bottom) {
+                if case .pickingBlendEdges(let kind) = viewModel.mode {
+                    blendBar(kind, viewModel)
+                        .padding(.horizontal, 20)
+                        .padding(.bottom, 12)
+                }
             }
             .overlay(alignment: .topTrailing) {
                 // Items Manager sidebar (spec §11).

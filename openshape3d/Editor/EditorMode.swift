@@ -31,6 +31,15 @@ enum CreateTool: String, CaseIterable {
     case extrude, revolve, sweep, loft, helix
 }
 
+/// An edge blend (Phase E, spec §4.3): chamfer flattens the corner, fillet
+/// rounds it. Both pick convex edges then apply one shared size.
+enum BlendKind: String, CaseIterable {
+    case chamfer, fillet
+    var title: String { self == .chamfer ? "Chamfer" : "Fillet" }
+    /// The size label shown in the blend bar / History (setback vs radius).
+    var valueLabel: String { self == .chamfer ? "Setback" : "Radius" }
+}
+
 enum EditorMode: Equatable {
     case idle
     /// A legacy primitive body is selected with editable dimensions.
@@ -80,6 +89,9 @@ enum EditorMode: Equatable {
     /// `EditorViewModel.pendingImageData`; the plane tiles are shown, and the
     /// tapped plane (ground when the tap misses every tile) hosts the image.
     case pickingImagePlane
+    /// Chamfer/Fillet armed (spec §4.3): taps toggle convex edges of a body
+    /// into `EditorViewModel.blendSelectedEdges`; the blend bar sets the size.
+    case pickingBlendEdges(BlendKind)
 
     var isSketching: Bool {
         if case .sketching = self { return true }

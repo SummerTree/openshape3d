@@ -128,6 +128,14 @@ struct ToolPaletteView: View {
             modifyItem("Sweep", "scribble.variable", .sweep, "SweepButton"),
             modifyItem("Loft", "square.stack.3d.up", .loft, "LoftButton"),
             modifyItem("Helix", "tornado", .helix, "HelixButton"),
+            toggleItem("Chamfer", "square.on.circle", "ChamferButton",
+                       active: isMode { if case .pickingBlendEdges(.chamfer) = $0 { return true }; return false },
+                       enabled: !viewModel.session.document.bodies.isEmpty, tint: .blue,
+                       begin: { viewModel.beginBlend(.chamfer) }, cancel: { viewModel.cancelBlend() }),
+            toggleItem("Fillet", "circle.circle", "FilletButton",
+                       active: isMode { if case .pickingBlendEdges(.fillet) = $0 { return true }; return false },
+                       enabled: !viewModel.session.document.bodies.isEmpty, tint: .blue,
+                       begin: { viewModel.beginBlend(.fillet) }, cancel: { viewModel.cancelBlend() }),
         ])
     }
 
