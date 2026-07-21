@@ -631,17 +631,16 @@ struct EditorView: View {
                     // Selection info strip sits above the numeric bar when
                     // both are visible (spec §16.3).
                     SelectionInfoBar(viewModel: viewModel)
-                    NumericInputBar(viewModel: viewModel)
+                    // Chamfer/Fillet pick replaces the numeric bar with the
+                    // blend bar (both bottom-anchored; never stacked).
+                    if case .pickingBlendEdges(let kind) = viewModel.mode {
+                        blendBar(kind, viewModel)
+                    } else {
+                        NumericInputBar(viewModel: viewModel)
+                    }
                 }
                 .padding(.horizontal, 20)
                 .padding(.bottom, 12)
-            }
-            .overlay(alignment: .bottom) {
-                if case .pickingBlendEdges(let kind) = viewModel.mode {
-                    blendBar(kind, viewModel)
-                        .padding(.horizontal, 20)
-                        .padding(.bottom, 12)
-                }
             }
             .overlay(alignment: .topTrailing) {
                 // Items Manager sidebar (spec §11).

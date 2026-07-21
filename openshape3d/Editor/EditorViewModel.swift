@@ -250,12 +250,15 @@ final class EditorViewModel {
         let facePreviewSource: BodyID? =
             (toolContext?.previewReplacesSource == true && toolContext?.preview != nil)
             ? toolContext?.sourceBody : nil
+        // A live chamfer/fillet preview also replaces its source body.
+        let blendPreviewSource: BodyID? = blendPreview != nil ? blendBodyID : nil
 
         // Isolate (spec §16.2): a transient override hides everything outside
         // the isolated set without touching persisted visibility.
         for body in session.document.bodies
         where !body.isHidden
             && body.id != facePreviewSource
+            && body.id != blendPreviewSource
             && (isolatedBodyIDs?.contains(body.id) ?? true) {
             var selectionState = SelectionStateNone.rawValue
             if selection.contains(body.id) {
@@ -305,6 +308,20 @@ final class EditorViewModel {
                 selectionState: replacesSource
                     ? SelectionStateNone.rawValue : SelectionStatePreview.rawValue,
                 isTranslucent: !replacesSource
+            ))
+        }
+
+        // Live chamfer/fillet preview: the blended source body rendered
+        // neutrally in place of the original (spec §4.3 live feedback).
+        if let preview = blendPreview {
+            scene.bodies.append(BodyDrawable(
+                id: preview.id,
+                renderMesh: preview.render,
+                edges: preview.edges,
+                meshRevision: preview.meshRevision,
+                modelMatrix: preview.transform.matrixFloat,
+                baseColor: SIMD4(0.72, 0.74, 0.78, 1),
+                selectionState: SelectionStateNone.rawValue
             ))
         }
 
@@ -1208,6 +1225,7 @@ final class EditorViewModel {
         cancelBooleanPicking()
         cancelSectionPlanePick()
         cancelImagePlanePick()
+        resetBlendState()
         pendingCreateTool = nil
     }
 
@@ -1423,7 +1441,15 @@ final class EditorViewModel {
     /// Convex edges (body-LOCAL space) the user has toggled for the blend.
     var blendSelectedEdges: [SelectableEdge] = []
     /// The blend size (setback for chamfer, radius for fillet), in mm.
-    var blendValue: Double = 1
+    var blendValue: Double = 1 {
+        didSet { if blendValue != oldValue { updateBlendPreview() } }
+    }
+    /// Live result preview: the source body with the pending blend applied,
+    /// rendered IN PLACE of the source while the pick is armed (same swap the
+    /// face push/pull preview uses). Monotonic revision keeps the GPU cache
+    /// fresh across recomputes.
+    var blendPreview: Body?
+    private var blendPreviewRevision: UInt64 = 0
 
     /// Arm Chamfer/Fillet from the Modify palette: the next taps toggle the
     /// convex edges of a body. A body must already be selected or tappable.
@@ -1433,15 +1459,70 @@ final class EditorViewModel {
         blendSelectedEdges = []
         blendBodyID = selection.count == 1 ? selection.first : nil
         blendValue = 1
+        blendPreview = nil
         mode = .pickingBlendEdges(kind)
     }
 
+    /// User-facing Cancel: drop the pick and restore the body selection.
     func cancelBlend() {
-        if case .pickingBlendEdges = mode {
-            blendSelectedEdges = []
-            blendBodyID = nil
-            mode = blendBodyID.map { .selected($0) } ?? .idle
+        guard case .pickingBlendEdges = mode else { return }
+        let body = blendBodyID
+        resetBlendState()
+        if let body, session.document.body(with: body) != nil {
+            mode = .selected(body)
+            selection = [body]
+        } else {
+            mode = .idle
         }
+    }
+
+    /// Internal reset (delete / undo / arming another tool): clears the blend
+    /// state WITHOUT touching `selection` — deleteSelection deletes whatever is
+    /// in `selection`, so mutating it here would change what gets deleted.
+    private func resetBlendState() {
+        blendSelectedEdges = []
+        blendBodyID = nil
+        blendPreview = nil
+        if case .pickingBlendEdges = mode { mode = .idle }
+    }
+
+    /// The source mesh with the pending blend applied to every selected edge.
+    private func blendedMesh(_ kind: BlendKind, source: Body) -> Euclid.Mesh {
+        func d3(_ v: SIMD3<Float>) -> SIMD3<Double> { SIMD3(Double(v.x), Double(v.y), Double(v.z)) }
+        var mesh = source.euclidMesh()
+        for edge in blendSelectedEdges {
+            let p0 = d3(edge.start), p1 = d3(edge.end)
+            let nA = d3(edge.normalA), nB = d3(edge.normalB)
+            mesh = kind == .fillet
+                ? KernelOps.filletEdge(mesh: mesh, p0: p0, p1: p1, normalA: nA, normalB: nB, radius: blendValue)
+                : KernelOps.chamferEdge(mesh: mesh, p0: p0, p1: p1, normalA: nA, normalB: nB, setback: blendValue)
+        }
+        return mesh
+    }
+
+    /// Recompute the live blend preview (edge toggles and size edits call this).
+    private func updateBlendPreview() {
+        guard case .pickingBlendEdges(let kind) = mode,
+              let bodyID = blendBodyID,
+              let source = session.document.body(with: bodyID),
+              !blendSelectedEdges.isEmpty,
+              blendValue > 1e-6
+        else {
+            blendPreview = nil
+            return
+        }
+        let mesh = blendedMesh(kind, source: source)
+        guard !mesh.polygons.isEmpty else {
+            blendPreview = nil
+            return
+        }
+        blendPreviewRevision &+= 1
+        blendPreview = Body(
+            id: source.id, name: source.name, transform: source.transform,
+            primitive: nil, euclidMesh: mesh,
+            // High-bit revision space so preview revisions never collide with
+            // the document's own mesh revisions in the GPU cache.
+            revision: (1 << 62) | blendPreviewRevision)
     }
 
     /// Whether the blend can be committed (edges picked on one body).
@@ -1481,6 +1562,7 @@ final class EditorViewModel {
         } else {
             blendSelectedEdges.append(nearest)
         }
+        updateBlendPreview()
     }
 
     /// Apply the blend: build the new mesh live and record a `.chamfer`/`.fillet`
@@ -1493,15 +1575,8 @@ final class EditorViewModel {
               !blendSelectedEdges.isEmpty
         else { return }
 
-        func d3(_ v: SIMD3<Float>) -> SIMD3<Double> { SIMD3(Double(v.x), Double(v.y), Double(v.z)) }
-        var mesh = source.euclidMesh()
-        for edge in blendSelectedEdges {
-            let p0 = d3(edge.start), p1 = d3(edge.end)
-            let nA = d3(edge.normalA), nB = d3(edge.normalB)
-            mesh = kind == .fillet
-                ? KernelOps.filletEdge(mesh: mesh, p0: p0, p1: p1, normalA: nA, normalB: nB, radius: blendValue)
-                : KernelOps.chamferEdge(mesh: mesh, p0: p0, p1: p1, normalA: nA, normalB: nB, setback: blendValue)
-        }
+        // Reuse the live preview's mesh when it's current; else compute fresh.
+        let mesh = blendPreview?.euclid ?? blendedMesh(kind, source: source)
         guard !mesh.polygons.isEmpty else {
             errorMessage = "The \(kind.title.lowercased()) produced no geometry."
             cancelBlend()
@@ -1532,6 +1607,7 @@ final class EditorViewModel {
         }
         blendSelectedEdges = []
         blendBodyID = nil
+        blendPreview = nil
         mode = .selected(source.id)
         selection = [source.id]
         session.save()
@@ -1969,6 +2045,8 @@ final class EditorViewModel {
     private func sanitizeAfterHistoryChange() {
         // Face/tool contexts reference geometry that may have changed.
         cancelTool()
+        // A blend pick references edges of geometry that may have changed.
+        resetBlendState()
         axisEntryPart = nil
         scaleEntryActive = false
         // Pending sketch state may reference entities that no longer exist.
@@ -6397,6 +6475,19 @@ final class EditorViewModel {
                 ))
             }
             return rows
+        case .pickingBlendEdges:
+            // Chamfer/Fillet pick (Phase E): edge count + total world length.
+            guard !blendSelectedEdges.isEmpty else { return [] }
+            let scale = blendBodyID
+                .flatMap { session.document.body(with: $0)?.transform.scale } ?? 1
+            let total = blendSelectedEdges.reduce(0.0) { $0 + Double($1.length) } * scale
+            return [
+                MeasurementRow(label: "Edges", value: "\(blendSelectedEdges.count)"),
+                MeasurementRow(
+                    label: blendSelectedEdges.count == 1 ? "Length" : "Total Length",
+                    value: Self.formatted(total, unit: "mm")
+                ),
+            ]
         default:
             return []
         }

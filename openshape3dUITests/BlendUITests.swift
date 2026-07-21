@@ -120,4 +120,51 @@ final class BlendUITests: XCTestCase {
         NSLog("OS3D_BUG fillet errorBadges=\(errors.count)")
         XCTAssertEqual(errors.count, 0, "the fillet must evaluate cleanly")
     }
+
+    func testChamferTwoEdgesInOneFeature() throws {
+        let app = XCUIApplication()
+        app.launchEnvironment["OS3D_FRESH"] = "1"
+        app.launch()
+        let window = app.windows.firstMatch
+        XCTAssertTrue(app.buttons["SketchGroup"].waitForExistence(timeout: 10))
+
+        extrudeBox(app, window)
+
+        tapPaletteTool(app, group: "Modify", id: "ChamferButton")
+        XCTAssertTrue(app.buttons["BlendApply"].waitForExistence(timeout: 3))
+
+        func p(_ dx: CGFloat, _ dy: CGFloat) -> XCUICoordinate {
+            window.coordinate(withNormalizedOffset: CGVector(dx: dx, dy: dy))
+        }
+        // Tap around the box until two DISTINCT edges are in (the bar text is
+        // the deterministic readout; a repeat tap on the same edge toggles it
+        // off, so the loop just keeps going).
+        let two = app.staticTexts["2 edges selected"]
+        let candidates: [(CGFloat, CGFloat)] = [
+            (0.50, 0.42), (0.62, 0.55), (0.45, 0.55),
+            (0.55, 0.33), (0.70, 0.45), (0.40, 0.45),
+        ]
+        for pt in candidates {
+            p(pt.0, pt.1).tap()
+            sleep(1)
+            if two.exists { break }
+        }
+        XCTAssertTrue(two.exists, "two distinct edges should be selected")
+        shot("two-edges-selected")
+
+        app.buttons["BlendApply"].tap(); sleep(2)
+        shot("two-edges-chamfered")
+
+        // One Chamfer feature covering BOTH edges, evaluated cleanly.
+        app.buttons["HistoryButton"].firstMatch.tap(); sleep(1)
+        XCTAssertTrue(app.descendants(matching: .any)
+            .matching(NSPredicate(format: "identifier BEGINSWITH 'HistoryRow-Chamfer'"))
+            .firstMatch.waitForExistence(timeout: 3))
+        XCTAssertTrue(app.staticTexts
+            .matching(NSPredicate(format: "label CONTAINS '2 edges'"))
+            .firstMatch.exists, "the history subtitle shows the edge count")
+        let errors = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "identifier BEGINSWITH 'HistoryError-'"))
+        XCTAssertEqual(errors.count, 0, "the two-edge chamfer must evaluate cleanly")
+    }
 }

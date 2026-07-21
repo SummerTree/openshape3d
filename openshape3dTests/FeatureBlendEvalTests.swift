@@ -122,6 +122,43 @@ final class FeatureBlendEvalTests: XCTestCase {
         XCTAssertLessThan(vBig, vSmall, "a bigger setback removes more material")
     }
 
+    // MARK: Multi-edge blend (one feature, shared setback)
+
+    func testChamferTwoParallelEdgesIsAdditive() throws {
+        // Evaluate the box, pick an edge AND its parallel far-side twin — their
+        // corner wedges are disjoint, so the removed volume is exactly 2×.
+        let graph0 = FeatureGraph(nodes: [boxNode()])
+        let result0 = graph0.evaluate(sketches: [], planes: [],
+                                      naming: SignatureNaming(), nextRevision: RevisionSource().next)
+        let body0 = try XCTUnwrap(result0.bodies.first)
+        let edges = EdgeTopology.selectableEdges(from: body0.render).filter { $0.isConvex }
+        let first = try XCTUnwrap(edges.first)
+        let twin = try XCTUnwrap(edges.first {
+            abs(simd_dot($0.direction, first.direction)) > 0.99
+                && simd_length($0.midpoint - first.midpoint) > 9   // opposite side
+        }, "a box has a parallel edge on the far side")
+
+        let bodyRef = BodyRef(producer: boxFeature, bodyID: boxID)
+        let refs = [first, twin].map {
+            EdgeRef(body: bodyRef, signature: EdgeTopology.signature(of: $0))
+        }
+        let d = 2.0
+        let graph = FeatureGraph(nodes: [
+            boxNode(),
+            FeatureNode(id: blendFeature, name: "Chamfer",
+                        kind: .chamfer(body: bodyRef, edges: refs, setback: Expr(value: d)),
+                        outputBodyIDs: []),
+        ])
+        let result = graph.evaluate(sketches: [], planes: [],
+                                    naming: SignatureNaming(), nextRevision: RevisionSource().next)
+        XCTAssertTrue(result.errors.isEmpty, "two-edge chamfer must not error: \(result.errors)")
+        let body = try XCTUnwrap(result.bodies.first)
+        XCTAssertTrue(body.euclidMesh().isWatertight)
+        let edgeLen = Double(first.length)
+        XCTAssertEqual(volume(body), 1000 - 2 * 0.5 * d * d * edgeLen, accuracy: 0.1,
+                       "disjoint wedges remove exactly twice one edge's material")
+    }
+
     // MARK: Unresolvable / empty edge set errors (History badge)
 
     func testEmptyEdgeSetErrors() throws {
