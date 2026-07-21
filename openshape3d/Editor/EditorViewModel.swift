@@ -378,6 +378,25 @@ final class EditorViewModel {
                 scene.sketchLines.append(SketchLineBatch(
                     segments: segs, color: SIMD4(0.16, 0.55, 1.0, 1)))
             }
+            // Drag-to-size handle (spec §4.3 edge arrows): the pull arrow rides
+            // the LAST picked edge's midpoint, pointing INTO the body along the
+            // inward bisector — dragging the arrow the way it points carves a
+            // bigger blend (Shapr3D: drag into the body).
+            if let last = blendSelectedEdges.last {
+                var bis = last.normalA + last.normalB
+                let bl = simd_length(bis)
+                if bl > 1e-5 {
+                    bis /= bl
+                    let mid4 = matrix * SIMD4(last.midpoint, 1)
+                    let dir4 = matrix * SIMD4(-bis, 0)   // inward, world space
+                    let dir = simd_normalize(SIMD3(dir4.x, dir4.y, dir4.z))
+                    scene.pullArrow = PullArrowState(
+                        origin: SIMD3(mid4.x, mid4.y, mid4.z),
+                        direction: dir,
+                        isValid: blendPreview != nil || blendValue <= 1e-6
+                    )
+                }
+            }
         }
 
         // Pull arrow — "these arrows are the interface for creating an
@@ -1525,10 +1544,34 @@ final class EditorViewModel {
             revision: (1 << 62) | blendPreviewRevision)
     }
 
-    /// Whether the blend can be committed (edges picked on one body).
+    /// Whether the blend can be committed (edges picked on one body, a positive
+    /// size, and the result is non-empty — a too-big blend that ate the body
+    /// keeps Apply disabled, mirroring the red arrow).
     var canCommitBlend: Bool {
-        if case .pickingBlendEdges = mode { return !blendSelectedEdges.isEmpty }
+        if case .pickingBlendEdges = mode {
+            return !blendSelectedEdges.isEmpty && blendValue > 1e-6
+                && blendPreview != nil
+        }
         return false
+    }
+
+    /// Drag-to-size: value at drag start; the drag applies a delta to it.
+    private var blendDragStartValue: Double?
+
+    func beginBlendDrag() -> Bool {
+        guard case .pickingBlendEdges = mode, !blendSelectedEdges.isEmpty else { return false }
+        blendDragStartValue = blendValue
+        return true
+    }
+
+    /// `delta` is world mm along the arrow's pointing direction (into the body).
+    func updateBlendDrag(delta: Double) {
+        guard let start = blendDragStartValue else { return }
+        blendValue = max(0, start + delta)   // didSet recomputes the preview
+    }
+
+    func endBlendDrag() {
+        blendDragStartValue = nil
     }
 
     /// Tap while a blend is armed: pick the body, find the nearest convex edge to
@@ -1572,7 +1615,8 @@ final class EditorViewModel {
         guard case .pickingBlendEdges(let kind) = mode,
               let bodyID = blendBodyID,
               let source = session.document.body(with: bodyID),
-              !blendSelectedEdges.isEmpty
+              !blendSelectedEdges.isEmpty,
+              blendValue > 1e-6   // a zero-size node would error on replay
         else { return }
 
         // Reuse the live preview's mesh when it's current; else compute fresh.

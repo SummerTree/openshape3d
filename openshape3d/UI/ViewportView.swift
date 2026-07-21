@@ -114,6 +114,8 @@ final class ViewportCoordinator: NSObject, ViewportGestureDelegate, ViewportCame
     private var rotateAxisDragActive = false
     /// A drag moving the section plane along its normal (spec §16.1).
     private var sectionDragActive = false
+    /// A drag scrubbing the chamfer/fillet size on the edge arrow (spec §4.3).
+    private var blendDragActive = false
 
     func gestureTapped(at point: CGPoint) {
         // Orientation cube first: taps on it never reach the model.
@@ -178,6 +180,26 @@ final class ViewportCoordinator: NSObject, ViewportGestureDelegate, ViewportCame
         let handle = CGPoint(x: p0.x + ux * Self.pullHandleScreenOffset,
                              y: p0.y + uy * Self.pullHandleScreenOffset)
         return hypot(point.x - handle.x, point.y - handle.y) <= Self.pullHandleTouchRadius
+    }
+
+    /// World-mm drag component along the blend arrow's on-screen direction —
+    /// positive when dragging the way the arrow points (into the body).
+    private func blendDragDelta(to point: CGPoint) -> Double {
+        guard let arrow = viewModel.scene.pullArrow else { return 0 }
+        let o = SIMD3<Double>(Double(arrow.origin.x), Double(arrow.origin.y), Double(arrow.origin.z))
+        guard let p0 = worldToScreenPoint(o) else { return 0 }
+        let d = simd_normalize(SIMD3<Double>(Double(arrow.direction.x),
+                                             Double(arrow.direction.y),
+                                             Double(arrow.direction.z)))
+        var ux: CGFloat = 0, uy: CGFloat = -1
+        if let p1 = worldToScreenPoint(o + d) {
+            let dx = p1.x - p0.x, dy = p1.y - p0.y
+            let len = (dx * dx + dy * dy).squareRoot()
+            if len > 0.5 { ux = dx / len; uy = dy / len }
+        }
+        let dx = point.x - dragStartPoint.x
+        let dy = point.y - dragStartPoint.y
+        return Double(dx * ux + dy * uy) * worldPerPoint
     }
 
     func gestureDragBegan(at point: CGPoint) -> Bool {
@@ -245,6 +267,18 @@ final class ViewportCoordinator: NSObject, ViewportGestureDelegate, ViewportCame
             return true
         }
 
+        // Chamfer/Fillet pick: grabbing the edge arrow scrubs the blend size
+        // (drag into the body = bigger, Shapr3D §4.3); anywhere else orbits.
+        if case .pickingBlendEdges = viewModel.mode {
+            if let arrow = viewModel.scene.pullArrow,
+               hitsPullArrowScreen(point: point, arrow: arrow),
+               viewModel.beginBlendDrag() {
+                blendDragActive = true
+                return true
+            }
+            return false
+        }
+
         // Face selected: ONLY grabbing the pull-arrow handle pushes/pulls the
         // face (Shapr3D). A drag anywhere else — including on the face itself —
         // orbits, so the face never moves by accident.
@@ -303,6 +337,11 @@ final class ViewportCoordinator: NSObject, ViewportGestureDelegate, ViewportCame
             sceneDidChange()
             return
         }
+        if blendDragActive {
+            viewModel.updateBlendDrag(delta: blendDragDelta(to: point))
+            sceneDidChange()
+            return
+        }
         if pullActive {
             let screenDelta = Double(dragStartPoint.y - point.y) * worldPerPoint
             viewModel.updateToolDrag(ray: ray, screenDeltaWorld: screenDelta)
@@ -346,6 +385,12 @@ final class ViewportCoordinator: NSObject, ViewportGestureDelegate, ViewportCame
         if sectionDragActive {
             sectionDragActive = false
             viewModel.endSectionDrag()
+            sceneDidChange()
+            return
+        }
+        if blendDragActive {
+            blendDragActive = false
+            viewModel.endBlendDrag()
             sceneDidChange()
             return
         }

@@ -167,4 +167,50 @@ final class BlendUITests: XCTestCase {
             .matching(NSPredicate(format: "identifier BEGINSWITH 'HistoryError-'"))
         XCTAssertEqual(errors.count, 0, "the two-edge chamfer must evaluate cleanly")
     }
+
+    func testDragArrowScrubsBlendSize() throws {
+        let app = XCUIApplication()
+        app.launchEnvironment["OS3D_FRESH"] = "1"
+        app.launch()
+        let window = app.windows.firstMatch
+        XCTAssertTrue(app.buttons["SketchGroup"].waitForExistence(timeout: 10))
+
+        extrudeBox(app, window)
+
+        tapPaletteTool(app, group: "Modify", id: "ChamferButton")
+        XCTAssertTrue(app.buttons["BlendApply"].waitForExistence(timeout: 3))
+
+        func p(_ dx: CGFloat, _ dy: CGFloat) -> XCUICoordinate {
+            window.coordinate(withNormalizedOffset: CGVector(dx: dx, dy: dy))
+        }
+        // Pick one edge → the drag arrow appears on it.
+        p(0.50, 0.42).tap(); sleep(1)
+        XCTAssertTrue(app.staticTexts["1 edge selected"].waitForExistence(timeout: 3))
+        let field = app.textFields["BlendValueField"]
+        let before = (field.value as? String) ?? ""
+        XCTAssertTrue(app.pullArrowHandle.waitForExistence(timeout: 3),
+                      "the size arrow rides the picked edge")
+        shot("drag-armed")
+
+        // Drag the arrow toward the body interior (the way it points) to grow.
+        dragPullArrow(app, to: p(0.60, 0.55), duration: 0.3)
+        sleep(1)
+        let after = (field.value as? String) ?? ""
+        NSLog("OS3D_BUG blendDrag before=\(before) after=\(after)")
+        XCTAssertNotEqual(before, after, "dragging the arrow must scrub the size")
+        XCTAssertGreaterThan(Double(after.replacingOccurrences(of: ",", with: ".")) ?? 0, 0,
+                             "the dragged size stays positive")
+        shot("after-drag")
+
+        // The scrubbed size commits like any other.
+        let apply = app.buttons["BlendApply"]
+        XCTAssertTrue(apply.isEnabled, "a valid dragged size keeps Apply enabled")
+        apply.tap(); sleep(2)
+        app.buttons["HistoryButton"].firstMatch.tap(); sleep(1)
+        XCTAssertTrue(app.descendants(matching: .any)
+            .matching(NSPredicate(format: "identifier BEGINSWITH 'HistoryRow-Chamfer'"))
+            .firstMatch.waitForExistence(timeout: 3))
+        XCTAssertEqual(app.descendants(matching: .any)
+            .matching(NSPredicate(format: "identifier BEGINSWITH 'HistoryError-'")).count, 0)
+    }
 }

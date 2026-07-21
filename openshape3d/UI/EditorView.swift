@@ -327,7 +327,7 @@ struct EditorView: View {
                 .font(.subheadline)
             Divider().frame(height: 20)
             Text(kind.valueLabel).font(.caption).foregroundStyle(.secondary)
-            TextField("mm", value: value, format: .number)
+            TextField("mm", value: value, format: .number.precision(.fractionLength(0...2)))
                 .textFieldStyle(.roundedBorder)
                 .frame(width: 64)
                 .multilineTextAlignment(.trailing)
