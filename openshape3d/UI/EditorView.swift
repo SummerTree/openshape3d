@@ -351,6 +351,46 @@ struct EditorView: View {
         .shadow(color: .black.opacity(0.15), radius: 8, y: 2)
     }
 
+    /// Shell bar (Phase E, spec §4.4): pick prompt, wall-thickness field,
+    /// Apply/Cancel. Zero picked faces is valid (enclosed hollow).
+    private func shellBar(_ viewModel: EditorViewModel) -> some View {
+        let value = Binding(
+            get: { viewModel.shellThickness },
+            set: { viewModel.shellThickness = max(0, $0) })
+        return HStack(spacing: 12) {
+            Image(systemName: "cube.transparent")
+            Text(viewModel.shellBodyID == nil
+                 ? "Tap a body to shell"
+                 : viewModel.shellSelectedFaces.isEmpty
+                    ? "Tap faces to open (or Apply for a closed hollow)"
+                    : "\(viewModel.shellSelectedFaces.count) face\(viewModel.shellSelectedFaces.count == 1 ? "" : "s") open")
+                .font(.subheadline)
+            Divider().frame(height: 20)
+            Text("Thickness").font(.caption).foregroundStyle(.secondary)
+            TextField("mm", value: value, format: .number.precision(.fractionLength(0...2)))
+                .textFieldStyle(.roundedBorder)
+                .frame(width: 64)
+                .multilineTextAlignment(.trailing)
+                .keyboardType(.decimalPad)
+                .accessibilityIdentifier("ShellThicknessField")
+            Text("mm").font(.caption).foregroundStyle(.secondary)
+            Button("Cancel") { viewModel.cancelShell() }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .keyboardShortcut(.cancelAction)
+                .accessibilityIdentifier("ShellCancel")
+            Button("Apply") { viewModel.commitShell() }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+                .disabled(!viewModel.canCommitShell)
+                .accessibilityIdentifier("ShellApply")
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+        .background(.regularMaterial, in: Capsule())
+        .shadow(color: .black.opacity(0.15), radius: 8, y: 2)
+    }
+
     /// Marquee rectangle over the viewport (plan §B13, spec §8.2). Standard
     /// visual cue: solid border = window (L→R drag, fully-inside selects),
     /// dashed = crossing (R→L, touched selects). Screen points come straight
@@ -635,6 +675,8 @@ struct EditorView: View {
                     // blend bar (both bottom-anchored; never stacked).
                     if case .pickingBlendEdges(let kind) = viewModel.mode {
                         blendBar(kind, viewModel)
+                    } else if case .pickingShellFaces = viewModel.mode {
+                        shellBar(viewModel)
                     } else {
                         NumericInputBar(viewModel: viewModel)
                     }

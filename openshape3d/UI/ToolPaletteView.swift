@@ -136,6 +136,10 @@ struct ToolPaletteView: View {
                        active: isMode { if case .pickingBlendEdges(.fillet) = $0 { return true }; return false },
                        enabled: !viewModel.session.document.bodies.isEmpty, tint: .blue,
                        begin: { viewModel.beginBlend(.fillet) }, cancel: { viewModel.cancelBlend() }),
+            toggleItem("Shell", "cube.transparent", "ShellButton",
+                       active: isMode { if case .pickingShellFaces = $0 { return true }; return false },
+                       enabled: !viewModel.session.document.bodies.isEmpty, tint: .blue,
+                       begin: { viewModel.beginShell() }, cancel: { viewModel.cancelShell() }),
         ])
     }
 

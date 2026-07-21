@@ -92,6 +92,9 @@ nonisolated enum FeatureKind: Codable, Sendable {
     case chamfer(body: BodyRef, edges: [EdgeRef], setback: Expr)
     /// Phase E: round the referenced convex edges of `body` to `radius`.
     case fillet(body: BodyRef, edges: [EdgeRef], radius: Expr)
+    /// Phase E: hollow `body` to a wall of `thickness`, cutting the referenced
+    /// planar faces open (empty = fully enclosed hollow).
+    case shell(body: BodyRef, openFaces: [FaceRef], thickness: Expr)
 }
 
 /// A node in the feature graph: stable identity, display name, its operation, a
@@ -148,7 +151,7 @@ nonisolated extension FeatureNode {
         case let .mirror(_, plane, _):
             addPlane(plane)
         case .primitive, .boolean, .transform, .pattern, .pushPull,
-             .chamfer, .fillet:
+             .chamfer, .fillet, .shell:
             break
         }
         return ids
@@ -290,6 +293,10 @@ nonisolated extension FeatureGraph {
             evalEdgeBlend(
                 node, bodyRef: body, edgeRefs: edges, amount: radius.value,
                 isFillet: true, into: &state, next: nextRevision)
+        case let .shell(body, openFaces, thickness):
+            evalShell(
+                node, bodyRef: body, openFaceRefs: openFaces,
+                thickness: thickness.value, into: &state, next: nextRevision)
 
         // Defined but not evaluated yet — keep the graph total.
         case .transform:
@@ -572,6 +579,52 @@ nonisolated extension FeatureGraph {
         // FaceRefs re-resolve by signature scoring against the surviving faces.
         let table = state.naming.faceTable(for: result, createdBy: node.id, scheme: .generic)
         state.put(result, table: table)
+    }
+
+    // MARK: Shell
+
+    /// Hollow the body to `thickness`, opening the faces named by
+    /// `openFaceRefs`. Refs resolve against the INPUT body (the shell rebuilds
+    /// every face). An unresolved ref errors the node — silently shipping a
+    /// closed hollow instead of the asked-for opening would be worse.
+    private func evalShell(
+        _ node: FeatureNode,
+        bodyRef: BodyRef,
+        openFaceRefs: [FaceRef],
+        thickness: Double,
+        into state: inout EvalState,
+        next nextRevision: () -> UInt64
+    ) {
+        guard thickness > 1e-6 else {
+            state.errors[node.id] = .kernelFailure("shell thickness must be positive")
+            return
+        }
+        guard let body = state.bodies[bodyRef.bodyID] else {
+            state.errors[node.id] = .brokenRef("shell body unresolved")
+            return
+        }
+        let table = state.faceTables[body.id]
+        var openFaces = [FaceTopology.PlanarFace]()
+        for ref in openFaceRefs {
+            guard let resolved = state.naming.resolve(ref, in: body, table: table),
+                  let planar = resolved.planar else {
+                state.errors[node.id] = .brokenRef("shell open face did not resolve")
+                return
+            }
+            openFaces.append(planar)
+        }
+        let mesh = KernelOps.shell(
+            mesh: body.euclidMesh(), thickness: thickness, openFaces: openFaces)
+        guard !mesh.polygons.isEmpty else {
+            state.errors[node.id] = .emptyGeometry
+            return
+        }
+        let result = Body(
+            id: body.id, name: body.name, transform: .identity, primitive: nil,
+            euclidMesh: mesh, revision: nextRevision())
+        // Shelling rebuilds every face; relabel by geometry like the blends.
+        let newTable = state.naming.faceTable(for: result, createdBy: node.id, scheme: .generic)
+        state.put(result, table: newTable)
     }
 
     // MARK: Revolve / Sweep / Loft (full-solid ops)

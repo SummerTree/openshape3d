@@ -279,6 +279,11 @@ final class ViewportCoordinator: NSObject, ViewportGestureDelegate, ViewportCame
             return false
         }
 
+        // Shell pick: taps toggle open faces, drags orbit.
+        if case .pickingShellFaces = viewModel.mode {
+            return false
+        }
+
         // Face selected: ONLY grabbing the pull-arrow handle pushes/pulls the
         // face (Shapr3D). A drag anywhere else — including on the face itself —
         // orbits, so the face never moves by accident.

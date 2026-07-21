@@ -140,6 +140,7 @@ struct HistoryPanelView: View {
         case .pattern: return "square.grid.3x3"
         case .chamfer: return "square.on.circle"
         case .fillet: return "circle.circle"
+        case .shell: return "cube.transparent"
         }
     }
 
@@ -152,6 +153,7 @@ struct HistoryPanelView: View {
         case let .pushPull(_, distance, _): return distance.value
         case let .chamfer(_, _, setback): return setback.value
         case let .fillet(_, _, radius): return radius.value
+        case let .shell(_, _, thickness): return thickness.value
         default: return nil
         }
     }

@@ -252,6 +252,8 @@ final class EditorViewModel {
             ? toolContext?.sourceBody : nil
         // A live chamfer/fillet preview also replaces its source body.
         let blendPreviewSource: BodyID? = blendPreview != nil ? blendBodyID : nil
+        // …and so does a live shell preview.
+        let shellPreviewSource: BodyID? = shellPreview != nil ? shellBodyID : nil
 
         // Isolate (spec §16.2): a transient override hides everything outside
         // the isolated set without touching persisted visibility.
@@ -259,6 +261,7 @@ final class EditorViewModel {
         where !body.isHidden
             && body.id != facePreviewSource
             && body.id != blendPreviewSource
+            && body.id != shellPreviewSource
             && (isolatedBodyIDs?.contains(body.id) ?? true) {
             var selectionState = SelectionStateNone.rawValue
             if selection.contains(body.id) {
@@ -309,6 +312,44 @@ final class EditorViewModel {
                     ? SelectionStateNone.rawValue : SelectionStatePreview.rawValue,
                 isTranslucent: !replacesSource
             ))
+        }
+
+        // Live shell preview: the hollowed source body rendered neutrally in
+        // place of the original (spec §4.4 live feedback).
+        if let preview = shellPreview {
+            scene.bodies.append(BodyDrawable(
+                id: preview.id,
+                renderMesh: preview.render,
+                edges: preview.edges,
+                meshRevision: preview.meshRevision,
+                modelMatrix: preview.transform.matrixFloat,
+                baseColor: SIMD4(0.72, 0.74, 0.78, 1),
+                selectionState: SelectionStateNone.rawValue
+            ))
+        }
+
+        // Picked open faces (Shell): vivid-blue fills over the faces the shell
+        // will cut open, drawn from the ORIGINAL body's mesh so the user sees
+        // the selection even after the preview removes those faces.
+        if case .pickingShellFaces = mode, let bodyID = shellBodyID,
+           let body = session.document.body(with: bodyID) {
+            let matrix = body.transform.matrixFloat
+            var triangles: [SIMD3<Float>] = []
+            for face in shellSelectedFaces {
+                for t in face.triangles where t < body.render.triangleCount {
+                    for k in 0..<3 {
+                        let index = Int(body.render.indices[t * 3 + k])
+                        let world = matrix * SIMD4(body.render.positions[index], 1)
+                        triangles.append(SIMD3(world.x, world.y, world.z))
+                    }
+                }
+            }
+            if !triangles.isEmpty {
+                scene.profileFills.append(SketchFillBatch(
+                    triangles: triangles,
+                    color: SIMD4(0.16, 0.55, 1.0, 0.72)
+                ))
+            }
         }
 
         // Live chamfer/fillet preview: the blended source body rendered
@@ -1245,6 +1286,7 @@ final class EditorViewModel {
         cancelSectionPlanePick()
         cancelImagePlanePick()
         resetBlendState()
+        resetShellState()
         pendingCreateTool = nil
     }
 
@@ -1655,6 +1697,211 @@ final class EditorViewModel {
         mode = .selected(source.id)
         selection = [source.id]
         session.save()
+    }
+
+    // MARK: - Shell (Phase E, spec §4.4)
+
+    /// The body the current shell pick hollows (single-body, like blends).
+    var shellBodyID: BodyID?
+    /// Planar faces (body-LOCAL space) the user has toggled OPEN. Empty is
+    /// valid: Shapr3D's whole-body Shell yields an enclosed hollow.
+    var shellSelectedFaces: [PlanarFace] = []
+    /// Wall thickness in mm.
+    var shellThickness: Double = 2 {
+        didSet { if shellThickness != oldValue { updateShellPreview() } }
+    }
+    /// Live result preview, rendered in place of the source (same swap as the
+    /// blend preview). Nil when the thickness eats the body — Apply disables.
+    var shellPreview: Body?
+    private var shellPreviewRevision: UInt64 = 0
+
+    /// Arm Shell from the Modify palette: the next taps toggle planar faces
+    /// open; the shell bar drives the wall thickness.
+    func beginShell() {
+        cancelTransientPicks()
+        cancelTool()
+        shellSelectedFaces = []
+        shellBodyID = selection.count == 1 ? selection.first : nil
+        shellThickness = shellBodyID
+            .flatMap { session.document.body(with: $0) }
+            .map(Self.defaultShellThickness(for:)) ?? 2
+        shellPreview = nil
+        mode = .pickingShellFaces
+        updateShellPreview()
+    }
+
+    /// 2 mm, clamped to a quarter of the body's smallest extent so the default
+    /// never eats the body (a 2 mm plate would otherwise arm invalid).
+    private static func defaultShellThickness(for body: Body) -> Double {
+        let aabb = body.render.localAABB
+        let size = aabb.max - aabb.min
+        let minDim = Double(min(size.x, min(size.y, size.z))) * body.transform.scale
+        guard minDim > 1e-6 else { return 2 }
+        let fitted = min(2, minDim / 4)
+        // Round to a tidy 0.1 mm step so the bar shows a friendly number.
+        return max(0.1, (fitted * 10).rounded() / 10)
+    }
+
+    /// User-facing Cancel: drop the pick and restore the body selection.
+    func cancelShell() {
+        guard case .pickingShellFaces = mode else { return }
+        let body = shellBodyID
+        resetShellState()
+        if let body, session.document.body(with: body) != nil {
+            mode = .selected(body)
+            selection = [body]
+        } else {
+            mode = .idle
+        }
+    }
+
+    /// Internal reset (delete / undo / arming another tool): clears the shell
+    /// state WITHOUT touching `selection` (same contract as `resetBlendState`).
+    private func resetShellState() {
+        shellSelectedFaces = []
+        shellBodyID = nil
+        shellPreview = nil
+        if case .pickingShellFaces = mode { mode = .idle }
+    }
+
+    /// Tap while Shell is armed: pick the body, toggle the tapped planar face
+    /// open/closed. Switching bodies restarts the pick on the new body.
+    private func handleShellFaceTap(ray: Ray) {
+        guard let hit = HitTester.pickBody(ray: ray, in: scene) else { return }
+        guard let body = session.document.body(with: hit.bodyID) else { return }
+        if shellBodyID != hit.bodyID {
+            shellBodyID = hit.bodyID
+            shellSelectedFaces = []
+            shellThickness = Self.defaultShellThickness(for: body)
+        }
+        // While the live preview replaces the body in `scene`, the hit's
+        // triangle index refers to the PREVIEW mesh. Re-pick against the
+        // ORIGINAL body so the face comes from the mesh the shell recomputes
+        // from — this is also what makes tapping an already-open face (through
+        // the preview's hole) toggle it closed again.
+        let originalScene = ViewportScene(bodies: [BodyDrawable(
+            id: body.id,
+            renderMesh: body.render,
+            edges: body.edges,
+            meshRevision: body.meshRevision,
+            modelMatrix: body.transform.matrixFloat,
+            baseColor: SIMD4(0.72, 0.74, 0.78, 1),
+            selectionState: SelectionStateNone.rawValue
+        )])
+        guard let originalHit = HitTester.pickBody(ray: ray, in: originalScene),
+              let face = FaceTopology.planarFace(
+                  in: body.render, seedTriangle: originalHit.triangleIndex) else {
+            errorMessage = "Only flat faces can be opened — tap a planar face."
+            return
+        }
+        // Toggle: same triangle set already picked → close it again.
+        let key = Set(face.triangles)
+        if let idx = shellSelectedFaces.firstIndex(where: { Set($0.triangles) == key }) {
+            shellSelectedFaces.remove(at: idx)
+        } else {
+            shellSelectedFaces.append(face)
+        }
+        updateShellPreview()
+    }
+
+    /// Recompute the live shell preview (face toggles and thickness edits call
+    /// this). An empty kernel result (thickness ate the body, or an opening
+    /// rim collapsed) clears the preview — that's the invalid state.
+    private func updateShellPreview() {
+        guard case .pickingShellFaces = mode,
+              let bodyID = shellBodyID,
+              let source = session.document.body(with: bodyID),
+              shellThickness > 1e-6
+        else {
+            shellPreview = nil
+            return
+        }
+        let mesh = KernelOps.shell(
+            mesh: source.euclidMesh(), thickness: shellThickness,
+            openFaces: shellSelectedFaces)
+        guard !mesh.polygons.isEmpty else {
+            shellPreview = nil
+            return
+        }
+        shellPreviewRevision &+= 1
+        shellPreview = Body(
+            id: source.id, name: source.name, transform: source.transform,
+            primitive: nil, euclidMesh: mesh,
+            revision: (1 << 61) | shellPreviewRevision)
+    }
+
+    /// Whether the shell can be committed: a body picked, positive thickness,
+    /// and a live (non-empty) result.
+    var canCommitShell: Bool {
+        if case .pickingShellFaces = mode {
+            return shellBodyID != nil && shellThickness > 1e-6 && shellPreview != nil
+        }
+        return false
+    }
+
+    /// Apply the shell: replace the body's mesh and record a `.shell` feature
+    /// node so it rebuilds parametrically. Open faces pin by geometric
+    /// signature against the owning feature's body (same scheme as push/pull).
+    func commitShell() {
+        guard case .pickingShellFaces = mode,
+              let bodyID = shellBodyID,
+              let source = session.document.body(with: bodyID),
+              shellThickness > 1e-6
+        else { return }
+
+        let mesh = shellPreview?.euclid ?? KernelOps.shell(
+            mesh: source.euclidMesh(), thickness: shellThickness,
+            openFaces: shellSelectedFaces)
+        guard !mesh.polygons.isEmpty else {
+            errorMessage = "The shell produced no geometry — try a thinner wall."
+            cancelShell()
+            return
+        }
+        let after = Body(
+            id: source.id, name: source.name, transform: source.transform,
+            primitive: nil, euclidMesh: mesh, revision: 0)
+        let replace = ReplaceBodyCommand(title: "Shell", before: source, after: after)
+
+        // Parametric node only for a feature-owned body (same rule as blends).
+        if let owner = featureNode(owning: bodyID) {
+            let bodyRef = BodyRef(producer: owner.id, bodyID: bodyID)
+            let faceRefs = shellSelectedFaces.map {
+                Self.shellFaceRef(face: $0, bodyRef: bodyRef, creator: owner.id)
+            }
+            let node = FeatureNode(
+                name: "Shell",
+                kind: .shell(
+                    body: bodyRef, openFaces: faceRefs,
+                    thickness: Expr(value: shellThickness)),
+                outputBodyIDs: [bodyID])
+            session.perform(CompositeCommand(
+                title: "Shell", commands: [replace, AppendFeatureCommand(node: node)]))
+        } else {
+            session.perform(replace)
+        }
+        shellSelectedFaces = []
+        shellBodyID = nil
+        shellPreview = nil
+        mode = .selected(source.id)
+        selection = [source.id]
+        session.save()
+    }
+
+    /// A `FaceRef` pinning an open face by geometric signature in body-local
+    /// space (mirrors `pushPullFaceRef`; role is only a resolve tiebreak).
+    private static func shellFaceRef(
+        face: PlanarFace, bodyRef: BodyRef, creator: FeatureID
+    ) -> FaceRef {
+        let n = SIMD3<Double>(
+            Double(face.normal.x), Double(face.normal.y), Double(face.normal.z))
+        var area = abs(Profile.signedArea(face.outline))
+        for hole in face.holes { area -= abs(Profile.signedArea(hole)) }
+        let signature = FaceSignature(
+            kind: .planar, normal: n, centroid: face.origin,
+            area: max(area, 0), planeOffset: simd_dot(n, face.origin))
+        return FaceRef(
+            body: bodyRef, creator: creator,
+            role: .derived(index: 0), signature: signature)
     }
 
     /// Distance from a point to a segment (both body-local).
@@ -2089,8 +2336,9 @@ final class EditorViewModel {
     private func sanitizeAfterHistoryChange() {
         // Face/tool contexts reference geometry that may have changed.
         cancelTool()
-        // A blend pick references edges of geometry that may have changed.
+        // A blend/shell pick references geometry that may have changed.
         resetBlendState()
+        resetShellState()
         axisEntryPart = nil
         scaleEntryActive = false
         // Pending sketch state may reference entities that no longer exist.
@@ -2442,6 +2690,8 @@ final class EditorViewModel {
             handleImagePlanePick(ray: ray)
         case .pickingBlendEdges(let kind):
             handleBlendEdgeTap(ray: ray, kind: kind)
+        case .pickingShellFaces:
+            handleShellFaceTap(ray: ray)
         }
     }
 
@@ -6532,6 +6782,12 @@ final class EditorViewModel {
                     value: Self.formatted(total, unit: "mm")
                 ),
             ]
+        case .pickingShellFaces:
+            // Shell pick (Phase E): open-face count while faces are toggled.
+            guard !shellSelectedFaces.isEmpty else { return [] }
+            return [
+                MeasurementRow(label: "Open Faces", value: "\(shellSelectedFaces.count)"),
+            ]
         default:
             return []
         }
@@ -7443,6 +7699,8 @@ final class EditorViewModel {
             return .chamfer(body: body, edges: edges, setback: expr)
         case let .fillet(body, edges, _):
             return .fillet(body: body, edges: edges, radius: expr)
+        case let .shell(body, openFaces, _):
+            return .shell(body: body, openFaces: openFaces, thickness: expr)
         default:
             return nil
         }
@@ -7540,6 +7798,10 @@ final class EditorViewModel {
             return "Chamfer \(fmt(setback.value)) mm (\(edges.count) edge\(edges.count == 1 ? "" : "s"))"
         case let .fillet(_, edges, radius):
             return "Fillet \(fmt(radius.value)) mm (\(edges.count) edge\(edges.count == 1 ? "" : "s"))"
+        case let .shell(_, openFaces, thickness):
+            return openFaces.isEmpty
+                ? "Shell \(fmt(thickness.value)) mm (hollow)"
+                : "Shell \(fmt(thickness.value)) mm (\(openFaces.count) face\(openFaces.count == 1 ? "" : "s") open)"
         }
     }
 
