@@ -116,6 +116,28 @@ nonisolated struct FaceRef: Codable, Hashable, Sendable {
     var signature: FaceSignature
 }
 
+// MARK: - Edges
+
+/// Geometric fingerprint of a straight edge, used to re-find it after the input
+/// body is rebuilt. The STABLE identifier is the pair of adjacent face outward
+/// normals (an edge is "the crease between the +Z and +X faces"); midpoint,
+/// direction and length break ties between parallel same-face-pair edges. Unlike
+/// a `FaceRef`, an edge blend DESTROYS the edge it references, so an `EdgeRef` is
+/// always resolved against the feature's INPUT body, never its output.
+nonisolated struct EdgeSignature: Codable, Hashable, Sendable {
+    var midpoint: SIMD3<Double>
+    var direction: SIMD3<Double>
+    var length: Double
+    var normalA: SIMD3<Double>
+    var normalB: SIMD3<Double>
+}
+
+/// A persistent reference to a straight edge on a feature-produced body.
+nonisolated struct EdgeRef: Codable, Hashable, Sendable {
+    var body: BodyRef
+    var signature: EdgeSignature
+}
+
 // MARK: - Expressions & intents
 
 /// A scalar feature parameter. Tranche 1 uses `.value` only; `formula` is

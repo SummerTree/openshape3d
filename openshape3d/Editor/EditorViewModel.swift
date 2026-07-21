@@ -7151,6 +7151,10 @@ final class EditorViewModel {
             return .revolve(
                 profile: profile, plane: plane, axis: axis,
                 angle: expr, boolean: boolean)
+        case let .chamfer(body, edges, _):
+            return .chamfer(body: body, edges: edges, setback: expr)
+        case let .fillet(body, edges, _):
+            return .fillet(body: body, edges: edges, radius: expr)
         default:
             return nil
         }
@@ -7244,6 +7248,10 @@ final class EditorViewModel {
         case .transform: return "Move"
         case .mirror: return "Mirror"
         case let .pattern(_, spec): return "Pattern ×\(spec.count)"
+        case let .chamfer(_, edges, setback):
+            return "Chamfer \(fmt(setback.value)) mm (\(edges.count) edge\(edges.count == 1 ? "" : "s"))"
+        case let .fillet(_, edges, radius):
+            return "Fillet \(fmt(radius.value)) mm (\(edges.count) edge\(edges.count == 1 ? "" : "s"))"
         }
     }
 

@@ -138,6 +138,8 @@ struct HistoryPanelView: View {
         case .transform: return "move.3d"
         case .mirror: return "flip.horizontal"
         case .pattern: return "square.grid.3x3"
+        case .chamfer: return "square.on.circle"
+        case .fillet: return "circle.circle"
         }
     }
 
@@ -148,6 +150,8 @@ struct HistoryPanelView: View {
         switch node.kind {
         case let .extrude(_, _, distance, _, _, _): return distance.value
         case let .pushPull(_, distance, _): return distance.value
+        case let .chamfer(_, _, setback): return setback.value
+        case let .fillet(_, _, radius): return radius.value
         default: return nil
         }
     }

@@ -308,6 +308,131 @@ nonisolated enum KernelOps {
     }
 }
 
+// MARK: - Chamfer / Fillet (edge blends)
+
+nonisolated extension KernelOps {
+
+    /// Chamfer a single convex straight edge by `setback` (the flat width on
+    /// each face). Builds a triangular "corner wedge" prism — cross-section
+    /// `(edgePoint, edgePoint + tangentA·setback, edgePoint + tangentB·setback)`
+    /// lying in the plane perpendicular to the edge — extruded along the edge and
+    /// subtracted from `mesh`. `normalA`/`normalB` are the OUTWARD normals of the
+    /// two faces meeting at the edge; the mesh and edge share one coordinate
+    /// space. Returns `mesh` unchanged for a degenerate/non-convex request.
+    static func chamferEdge(
+        mesh: Euclid.Mesh,
+        p0: SIMD3<Double>,
+        p1: SIMD3<Double>,
+        normalA: SIMD3<Double>,
+        normalB: SIMD3<Double>,
+        setback: Double
+    ) -> Euclid.Mesh {
+        guard let tool = cornerWedge(
+            p0: p0, p1: p1, normalA: normalA, normalB: normalB,
+            setback: setback, round: nil
+        ) else { return mesh }
+        return mesh.subtracting(tool).makeWatertight()
+    }
+
+    /// Fillet (round) a single convex straight edge to `radius`. Subtracts the
+    /// corner wedge MINUS the fillet cylinder, so the cylinder's surface remains
+    /// as the rounded blend. The setback equals `radius` for the tangent arc on
+    /// a right-angle edge; general edges use the same setback (a v1 prismatic
+    /// approximation). Returns `mesh` unchanged for a degenerate request.
+    static func filletEdge(
+        mesh: Euclid.Mesh,
+        p0: SIMD3<Double>,
+        p1: SIMD3<Double>,
+        normalA: SIMD3<Double>,
+        normalB: SIMD3<Double>,
+        radius: Double
+    ) -> Euclid.Mesh {
+        guard let tool = cornerWedge(
+            p0: p0, p1: p1, normalA: normalA, normalB: normalB,
+            setback: radius, round: radius
+        ) else { return mesh }
+        return mesh.subtracting(tool).makeWatertight()
+    }
+
+    /// The corner-removal tool shared by chamfer and fillet. Without `round` it
+    /// is the solid triangular wedge (chamfer). With `round`, the fillet cylinder
+    /// (radius = round, axis = the edge, tangent to both faces) is subtracted
+    /// from the wedge so the rounded surface survives the body subtraction.
+    private static func cornerWedge(
+        p0: SIMD3<Double>,
+        p1: SIMD3<Double>,
+        normalA: SIMD3<Double>,
+        normalB: SIMD3<Double>,
+        setback: Double,
+        round: Double?
+    ) -> Euclid.Mesh? {
+        guard setback > 1e-6 else { return nil }
+        let axis = p1 - p0
+        let edgeLen = simd_length(axis)
+        guard edgeLen > 1e-6 else { return nil }
+        let e = axis / edgeLen
+
+        let nA = simd_normalize(normalA)
+        let nB = simd_normalize(normalB)
+
+        // Tangents into each face, perpendicular to the edge, oriented so each
+        // points INTO its face and away from the other face.
+        var tA = simd_cross(nA, e)
+        var tB = simd_cross(nB, e)
+        let lA = simd_length(tA), lB = simd_length(tB)
+        guard lA > 1e-6, lB > 1e-6 else { return nil }
+        tA /= lA; tB /= lB
+        if simd_dot(tA, nB) > 0 { tA = -tA }
+        if simd_dot(tB, nA) > 0 { tB = -tB }
+
+        let apex = (p0 + p1) / 2
+        let sa = apex + tA * setback
+        let sb = apex + tB * setback
+        let overlap = max(edgeLen * 0.02, 1e-3)
+        let depth = edgeLen + 2 * overlap
+
+        // Cross-section in the plane perpendicular to the edge. A chamfer removes
+        // the triangle (apex, sa, sb) — the sharp corner behind the flat. A
+        // fillet removes the corner PARALLELOGRAM (apex, sa, far, sb) out to the
+        // tangent points and then keeps the fillet cylinder, so the rounded
+        // surface survives. Euclid centers the extrusion on the path plane
+        // (normal = ±edge); depth = edgeLen + 2·overlap spans the edge cleanly.
+        func extrudeSection(_ pts: [SIMD3<Double>]) -> Euclid.Mesh {
+            var path = pts.map { PathPoint.point($0.x, $0.y, $0.z) }
+            if let first = path.first { path.append(first) }
+            return Euclid.Mesh.extrude(Euclid.Path(path), depth: depth)
+        }
+
+        guard let radius = round else {
+            let wedge = extrudeSection([apex, sa, sb])
+            return wedge.polygons.isEmpty ? nil : wedge
+        }
+
+        // Fillet: parallelogram corner minus the tangent cylinder.
+        let far = apex + tA * setback + tB * setback
+        var corner = extrudeSection([apex, sa, far, sb])
+        if corner.polygons.isEmpty { return nil }
+
+        // Cylinder tangent to both faces, on the inward bisector at distance
+        // radius / sin(halfAngle) from the apex. cos(2·halfAngle) = nA·nB.
+        let cosFull = max(-0.999, min(0.999, simd_dot(nA, nB)))
+        let halfAngle = (Double.pi - acos(cosFull)) / 2
+        let sinHalf = max(sin(halfAngle), 1e-3)
+        var bis = tA + tB
+        let bl = simd_length(bis)
+        guard bl > 1e-6 else { return nil }
+        bis /= bl
+        let center = apex + bis * (radius / sinHalf)
+        // Center the cylinder along the edge to match Euclid's centered
+        // extrusion of the corner parallelogram (base sits depth/2 back).
+        let cyl = cylinderAlongAxis(
+            baseCenter: center - e * (depth / 2), axisDir: e, radius: radius, height: depth
+        )
+        corner = corner.subtracting(cyl).makeWatertight()
+        return corner.polygons.isEmpty ? nil : corner
+    }
+}
+
 // MARK: - Planar face push/pull (feature-graph replay)
 
 nonisolated extension KernelOps {

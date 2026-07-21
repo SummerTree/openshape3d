@@ -88,6 +88,10 @@ nonisolated enum FeatureKind: Codable, Sendable {
     case mirror(body: BodyRef, plane: PlaneRef, keepOriginal: Bool)
     case pattern(body: BodyRef, spec: PatternSpec)
     case pushPull(face: FaceRef, distance: Expr, mode: PushPullMode)
+    /// Phase E: bevel the referenced convex edges of `body` by a flat `setback`.
+    case chamfer(body: BodyRef, edges: [EdgeRef], setback: Expr)
+    /// Phase E: round the referenced convex edges of `body` to `radius`.
+    case fillet(body: BodyRef, edges: [EdgeRef], radius: Expr)
 }
 
 /// A node in the feature graph: stable identity, display name, its operation, a
@@ -143,7 +147,8 @@ nonisolated extension FeatureNode {
             for ref in sections { ids.insert(ref.sketchID) }
         case let .mirror(_, plane, _):
             addPlane(plane)
-        case .primitive, .boolean, .transform, .pattern, .pushPull:
+        case .primitive, .boolean, .transform, .pattern, .pushPull,
+             .chamfer, .fillet:
             break
         }
         return ids
@@ -277,6 +282,14 @@ nonisolated extension FeatureGraph {
                 into: &state, next: nextRevision)
         case let .pattern(body, spec):
             evalPattern(node, bodyRef: body, spec: spec, into: &state, next: nextRevision)
+        case let .chamfer(body, edges, setback):
+            evalEdgeBlend(
+                node, bodyRef: body, edgeRefs: edges, amount: setback.value,
+                isFillet: false, into: &state, next: nextRevision)
+        case let .fillet(body, edges, radius):
+            evalEdgeBlend(
+                node, bodyRef: body, edgeRefs: edges, amount: radius.value,
+                isFillet: true, into: &state, next: nextRevision)
 
         // Defined but not evaluated yet — keep the graph total.
         case .transform:
@@ -498,6 +511,67 @@ nonisolated extension FeatureGraph {
             newTable = state.naming.faceTable(for: result, createdBy: node.id, scheme: .generic)
         }
         state.put(result, table: newTable)
+    }
+
+    // MARK: Chamfer / Fillet (edge blends)
+
+    /// Resolve each persisted `EdgeRef` against the input body's rebuilt edges
+    /// and remove/round the corner. Refs resolve against the INPUT body because
+    /// the blend destroys the very edges it names. Non-convex or unresolved edges
+    /// are skipped; if none resolve the node errors so History shows a badge.
+    private func evalEdgeBlend(
+        _ node: FeatureNode,
+        bodyRef: BodyRef,
+        edgeRefs: [EdgeRef],
+        amount: Double,
+        isFillet: Bool,
+        into state: inout EvalState,
+        next nextRevision: () -> UInt64
+    ) {
+        guard amount > 1e-6 else {
+            state.errors[node.id] = .kernelFailure("blend amount must be positive")
+            return
+        }
+        guard let body = state.bodies[bodyRef.bodyID] else {
+            state.errors[node.id] = .brokenRef("blend body unresolved")
+            return
+        }
+        let available = EdgeTopology.selectableEdges(from: body.render)
+        let aabb = body.render.localAABB
+        let scale = Double(simd_length(aabb.max - aabb.min))
+
+        func d3(_ v: SIMD3<Float>) -> SIMD3<Double> {
+            SIMD3(Double(v.x), Double(v.y), Double(v.z))
+        }
+
+        var mesh = body.euclidMesh()
+        var resolvedAny = false
+        for ref in edgeRefs {
+            guard let edge = EdgeTopology.resolve(
+                ref.signature, in: available, sizeScale: scale), edge.isConvex
+            else { continue }
+            let p0 = d3(edge.start), p1 = d3(edge.end)
+            let nA = d3(edge.normalA), nB = d3(edge.normalB)
+            mesh = isFillet
+                ? KernelOps.filletEdge(mesh: mesh, p0: p0, p1: p1, normalA: nA, normalB: nB, radius: amount)
+                : KernelOps.chamferEdge(mesh: mesh, p0: p0, p1: p1, normalA: nA, normalB: nB, setback: amount)
+            resolvedAny = true
+        }
+        guard resolvedAny else {
+            state.errors[node.id] = .brokenRef("no blend edge resolved")
+            return
+        }
+        guard !mesh.polygons.isEmpty else {
+            state.errors[node.id] = .emptyGeometry
+            return
+        }
+        let result = Body(
+            id: body.id, name: body.name, transform: .identity, primitive: nil,
+            euclidMesh: mesh, revision: nextRevision())
+        // A blend changes face count/areas; relabel by geometry. Downstream
+        // FaceRefs re-resolve by signature scoring against the surviving faces.
+        let table = state.naming.faceTable(for: result, createdBy: node.id, scheme: .generic)
+        state.put(result, table: table)
     }
 
     // MARK: Revolve / Sweep / Loft (full-solid ops)
