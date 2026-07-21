@@ -23,9 +23,8 @@ final class TextProjectUITests: XCTestCase {
         app.launch()
 
         let window = app.windows.firstMatch
-        let textButton = app.buttons.containing(.staticText, identifier: "Text").firstMatch
-        XCTAssertTrue(textButton.waitForExistence(timeout: 10))
-        textButton.tap()
+        XCTAssertTrue(app.buttons["SketchGroup"].waitForExistence(timeout: 10))
+        startSketchTool(app, "Text")
 
         // Plane pickers appear; tapping the bare ground starts there.
         XCTAssertTrue(app.staticTexts["Choose a sketch plane"].waitForExistence(timeout: 3))
@@ -86,10 +85,9 @@ final class TextProjectUITests: XCTestCase {
         app.launch()
 
         let window = app.windows.firstMatch
-        let projectButton = app.buttons.containing(.staticText, identifier: "Project").firstMatch
-        XCTAssertTrue(projectButton.waitForExistence(timeout: 10))
+        XCTAssertTrue(app.buttons["SketchGroup"].waitForExistence(timeout: 10))
         sleep(1) // camera fit settles
-        projectButton.tap()
+        startSketchTool(app, "Project")
 
         // Plane pickers appear; tap bare ground away from the seeded box.
         XCTAssertTrue(app.staticTexts["Choose a sketch plane"].waitForExistence(timeout: 3))

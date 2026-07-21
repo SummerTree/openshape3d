@@ -230,19 +230,19 @@ struct EditorView: View {
         }
     }
 
-    /// Sketch-state chip inside the sketch pill (plan §C4): GREEN "Fully
-    /// defined" at zero DOF, else BLUE "Under-defined — N DOF".
+    /// Sketch-state chip inside the sketch pill (plan §C4). Under-defined
+    /// geometry is conveyed by the on-canvas point/edge colours (blue = free),
+    /// not a toolbar badge that reads like an error while you're mid-sketch —
+    /// so this only surfaces the positive GREEN "Fully defined" confirmation.
     @ViewBuilder
     private func sketchStateChip(_ viewModel: EditorViewModel) -> some View {
-        if let status = viewModel.sketchDefinitionStatus {
-            Text(status.fullyDefined
-                ? "Fully defined"
-                : "Under-defined — \(status.dof) DOF")
+        if let status = viewModel.sketchDefinitionStatus, status.fullyDefined {
+            Text("Fully defined")
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(.white)
                 .padding(.horizontal, 10)
                 .padding(.vertical, 4)
-                .background(status.fullyDefined ? Color.green : Color.blue, in: Capsule())
+                .background(Color.green, in: Capsule())
                 .accessibilityIdentifier("SketchStateChip")
         }
     }
@@ -683,7 +683,19 @@ struct EditorView: View {
                 }
             }
             .overlay(alignment: .top) {
-                if viewModel.selectModeActive {
+                if let tool = viewModel.pendingCreateTool {
+                    // Modify group armed (pick the operation, then the region).
+                    statusPill(
+                        icon: "cube",
+                        text: "Tap a sketch region to \(tool.rawValue.capitalized)"
+                    ) {
+                        Button("Cancel") { viewModel.cancelCreate() }
+                            .buttonStyle(.borderedProminent)
+                            .controlSize(.small)
+                            .keyboardShortcut(.cancelAction)
+                            .accessibilityIdentifier("CreateToolCancel")
+                    }
+                } else if viewModel.selectModeActive {
                     selectModePill(viewModel)
                 } else if viewModel.mode.isSketching, let symbol = viewModel.pendingSymbol {
                     // Insert Symbol armed (plan §B16): each tap stamps an

@@ -21,8 +21,7 @@ final class SplitPatternUITests: XCTestCase {
         app.launchEnvironment["OS3D_FRESH"] = "1"
         app.launchEnvironment["OS3D_DEBUG_SEED"] = "1"
         app.launch()
-        let rectButton = app.buttons.containing(.staticText, identifier: "Rect").firstMatch
-        XCTAssertTrue(rectButton.waitForExistence(timeout: 10))
+        XCTAssertTrue(app.buttons["SketchGroup"].waitForExistence(timeout: 10))
         sleep(1) // camera fit settles
         return app
     }
@@ -31,7 +30,7 @@ final class SplitPatternUITests: XCTestCase {
         let app = launchSeeded()
 
         // Seeded box is selected: Pattern opens the bar (Linear, X, count 3).
-        app.buttons["PatternButton"].tap()
+        tapPaletteTool(app, group: "Transform", id: "PatternButton")
         let apply = app.buttons["PatternApply"]
         XCTAssertTrue(apply.waitForExistence(timeout: 3),
                       "Pattern action should open the pattern bar")
@@ -64,7 +63,7 @@ final class SplitPatternUITests: XCTestCase {
         let app = launchSeeded()
         let window = app.windows.firstMatch
 
-        app.buttons["SplitButton"].tap()
+        tapPaletteTool(app, group: "Transform", id: "SplitButton")
         let pill = app.staticTexts["Tap a plane or profile to split"]
         XCTAssertTrue(pill.waitForExistence(timeout: 3),
                       "Split should arm the cutter pick")

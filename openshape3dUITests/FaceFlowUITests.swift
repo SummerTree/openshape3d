@@ -20,9 +20,7 @@ final class FaceFlowUITests: XCTestCase {
         app.launchEnvironment["OS3D_FRESH"] = "1"
         app.launchEnvironment["OS3D_DEBUG_SEED"] = "1"
         app.launch()
-
-        let rectButton = app.buttons.containing(.staticText, identifier: "Rect").firstMatch
-        XCTAssertTrue(rectButton.waitForExistence(timeout: 10))
+        XCTAssertTrue(app.buttons["SketchGroup"].waitForExistence(timeout: 10))
         sleep(1) // camera fit settles
 
         let window = app.windows.firstMatch
@@ -40,9 +38,9 @@ final class FaceFlowUITests: XCTestCase {
             "Tapping a body should select the face under the tap"
         )
 
-        // Pull the face upward (push/pull with dynamic preview).
-        let pullEnd = window.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.18))
-        facePoint.press(forDuration: 0.15, thenDragTo: pullEnd)
+        // Pull the face upward via its arrow handle (only the arrow moves it).
+        let pullEnd = window.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.10))
+        dragPullArrow(app, to: pullEnd)
 
         // Complete the tool.
         app.buttons["Extrude"].firstMatch.tap()
@@ -65,9 +63,7 @@ final class FaceFlowUITests: XCTestCase {
         app.launchEnvironment["OS3D_FRESH"] = "1"
         app.launchEnvironment["OS3D_DEBUG_SEED"] = "1"
         app.launch()
-
-        let rectButton = app.buttons.containing(.staticText, identifier: "Rect").firstMatch
-        XCTAssertTrue(rectButton.waitForExistence(timeout: 10))
+        XCTAssertTrue(app.buttons["SketchGroup"].waitForExistence(timeout: 10))
         sleep(1)
         let window = app.windows.firstMatch
 
@@ -80,9 +76,9 @@ final class FaceFlowUITests: XCTestCase {
             app.staticTexts["Face selected — drag it to push or pull"].waitForExistence(timeout: 3)
         )
 
-        // Push the top face DOWN (inward) — the failure case.
-        let pushEnd = window.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.52))
-        facePoint.press(forDuration: 0.15, thenDragTo: pushEnd)
+        // Push the top face DOWN (inward) via its arrow handle — the failure case.
+        let pushEnd = window.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.58))
+        dragPullArrow(app, to: pushEnd)
         app.buttons["Extrude"].firstMatch.tap()
 
         // Exactly one body remains: the truncated box. It is selected on commit.
@@ -97,5 +93,42 @@ final class FaceFlowUITests: XCTestCase {
         XCTAssertTrue(undo.isEnabled, "Push/pull undoes first, leaving the seeded box")
         undo.tap()
         XCTAssertFalse(undo.isEnabled, "Exactly two undoable commands — no stray bodies")
+    }
+
+    /// Typing a NEGATIVE value into the on-arrow pill pushes the face inward
+    /// (regression: the pill used to strip the sign with `abs`, so a typed
+    /// negative extruded outward or did nothing).
+    func testTypeNegativeIntoArrowPill() throws {
+        let app = XCUIApplication()
+        app.launchEnvironment["OS3D_FRESH"] = "1"
+        app.launchEnvironment["OS3D_DEBUG_SEED"] = "1"
+        app.launch()
+        XCTAssertTrue(app.buttons["SketchGroup"].waitForExistence(timeout: 10))
+        sleep(1)
+        let window = app.windows.firstMatch
+        window.coordinate(withNormalizedOffset: CGVector(dx: 0.85, dy: 0.85)).tap()
+        sleep(1)
+        window.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.35)).tap()
+        sleep(1)
+        XCTAssertTrue(
+            app.staticTexts["Face selected — drag it to push or pull"].waitForExistence(timeout: 3)
+        )
+
+        let pill = app.buttons["ExtrudeArrowValue"]
+        XCTAssertTrue(pill.waitForExistence(timeout: 3))
+        pill.tap()
+        let field = app.textFields["ExtrudeArrowField"]
+        XCTAssertTrue(field.waitForExistence(timeout: 3))
+        field.tap()
+        field.typeText("-3\n")   // explicit negative → push inward
+        sleep(1)
+
+        // Seed add + inward push = two undoable commands (the push committed).
+        let undo = app.buttons["Undo"]
+        XCTAssertTrue(undo.isEnabled)
+        undo.tap()
+        XCTAssertTrue(undo.isEnabled, "Typing a negative should commit an inward push")
+        undo.tap()
+        XCTAssertFalse(undo.isEnabled, "Exactly two commands — the negative push committed once")
     }
 }

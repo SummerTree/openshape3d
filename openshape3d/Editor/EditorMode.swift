@@ -22,6 +22,15 @@ enum SketchTool: String, CaseIterable {
     case project
 }
 
+/// A 3D-create operation armed from the body-mode "Modify" palette group. The
+/// user picks the operation first, then taps a sketch region to apply it —
+/// tracked by `EditorViewModel.pendingCreateTool` (not an `EditorMode` case, so
+/// it doesn't ripple through every mode switch). Extrude is the default a plain
+/// region tap already gives; the others route into their existing pick flows.
+enum CreateTool: String, CaseIterable {
+    case extrude, revolve, sweep, loft, helix
+}
+
 enum EditorMode: Equatable {
     case idle
     /// A legacy primitive body is selected with editable dimensions.

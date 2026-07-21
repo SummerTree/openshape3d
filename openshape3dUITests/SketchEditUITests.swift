@@ -23,9 +23,8 @@ final class SketchEditUITests: XCTestCase {
         app.launch()
 
         let window = app.windows.firstMatch
-        let lineButton = app.buttons.containing(.staticText, identifier: "Line").firstMatch
-        XCTAssertTrue(lineButton.waitForExistence(timeout: 10))
-        lineButton.tap()
+        XCTAssertTrue(app.buttons["SketchGroup"].waitForExistence(timeout: 10))
+        startSketchTool(app, "Line")
 
         // Plane pickers appear; tapping the bare ground starts there.
         XCTAssertTrue(app.staticTexts["Choose a sketch plane"].waitForExistence(timeout: 3))

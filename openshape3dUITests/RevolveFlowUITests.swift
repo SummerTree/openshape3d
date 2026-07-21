@@ -23,9 +23,8 @@ final class RevolveFlowUITests: XCTestCase {
 
         // Rectangle right of center.
         let window = app.windows.firstMatch
-        let rectButton = app.buttons.containing(.staticText, identifier: "Rect").firstMatch
-        XCTAssertTrue(rectButton.waitForExistence(timeout: 10))
-        rectButton.tap()
+        XCTAssertTrue(app.buttons["SketchGroup"].waitForExistence(timeout: 10))
+        startSketchTool(app, "Rect")
         // Plane pickers appear; tap the bare ground to sketch there.
         XCTAssertTrue(app.staticTexts["Choose a sketch plane"].waitForExistence(timeout: 3))
         window.coordinate(withNormalizedOffset: CGVector(dx: 0.80, dy: 0.78)).tap()
@@ -36,8 +35,7 @@ final class RevolveFlowUITests: XCTestCase {
         rectStart.press(forDuration: 0.15, thenDragTo: rectEnd)
 
         // Vertical line just left of the rectangle: the future axis.
-        let lineButton = app.buttons.containing(.staticText, identifier: "Line").firstMatch
-        lineButton.tap()
+        startSketchTool(app, "Line")
         let lineStart = window.coordinate(withNormalizedOffset: CGVector(dx: 0.44, dy: 0.35))
         let lineEnd = window.coordinate(withNormalizedOffset: CGVector(dx: 0.44, dy: 0.62))
         lineStart.press(forDuration: 0.15, thenDragTo: lineEnd)

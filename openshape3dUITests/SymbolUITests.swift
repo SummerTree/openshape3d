@@ -23,9 +23,8 @@ final class SymbolUITests: XCTestCase {
         app.launch()
 
         let window = app.windows.firstMatch
-        let lineButton = app.buttons.containing(.staticText, identifier: "Line").firstMatch
-        XCTAssertTrue(lineButton.waitForExistence(timeout: 10))
-        lineButton.tap()
+        XCTAssertTrue(app.buttons["SketchGroup"].waitForExistence(timeout: 10))
+        startSketchTool(app, "Line")
 
         // Plane pickers appear; tapping the bare ground starts there.
         XCTAssertTrue(app.staticTexts["Choose a sketch plane"].waitForExistence(timeout: 3))
@@ -48,7 +47,8 @@ final class SymbolUITests: XCTestCase {
         point(0.47, 0.48).tap()
         sleep(1)
 
-        // Make Symbol "Bracket" through the name prompt.
+        // Make Symbol "Bracket" through the name prompt (Symbol flyout).
+        app.buttons["SymbolGroup"].tap()
         let makeButton = app.buttons["MakeSymbolButton"]
         XCTAssertTrue(makeButton.waitForExistence(timeout: 3))
         XCTAssertTrue(makeButton.isEnabled,
@@ -64,6 +64,7 @@ final class SymbolUITests: XCTestCase {
         alert.buttons["Create"].tap()
 
         // Insert Symbol lists "Bracket"; choosing it arms tap-to-place.
+        app.buttons["SymbolGroup"].tap()
         let insertMenu = app.buttons["InsertSymbolMenu"]
         XCTAssertTrue(insertMenu.waitForExistence(timeout: 3))
         XCTAssertTrue(insertMenu.isEnabled,

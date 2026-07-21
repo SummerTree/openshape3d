@@ -18,11 +18,10 @@ final class CylinderGrowShotUITests: XCTestCase {
         app.launchEnvironment["OS3D_FRESH"] = "1"
         app.launch()
         let window = app.windows.firstMatch
-        let circle = app.buttons.containing(.staticText, identifier: "Circle").firstMatch
-        XCTAssertTrue(circle.waitForExistence(timeout: 10))
+        XCTAssertTrue(app.buttons["SketchGroup"].waitForExistence(timeout: 10))
 
         // Circle → cylinder.
-        circle.tap()
+        startSketchTool(app, "Circle")
         XCTAssertTrue(app.staticTexts["Choose a sketch plane"].waitForExistence(timeout: 3))
         window.coordinate(withNormalizedOffset: CGVector(dx: 0.80, dy: 0.80)).tap()
         XCTAssertTrue(app.staticTexts["Sketching on ground plane"].waitForExistence(timeout: 3))

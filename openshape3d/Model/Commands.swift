@@ -745,6 +745,35 @@ struct SetRollbackCommand: DocumentCommand {
     }
 }
 
+/// Reorder a feature history node (History panel drag-to-reorder). Rides
+/// `DocumentSession.moveFeature`'s `performRebuild` with the downstream mesh diff
+/// so one undo restores both the ordering and every affected mesh. `evaluate`
+/// replays nodes in array order, so moving a node earlier than one it references
+/// simply fails that reference (`.brokenRef`) — surfaced as a History error badge
+/// rather than being forbidden (mirrors Shapr3D). The rollback marker is a
+/// positional COUNT and is intentionally left unchanged by a reorder.
+///
+/// Both indices are positions in the array AFTER the node is removed for the
+/// move, so `remove(at:)`+`insert(at:)` is symmetric: apply inserts at `to`,
+/// revert (which finds the node's current index by id) inserts back at `from`.
+struct MoveFeatureCommand: DocumentCommand {
+    let title = "Reorder Feature"
+    let featureID: FeatureID
+    let from: Int
+    let to: Int
+
+    private func reorder(toIndex: Int, in document: inout DesignDocument) {
+        guard let current = document.features.index(of: featureID) else { return }
+        var nodes = document.features.nodes
+        let node = nodes.remove(at: current)
+        nodes.insert(node, at: min(max(toIndex, 0), nodes.count))
+        document.features.nodes = nodes
+    }
+
+    func apply(to document: inout DesignDocument) { reorder(toIndex: to, in: &document) }
+    func revert(in document: inout DesignDocument) { reorder(toIndex: from, in: &document) }
+}
+
 // MARK: - Document variables (Phase D, Task B1 / spec §6.6)
 
 /// Re-derive every variable's cached `.value` from its `.expression` in creation

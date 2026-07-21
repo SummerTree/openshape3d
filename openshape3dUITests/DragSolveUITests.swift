@@ -26,9 +26,8 @@ final class DragSolveUITests: XCTestCase {
         let window = app.windows.firstMatch
 
         // Enter a ground sketch with the Line tool.
-        let lineButton = app.buttons.containing(.staticText, identifier: "Line").firstMatch
-        XCTAssertTrue(lineButton.waitForExistence(timeout: 10))
-        lineButton.tap()
+        XCTAssertTrue(app.buttons["SketchGroup"].waitForExistence(timeout: 10))
+        startSketchTool(app, "Line")
         XCTAssertTrue(app.staticTexts["Choose a sketch plane"].waitForExistence(timeout: 3))
         window.coordinate(withNormalizedOffset: CGVector(dx: 0.80, dy: 0.78)).tap()
         XCTAssertTrue(app.staticTexts["Sketching on ground plane"].waitForExistence(timeout: 3))
@@ -61,7 +60,8 @@ final class DragSolveUITests: XCTestCase {
         // Select the top edge (tap its middle) and level it with Horizontal.
         p(0.50, 0.42).tap()
         sleep(1)
-        let menu = app.buttons.containing(.staticText, identifier: "Constrain").firstMatch
+        let menu = app.buttons["ConstraintsMenu"]
+        if !menu.isHittable { app.buttons["ConstrainGroup"].tap() }
         XCTAssertTrue(menu.waitForExistence(timeout: 3), "Constraints menu should exist")
         menu.tap()
         let horizontal = app.buttons["Constraint_Horizontal"]

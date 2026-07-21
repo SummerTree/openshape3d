@@ -23,8 +23,7 @@ final class BooleanFlowUITests: XCTestCase {
         from start: CGVector, to end: CGVector, tapInside: CGVector
     ) {
         let window = app.windows.firstMatch
-        let rectButton = app.buttons.containing(.staticText, identifier: "Rect").firstMatch
-        rectButton.tap()
+        startSketchTool(app, "Rect")
         // Plane pickers appear; tap the bare ground to sketch there.
         XCTAssertTrue(app.staticTexts["Choose a sketch plane"].waitForExistence(timeout: 3))
         window.coordinate(withNormalizedOffset: CGVector(dx: 0.80, dy: 0.78)).tap()
@@ -45,9 +44,7 @@ final class BooleanFlowUITests: XCTestCase {
         let app = XCUIApplication()
         app.launchEnvironment["OS3D_FRESH"] = "1"
         app.launch()
-
-        let rectButton = app.buttons.containing(.staticText, identifier: "Rect").firstMatch
-        XCTAssertTrue(rectButton.waitForExistence(timeout: 10))
+        XCTAssertTrue(app.buttons["SketchGroup"].waitForExistence(timeout: 10))
 
         // Two separate bodies. The camera stays head-on between sketches, so
         // screen coordinates map stably onto the ground plane.
@@ -69,8 +66,10 @@ final class BooleanFlowUITests: XCTestCase {
         let deleteButton = app.buttons.containing(.staticText, identifier: "Delete").firstMatch
         XCTAssertTrue(deleteButton.isEnabled, "First body should be selected")
 
-        // Arm Subtract and tap the second body.
+        // Arm Subtract (in the Combine flyout) and tap the second body.
+        app.buttons["CombineGroup"].tap()
         let subtractButton = app.buttons.containing(.staticText, identifier: "Subtract").firstMatch
+        XCTAssertTrue(subtractButton.waitForExistence(timeout: 2))
         XCTAssertTrue(subtractButton.isEnabled)
         subtractButton.tap()
         XCTAssertTrue(app.staticTexts["Tap the second body to subtract"].waitForExistence(timeout: 3))

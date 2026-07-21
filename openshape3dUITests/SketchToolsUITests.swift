@@ -23,9 +23,8 @@ final class SketchToolsUITests: XCTestCase {
         app.launch()
 
         let window = app.windows.firstMatch
-        let polygonButton = app.buttons.containing(.staticText, identifier: "Polygon").firstMatch
-        XCTAssertTrue(polygonButton.waitForExistence(timeout: 10))
-        polygonButton.tap()
+        XCTAssertTrue(app.buttons["SketchGroup"].waitForExistence(timeout: 10))
+        startSketchTool(app, "Polygon")
 
         // Plane pickers appear; tapping the bare ground starts there.
         XCTAssertTrue(app.staticTexts["Choose a sketch plane"].waitForExistence(timeout: 3))
@@ -46,8 +45,7 @@ final class SketchToolsUITests: XCTestCase {
         XCTAssertTrue(undo.isEnabled, "Drawing a polygon should push an undoable command")
 
         // Ellipse: switch tools, drag center -> corner (away from the polygon).
-        let ellipseButton = app.buttons.containing(.staticText, identifier: "Ellipse").firstMatch
-        ellipseButton.tap()
+        startSketchTool(app, "Ellipse")
         let ellipseCenter = window.coordinate(withNormalizedOffset: CGVector(dx: 0.68, dy: 0.65))
         let ellipseCorner = window.coordinate(withNormalizedOffset: CGVector(dx: 0.78, dy: 0.72))
         ellipseCenter.press(forDuration: 0.15, thenDragTo: ellipseCorner)

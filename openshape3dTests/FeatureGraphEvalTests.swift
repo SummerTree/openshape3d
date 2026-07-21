@@ -253,6 +253,35 @@ final class FeatureGraphEvalTests: XCTestCase {
         XCTAssertTrue(body.euclidMesh().isWatertight)
     }
 
+    // MARK: 4b — reordering a node before the one it depends on surfaces a broken
+    // ref (History drag-to-reorder error surfacing), no crash.
+
+    func testMovingBooleanBeforeExtrudeBreaksItsToolRef() throws {
+        let h = Handles()
+        let sketches = [rectSketch(id: h.sketchID, entityID: h.rectEntity,
+                                   min: SIMD2(-2, -2), max: SIMD2(2, 2))]
+        let faceRef = try captureFaceRef(h: h, sketches: sketches, extrudeDistance: 12)
+
+        var graph = buildGraph(h: h, extrudeDistance: 12, face: faceRef)
+        // Move the subtract (consumes the extrude's tool body) to BEFORE the
+        // extrude — the same reorder a History drag would produce.
+        let boolIdx = try XCTUnwrap(graph.index(of: h.booleanFeature))
+        let node = graph.nodes.remove(at: boolIdx)
+        let extrudeIdx = try XCTUnwrap(graph.index(of: h.extrudeFeature))
+        graph.nodes.insert(node, at: extrudeIdx) // now the boolean evaluates first
+
+        let result = graph.evaluate(sketches: sketches, planes: [],
+                                    naming: SignatureNaming(), nextRevision: RevisionSource().next)
+
+        // The subtract can't resolve its tool (extrude not yet built) → broken ref.
+        switch result.errors[h.booleanFeature] {
+        case .brokenRef: break
+        default: XCTFail("out-of-order subtract should report a broken ref, got \(String(describing: result.errors[h.booleanFeature]))")
+        }
+        // No crash; the box still exists.
+        XCTAssertTrue(result.bodies.contains { $0.id == h.boxID })
+    }
+
     // MARK: 5 — bonus: the +Z face FOLLOWS a resized box (canonical naming proof)
 
     func testPlusZFaceResolvesToMovedFaceAfterBoxResize() throws {

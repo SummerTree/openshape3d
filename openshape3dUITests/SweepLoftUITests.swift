@@ -27,9 +27,8 @@ final class SweepLoftUITests: XCTestCase {
         let window = app.windows.firstMatch
 
         // Circle left of center on the ground plane.
-        let circleButton = app.buttons.containing(.staticText, identifier: "Circle").firstMatch
-        XCTAssertTrue(circleButton.waitForExistence(timeout: 10))
-        circleButton.tap()
+        XCTAssertTrue(app.buttons["SketchGroup"].waitForExistence(timeout: 10))
+        startSketchTool(app, "Circle")
         XCTAssertTrue(app.staticTexts["Choose a sketch plane"].waitForExistence(timeout: 3))
         window.coordinate(withNormalizedOffset: CGVector(dx: 0.80, dy: 0.78)).tap()
         XCTAssertTrue(app.staticTexts["Sketching on ground plane"].waitForExistence(timeout: 3))
@@ -39,8 +38,7 @@ final class SweepLoftUITests: XCTestCase {
         circleCenter.press(forDuration: 0.15, thenDragTo: circleEdge)
 
         // Two chained line segments to the right: the future sweep path.
-        let lineButton = app.buttons.containing(.staticText, identifier: "Line").firstMatch
-        lineButton.tap()
+        startSketchTool(app, "Line")
         let lineStart = window.coordinate(withNormalizedOffset: CGVector(dx: 0.54, dy: 0.50))
         let lineElbow = window.coordinate(withNormalizedOffset: CGVector(dx: 0.66, dy: 0.50))
         let lineEnd = window.coordinate(withNormalizedOffset: CGVector(dx: 0.66, dy: 0.36))
@@ -92,9 +90,8 @@ final class SweepLoftUITests: XCTestCase {
         let window = app.windows.firstMatch
 
         // Two rectangles of different sizes on the ground plane.
-        let rectButton = app.buttons.containing(.staticText, identifier: "Rect").firstMatch
-        XCTAssertTrue(rectButton.waitForExistence(timeout: 10))
-        rectButton.tap()
+        XCTAssertTrue(app.buttons["SketchGroup"].waitForExistence(timeout: 10))
+        startSketchTool(app, "Rect")
         XCTAssertTrue(app.staticTexts["Choose a sketch plane"].waitForExistence(timeout: 3))
         window.coordinate(withNormalizedOffset: CGVector(dx: 0.80, dy: 0.78)).tap()
         XCTAssertTrue(app.staticTexts["Sketching on ground plane"].waitForExistence(timeout: 3))

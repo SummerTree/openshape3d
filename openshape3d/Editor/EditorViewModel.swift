@@ -261,6 +261,11 @@ final class EditorViewModel {
             if selection.contains(body.id) {
                 selectionState = SelectionStateSelected.rawValue
             }
+            // A face selection highlights just the face (bright blue overlay
+            // below), not the whole body — Shapr3D keeps the body neutral.
+            if case .faceSelected(let faceBodyID) = mode, faceBodyID == body.id {
+                selectionState = SelectionStateNone.rawValue
+            }
             drawables.append(BodyDrawable(
                 id: body.id,
                 renderMesh: body.render,
@@ -295,32 +300,47 @@ final class EditorViewModel {
                 meshRevision: preview.meshRevision,
                 modelMatrix: preview.transform.matrixFloat,
                 baseColor: SIMD4(0.72, 0.74, 0.78, 1),
+                // The face push/pull result renders as a neutral body (like the
+                // committed result), not an orange "selected" body.
                 selectionState: replacesSource
-                    ? SelectionStateSelected.rawValue : SelectionStatePreview.rawValue,
+                    ? SelectionStateNone.rawValue : SelectionStatePreview.rawValue,
                 isTranslucent: !replacesSource
             ))
         }
 
-        // Selected-face highlight (Shapr3D: tap selects a face) — hidden once a
-        // push/pull preview is showing, since the highlight sits at the
-        // original face position while the preview body has already moved.
+        // Selected-face highlight (Shapr3D: tap selects a face). While a flat
+        // face is pushed/pulled, the highlight RIDES the cap along the pull
+        // normal so the selected face stays coloured through the whole drag
+        // (Shapr3D keeps it lit). Radial cylinder-wall pushes reshape the wall,
+        // so those keep the highlight only at rest.
         if case .faceSelected(let bodyID) = mode,
            let context = toolContext,
-           facePreviewSource == nil,
            let body = session.document.body(with: bodyID) {
+            var offset = SIMD3<Float>(repeating: 0)
+            var showHighlight = true
+            if case .extrude(let distance) = context.kind, context.cylinderFace == nil {
+                let n = context.plane.normal
+                offset = SIMD3(Float(n.x * distance), Float(n.y * distance), Float(n.z * distance))
+            } else {
+                showHighlight = (facePreviewSource == nil)
+            }
             let matrix = body.transform.matrixFloat
             var triangles: [SIMD3<Float>] = []
-            for t in context.faceTriangles where t < body.render.triangleCount {
-                for k in 0..<3 {
-                    let index = Int(body.render.indices[t * 3 + k])
-                    let world = matrix * SIMD4(body.render.positions[index], 1)
-                    triangles.append(SIMD3(world.x, world.y, world.z))
+            if showHighlight {
+                for t in context.faceTriangles where t < body.render.triangleCount {
+                    for k in 0..<3 {
+                        let index = Int(body.render.indices[t * 3 + k])
+                        let world = matrix * SIMD4(body.render.positions[index], 1)
+                        triangles.append(SIMD3(world.x, world.y, world.z) + offset)
+                    }
                 }
             }
             if !triangles.isEmpty {
+                // Vivid blue, mostly opaque — the selected face reads clearly
+                // against the neutral body (Shapr3D-style face selection).
                 scene.profileFills.append(SketchFillBatch(
                     triangles: triangles,
-                    color: SIMD4(0.98, 0.55, 0.12, 0.35)
+                    color: SIMD4(0.16, 0.55, 1.0, 0.72)
                 ))
             }
         }
@@ -1170,6 +1190,7 @@ final class EditorViewModel {
         cancelBooleanPicking()
         cancelSectionPlanePick()
         cancelImagePlanePick()
+        pendingCreateTool = nil
     }
 
     /// Translate: first tap picks the source snap point, second the
@@ -1778,6 +1799,9 @@ final class EditorViewModel {
         cancelTransientPicks()
         session.perform(DeleteBodiesCommand(ids: selection, document: session.document))
         selection.removeAll()
+        // Clear any active extrude/face tool so its on-screen pill + pull arrow
+        // disappear with the deleted body (they key off toolContext, not mode).
+        cancelTool()
         mode = .idle
     }
 
@@ -2092,6 +2116,11 @@ final class EditorViewModel {
     private func handleTap(ray: Ray) {
         // Any viewport tap dismisses pending gizmo numeric entry.
         axisEntryPart = nil
+        // A Modify-group operation armed from the palette consumes the next tap.
+        if let tool = pendingCreateTool {
+            applyPendingCreate(tool, ray: ray)
+            return
+        }
         if scaleEntryActive {
             // Spec §5.4: tapping an empty grid area commits the pending
             // scale; tapping a body just dismisses the field.
@@ -2716,7 +2745,19 @@ final class EditorViewModel {
     }
 
     var toolContext: ToolContext?
+    /// A 3D-create operation armed from the body-mode "Modify" palette group,
+    /// waiting for the user to tap a sketch region to apply it (Shapr3D: pick
+    /// the tool, then the profile). Consumed by the next viewport tap.
+    var pendingCreateTool: CreateTool?
+    /// Present the Helix options sheet — hoisted from `NumericInputBar` so the
+    /// Modify group can trigger it after arming a profile.
+    var showHelixOptions = false
     private var extrudeDragAnchor: Float?
+    /// The push/pull source body's world-space mesh, memoised for the duration
+    /// of a face drag. The source doesn't change until commit, so rebuilding it
+    /// from the render blob every drag frame (Euclid deserialize + transform)
+    /// was pure waste — the dominant cost behind sluggish push/pull.
+    private var cachedPullWorldBody: Euclid.Mesh?
     /// Distance (extrude) or angle (revolve) when the drag began.
     private var toolDragStartValue: Double = 0
     /// Stable identity for the preview drawable so GPU buffers cache by revision.
@@ -2767,9 +2808,46 @@ final class EditorViewModel {
         mode = .extruding
     }
 
+    /// True when at least one visible sketch has an extrudable profile, so the
+    /// body-mode "Modify" group can offer to start a 3D-create operation.
+    var hasExtrudableProfile: Bool {
+        session.document.sketches.contains {
+            !$0.isHidden && !ProfileDetector.detectProfiles(in: $0).isEmpty
+        }
+    }
+
+    /// Body-mode "Modify" group: arm a 3D-create operation (Shapr3D picks the
+    /// tool first). The next viewport tap on a sketch region applies it.
+    func beginCreate(_ tool: CreateTool) {
+        cancelTransientPicks()
+        cancelTool()
+        selection.removeAll()
+        pendingCreateTool = tool
+    }
+
+    func cancelCreate() { pendingCreateTool = nil }
+
+    /// Consume a pending Modify-group operation on a region tap: build the
+    /// extrude context (same as a plain fill tap), then route into the specific
+    /// operation's existing pick flow. An empty tap just cancels.
+    private func applyPendingCreate(_ tool: CreateTool, ray: Ray) {
+        pendingCreateTool = nil
+        guard let fill = profileHit(ray: ray) else { return }
+        selectedImageID = nil
+        startExtrude(with: fill)
+        switch tool {
+        case .extrude: break                 // extrude bar is already up
+        case .revolve: beginRevolveAxisPick()
+        case .sweep:   beginSweepPathPick()
+        case .loft:    beginLoftProfilePick()
+        case .helix:   showHelixOptions = true
+        }
+    }
+
     /// Drag starting on a filled profile pulls it into 3D directly
     /// (push/pull). Committing happens on release.
     func beginFillPull(ray: Ray) -> Bool {
+        pendingCreateTool = nil // a drag resumes normal fill-pull behaviour
         if case .measuring = mode { return false } // measure taps/drags never extrude
         // Split/pattern/transform picks never start an extrude; unclaimed
         // drags orbit (rotate-axis angle drags are claimed upstream).
@@ -2848,7 +2926,7 @@ final class EditorViewModel {
                     context.isPendingValid = true
                     return
                 }
-                let modified = faceModifiedMesh(context, distance: distance)
+                let modified = faceModifiedMesh(context, distance: distance, finalize: false)
                 context.isPendingValid = !(modified?.polygons.isEmpty ?? true)
                 guard let modified, !modified.polygons.isEmpty else {
                     context.preview = nil
@@ -3016,7 +3094,12 @@ final class EditorViewModel {
     }
 
     func setExtrudeDistance(_ distance: Double) {
-        guard var context = toolContext, case .extrude = context.kind else { return }
+        guard var context = toolContext, case .extrude(let current) = context.kind else { return }
+        // A pan delivers `.changed` at up to the display rate; snapping and
+        // sub-pixel jitter make many consecutive events resolve to the SAME
+        // distance. Skip the (expensive) CSG rebuild when nothing moved so the
+        // drag stays responsive instead of backing up behind redundant rebuilds.
+        guard abs(distance - current) > 1e-6 else { return }
         context.kind = .extrude(distance: distance)
         rebuildToolPreview(&context)
         toolContext = context
@@ -3071,7 +3154,15 @@ final class EditorViewModel {
         if let cyl = context.cylinderFace {
             setExtrudeDistance(value / 2 - cyl.radius)
         } else {
-            let signed = (context.distance ?? 0) < 0 ? -abs(value) : abs(value)
+            // Honor an explicitly typed sign ("-5" pushes inward); when no sign
+            // is typed, keep the current drag direction (the pill shows |dist|).
+            let hasExplicitSign = text.contains("-") || text.contains("+")
+            let signed: Double
+            if hasExplicitSign {
+                signed = value
+            } else {
+                signed = (context.distance ?? 0) < 0 ? -abs(value) : abs(value)
+            }
             setExtrudeDistance(context.symmetric ? signed / 2 : signed)
         }
         commitTool()
@@ -3097,14 +3188,19 @@ final class EditorViewModel {
     }
 
     func setRevolveAngle(_ angle: Double) {
-        guard var context = toolContext, case .revolve(let axis, _) = context.kind else { return }
-        context.kind = .revolve(axis: axis, angle: min(max(angle, 1), 360))
+        guard var context = toolContext, case .revolve(let axis, let current) = context.kind else { return }
+        let clamped = min(max(angle, 1), 360)
+        // Skip the redundant CSG rebuild when the (snapped) angle is unchanged —
+        // see setExtrudeDistance for why consecutive drag events repeat values.
+        guard abs(clamped - current) > 1e-6 else { return }
+        context.kind = .revolve(axis: axis, angle: clamped)
         rebuildToolPreview(&context)
         toolContext = context
     }
 
     /// Commits whichever profile tool is active (extrude or revolve).
     func commitTool() {
+        cachedPullWorldBody = nil
         guard let context = toolContext else {
             cancelTool()
             return
@@ -3252,7 +3348,10 @@ final class EditorViewModel {
         mode = .faceSelected(body.id)
     }
 
-    private func faceModifiedMesh(_ context: ToolContext, distance: Double) -> Euclid.Mesh? {
+    /// - Parameter finalize: when false (the live drag preview) the expensive
+    ///   `makeWatertight()` seam-weld is skipped — the raw boolean renders fine
+    ///   and only the committed mesh needs to be watertight.
+    private func faceModifiedMesh(_ context: ToolContext, distance: Double, finalize: Bool = true) -> Euclid.Mesh? {
         guard let sourceID = context.sourceBody,
               let source = session.document.body(with: sourceID)
         else { return nil }
@@ -3273,7 +3372,15 @@ final class EditorViewModel {
             return grown.transformed(by: source.transform.euclid)
         }
 
-        let worldBody = source.euclidMesh().transformed(by: source.transform.euclid)
+        // The source is immutable for the whole drag, so deserialize + transform
+        // it once and reuse the cached copy on every subsequent frame.
+        let worldBody: Euclid.Mesh
+        if let cached = cachedPullWorldBody {
+            worldBody = cached
+        } else {
+            worldBody = source.euclidMesh().transformed(by: source.transform.euclid)
+            cachedPullWorldBody = worldBody
+        }
         let n = context.plane.normal
 
         if distance < 0 {
@@ -3292,7 +3399,8 @@ final class EditorViewModel {
                 distance: distance
             )
             guard !prism.polygons.isEmpty else { return nil }
-            return worldBody.union(prism).makeWatertight()
+            let merged = worldBody.union(prism)
+            return finalize ? merged.makeWatertight() : merged
         }
     }
 
@@ -3557,6 +3665,7 @@ final class EditorViewModel {
     func cancelTool() {
         toolContext = nil
         extrudeDragAnchor = nil
+        cachedPullWorldBody = nil
         switch mode {
         case .extruding, .faceSelected, .pickingRevolveAxis,
              .pickingSweepPath, .pickingLoftProfiles:
@@ -3907,6 +4016,9 @@ final class EditorViewModel {
 
     func beginToolDrag(ray: Ray) -> Bool {
         guard let context = toolContext else { return false }
+        // Start each drag with a clean cache so the first preview frame rebuilds
+        // from the current source (not a body memoised during a prior commit).
+        cachedPullWorldBody = nil
         switch context.kind {
         case .extrude(let distance), .offsetPlane(let distance):
             let centroid = context.profile.centroid
@@ -3975,6 +4087,7 @@ final class EditorViewModel {
         // refine the value; commit by tapping empty space or the tool button
         // ("select an empty area of the grid to complete the tool").
         extrudeDragAnchor = nil
+        cachedPullWorldBody = nil
     }
 
     // MARK: - Sketch mode
@@ -6981,6 +7094,12 @@ final class EditorViewModel {
     /// Suppress / un-suppress a history node and rebuild downstream.
     func setFeatureSuppressed(_ id: FeatureID, _ value: Bool) {
         session.setSuppressed(id, value)
+        session.save()
+    }
+
+    /// Drag-reorder a history node to a new position and rebuild downstream.
+    func moveFeature(_ id: FeatureID, to newIndex: Int) {
+        session.moveFeature(id, to: newIndex)
         session.save()
     }
 

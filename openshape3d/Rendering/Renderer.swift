@@ -110,15 +110,10 @@ final class Renderer: NSObject, MTKViewDelegate {
                         tiles: scene.planePickers
                     )
                 }
-                if let arrow = scene.pullArrow {
-                    gizmoRenderer.drawPullArrow(
-                        encoder: overlayEncoder,
-                        pipelines: context.pipelines,
-                        frame: &frame,
-                        arrow: arrow,
-                        scale: gizmoScale(origin: arrow.origin)
-                    )
-                }
+                // The pull handle is drawn as an always-on-top SwiftUI SF Symbol
+                // overlay (ExtrudeGizmoOverlay), not in the 3D pass — so it stays
+                // visible when the cap dips below/behind a surface. `scene.pullArrow`
+                // is still populated for the geometric grab hit-test.
                 // Orientation cube (spec §7.2), always on. Layout math is in
                 // points so its NDC placement matches tap hit-testing.
                 orientationCubeRenderer.prepare(device: context.device)

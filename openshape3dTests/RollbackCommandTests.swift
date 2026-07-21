@@ -149,4 +149,41 @@ final class RollbackCommandTests: XCTestCase {
         clear.revert(in: &document)
         XCTAssertEqual(document.features.rollbackIndex, 1)
     }
+
+    // MARK: 4 — MoveFeatureCommand reorders and reverts symmetrically
+
+    func testMoveFeatureReordersAndRevertRestores() {
+        let a = node("A"), b = node("B"), c = node("C")
+        var document = doc([a, b, c], rollbackIndex: nil)
+
+        // Move A (0) to the end.
+        let toEnd = MoveFeatureCommand(featureID: a.id, from: 0, to: 2)
+        toEnd.apply(to: &document)
+        XCTAssertEqual(document.features.nodes.map(\.name), ["B", "C", "A"])
+        toEnd.revert(in: &document)
+        XCTAssertEqual(document.features.nodes.map(\.name), ["A", "B", "C"])
+
+        // Move C (2) to the front.
+        let toFront = MoveFeatureCommand(featureID: c.id, from: 2, to: 0)
+        toFront.apply(to: &document)
+        XCTAssertEqual(document.features.nodes.map(\.name), ["C", "A", "B"])
+        toFront.revert(in: &document)
+        XCTAssertEqual(document.features.nodes.map(\.name), ["A", "B", "C"])
+    }
+
+    // MARK: 5 — A reorder leaves the (positional) rollback marker COUNT unchanged
+
+    func testMoveFeatureLeavesRollbackMarkerUnchanged() {
+        let a = node("A"), b = node("B"), c = node("C")
+        var document = doc([a, b, c], rollbackIndex: 2) // A, B active
+
+        let cmd = MoveFeatureCommand(featureID: c.id, from: 2, to: 0)
+        cmd.apply(to: &document)
+        XCTAssertEqual(document.features.nodes.map(\.name), ["C", "A", "B"])
+        XCTAssertEqual(document.features.rollbackIndex, 2, "reorder is positional; marker count is unchanged")
+
+        cmd.revert(in: &document)
+        XCTAssertEqual(document.features.nodes.map(\.name), ["A", "B", "C"])
+        XCTAssertEqual(document.features.rollbackIndex, 2)
+    }
 }

@@ -23,9 +23,8 @@ final class PlanesUITests: XCTestCase {
         app.launch()
 
         let window = app.windows.firstMatch
-        let rectButton = app.buttons.containing(.staticText, identifier: "Rect").firstMatch
-        XCTAssertTrue(rectButton.waitForExistence(timeout: 10))
-        rectButton.tap()
+        XCTAssertTrue(app.buttons["SketchGroup"].waitForExistence(timeout: 10))
+        startSketchTool(app, "Rect")
 
         // The three origin plane tiles are up; the status pill tracks them.
         XCTAssertTrue(app.staticTexts["Choose a sketch plane"].waitForExistence(timeout: 3),
@@ -54,9 +53,8 @@ final class PlanesUITests: XCTestCase {
         app.launch()
 
         let window = app.windows.firstMatch
-        let rectButton = app.buttons.containing(.staticText, identifier: "Rect").firstMatch
-        XCTAssertTrue(rectButton.waitForExistence(timeout: 10))
-        rectButton.tap()
+        XCTAssertTrue(app.buttons["SketchGroup"].waitForExistence(timeout: 10))
+        startSketchTool(app, "Rect")
         XCTAssertTrue(app.staticTexts["Choose a sketch plane"].waitForExistence(timeout: 3))
 
         // The XY tile (front plane) projects right-and-up of screen center
@@ -74,9 +72,7 @@ final class PlanesUITests: XCTestCase {
         app.launchEnvironment["OS3D_FRESH"] = "1"
         app.launchEnvironment["OS3D_DEBUG_SEED"] = "1"
         app.launch()
-
-        let rectButton = app.buttons.containing(.staticText, identifier: "Rect").firstMatch
-        XCTAssertTrue(rectButton.waitForExistence(timeout: 10))
+        XCTAssertTrue(app.buttons["SketchGroup"].waitForExistence(timeout: 10))
         sleep(1) // camera fit settles
 
         let window = app.windows.firstMatch
@@ -90,7 +86,7 @@ final class PlanesUITests: XCTestCase {
         )
 
         // A sketch tool with a face selected sketches ON that face.
-        rectButton.tap()
+        startSketchTool(app, "Rect")
         XCTAssertTrue(app.staticTexts["Sketching on plane"].waitForExistence(timeout: 3),
                       "Sketch tools should start on the selected face's plane")
         sleep(2) // head-on camera animation

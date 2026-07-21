@@ -19,9 +19,8 @@ final class SketchStateUITests: XCTestCase {
     }
 
     private func startGroundSketch(_ app: XCUIApplication, window: XCUIElement) {
-        let lineButton = app.buttons.containing(.staticText, identifier: "Line").firstMatch
-        XCTAssertTrue(lineButton.waitForExistence(timeout: 10))
-        lineButton.tap()
+        XCTAssertTrue(app.buttons["SketchGroup"].waitForExistence(timeout: 10))
+        startSketchTool(app, "Line")
         XCTAssertTrue(app.staticTexts["Choose a sketch plane"].waitForExistence(timeout: 3))
         window.coordinate(withNormalizedOffset: CGVector(dx: 0.80, dy: 0.78)).tap()
         XCTAssertTrue(app.staticTexts["Sketching on ground plane"].waitForExistence(timeout: 3))
@@ -29,7 +28,8 @@ final class SketchStateUITests: XCTestCase {
     }
 
     private func applyConstraint(_ app: XCUIApplication, _ identifier: String) {
-        let menu = app.buttons.containing(.staticText, identifier: "Constrain").firstMatch
+        let menu = app.buttons["ConstraintsMenu"]
+        if !menu.isHittable { app.buttons["ConstrainGroup"].tap() }
         XCTAssertTrue(menu.waitForExistence(timeout: 3), "Constraints menu should exist")
         menu.tap()
         let item = app.buttons[identifier]
@@ -50,13 +50,13 @@ final class SketchStateUITests: XCTestCase {
         }
 
         // A single line: both endpoints are free (4 DOF) → under-defined.
+        // The under-defined state is shown on-canvas (blue points), NOT as a
+        // toolbar badge, so no "Fully defined" chip should be present yet.
         p(0.32, 0.46).press(forDuration: 0.15, thenDragTo: p(0.64, 0.52))
-
-        let chip = app.staticTexts["SketchStateChip"]
-        XCTAssertTrue(chip.waitForExistence(timeout: 3),
-                      "Sketch state chip should appear once geometry exists")
-        XCTAssertTrue(chip.label.contains("Under-defined"),
-                      "A fresh free line should read under-defined, got \"\(chip.label)\"")
+        XCTAssertFalse(
+            app.staticTexts.containing(NSPredicate(format: "label == %@", "Fully defined")).firstMatch.exists,
+            "A fresh free line is under-defined — no Fully-defined chip yet"
+        )
 
         // Select the line, then Lock it: both endpoints become fixed → 0 DOF.
         p(0.48, 0.49).tap()

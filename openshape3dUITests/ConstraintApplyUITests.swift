@@ -18,9 +18,8 @@ final class ConstraintApplyUITests: XCTestCase {
     }
 
     private func startGroundSketch(_ app: XCUIApplication, window: XCUIElement) {
-        let lineButton = app.buttons.containing(.staticText, identifier: "Line").firstMatch
-        XCTAssertTrue(lineButton.waitForExistence(timeout: 10))
-        lineButton.tap()
+        XCTAssertTrue(app.buttons["SketchGroup"].waitForExistence(timeout: 10))
+        startSketchTool(app, "Line")
         XCTAssertTrue(app.staticTexts["Choose a sketch plane"].waitForExistence(timeout: 3))
         window.coordinate(withNormalizedOffset: CGVector(dx: 0.80, dy: 0.78)).tap()
         XCTAssertTrue(app.staticTexts["Sketching on ground plane"].waitForExistence(timeout: 3))
@@ -39,7 +38,8 @@ final class ConstraintApplyUITests: XCTestCase {
     }
 
     private func applyConstraint(_ app: XCUIApplication, _ identifier: String) {
-        let menu = app.buttons.containing(.staticText, identifier: "Constrain").firstMatch
+        let menu = app.buttons["ConstraintsMenu"]
+        if !menu.isHittable { app.buttons["ConstrainGroup"].tap() }
         XCTAssertTrue(menu.waitForExistence(timeout: 3), "Constraints menu should exist")
         menu.tap()
         let item = app.buttons[identifier]

@@ -9,18 +9,110 @@
 //
 
 import SwiftUI
+import simd
 
 struct ExtrudeGizmoOverlay: View {
     @Bindable var viewModel: EditorViewModel
 
+    /// The arrow handle's screen anchor: where the symbol is drawn (and grabbed),
+    /// plus the pull direction's on-screen orientation.
+    private struct ArrowAnchor {
+        var point: CGPoint
+        var dir: (x: CGFloat, y: CGFloat, angle: Double)
+        var isValid: Bool
+    }
+
+    private var arrowAnchor: ArrowAnchor? {
+        guard let arrow = viewModel.scene.pullArrow,
+              let cam = viewModel.cameraControl else { return nil }
+        let o = SIMD3<Double>(Double(arrow.origin.x), Double(arrow.origin.y), Double(arrow.origin.z))
+        let d = simd_normalize(SIMD3<Double>(Double(arrow.direction.x),
+                                             Double(arrow.direction.y),
+                                             Double(arrow.direction.z)))
+        guard let p0 = cam.worldToScreenPoint(o) else { return nil }
+        let p1 = cam.worldToScreenPoint(o + d)
+        let dir = screenDir(from: p0, to: p1)
+        // Float off the cap — shares the grab-region offset so the touch target
+        // sits exactly under the drawn symbol.
+        let float = ViewportCoordinator.pullHandleScreenOffset
+        return ArrowAnchor(
+            point: CGPoint(x: p0.x + dir.x * float, y: p0.y + dir.y * float),
+            dir: dir, isValid: arrow.isValid
+        )
+    }
+
+    /// Screen gap the pill sits below the arrow handle — clears the symbol so
+    /// the measurement pill never hides the arrow (any face orientation).
+    private static let pillDropBelowArrow: CGFloat = 60
+
     var body: some View {
         let _ = viewModel.cameraEpoch
-        if let label = viewModel.extrudeArrowLabel,
-           let pt = viewModel.cameraControl?.worldToScreenPoint(label.world) {
-            pill(label)
-                // Just off the shaft so the arrow line stays visible.
-                .position(x: pt.x + 34, y: pt.y)
+        ZStack {
+            if let anchor = arrowAnchor {
+                if !viewModel.editingExtrudeArrow {
+                    pullSymbol(anchor)
+                }
+                if let label = viewModel.extrudeArrowLabel {
+                    // Anchor the pill BELOW the arrow (screen-down) so it never
+                    // overlaps the handle, whichever way the face points.
+                    pill(label)
+                        .position(x: anchor.point.x,
+                                  y: anchor.point.y + Self.pillDropBelowArrow)
+                }
+            }
         }
+        // `worldToScreenPoint` returns full-screen (MTKView) coordinates, so the
+        // overlay must span the full screen too — otherwise the safe-area inset
+        // shifts every `.position` down and the handle/pill miss the geometry.
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .ignoresSafeArea()
+    }
+
+    /// The grab handle: the ACTUAL SF Symbol (`arrow.up.and.down`), drawn as an
+    /// always-on-top overlay so it stays visible when the moving cap dips below
+    /// or behind a surface (the 3D-drawn arrow used to get occluded there). It
+    /// rides the pull arrow's world origin, projected each camera move, rotated
+    /// so its axis follows the pull direction on screen. Hit-testing is disabled
+    /// so drags fall through to the viewport, which grabs it geometrically.
+    private func pullSymbol(_ anchor: ArrowAnchor) -> some View {
+        ZStack {
+            // The visible (rotated) symbol.
+            ZStack {
+                // Dark backing (a hair larger) → crisp outline like Shapr3D.
+                symbolImage.foregroundStyle(Color(white: 0.08))
+                    .scaleEffect(1.18)
+                symbolImage.foregroundStyle(anchor.isValid ? Color(red: 0.20, green: 0.52, blue: 1.0)
+                                                           : Color(red: 0.90, green: 0.26, blue: 0.26))
+            }
+            .rotationEffect(.radians(anchor.dir.angle + .pi / 2))
+            .position(anchor.point)
+            .allowsHitTesting(false)
+            // A separate, un-rotated invisible marker at the exact grab point —
+            // its accessibility frame is what UI tests target (rotation/nested
+            // images make the symbol's own frame unreliable).
+            Color.clear
+                .frame(width: 52, height: 52)
+                .contentShape(Rectangle())
+                .position(anchor.point)
+                .allowsHitTesting(false)
+                .accessibilityElement()
+                .accessibilityIdentifier("PullArrowHandle")
+        }
+    }
+
+    private var symbolImage: some View {
+        Image(systemName: "arrow.up.and.down")
+            .font(.system(size: 30, weight: .bold))
+    }
+
+    /// Unit screen-space direction from `p0` toward `p1` (defaults to straight
+    /// up when the axis projects to a point), plus its angle for rotation.
+    private func screenDir(from p0: CGPoint, to p1: CGPoint?) -> (x: CGFloat, y: CGFloat, angle: Double) {
+        guard let p1 else { return (0, -1, -.pi / 2) }
+        let dx = p1.x - p0.x, dy = p1.y - p0.y
+        let len = (dx * dx + dy * dy).squareRoot()
+        guard len > 0.5 else { return (0, -1, -.pi / 2) }
+        return (dx / len, dy / len, atan2(Double(dy), Double(dx)))
     }
 
     @ViewBuilder

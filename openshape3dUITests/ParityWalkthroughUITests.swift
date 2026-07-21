@@ -30,8 +30,7 @@ final class ParityWalkthroughUITests: XCTestCase {
         app.launchEnvironment["OS3D_FRESH"] = "1"
         if seed { app.launchEnvironment["OS3D_DEBUG_SEED"] = "1" }
         app.launch()
-        let rectButton = app.buttons.containing(.staticText, identifier: "Rect").firstMatch
-        XCTAssertTrue(rectButton.waitForExistence(timeout: 10))
+        XCTAssertTrue(app.buttons["SketchGroup"].waitForExistence(timeout: 10))
         sleep(1)
         return app
     }
@@ -42,7 +41,7 @@ final class ParityWalkthroughUITests: XCTestCase {
         snap("01-editor-empty-palette")
 
         // Plane pickers
-        app.buttons.containing(.staticText, identifier: "Rect").firstMatch.tap()
+        startSketchTool(app, "Rect")
         XCTAssertTrue(app.staticTexts["Choose a sketch plane"].waitForExistence(timeout: 3))
         snap("02-plane-pickers")
 
@@ -52,10 +51,10 @@ final class ParityWalkthroughUITests: XCTestCase {
         sleep(2)
         window.coordinate(withNormalizedOffset: CGVector(dx: 0.35, dy: 0.35))
             .press(forDuration: 0.15, thenDragTo: window.coordinate(withNormalizedOffset: CGVector(dx: 0.62, dy: 0.60)))
-        app.buttons.containing(.staticText, identifier: "Circle").firstMatch.tap()
+        startSketchTool(app, "Circle")
         window.coordinate(withNormalizedOffset: CGVector(dx: 0.48, dy: 0.47))
             .press(forDuration: 0.15, thenDragTo: window.coordinate(withNormalizedOffset: CGVector(dx: 0.54, dy: 0.51)))
-        app.buttons.containing(.staticText, identifier: "Polygon").firstMatch.tap()
+        startSketchTool(app, "Polygon")
         window.coordinate(withNormalizedOffset: CGVector(dx: 0.76, dy: 0.42))
             .press(forDuration: 0.15, thenDragTo: window.coordinate(withNormalizedOffset: CGVector(dx: 0.84, dy: 0.50)))
         snap("03-sketch-rect-hole-polygon-fills")
@@ -69,7 +68,7 @@ final class ParityWalkthroughUITests: XCTestCase {
         let app = launchFresh()
         let window = app.windows.firstMatch
 
-        app.buttons.containing(.staticText, identifier: "Rect").firstMatch.tap()
+        startSketchTool(app, "Rect")
         _ = app.staticTexts["Choose a sketch plane"].waitForExistence(timeout: 3)
         window.coordinate(withNormalizedOffset: CGVector(dx: 0.80, dy: 0.78)).tap()
         _ = app.staticTexts["Sketching on ground plane"].waitForExistence(timeout: 3)
@@ -128,7 +127,7 @@ final class ParityWalkthroughUITests: XCTestCase {
         let window = app.windows.firstMatch
 
         // Pattern bar with ghost previews
-        app.buttons["PatternButton"].tap()
+        tapPaletteTool(app, group: "Transform", id: "PatternButton")
         XCTAssertTrue(app.buttons["PatternApply"].waitForExistence(timeout: 3))
         snap("13-pattern-bar-ghosts")
         app.buttons["Cancel"].firstMatch.tap()
@@ -152,15 +151,14 @@ final class ParityWalkthroughUITests: XCTestCase {
         let window = app.windows.firstMatch
 
         // Rect + separate vertical line (axis), then arm Revolve
-        app.buttons.containing(.staticText, identifier: "Rect").firstMatch.tap()
+        startSketchTool(app, "Rect")
         _ = app.staticTexts["Choose a sketch plane"].waitForExistence(timeout: 3)
         window.coordinate(withNormalizedOffset: CGVector(dx: 0.80, dy: 0.78)).tap()
         _ = app.staticTexts["Sketching on ground plane"].waitForExistence(timeout: 3)
         sleep(2)
         window.coordinate(withNormalizedOffset: CGVector(dx: 0.52, dy: 0.40))
             .press(forDuration: 0.15, thenDragTo: window.coordinate(withNormalizedOffset: CGVector(dx: 0.68, dy: 0.56)))
-        let lineButton = app.buttons.containing(.staticText, identifier: "Line").firstMatch
-        lineButton.tap()
+        startSketchTool(app, "Line")
         window.coordinate(withNormalizedOffset: CGVector(dx: 0.36, dy: 0.35))
             .press(forDuration: 0.15, thenDragTo: window.coordinate(withNormalizedOffset: CGVector(dx: 0.36, dy: 0.62)))
         app.buttons["Exit Sketching"].tap()
@@ -243,7 +241,7 @@ final class ParityWalkthroughUITests: XCTestCase {
         let window = app.windows.firstMatch
 
         // Pattern the seeded box so the marquee has several targets.
-        app.buttons["PatternButton"].tap()
+        tapPaletteTool(app, group: "Transform", id: "PatternButton")
         XCTAssertTrue(app.buttons["PatternApply"].waitForExistence(timeout: 3))
         app.buttons["PatternApply"].tap()
         app.buttons["Fit View"].tap()
@@ -316,7 +314,7 @@ final class ParityWalkthroughUITests: XCTestCase {
         let app = launchFresh()
         let window = app.windows.firstMatch
 
-        app.buttons.containing(.staticText, identifier: "Line").firstMatch.tap()
+        startSketchTool(app, "Line")
         _ = app.staticTexts["Choose a sketch plane"].waitForExistence(timeout: 3)
         window.coordinate(withNormalizedOffset: CGVector(dx: 0.80, dy: 0.78)).tap()
         _ = app.staticTexts["Sketching on ground plane"].waitForExistence(timeout: 3)
@@ -333,6 +331,7 @@ final class ParityWalkthroughUITests: XCTestCase {
         sleep(1)
         point(0.47, 0.48).tap()
         sleep(1)
+        app.buttons["SymbolGroup"].tap()
         app.buttons["MakeSymbolButton"].tap()
         let alert = app.alerts["Make Symbol"]
         XCTAssertTrue(alert.waitForExistence(timeout: 3))
@@ -343,6 +342,7 @@ final class ParityWalkthroughUITests: XCTestCase {
         alert.buttons["Create"].tap()
 
         // Insert arms tap-to-place; two taps stamp two instances.
+        app.buttons["SymbolGroup"].tap()
         let insertMenu = app.buttons["InsertSymbolMenu"]
         XCTAssertTrue(insertMenu.waitForExistence(timeout: 3))
         insertMenu.tap()
@@ -365,7 +365,7 @@ final class ParityWalkthroughUITests: XCTestCase {
     private func startGroundSketch(
         _ app: XCUIApplication, window: XCUIElement, tool: String
     ) {
-        app.buttons.containing(.staticText, identifier: tool).firstMatch.tap()
+        startSketchTool(app, tool)
         XCTAssertTrue(app.staticTexts["Choose a sketch plane"].waitForExistence(timeout: 3))
         window.coordinate(withNormalizedOffset: CGVector(dx: 0.80, dy: 0.78)).tap()
         XCTAssertTrue(app.staticTexts["Sketching on ground plane"].waitForExistence(timeout: 3))
@@ -392,11 +392,12 @@ final class ParityWalkthroughUITests: XCTestCase {
         p(0.57, 0.47).press(forDuration: 0.15, thenDragTo: p(0.66, 0.70))
         sleep(1)
 
-        // Sketch-state chip: BLUE "Under-defined — N DOF".
-        let chip = app.staticTexts["SketchStateChip"]
-        XCTAssertTrue(chip.waitForExistence(timeout: 3))
-        XCTAssertTrue(chip.label.contains("Under-defined"),
-                      "Fresh free lines should read under-defined, got \"\(chip.label)\"")
+        // Under-defined geometry reads on-canvas (blue points), not as a toolbar
+        // badge — so no "Fully defined" chip should be present yet.
+        XCTAssertFalse(
+            app.staticTexts.containing(NSPredicate(format: "label == %@", "Fully defined")).firstMatch.exists,
+            "Fresh free lines are under-defined — no Fully-defined chip yet"
+        )
         snap("27-sketch-under-defined-blue")
 
         // Select both lines by tapping their middles.
@@ -409,7 +410,8 @@ final class ParityWalkthroughUITests: XCTestCase {
         // relations (Parallel/Perpendicular/Equal Length/Coincident/Lock) are
         // enabled while circle-only ones (Concentric/Equal Radius/Tangent) stay
         // disabled — the screenshot captures that adaptive enablement.
-        let menu = app.buttons.containing(.staticText, identifier: "Constrain").firstMatch
+        let menu = app.buttons["ConstraintsMenu"]
+        if !menu.isHittable { app.buttons["ConstrainGroup"].tap() }
         XCTAssertTrue(menu.waitForExistence(timeout: 3))
         menu.tap()
         let parallel = app.buttons["Constraint_Parallel"]

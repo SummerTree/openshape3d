@@ -23,8 +23,7 @@ final class VariablesPanelUITests: XCTestCase {
         app.launchEnvironment["OS3D_FRESH"] = "1"
         app.launch()
         // Editor is up when the sketch palette exists.
-        XCTAssertTrue(app.buttons.containing(.staticText, identifier: "Rect").firstMatch
-            .waitForExistence(timeout: 10))
+        XCTAssertTrue(app.buttons["SketchGroup"].waitForExistence(timeout: 10))
 
         // Open the Variables panel and add a variable.
         let varsButton = app.buttons["VariablesButton"]

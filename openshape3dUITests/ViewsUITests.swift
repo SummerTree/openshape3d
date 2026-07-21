@@ -34,9 +34,8 @@ final class ViewsUITests: XCTestCase {
         sleep(1)
 
         // Draw a rectangle: arm Rect, pick the ground plane, drag.
-        let rectButton = app.buttons.containing(.staticText, identifier: "Rect").firstMatch
-        XCTAssertTrue(rectButton.waitForExistence(timeout: 5))
-        rectButton.tap()
+        XCTAssertTrue(app.buttons["SketchGroup"].waitForExistence(timeout: 5))
+        startSketchTool(app, "Rect")
 
         // From the front view the XY plane tile sits head-on just up-right of
         // the screen center (tiles span 0.3–2.3 world units from the origin).

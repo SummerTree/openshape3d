@@ -21,9 +21,8 @@ final class SketchFlowUITests: XCTestCase {
         app.launch()
 
         let window = app.windows.firstMatch
-        let rectButton = app.buttons.containing(.staticText, identifier: "Rect").firstMatch
-        XCTAssertTrue(rectButton.waitForExistence(timeout: 10))
-        rectButton.tap()
+        XCTAssertTrue(app.buttons["SketchGroup"].waitForExistence(timeout: 10))
+        startSketchTool(app, "Rect")
 
         // Plane pickers appear; tapping the bare ground starts there.
         XCTAssertTrue(app.staticTexts["Choose a sketch plane"].waitForExistence(timeout: 3))

@@ -14,7 +14,6 @@ struct NumericInputBar: View {
 
     @State private var values: [Double] = []
     @State private var axisDistance: Double = 0
-    @State private var showHelixSheet = false
     @FocusState private var focusedField: Int?
 
     var body: some View {
@@ -544,7 +543,7 @@ struct NumericInputBar: View {
                         viewModel.beginLoftProfilePick()
                     }
                     Button("Helix") {
-                        showHelixSheet = true
+                        viewModel.showHelixOptions = true
                     }
                 }
                 // Face pulls can become an offset construction plane instead.
@@ -583,7 +582,7 @@ struct NumericInputBar: View {
         .padding(.vertical, 12)
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16))
         .shadow(color: .black.opacity(0.15), radius: 10, y: 3)
-        .sheet(isPresented: $showHelixSheet) {
+        .sheet(isPresented: $viewModel.showHelixOptions) {
             HelixOptionsSheet { radius, pitch, turns in
                 viewModel.commitHelixSweep(radius: radius, pitch: pitch, turns: turns)
             }

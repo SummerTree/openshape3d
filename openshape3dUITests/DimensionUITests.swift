@@ -20,9 +20,8 @@ final class DimensionUITests: XCTestCase {
     private func startGroundSketch(
         _ app: XCUIApplication, window: XCUIElement, tool: String
     ) {
-        let toolButton = app.buttons.containing(.staticText, identifier: tool).firstMatch
-        XCTAssertTrue(toolButton.waitForExistence(timeout: 10))
-        toolButton.tap()
+        XCTAssertTrue(app.buttons["SketchGroup"].waitForExistence(timeout: 10))
+        startSketchTool(app, tool)
         XCTAssertTrue(app.staticTexts["Choose a sketch plane"].waitForExistence(timeout: 3))
         window.coordinate(withNormalizedOffset: CGVector(dx: 0.80, dy: 0.78)).tap()
         XCTAssertTrue(app.staticTexts["Sketching on ground plane"].waitForExistence(timeout: 3))

@@ -152,17 +152,32 @@ final class ViewportCoordinator: NSObject, ViewportGestureDelegate, ViewportCame
     /// A one-finger drag drawing the select-mode marquee (plan §B13).
     private var marqueeActive = false
 
-    /// True when `ray` passes within a touch-friendly radius of the pull-arrow
-    /// handle (which floats off the surface along the pull direction). `scale` is
-    /// the gizmo's constant-screen-size factor, so the world radius stays a fixed
-    /// on-screen size. Matches the handle centre in `GizmoRenderer.drawPullArrow`.
-    private static func hitsPullArrow(ray: Ray, arrow: PullArrowState, scale: Float) -> Bool {
-        let dir = simd_normalize(arrow.direction)
-        let center = arrow.origin + dir * (0.78 * scale)   // between the two chevrons
-        let along = simd_dot(center - ray.origin, ray.direction)
-        guard along > 0 else { return false }
-        let closest = ray.origin + ray.direction * along
-        return simd_length(center - closest) < 0.6 * scale
+    /// Screen offset (points) of the drawn SF Symbol handle off the projected
+    /// cap, and the touch radius around it. MUST match `ExtrudeGizmoOverlay`'s
+    /// `float` so the grab region sits exactly under the symbol the user sees.
+    static let pullHandleScreenOffset: CGFloat = 30
+    private static let pullHandleTouchRadius: CGFloat = 46
+
+    /// True when the screen `point` lands within a touch-friendly radius of the
+    /// drawn pull-arrow handle. The handle is a SwiftUI SF Symbol overlay at a
+    /// fixed screen offset off the projected cap, so the grab test is done in
+    /// screen space (not a world ray) to line up exactly with what's visible.
+    private func hitsPullArrowScreen(point: CGPoint, arrow: PullArrowState) -> Bool {
+        let o = SIMD3<Double>(Double(arrow.origin.x), Double(arrow.origin.y), Double(arrow.origin.z))
+        guard let p0 = worldToScreenPoint(o) else { return false }
+        let d = simd_normalize(SIMD3<Double>(Double(arrow.direction.x),
+                                             Double(arrow.direction.y),
+                                             Double(arrow.direction.z)))
+        let p1 = worldToScreenPoint(o + d)
+        var ux: CGFloat = 0, uy: CGFloat = -1
+        if let p1 {
+            let dx = p1.x - p0.x, dy = p1.y - p0.y
+            let len = (dx * dx + dy * dy).squareRoot()
+            if len > 0.5 { ux = dx / len; uy = dy / len }
+        }
+        let handle = CGPoint(x: p0.x + ux * Self.pullHandleScreenOffset,
+                             y: p0.y + uy * Self.pullHandleScreenOffset)
+        return hypot(point.x - handle.x, point.y - handle.y) <= Self.pullHandleTouchRadius
     }
 
     func gestureDragBegan(at point: CGPoint) -> Bool {
@@ -230,19 +245,17 @@ final class ViewportCoordinator: NSObject, ViewportGestureDelegate, ViewportCame
             return true
         }
 
-        // Face selected: dragging the face — OR grabbing its floating pull-arrow
-        // handle (which sits off the surface, so its touch never lands on the
-        // face below) — pushes/pulls it.
+        // Face selected: ONLY grabbing the pull-arrow handle pushes/pulls the
+        // face (Shapr3D). A drag anywhere else — including on the face itself —
+        // orbits, so the face never moves by accident.
         if case .faceSelected = viewModel.mode {
-            if let arrow = viewModel.scene.pullArrow, let renderer,
-               Self.hitsPullArrow(ray: ray, arrow: arrow, scale: renderer.gizmoScale(origin: arrow.origin)),
+            if let arrow = viewModel.scene.pullArrow,
+               hitsPullArrowScreen(point: point, arrow: arrow),
                viewModel.beginToolDrag(ray: ray) {
                 pullActive = true
                 return true
             }
-            pullActive = viewModel.beginFacePull(ray: ray)
-            if pullActive { return true }
-            // Fall through — drags off the face orbit.
+            return false   // drags off the arrow orbit; the face stays put
         }
 
         // Offer the drag to the gizmo when a body is selected.

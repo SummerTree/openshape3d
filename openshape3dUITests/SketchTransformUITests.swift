@@ -22,9 +22,8 @@ final class SketchTransformUITests: XCTestCase {
         app.launch()
 
         let window = app.windows.firstMatch
-        let lineButton = app.buttons.containing(.staticText, identifier: "Line").firstMatch
-        XCTAssertTrue(lineButton.waitForExistence(timeout: 10))
-        lineButton.tap()
+        XCTAssertTrue(app.buttons["SketchGroup"].waitForExistence(timeout: 10))
+        startSketchTool(app, "Line")
 
         // Plane pickers appear; tapping the bare ground starts there.
         XCTAssertTrue(app.staticTexts["Choose a sketch plane"].waitForExistence(timeout: 3))
@@ -82,13 +81,11 @@ final class SketchTransformUITests: XCTestCase {
         app.launchEnvironment["OS3D_FRESH"] = "1"
         app.launchEnvironment["OS3D_DEBUG_SEED"] = "1"
         app.launch()
-
-        let rectButton = app.buttons.containing(.staticText, identifier: "Rect").firstMatch
-        XCTAssertTrue(rectButton.waitForExistence(timeout: 10))
+        XCTAssertTrue(app.buttons["SketchGroup"].waitForExistence(timeout: 10))
         sleep(1) // camera fit settles
 
         // Seeded box is selected: arm Rotate Around Axis.
-        app.buttons["RotateAxisButton"].tap()
+        tapPaletteTool(app, group: "Transform", id: "RotateAxisButton")
         XCTAssertTrue(
             app.staticTexts["Tap a sketch line, or pick a world axis"].waitForExistence(timeout: 3),
             "Rotate Axis should prompt for an axis"

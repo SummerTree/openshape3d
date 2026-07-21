@@ -88,6 +88,26 @@ final class ViewportGestureController: NSObject {
         view?.setNeedsDisplay()
     }
 
+    // MARK: - Interactive (continuous) rendering
+
+    /// The viewport renders on-demand (paused + setNeedsDisplay) when idle, but
+    /// that adds a frame-plus of input-to-photon latency that reads as a
+    /// "sluggish" drag. While any gesture is live we un-pause the view so it
+    /// renders every display refresh; a depth counter keeps it un-paused until
+    /// the LAST overlapping gesture ends (pinch + two-finger pan overlap).
+    private var interactiveDepth = 0
+    private func beginInteractive() {
+        interactiveDepth += 1
+        if interactiveDepth == 1 { view?.isPaused = false }
+    }
+    private func endInteractive() {
+        interactiveDepth = max(0, interactiveDepth - 1)
+        if interactiveDepth == 0 {
+            view?.isPaused = true
+            view?.setNeedsDisplay()   // one settled frame after the gesture
+        }
+    }
+
     // MARK: - Handlers
 
     private var dragClaimed = false
@@ -97,6 +117,7 @@ final class ViewportGestureController: NSObject {
         let location = gesture.location(in: view)
         switch gesture.state {
         case .began:
+            beginInteractive()
             lastPanLocation = location
             dragClaimed = delegate?.gestureDragBegan(at: location) ?? false
         case .changed:
@@ -122,6 +143,7 @@ final class ViewportGestureController: NSObject {
                 dragClaimed = false
                 redraw()
             }
+            endInteractive()
         default:
             break
         }
@@ -132,6 +154,7 @@ final class ViewportGestureController: NSObject {
         let location = gesture.location(in: view)
         switch gesture.state {
         case .began:
+            beginInteractive()
             lastTwoFingerLocation = location
         case .changed:
             let delta = CGSize(
@@ -142,6 +165,8 @@ final class ViewportGestureController: NSObject {
             renderer.camera.pan(deltaPixels: delta, viewportSize: view.bounds.size)
             redraw()
             cameraChanged?()
+        case .ended, .cancelled, .failed:
+            endInteractive()
         default:
             break
         }
@@ -150,11 +175,15 @@ final class ViewportGestureController: NSObject {
     @objc private func handlePinch(_ gesture: UIPinchGestureRecognizer) {
         guard let renderer else { return }
         switch gesture.state {
+        case .began:
+            beginInteractive()
         case .changed:
             renderer.camera.zoom(scale: Float(gesture.scale))
             gesture.scale = 1
             redraw()
             cameraChanged?()
+        case .ended, .cancelled, .failed:
+            endInteractive()
         default:
             break
         }

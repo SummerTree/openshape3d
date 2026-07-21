@@ -18,9 +18,8 @@ final class ExtrudeFlowUITests: XCTestCase {
 
     private func drawRectangle(in app: XCUIApplication) {
         let window = app.windows.firstMatch
-        let rectButton = app.buttons.containing(.staticText, identifier: "Rect").firstMatch
-        XCTAssertTrue(rectButton.waitForExistence(timeout: 10))
-        rectButton.tap()
+        XCTAssertTrue(app.buttons["SketchGroup"].waitForExistence(timeout: 10))
+        startSketchTool(app, "Rect")
         // Plane pickers appear; tap the bare ground to sketch there.
         XCTAssertTrue(app.staticTexts["Choose a sketch plane"].waitForExistence(timeout: 3))
         window.coordinate(withNormalizedOffset: CGVector(dx: 0.80, dy: 0.78)).tap()
@@ -94,11 +93,10 @@ final class ExtrudeFlowUITests: XCTestCase {
         app.launch()
 
         let window = app.windows.firstMatch
-        let rectButton = app.buttons.containing(.staticText, identifier: "Rect").firstMatch
-        XCTAssertTrue(rectButton.waitForExistence(timeout: 10))
+        XCTAssertTrue(app.buttons["SketchGroup"].waitForExistence(timeout: 10))
 
         // Body A.
-        rectButton.tap()
+        startSketchTool(app, "Rect")
         XCTAssertTrue(app.staticTexts["Choose a sketch plane"].waitForExistence(timeout: 3))
         window.coordinate(withNormalizedOffset: CGVector(dx: 0.80, dy: 0.78)).tap()
         XCTAssertTrue(app.staticTexts["Sketching on ground plane"].waitForExistence(timeout: 3))
@@ -112,7 +110,7 @@ final class ExtrudeFlowUITests: XCTestCase {
         XCTAssertFalse(app.staticTexts["Extrude"].exists)
 
         // Profile B overlaps body A; tap point sits outside A's footprint.
-        rectButton.tap()
+        startSketchTool(app, "Rect")
         XCTAssertTrue(app.staticTexts["Choose a sketch plane"].waitForExistence(timeout: 3))
         window.coordinate(withNormalizedOffset: CGVector(dx: 0.80, dy: 0.78)).tap()
         XCTAssertTrue(app.staticTexts["Sketching on ground plane"].waitForExistence(timeout: 3))

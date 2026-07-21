@@ -45,6 +45,18 @@ struct HistoryPanelView: View {
                         onEditPatternSpacing: { viewModel.editPatternSpacing(row.id, $0) },
                         onEditPatternAngle: { viewModel.editPatternAngle(row.id, $0) }
                     )
+                    // Drag-to-reorder: the payload is the node's UUID; dropping it
+                    // onto another row moves it to that row's position. Replaying
+                    // out of dependency order surfaces a broken-ref badge (handled
+                    // by the feature graph), so the reorder is never forbidden.
+                    .draggable(row.id.raw.uuidString) {
+                        Label(row.name, systemImage: "line.3.horizontal")
+                            .font(.caption).padding(6)
+                            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
+                    }
+                    .dropDestination(for: String.self) { items, _ in
+                        reorder(droppedIDs: items, onto: index)
+                    }
                 }
             }
             .padding(12)
@@ -54,6 +66,13 @@ struct HistoryPanelView: View {
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 18))
         .shadow(color: .black.opacity(0.15), radius: 10, y: 3)
         .accessibilityIdentifier("HistoryPanel")
+    }
+
+    /// Move the dragged feature (by UUID payload) to the drop row's index.
+    private func reorder(droppedIDs: [String], onto index: Int) -> Bool {
+        guard let str = droppedIDs.first, let uuid = UUID(uuidString: str) else { return false }
+        viewModel.moveFeature(FeatureID(raw: uuid), to: index)
+        return true
     }
 
     private func sectionHeader(_ title: String) -> some View {

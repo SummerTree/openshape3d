@@ -167,6 +167,23 @@ final class DocumentSession {
         performRebuild(edited, leadingCommands: [cmd], title: cmd.title)
     }
 
+    /// Reorder a node to `newIndex` and rebuild everything downstream in one undo
+    /// step (History panel drag-to-reorder). `evaluate` replays nodes in array
+    /// order, so moving a node before one it references breaks that reference and
+    /// surfaces a `.brokenRef` error on the dependent node (Shapr3D-style — the
+    /// reorder is allowed, the error is shown). The rollback marker is a positional
+    /// count and is left unchanged. No-op if the position doesn't actually change.
+    func moveFeature(_ id: FeatureID, to newIndex: Int) {
+        guard let from = document.features.index(of: id) else { return }
+        var edited = document.features
+        let node = edited.nodes.remove(at: from)
+        let clamped = min(max(newIndex, 0), edited.nodes.count)
+        guard clamped != from else { return }
+        edited.nodes.insert(node, at: clamped)
+        let cmd = MoveFeatureCommand(featureID: id, from: from, to: clamped)
+        performRebuild(edited, leadingCommands: [cmd], title: cmd.title)
+    }
+
     /// Guards `performRebuild` against re-entrancy. `performRebuild` ends by
     /// `perform`ing one internal `CompositeCommand`; that document mutation must
     /// never start a nested replay (e.g. via a sketch-driven rebuild). Set for
