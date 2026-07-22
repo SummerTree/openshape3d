@@ -21,8 +21,10 @@ struct ExportDocument: FileDocument {
     static let glbType = UTType(filenameExtension: "glb") ?? .data
     static let dxfType = UTType(filenameExtension: "dxf") ?? .data
     static let usdzType = UTType.usdz
+    /// The .os3d project archive (Phase F, spec §13).
+    static let os3dType = UTType(filenameExtension: "os3d") ?? .data
     static var readableContentTypes: [UTType] {
-        [stlType, objType, threeMFType, glbType, dxfType, usdzType, .png, .data]
+        [stlType, objType, threeMFType, glbType, dxfType, usdzType, os3dType, .png, .data]
     }
 
     var data: Data
@@ -614,6 +616,22 @@ struct EditorView: View {
                     )
                 }
             }
+            Divider()
+            // Full-fidelity project archive: sketches, features, variables —
+            // everything (Phase F, spec §13). Mesh exports above are geometry-
+            // only; this one round-trips back through Import on any device.
+            Button("Project Archive (.os3d)") {
+                viewModel.session.save()   // rows must reflect live edits
+                if let data = ProjectArchive
+                    .archive(from: viewModel.session.project).encoded() {
+                    exportDocument = ExportDocument(
+                        data: data,
+                        contentType: ExportDocument.os3dType,
+                        fileExtension: "os3d"
+                    )
+                }
+            }
+            .accessibilityIdentifier("ExportArchiveButton")
             Divider()
             Button("PNG Screenshot…") {
                 showScreenshotOptions = true

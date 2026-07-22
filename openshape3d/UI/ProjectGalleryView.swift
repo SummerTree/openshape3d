@@ -5,6 +5,7 @@
 
 import SwiftUI
 import SwiftData
+import UniformTypeIdentifiers
 
 struct ProjectGalleryView: View {
     @Environment(\.modelContext) private var modelContext
@@ -14,6 +15,8 @@ struct ProjectGalleryView: View {
     @State private var renamingProject: Project?
     @State private var renameText = ""
     @State private var didHandleLaunchHooks = false
+    @State private var showArchiveImporter = false
+    @State private var importErrorMessage: String?
 
     private let columns = [GridItem(.adaptive(minimum: 220, maximum: 300), spacing: 20)]
 
@@ -63,11 +66,47 @@ struct ProjectGalleryView: View {
             }
             .navigationTitle("Designs")
             .toolbar {
+                ToolbarItem(placement: .secondaryAction) {
+                    Button {
+                        showArchiveImporter = true
+                    } label: {
+                        Label("Import Project…", systemImage: "square.and.arrow.down")
+                    }
+                    .accessibilityIdentifier("ImportProjectButton")
+                }
                 ToolbarItem(placement: .primaryAction) {
                     Button(action: createProject) {
                         Label("New Design", systemImage: "plus")
                     }
                 }
+            }
+            .fileImporter(
+                isPresented: $showArchiveImporter,
+                allowedContentTypes: [ExportDocument.os3dType, .data]
+            ) { result in
+                guard case .success(let url) = result else { return }
+                let accessing = url.startAccessingSecurityScopedResource()
+                defer {
+                    if accessing { url.stopAccessingSecurityScopedResource() }
+                }
+                guard let data = try? Data(contentsOf: url),
+                      let archive = ProjectArchive.decode(data) else {
+                    importErrorMessage =
+                        "That file isn't a readable OpenShape3D archive (or was made by a newer version)."
+                    return
+                }
+                importArchive(archive, fallbackName: url.deletingPathExtension().lastPathComponent)
+            }
+            .alert(
+                "Import Failed",
+                isPresented: Binding(
+                    get: { importErrorMessage != nil },
+                    set: { if !$0 { importErrorMessage = nil } }
+                )
+            ) {
+                Button("OK", role: .cancel) { importErrorMessage = nil }
+            } message: {
+                Text(importErrorMessage ?? "")
             }
             .navigationDestination(for: PersistentIdentifier.self) { id in
                 if let project = modelContext.model(for: id) as? Project {
@@ -127,31 +166,33 @@ struct ProjectGalleryView: View {
         path.append(project.persistentModelID)
     }
 
+    /// Duplicate = archive round-trip: snapshot the rows, remap every UUID
+    /// (record IDs and the references inside blobs stay consistent), insert
+    /// as a new project. Unlike the old field-copy, this carries features,
+    /// variables, images, symbols and materials, and can never collide with
+    /// the original's unique ID columns.
     private func duplicate(_ project: Project) {
-        let copy = Project(name: "\(project.name) Copy")
-        copy.thumbnail = project.thumbnail
-        modelContext.insert(copy)
-        for body in project.bodies {
-            let bodyCopy = PersistedBody(
-                bodyID: UUID(),
-                name: body.name,
-                transformData: body.transformData,
-                primitiveData: body.primitiveData,
-                meshData: body.meshData
-            )
-            bodyCopy.project = copy
-            modelContext.insert(bodyCopy)
+        importArchive(
+            ProjectArchive.archive(from: project),
+            fallbackName: project.name,
+            nameSuffix: " Copy"
+        )
+    }
+
+    /// Insert an archive as a new project under a unique name and save.
+    private func importArchive(
+        _ archive: ProjectArchive, fallbackName: String, nameSuffix: String = ""
+    ) {
+        let base = (archive.name.isEmpty ? fallbackName : archive.name) + nameSuffix
+        let existing = Set(projects.map(\.name))
+        var name = base
+        var n = 2
+        while existing.contains(name) {
+            name = "\(base) \(n)"
+            n += 1
         }
-        for sketch in project.sketches {
-            let sketchCopy = PersistedSketch(sketchID: UUID(), sketchData: sketch.sketchData)
-            sketchCopy.project = copy
-            modelContext.insert(sketchCopy)
-        }
-        for plane in project.planes {
-            let planeCopy = PersistedPlane(planeID: UUID(), planeData: plane.planeData)
-            planeCopy.project = copy
-            modelContext.insert(planeCopy)
-        }
+        archive.remappingAllUUIDs().insert(into: modelContext, name: name)
+        try? modelContext.save()
     }
 }
 
