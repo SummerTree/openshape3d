@@ -59,7 +59,8 @@ struct NumericInputBar: View {
                         Text(label)
                             .font(.caption)
                             .foregroundStyle(.secondary)
-                        TextField(label, value: binding(at: index), format: .number)
+                        TextField(label, value: AppSettings.shared.unit.binding(binding(at: index)),
+                                  format: .number.precision(.fractionLength(0...3)))
                             .keyboardType(.decimalPad)
                             .textFieldStyle(.roundedBorder)
                             .frame(width: 80)
@@ -104,7 +105,8 @@ struct NumericInputBar: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize()
-                TextField("Distance", value: $axisDistance, format: .number)
+                TextField("Distance", value: AppSettings.shared.unit.binding($axisDistance),
+                          format: .number.precision(.fractionLength(0...3)))
                     .keyboardType(.numbersAndPunctuation)
                     .textFieldStyle(.roundedBorder)
                     .frame(width: 90)
@@ -292,10 +294,10 @@ struct NumericInputBar: View {
                         .fixedSize()
                     TextField(
                         "Spacing",
-                        value: Binding(
+                        value: AppSettings.shared.unit.binding(Binding(
                             get: { viewModel.patternState?.spacing ?? 6 },
                             set: { viewModel.patternState?.spacing = $0 }
-                        ),
+                        )),
                         format: .number.precision(.fractionLength(0...2))
                     )
                     .keyboardType(.numbersAndPunctuation)
@@ -356,13 +358,13 @@ struct NumericInputBar: View {
                     .fixedSize()
                 TextField(
                     "Size",
-                    value: Binding(
+                    value: AppSettings.shared.unit.binding(Binding(
                         get: {
                             viewModel.selectedImage.map { max($0.width, $0.height) }
                                 ?? max(image.width, image.height)
                         },
                         set: { viewModel.setImageMaxDimension($0) }
-                    ),
+                    )),
                     format: .number.precision(.fractionLength(0...2))
                 )
                 .keyboardType(.numbersAndPunctuation)
@@ -467,10 +469,10 @@ struct NumericInputBar: View {
                     .fixedSize()
                 TextField(
                     "Diameter",
-                    value: Binding(
+                    value: AppSettings.shared.unit.binding(Binding(
                         get: { 2 * (radius + (viewModel.toolContext?.distance ?? 0)) },
                         set: { viewModel.setExtrudeDistance($0 / 2 - radius) }
-                    ),
+                    )),
                     format: .number.precision(.fractionLength(0...2))
                 )
                 .keyboardType(.numbersAndPunctuation)
@@ -509,10 +511,10 @@ struct NumericInputBar: View {
                         .fixedSize()
                     TextField(
                         "Distance",
-                        value: Binding(
+                        value: AppSettings.shared.unit.binding(Binding(
                             get: { viewModel.toolContext?.distance ?? 0 },
                             set: { viewModel.setExtrudeDistance($0) }
-                        ),
+                        )),
                         format: .number.precision(.fractionLength(0...2))
                     )
                     .keyboardType(.numbersAndPunctuation)
@@ -664,10 +666,10 @@ struct NumericInputBar: View {
                     .fixedSize()
                 TextField(
                     "Distance",
-                    value: Binding(
+                    value: AppSettings.shared.unit.binding(Binding(
                         get: { viewModel.toolContext?.distance ?? 0 },
                         set: { viewModel.setOffsetPlaneDistance($0) }
-                    ),
+                    )),
                     format: .number.precision(.fractionLength(0...2))
                 )
                 .keyboardType(.numbersAndPunctuation)

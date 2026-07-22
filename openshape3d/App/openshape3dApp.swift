@@ -30,8 +30,19 @@ struct openshape3dApp: App {
 
     var body: some Scene {
         WindowGroup {
-            ProjectGalleryView()
+            ThemedRoot()
         }
         .modelContainer(sharedModelContainer)
+    }
+}
+
+/// Applies the user's theme preference app-wide; a separate view so the
+/// `@Observable` settings read is tracked and re-themes live.
+private struct ThemedRoot: View {
+    private var settings = AppSettings.shared
+
+    var body: some View {
+        ProjectGalleryView()
+            .preferredColorScheme(settings.theme.colorScheme)
     }
 }

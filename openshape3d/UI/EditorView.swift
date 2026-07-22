@@ -170,6 +170,10 @@ struct EditorView: View {
     @State private var viewModel: EditorViewModel?
     @State private var exportDocument: ExportDocument?
     @State private var showItemsPanel = false
+    @State private var showSettings = false
+    /// App-wide preferences; reads in body are Observation-tracked so unit /
+    /// palette-side changes re-render live.
+    private var settings: AppSettings { AppSettings.shared }
     @State private var showImporter = false
     @State private var showScreenshotOptions = false
     /// Insert Image (plan §B10): Photos picker + image file importer.
@@ -282,13 +286,15 @@ struct EditorView: View {
         HStack(spacing: 12) {
             Image(systemName: "ruler")
             if let result = viewModel.measureResult {
-                Text(EditorViewModel.formatted(result.distance, unit: "mm"))
+                Text(EditorViewModel.formattedLength(result.distance))
                     .font(.subheadline.weight(.semibold))
                     .monospacedDigit()
                     .accessibilityIdentifier("MeasureDistanceValue")
                 Text(String(
                     format: "ΔX %.2f  ΔY %.2f  ΔZ %.2f",
-                    result.deltas.x, result.deltas.y, result.deltas.z
+                    settings.unit.display(fromMM: result.deltas.x),
+                    settings.unit.display(fromMM: result.deltas.y),
+                    settings.unit.display(fromMM: result.deltas.z)
                 ))
                 .font(.caption)
                 .monospacedDigit()
@@ -316,9 +322,9 @@ struct EditorView: View {
     /// Chamfer/Fillet bar (Phase E, spec §4.3): shows the pick prompt, the
     /// size field (setback/radius), and Apply/Cancel.
     private func blendBar(_ kind: BlendKind, _ viewModel: EditorViewModel) -> some View {
-        let value = Binding(
+        let value = settings.unit.binding(Binding(
             get: { viewModel.blendValue },
-            set: { viewModel.blendValue = max(0, $0) })
+            set: { viewModel.blendValue = max(0, $0) }))
         return HStack(spacing: 12) {
             Image(systemName: kind == .chamfer ? "square.on.circle" : "circle.circle")
             Text(viewModel.blendSelectedEdges.isEmpty
@@ -327,13 +333,14 @@ struct EditorView: View {
                 .font(.subheadline)
             Divider().frame(height: 20)
             Text(kind.valueLabel).font(.caption).foregroundStyle(.secondary)
-            TextField("mm", value: value, format: .number.precision(.fractionLength(0...2)))
+            TextField(settings.unit.symbol, value: value,
+                      format: .number.precision(.fractionLength(0...3)))
                 .textFieldStyle(.roundedBorder)
                 .frame(width: 64)
                 .multilineTextAlignment(.trailing)
                 .keyboardType(.decimalPad)
                 .accessibilityIdentifier("BlendValueField")
-            Text("mm").font(.caption).foregroundStyle(.secondary)
+            Text(settings.unit.symbol).font(.caption).foregroundStyle(.secondary)
             Button("Cancel") { viewModel.cancelBlend() }
                 .buttonStyle(.bordered)
                 .controlSize(.small)
@@ -354,9 +361,9 @@ struct EditorView: View {
     /// Shell bar (Phase E, spec §4.4): pick prompt, wall-thickness field,
     /// Apply/Cancel. Zero picked faces is valid (enclosed hollow).
     private func shellBar(_ viewModel: EditorViewModel) -> some View {
-        let value = Binding(
+        let value = settings.unit.binding(Binding(
             get: { viewModel.shellThickness },
-            set: { viewModel.shellThickness = max(0, $0) })
+            set: { viewModel.shellThickness = max(0, $0) }))
         return HStack(spacing: 12) {
             Image(systemName: "cube.transparent")
             Text(viewModel.shellBodyID == nil
@@ -367,13 +374,14 @@ struct EditorView: View {
                 .font(.subheadline)
             Divider().frame(height: 20)
             Text("Thickness").font(.caption).foregroundStyle(.secondary)
-            TextField("mm", value: value, format: .number.precision(.fractionLength(0...2)))
+            TextField(settings.unit.symbol, value: value,
+                      format: .number.precision(.fractionLength(0...3)))
                 .textFieldStyle(.roundedBorder)
                 .frame(width: 64)
                 .multilineTextAlignment(.trailing)
                 .keyboardType(.decimalPad)
                 .accessibilityIdentifier("ShellThicknessField")
-            Text("mm").font(.caption).foregroundStyle(.secondary)
+            Text(settings.unit.symbol).font(.caption).foregroundStyle(.secondary)
             Button("Cancel") { viewModel.cancelShell() }
                 .buttonStyle(.bordered)
                 .controlSize(.small)
@@ -656,9 +664,11 @@ struct EditorView: View {
                 // Shapr3D on-arrow value pill for extrude / diameter (§4.1).
                 ExtrudeGizmoOverlay(viewModel: viewModel)
             }
-            .overlay(alignment: .leading) {
+            .overlay(alignment: settings.paletteOnRight ? .trailing : .leading) {
                 ToolPaletteView(viewModel: viewModel)
-                    .padding(.leading, 14)
+                    // Interface side (spec §17): palette flips to the right
+                    // for left-handed sketching.
+                    .padding(settings.paletteOnRight ? .trailing : .leading, 14)
                     // Keep the (scrollable) palette clear of the top bar and
                     // the bottom info/input bars, which span the full width:
                     // without the inset the last tools (Delete) can sit under
@@ -1119,7 +1129,17 @@ struct EditorView: View {
                     importMenu(viewModel)
 
                     exportMenu(viewModel)
+
+                    Button {
+                        showSettings = true
+                    } label: {
+                        Label("Settings", systemImage: "gearshape")
+                    }
+                    .accessibilityIdentifier("SettingsButton")
                 }
+            }
+            .sheet(isPresented: $showSettings) {
+                SettingsView(settings: AppSettings.shared)
             }
     }
 

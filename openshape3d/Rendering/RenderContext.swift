@@ -16,7 +16,9 @@ final class RenderContext {
 
     static let colorPixelFormat: MTLPixelFormat = .bgra8Unorm
     static let depthPixelFormat: MTLPixelFormat = .depth32Float
-    static let sampleCount = 4
+    /// MSAA samples, from Settings (1/2/4). Read once at launch — pipelines
+    /// bake the sample count, so changing the setting applies next launch.
+    static let sampleCount = AppSettings.launchSampleCount()
 
     init?() {
         guard let device = MTLCreateSystemDefaultDevice(),

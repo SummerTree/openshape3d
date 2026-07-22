@@ -186,7 +186,8 @@ private struct ExtrudeArrowField: View {
                 // Seed with the numeric part of the current label.
                 text = (viewModel.extrudeArrowLabel?.text ?? "")
                     .replacingOccurrences(of: "⌀ ", with: "")
-                    .replacingOccurrences(of: " mm", with: "")
+                    .replacingOccurrences(
+                        of: " " + AppSettings.shared.unit.symbol, with: "")
                 focused = true
             }
     }

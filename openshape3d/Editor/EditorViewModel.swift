@@ -3649,16 +3649,17 @@ final class EditorViewModel {
         // Anchor the pill at the arrow's midpoint (Shapr3D centres it on the
         // line), nudged just off-axis so it doesn't overlap the shaft.
         let mid = centroid + context.plane.normal * (distance * 0.5)
+        let unit = AppSettings.shared.unit
         if let cyl = context.cylinderFace {
             let dia = 2 * (cyl.radius + distance / max(sourceScale(context), 1e-6))
             return ExtrudeArrowLabel(
-                world: mid, text: String(format: "⌀ %.1f mm", dia),
+                world: mid, text: "⌀ " + unit.compactLengthString(fromMM: dia),
                 isDiameter: true, symmetric: false
             )
         }
         let shown = context.symmetric ? abs(distance) * 2 : abs(distance)
         return ExtrudeArrowLabel(
-            world: mid, text: String(format: "%.1f mm", shown),
+            world: mid, text: unit.compactLengthString(fromMM: shown),
             isDiameter: false, symmetric: context.symmetric
         )
     }
@@ -3673,9 +3674,11 @@ final class EditorViewModel {
     /// (Enter commits the feature, matching the bottom bar).
     func commitExtrudeArrowEdit(_ text: String) {
         defer { editingExtrudeArrow = false }
-        guard let value = ExpressionEvaluator.evaluate(text),
+        guard let typed = ExpressionEvaluator.evaluate(text),
               let context = toolContext, case .extrude = context.kind
         else { return }
+        // The pill shows and edits the DISPLAY unit; the tool works in mm.
+        let value = AppSettings.shared.unit.mm(fromDisplay: typed)
         if let cyl = context.cylinderFace {
             setExtrudeDistance(value / 2 - cyl.radius)
         } else {
@@ -6724,8 +6727,8 @@ final class EditorViewModel {
             // Profile loop is already in world scale (built with scale applied).
             let perimeter = MeasureKit.perimeter(of: context.profile.loop)
             return [
-                MeasurementRow(label: "Area", value: Self.formatted(area, unit: "mm²")),
-                MeasurementRow(label: "Perimeter", value: Self.formatted(perimeter, unit: "mm")),
+                MeasurementRow(label: "Area", value: Self.formattedArea(area)),
+                MeasurementRow(label: "Perimeter", value: Self.formattedLength(perimeter)),
             ]
         case .selected(let id), .editingPrimitive(let id):
             if selection.count > 1 {
@@ -6737,7 +6740,14 @@ final class EditorViewModel {
                     MeasurementRow(label: "Selected", value: "\(bodies.count) bodies"),
                     MeasurementRow(
                         label: "Bounds",
-                        value: String(format: "%.2f × %.2f × %.2f mm", size.x, size.y, size.z)
+                        value: {
+                            let u = AppSettings.shared.unit
+                            return String(
+                                format: "%.2f × %.2f × %.2f %@",
+                                u.display(fromMM: Double(size.x)),
+                                u.display(fromMM: Double(size.y)),
+                                u.display(fromMM: Double(size.z)), u.symbol)
+                        }()
                     ),
                 ]
             }
@@ -6747,10 +6757,17 @@ final class EditorViewModel {
             let volume = MeasureKit.bodyVolume(body.render, scale: body.transform.scale)
             let size = box.max - box.min
             return [
-                MeasurementRow(label: "Volume", value: Self.formatted(volume, unit: "mm³")),
+                MeasurementRow(label: "Volume", value: Self.formattedVolume(volume)),
                 MeasurementRow(
                     label: "Bounds",
-                    value: String(format: "%.2f × %.2f × %.2f mm", size.x, size.y, size.z)
+                    value: {
+                            let u = AppSettings.shared.unit
+                            return String(
+                                format: "%.2f × %.2f × %.2f %@",
+                                u.display(fromMM: Double(size.x)),
+                                u.display(fromMM: Double(size.y)),
+                                u.display(fromMM: Double(size.z)), u.symbol)
+                        }()
                 ),
             ]
         case .sketching:
@@ -6761,11 +6778,11 @@ final class EditorViewModel {
             let total = entities.reduce(0.0) { $0 + MeasureKit.length(of: $1) }
             var rows = [MeasurementRow(
                 label: entities.count == 1 ? "Length" : "Total Length",
-                value: Self.formatted(total, unit: "mm")
+                value: Self.formattedLength(total)
             )]
             if entities.count == 1, let radius = MeasureKit.radius(of: entities[0]) {
                 rows.append(MeasurementRow(
-                    label: "Radius", value: Self.formatted(radius, unit: "mm")
+                    label: "Radius", value: Self.formattedLength(radius)
                 ))
             }
             return rows
@@ -6779,7 +6796,7 @@ final class EditorViewModel {
                 MeasurementRow(label: "Edges", value: "\(blendSelectedEdges.count)"),
                 MeasurementRow(
                     label: blendSelectedEdges.count == 1 ? "Length" : "Total Length",
-                    value: Self.formatted(total, unit: "mm")
+                    value: Self.formattedLength(total)
                 ),
             ]
         case .pickingShellFaces:
@@ -6795,6 +6812,19 @@ final class EditorViewModel {
 
     static func formatted(_ value: Double, unit: String) -> String {
         String(format: "%.2f %@", value, unit)
+    }
+
+    // Unit-aware readouts (spec §17): the document stays mm; only display
+    // converts. Reading `AppSettings.shared.unit` inside a view body is
+    // Observation-tracked, so switching units re-renders every readout.
+    static func formattedLength(_ mm: Double) -> String {
+        AppSettings.shared.unit.lengthString(fromMM: mm)
+    }
+    static func formattedArea(_ mm2: Double) -> String {
+        AppSettings.shared.unit.areaString(fromMM2: mm2)
+    }
+    static func formattedVolume(_ mm3: Double) -> String {
+        AppSettings.shared.unit.volumeString(fromMM3: mm3)
     }
 
     // MARK: - Insert Image (plan §B10, spec §6.3)
