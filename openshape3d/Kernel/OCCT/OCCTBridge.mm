@@ -18,6 +18,7 @@
 #include <BRepPrimAPI_MakeBox.hxx>
 #include <BRepPrimAPI_MakePrism.hxx>
 #include <BRepPrimAPI_MakeCylinder.hxx>
+#include <BRepPrimAPI_MakeSphere.hxx>
 #include <BRepAdaptor_Surface.hxx>
 #include <Poly_Triangle.hxx>
 #include <TopAbs_Orientation.hxx>
@@ -317,6 +318,44 @@ static TopoDS_Wire PolyWire(NSData *loop, double z) {
 
         OCCTShape *out = [OCCTShape new];
         out->_shape = world;
+        return out;
+    } catch (...) {
+        return nil;
+    }
+}
+
++ (nullable OCCTShape *)primitiveShapeOfKind:(NSInteger)kind
+                                           a:(double)a
+                                           b:(double)b
+                                           c:(double)c
+                                   transform:(nullable NSData *)transform {
+    try {
+        TopoDS_Shape shape;
+        switch (kind) {
+            case 0:  // box: Euclid centers x/z and puts the base on y=0
+                if (a <= 0 || b <= 0 || c <= 0) return nil;
+                shape = BRepPrimAPI_MakeBox(gp_Pnt(-a / 2.0, 0.0, -b / 2.0), a, c, b).Shape();
+                break;
+            case 1:  // cylinder: base on y=0, axis +Y
+                if (a <= 0 || b <= 0) return nil;
+                shape = BRepPrimAPI_MakeCylinder(
+                    gp_Ax2(gp_Pnt(0.0, 0.0, 0.0), gp_Dir(0.0, 1.0, 0.0)), a, b).Shape();
+                break;
+            default:  // sphere: centered at (0, r, 0) so it rests on y=0
+                if (a <= 0) return nil;
+                shape = BRepPrimAPI_MakeSphere(gp_Pnt(0.0, a, 0.0), a).Shape();
+                break;
+        }
+        if (transform != nil && transform.length >= 12 * sizeof(double)) {
+            const double *m = (const double *)transform.bytes;  // row-major 3x4
+            gp_Trsf t;
+            t.SetValues(m[0], m[1], m[2],  m[3],
+                        m[4], m[5], m[6],  m[7],
+                        m[8], m[9], m[10], m[11]);
+            shape = BRepBuilderAPI_Transform(shape, t, Standard_True).Shape();
+        }
+        OCCTShape *out = [OCCTShape new];
+        out->_shape = shape;
         return out;
     } catch (...) {
         return nil;

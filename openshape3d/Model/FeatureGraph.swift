@@ -328,10 +328,25 @@ nonisolated extension FeatureGraph {
             state.errors[node.id] = .emptyGeometry
             return
         }
-        let body = Body(
+        var body = Body(
             id: id, name: node.name, transform: .identity,
             primitive: placement == .identity ? spec : nil,
             euclidMesh: mesh, revision: nextRevision())
+        // Give primitives an analytic B-rep too, so booleans that mix a primitive
+        // with a cylinder stay analytic (and round). Only CURVED primitives take
+        // the OCCT render mesh — a box looks identical either way, so it keeps the
+        // Euclid render and existing coverage is unperturbed.
+        if OCCTKernel.renderCircleExtrudesWithOCCT,
+           let handle = OCCTKernel.primitiveShape(spec, placement: placement) {
+            body.brep = handle
+            if OCCTKernel.hasCurvedFaces(spec) {
+                let m = OCCTKernel.renderMesh(from: handle)
+                if !m.positions.isEmpty {
+                    body.render = RenderMesh(positions: m.positions, normals: m.normals, indices: m.indices)
+                    body.edges = FeatureEdgeExtractor.edges(from: body.render)
+                }
+            }
+        }
         let table = state.naming.faceTable(for: body, createdBy: node.id, scheme: .primitive(spec))
         state.put(body, table: table)
     }

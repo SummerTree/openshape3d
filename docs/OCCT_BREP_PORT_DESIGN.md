@@ -212,6 +212,20 @@ an offset cylinder → smooth outer wall + smooth concave cut). The pieces:
 exact Euclid path (no perturbation of existing coverage). Demo hook:
 `SIMCTL_CHILD_OS3D_DEBUG_SEED_BOOLEAN=1`.
 
+### Primitives are analytic too ✅ (2026-07-22)
+
+`evalPrimitive` now builds an OCCT solid for box/cylinder/sphere
+(`primitiveShapeOfKind:`), matching Euclid's placement conventions EXACTLY (base
+on y=0, cylinder axis +Y, sphere centred at (0,r,0)) so the B-rep and the CSG
+mesh coincide. Consequences:
+
+- A **mixed** boolean — e.g. cylinder primitive − box primitive — now composes
+  analytically and renders round (verified on-device:
+  `SIMCTL_CHILD_OS3D_DEBUG_SEED_PRIMBOOL=1`).
+- Cylinder/sphere primitives also take the smooth OCCT render mesh; a **box
+  keeps the Euclid render** (identical look, so no reason to perturb coverage).
+- Suite still 500 green.
+
 Remaining for a full port: general (polygonal/arc/ellipse) profiles as B-rep
 source, analytic circular holes, the extrude-into-target boolean path, B-rep
 persistence (survives reload), and fillet/shell on B-rep. Those are the next

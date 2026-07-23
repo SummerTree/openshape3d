@@ -101,6 +101,17 @@ NS_ASSUME_NONNULL_BEGIN
                                               zMax:(double)zMax
                                              basis:(OCCTPlaneBasis *)basis;
 
+/// Build a primitive matching Euclid's conventions exactly (base sits on y=0;
+/// cylinder axis is +Y), so the B-rep coincides with the Euclid CSG mesh.
+/// `kind`: 0 = box (a=width, b=depth, c=height), 1 = cylinder (a=radius,
+/// b=height), 2 = sphere (a=radius). `transform` is 12 packed doubles
+/// (row-major 3×4 placement) or nil for identity.
++ (nullable OCCTShape *)primitiveShapeOfKind:(NSInteger)kind
+                                           a:(double)a
+                                           b:(double)b
+                                           c:(double)c
+                                   transform:(nullable NSData *)transform;
+
 /// Boolean of two world-space shapes. `op`: 0 = union (fuse), 1 = subtract
 /// (cut a from ... i.e. a − b), 2 = intersect (common). Nil on failure.
 + (nullable OCCTShape *)booleanOfShape:(OCCTShape *)a

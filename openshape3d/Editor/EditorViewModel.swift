@@ -7304,6 +7304,32 @@ final class EditorViewModel {
             return
         }
 
+        // OS3D_DEBUG_SEED_PRIMBOOL: cylinder PRIMITIVE − box PRIMITIVE, proving a
+        // MIXED boolean (both operands analytic via primitive breps) stays round.
+        if ProcessInfo.processInfo.environment["OS3D_DEBUG_SEED_PRIMBOOL"] != nil,
+           session.document.bodies.isEmpty {
+            var seedDoc = session.document
+            let cylSpec = PrimitiveSpec.cylinder(radius: 3, height: 5)
+            let boxSpec = PrimitiveSpec.box(width: 3, depth: 3, height: 7)
+            let boxPlacement = Transform3D(translation: SIMD3(3, -1, 0))
+            var ebox = Euclid.Mesh.primitive(boxSpec)
+            ebox = ebox.transformed(by: boxPlacement.euclid)
+            let euclidResult = Euclid.Mesh.primitive(cylSpec).subtracting(ebox)
+            if let a = OCCTKernel.primitiveShape(cylSpec, placement: .identity),
+               let b = OCCTKernel.primitiveShape(boxSpec, placement: boxPlacement),
+               let cut = OCCTKernel.boolean(a, b, op: 1) {
+                var body = Body(name: "PrimBoolean", transform: .identity, primitive: nil,
+                                euclidMesh: euclidResult, revision: seedDoc.nextRevision())
+                let m = OCCTKernel.renderMesh(from: cut)
+                body.brep = cut
+                body.render = RenderMesh(positions: m.positions, normals: m.normals, indices: m.indices)
+                body.edges = FeatureEdgeExtractor.edges(from: body.render)
+                body.material = BodyMaterialSpec.default
+                session.perform(AddBodyCommand(body: body))
+            }
+            return
+        }
+
         guard ProcessInfo.processInfo.environment["OS3D_DEBUG_SEED"] != nil,
               session.document.bodies.isEmpty
         else { return }

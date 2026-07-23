@@ -118,6 +118,35 @@ nonisolated enum OCCTKernel {
         return BRepHandle(shape)
     }
 
+    /// Build the analytic OCCT solid for a primitive, matching Euclid's placement
+    /// conventions so B-rep and CSG mesh coincide. `placement` is baked in.
+    static func primitiveShape(_ spec: PrimitiveSpec, placement: Transform3D) -> BRepHandle? {
+        let kind: Int, a: Double, b: Double, c: Double
+        switch spec {
+        case let .box(width, depth, height): kind = 0; a = width; b = depth; c = height
+        case let .cylinder(radius, height):  kind = 1; a = radius; b = height; c = 0
+        case let .sphere(radius):            kind = 2; a = radius; b = 0; c = 0
+        }
+        var data: Data?
+        if placement != .identity {
+            let m = placement.matrix  // simd is column-major: m[col][row]
+            var flat = [Double]()
+            for r in 0..<3 { for col in 0..<4 { flat.append(m[col][r]) } }
+            data = flat.withUnsafeBytes { Data($0) }
+        }
+        return OCCTBridge.primitiveShape(ofKind: kind, a: a, b: b, c: c, transform: data)
+            .map(BRepHandle.init)
+    }
+
+    /// True when a primitive has curved faces worth re-rendering through OCCT.
+    /// A box looks identical either way, so it keeps the Euclid render mesh.
+    static func hasCurvedFaces(_ spec: PrimitiveSpec) -> Bool {
+        switch spec {
+        case .box: return false
+        case .cylinder, .sphere: return true
+        }
+    }
+
     /// OCCT boolean of two solids. op: 0 = union, 1 = subtract (a − b), 2 = intersect.
     static func boolean(_ a: BRepHandle, _ b: BRepHandle, op: Int) -> BRepHandle? {
         OCCTBridge.boolean(of: a.shape, with: b.shape, op: op).map(BRepHandle.init)
