@@ -45,6 +45,9 @@ protocol ViewportCameraControl: AnyObject {
     /// Standard-view names for the orientation-cube faces currently turned
     /// toward the camera, in screen points (spec §7.2).
     func orientationCubeLabels() -> [OrientationCube.FaceLabel]
+    /// World-units-per-gizmo-unit at `origin` (constant on-screen gizmo size).
+    /// The 2D move/rotate overlay uses it to project gizmo-local part anchors.
+    func gizmoWorldScale(at origin: SIMD3<Float>) -> Float
 }
 
 @MainActor
@@ -479,9 +482,10 @@ final class EditorViewModel {
             }
         }
 
-        if let origin = gizmoOrigin {
-            scene.gizmo = GizmoState(origin: origin, scale: 1, highlighted: gizmoHighlight)
-        }
+        // The move/rotate gizmo is drawn by the 2D `MoveGizmoOverlay` (flat
+        // arrows like the extrude handle, curved double-headed rotate arrows),
+        // NOT the Metal mesh — so `scene.gizmo` stays nil. Hit-testing still
+        // runs off `gizmoOrigin` in the viewport, so drags are unaffected.
 
         // Sketch overlay: committed entities dark, in-progress accent blue,
         // selected entities accent orange. The sketch BEING EDITED renders its

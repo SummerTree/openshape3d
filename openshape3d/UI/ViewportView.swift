@@ -139,24 +139,34 @@ final class ViewportCoordinator: NSObject, ViewportGestureDelegate, ViewportCame
             cameraAnimator?.animate(to: pose, duration: 0.4)
             return
         }
-        guard let ray = ray(at: point) else { return }
         // Tapping (not dragging) a gizmo arrow opens exact-distance entry.
-        if let part = gizmoPart(under: ray), part.isArrow {
+        if let part = gizmoPart(at: point), part.isArrow {
             viewModel.beginAxisDistanceEntry(part)
             sceneDidChange()
             return
         }
+        guard let ray = ray(at: point) else { return }
         viewModel.handle(.tap(ray: ray))
     }
 
-    private func gizmoPart(under ray: Ray) -> GizmoPart? {
+    /// Project a gizmo-local offset to screen (local → world → screen), the
+    /// same mapping `MoveGizmoOverlay` draws with. nil when no gizmo is up.
+    private func gizmoProjector() -> ((SIMD3<Float>) -> CGPoint?)? {
         guard let renderer, let origin = viewModel.gizmoOrigin else { return nil }
-        let gizmo = GizmoState(
-            origin: origin,
-            scale: renderer.gizmoScale(origin: origin),
-            highlighted: nil
-        )
-        return GizmoGeometry.hitTest(ray: ray, gizmo: gizmo)
+        let scale = renderer.gizmoScale(origin: origin)
+        return { [weak self] local in
+            let world = origin + local * scale
+            return self?.worldToScreenPoint(
+                SIMD3(Double(world.x), Double(world.y), Double(world.z)))
+        }
+    }
+
+    /// The gizmo handle under a screen tap — hit-tested against the SAME 2D
+    /// anchors the overlay draws, so the flat handle a user sees is the target
+    /// they grab (the old 3D-mesh capsule test no longer matched the visual).
+    private func gizmoPart(at point: CGPoint) -> GizmoPart? {
+        guard let project = gizmoProjector() else { return nil }
+        return GizmoScreenLayout.hitTest(at: point, project: project)
     }
 
     func gestureDoubleTapped(at point: CGPoint) {
@@ -322,15 +332,17 @@ final class ViewportCoordinator: NSObject, ViewportGestureDelegate, ViewportCame
             return false   // drags off the arrow orbit; the face stays put
         }
 
-        // Offer the drag to the gizmo when a body is selected.
-        if let renderer, let origin = viewModel.gizmoOrigin {
+        // Offer the drag to the gizmo when a body is selected. The part is
+        // picked in SCREEN space (matching the 2D overlay); the drag math then
+        // runs in 3D from that part.
+        if let renderer, let origin = viewModel.gizmoOrigin,
+           let part = gizmoPart(at: point) {
             let gizmo = GizmoState(
                 origin: origin,
                 scale: renderer.gizmoScale(origin: origin),
                 highlighted: nil
             )
-            if let part = GizmoGeometry.hitTest(ray: ray, gizmo: gizmo),
-               let session = GizmoDragSession(part: part, gizmo: gizmo, ray: ray) {
+            if let session = GizmoDragSession(part: part, gizmo: gizmo, ray: ray) {
                 gizmoDrag = session
                 viewModel.gizmoHighlight = part
                 viewModel.beginMove()
@@ -559,6 +571,10 @@ final class ViewportCoordinator: NSObject, ViewportGestureDelegate, ViewportCame
         guard let p = worldToScreen(SIMD3<Float>(Float(world.x), Float(world.y), Float(world.z)))
         else { return nil }
         return CGPoint(x: p.x, y: p.y)
+    }
+
+    func gizmoWorldScale(at origin: SIMD3<Float>) -> Float {
+        renderer?.gizmoScale(origin: origin) ?? 1
     }
 
     func moveCameraHeadOn(to plane: SketchPlane) {

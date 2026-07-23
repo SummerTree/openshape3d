@@ -686,12 +686,16 @@ struct EditorView: View {
                 SketchLiveDimensionOverlay(viewModel: viewModel)
             }
             .overlay {
-                // Standard-view names on the orientation cube (§7.2).
-                OrientationCubeLabels(viewModel: viewModel)
-            }
-            .overlay {
-                // Named snap under the pointer while drawing (Endpoint/…).
-                SnapChipOverlay(viewModel: viewModel)
+                // Non-interactive projected overlays, grouped in one ZStack to
+                // keep the modifier chain type-checkable: cube face names
+                // (§7.2), the flat extrude-style move/rotate gizmo (replaces
+                // the Metal mesh; drags stay 3D-hit-tested), and the named-snap
+                // chip while drawing.
+                ZStack {
+                    OrientationCubeLabels(viewModel: viewModel)
+                    MoveGizmoOverlay(viewModel: viewModel)
+                    SnapChipOverlay(viewModel: viewModel)
+                }
             }
             .overlay {
                 // Shapr3D on-arrow value pill for extrude / diameter (§4.1).
