@@ -5931,7 +5931,13 @@ final class EditorViewModel {
             return points >= 2 || (lines == 2 && nearestEndpointPair(selectedLineEntities) != nil)
         case .horizontal, .vertical:
             return lines >= 1 || points == 2
-        case .parallel, .perpendicular, .equalLength:
+        // Spec §3.2: Parallel takes "2+ lines" — parallelism is transitive, so a
+        // run of lines chains pairwise. Perpendicular stays strictly 2 (three
+        // mutually perpendicular lines are impossible in 2D), and Equal Length
+        // keeps its documented pair form.
+        case .parallel:
+            return lines >= 2
+        case .perpendicular, .equalLength:
             return lines == 2
         case .equalRadius, .concentric:
             return circles == 2
@@ -5954,16 +5960,15 @@ final class EditorViewModel {
     func applyConstraint(_ kind: SketchConstraintKind) {
         guard canApplyConstraint(kind),
               case .sketching(let sketchID, _) = mode,
-              let sketch = activeSketch,
-              let refs = constraintRefs(for: kind, in: sketch)
+              let sketch = activeSketch
         else { return }
-
-        let constraint = SketchConstraint(kind: kind, refs: refs)
+        let newConstraints = constraintsToApply(kind, in: sketch)
+        guard !newConstraints.isEmpty else { return }
 
         // Solve the sketch with the new constraint in place; the bridge welds
         // coincident points and pulls under-defined geometry to satisfy it.
         var proposed = sketch
-        proposed.constraints.append(constraint)
+        proposed.constraints.append(contentsOf: newConstraints)
 
         // Over-constraint guard (spec §2.2): if the added constraint makes the
         // system unsatisfiable (conflicting), refuse it — never corrupt the
@@ -5979,9 +5984,9 @@ final class EditorViewModel {
             proposed, movingEntity: nil, dragTarget: nil
         )
 
-        var commands: [DocumentCommand] = [
-            AddSketchConstraintCommand(sketchID: sketchID, constraint: constraint)
-        ]
+        var commands: [DocumentCommand] = newConstraints.map {
+            AddSketchConstraintCommand(sketchID: sketchID, constraint: $0)
+        }
         for (before, after) in zip(sketch.entities, solvedEntities) where before != after {
             commands.append(UpdateSketchEntityCommand(
                 sketchID: sketchID, before: before, after: after
@@ -6013,6 +6018,29 @@ final class EditorViewModel {
         case .colinear: "Colinear"
         case .fixed: "Lock"
         }
+    }
+
+    /// The constraint(s) the current selection produces. Every kind yields
+    /// exactly one, EXCEPT Parallel with more than two lines (spec §3.2 allows
+    /// "2+"): those chain pairwise — line0∥line1, line1∥line2, … — which is
+    /// equivalent to all-parallel because parallelism is transitive, and keeps
+    /// each stored constraint in the two-operand form the solver expects.
+    private func constraintsToApply(
+        _ kind: SketchConstraintKind, in sketch: Sketch
+    ) -> [SketchConstraint] {
+        if kind == .parallel {
+            let lines = selectedLineEntities
+            if lines.count > 2 {
+                return (0..<(lines.count - 1)).map { i in
+                    SketchConstraint(kind: .parallel, refs: [
+                        ConstraintRef(entityID: lines[i].id, role: .whole),
+                        ConstraintRef(entityID: lines[i + 1].id, role: .whole),
+                    ])
+                }
+            }
+        }
+        guard let refs = constraintRefs(for: kind, in: sketch) else { return [] }
+        return [SketchConstraint(kind: kind, refs: refs)]
     }
 
     /// Map the selection to the ref layout each constraint kind expects

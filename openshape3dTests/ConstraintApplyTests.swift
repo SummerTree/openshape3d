@@ -135,6 +135,39 @@ final class ConstraintApplyTests: XCTestCase {
 
     // MARK: - Adaptive enable/disable rules
 
+    /// Spec §3.2 lists Parallel as taking "2+ lines". Three selected lines must
+    /// therefore enable it and end up mutually parallel — stored as a pairwise
+    /// chain, which is equivalent because parallelism is transitive.
+    func testParallelAcceptsMoreThanTwoLines() throws {
+        let vm = try makeViewModel()
+        let l0 = line(SIMD2(0, 0), SIMD2(10, 0))          // horizontal
+        let l1 = line(SIMD2(0, 5), SIMD2(10, 6))          // slightly tilted
+        let l2 = line(SIMD2(0, 12), SIMD2(9, 14))         // more tilted
+        _ = openSketch(vm, entities: [l0, l1, l2])
+
+        vm.selectedSketchEntityIDs = [l0.id, l1.id, l2.id]
+        XCTAssertTrue(vm.canApplyConstraint(.parallel),
+                      "Parallel must enable for 2+ lines (spec §3.2)")
+        // Perpendicular is NOT transitive — three mutually perpendicular lines
+        // are impossible in 2D, so it stays a strict pair.
+        XCTAssertFalse(vm.canApplyConstraint(.perpendicular),
+                       "Perpendicular stays a strict two-line relation")
+
+        vm.applyConstraint(.parallel)
+
+        guard let a = currentLine(vm, id: l0.id),
+              let b = currentLine(vm, id: l1.id),
+              let c = currentLine(vm, id: l2.id) else {
+            return XCTFail("lines missing after solve")
+        }
+        func angle(_ l: (a: SIMD2<Double>, b: SIMD2<Double>)) -> Double {
+            let d = l.b - l.a
+            return atan2(d.y, d.x).truncatingRemainder(dividingBy: .pi)
+        }
+        XCTAssertEqual(angle(a), angle(b), accuracy: 1e-3, "line 0 ∥ line 1")
+        XCTAssertEqual(angle(b), angle(c), accuracy: 1e-3, "line 1 ∥ line 2")
+    }
+
     func testAdaptiveEnablement() throws {
         let vm = try makeViewModel()
         let l0 = line(SIMD2(0, 0), SIMD2(10, 0))
