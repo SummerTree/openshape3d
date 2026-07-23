@@ -166,6 +166,47 @@ nonisolated enum OCCTKernel {
         OCCTBridge.boolean(of: a.shape, with: b.shape, op: op).map(BRepHandle.init)
     }
 
+    /// Remove the faces nearest `points` and heal the solid (spec §4.16 Delete
+    /// Face). Nil when nothing matched or OCCT couldn't close the result — the
+    /// caller should surface a recoverable failure rather than mutate the body.
+    static func removingFaces(_ handle: BRepHandle, at points: [SIMD3<Double>],
+                              tolerance: Double) -> BRepHandle? {
+        guard !points.isEmpty else { return nil }
+        var flat = [Double](); flat.reserveCapacity(points.count * 3)
+        for p in points { flat.append(p.x); flat.append(p.y); flat.append(p.z) }
+        let data = flat.withUnsafeBytes { Data($0) }
+        return OCCTBridge.defeaturedShape(handle.shape, atWorldPoints: data,
+                                               tolerance: tolerance)
+            .map(BRepHandle.init)
+    }
+
+    /// Analytic face-type histogram of a solid — how we assert that geometry
+    /// stayed exact through an operation.
+    static func faceTypeCounts(_ handle: BRepHandle)
+        -> (planar: Int, cylindrical: Int, other: Int) {
+        let c = OCCTBridge.faceTypeCounts(of: handle.shape)
+        return (c.planar, c.cylindrical, c.other)
+    }
+
+    /// Round the analytic edges nearest `points` to `radius`. `points` are world
+    /// positions on the edges to blend (mesh-edge midpoints from the picker);
+    /// `tolerance` should scale with the body (a fraction of its bounding box),
+    /// since a tessellated chord sits slightly inside the true arc.
+    ///
+    /// Returns nil when nothing matched or OCCT couldn't build the blend (e.g.
+    /// the radius exceeds what the geometry allows) — callers fall back to the
+    /// mesh blend rather than failing the user's action.
+    static func fillet(_ handle: BRepHandle, at points: [SIMD3<Double>],
+                       radius: Double, tolerance: Double) -> BRepHandle? {
+        guard !points.isEmpty, radius > 0 else { return nil }
+        var flat = [Double](); flat.reserveCapacity(points.count * 3)
+        for p in points { flat.append(p.x); flat.append(p.y); flat.append(p.z) }
+        let data = flat.withUnsafeBytes { Data($0) }
+        return OCCTBridge.filletedShape(handle.shape, atWorldPoints: data,
+                                        radius: radius, tolerance: tolerance)
+            .map(BRepHandle.init)
+    }
+
     /// Serialize a solid so the analytic geometry survives a document reload.
     static func serialize(_ handle: BRepHandle) -> Data? {
         OCCTBridge.serializedShape(handle.shape)

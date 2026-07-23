@@ -17,6 +17,12 @@
 
 #include <BRepTools.hxx>
 #include <BRep_Builder.hxx>
+#include <BRepFilletAPI_MakeFillet.hxx>
+#include <BRepAlgoAPI_Defeaturing.hxx>
+#include <TopTools_ListOfShape.hxx>
+#include <BRepAdaptor_Curve.hxx>
+#include <TopExp.hxx>
+#include <TopTools_IndexedMapOfShape.hxx>
 
 #include <Standard_Version.hxx>
 
@@ -398,6 +404,123 @@ static TopoDS_Wire PolyWire(NSData *loop, double z) {
             default: result = BRepAlgoAPI_Common(a->_shape, b->_shape).Shape(); break;
         }
         if (result.IsNull()) return nil;
+        OCCTShape *out = [OCCTShape new];
+        out->_shape = result;
+        return out;
+    } catch (...) {
+        return nil;
+    }
+}
+
++ (nullable OCCTShape *)defeaturedShape:(OCCTShape *)shape
+                                 atWorldPoints:(NSData *)worldPoints
+                                     tolerance:(double)tolerance {
+    if (shape == nil) return nil;
+    const NSUInteger count = worldPoints.length / (3 * sizeof(double));
+    if (count == 0) return nil;
+    const double *pts = (const double *)worldPoints.bytes;
+
+    try {
+        TopTools_ListOfShape toRemove;
+        for (TopExp_Explorer ex(shape->_shape, TopAbs_FACE); ex.More(); ex.Next()) {
+            const TopoDS_Face face = TopoDS::Face(ex.Current());
+            BRepAdaptor_Surface surf(face);
+            const double u0 = surf.FirstUParameter(), u1 = surf.LastUParameter();
+            const double v0 = surf.FirstVParameter(), v1 = surf.LastVParameter();
+            bool hit = false;
+            const int S = 4;
+            for (int i = 0; i <= S && !hit; ++i) {
+                for (int j = 0; j <= S && !hit; ++j) {
+                    const gp_Pnt q = surf.Value(u0 + (u1 - u0) * i / (double)S,
+                                                v0 + (v1 - v0) * j / (double)S);
+                    for (NSUInteger k = 0; k < count; ++k) {
+                        const gp_Pnt t(pts[3*k], pts[3*k+1], pts[3*k+2]);
+                        if (q.Distance(t) <= tolerance) { hit = true; break; }
+                    }
+                }
+            }
+            if (hit) toRemove.Append(face);
+        }
+        if (toRemove.IsEmpty()) return nil;
+
+        BRepAlgoAPI_Defeaturing defeat;
+        defeat.SetShape(shape->_shape);
+        defeat.AddFacesToRemove(toRemove);
+        defeat.Build();
+        if (!defeat.IsDone()) return nil;
+        const TopoDS_Shape result = defeat.Shape();
+        if (result.IsNull()) return nil;
+
+        OCCTShape *out = [OCCTShape new];
+        out->_shape = result;
+        return out;
+    } catch (...) {
+        return nil;
+    }
+}
+
++ (OCCTFaceTypeCounts *)faceTypeCountsOfShape:(OCCTShape *)shape {
+    NSInteger planar = 0, cyl = 0, other = 0;
+    if (shape != nil) {
+        for (TopExp_Explorer ex(shape->_shape, TopAbs_FACE); ex.More(); ex.Next()) {
+            BRepAdaptor_Surface surf(TopoDS::Face(ex.Current()));
+            switch (surf.GetType()) {
+                case GeomAbs_Plane: planar++; break;
+                case GeomAbs_Cylinder: cyl++; break;
+                default: other++; break;
+            }
+        }
+    }
+    OCCTFaceTypeCounts *counts = [OCCTFaceTypeCounts new];
+    counts->_planar = planar;
+    counts->_cylindrical = cyl;
+    counts->_other = other;
+    return counts;
+}
+
++ (nullable OCCTShape *)filletedShape:(OCCTShape *)shape
+                        atWorldPoints:(NSData *)worldPoints
+                               radius:(double)radius
+                            tolerance:(double)tolerance {
+    if (shape == nil || radius <= 0.0) return nil;
+    const NSUInteger count = worldPoints.length / (3 * sizeof(double));
+    if (count == 0) return nil;
+    const double *pts = (const double *)worldPoints.bytes;
+
+    try {
+        TopTools_IndexedMapOfShape edgeMap;
+        TopExp::MapShapes(shape->_shape, TopAbs_EDGE, edgeMap);
+        if (edgeMap.Extent() == 0) return nil;
+
+        BRepFilletAPI_MakeFillet mk(shape->_shape);
+        int added = 0;
+
+        for (Standard_Integer i = 1; i <= edgeMap.Extent(); ++i) {
+            const TopoDS_Edge edge = TopoDS::Edge(edgeMap(i));
+            if (BRep_Tool::Degenerated(edge)) continue;
+
+            BRepAdaptor_Curve curve(edge);
+            const double first = curve.FirstParameter();
+            const double last = curve.LastParameter();
+            const int samples = 16;
+            bool hit = false;
+
+            for (int s = 0; s <= samples && !hit; ++s) {
+                const gp_Pnt q = curve.Value(first + (last - first) * (double)s / (double)samples);
+                for (NSUInteger k = 0; k < count; ++k) {
+                    const gp_Pnt target(pts[3*k], pts[3*k+1], pts[3*k+2]);
+                    if (q.Distance(target) <= tolerance) { hit = true; break; }
+                }
+            }
+            if (hit) { mk.Add(radius, edge); ++added; }
+        }
+        if (added == 0) return nil;
+
+        mk.Build();
+        if (!mk.IsDone()) return nil;
+        const TopoDS_Shape result = mk.Shape();
+        if (result.IsNull()) return nil;
+
         OCCTShape *out = [OCCTShape new];
         out->_shape = result;
         return out;

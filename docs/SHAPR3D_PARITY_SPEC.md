@@ -2,11 +2,18 @@
 
 **openshape3d** — feature-for-feature product spec derived from the Shapr3D Help
 Center (manual + tutorial corpus, extracted 2026-07-18), with an honest status
-audit against the current source tree (v0.5, post-Phase C tranche 1: a
-pure-Swift 2D constraint solver, geometric constraints, driving dimensions,
-sketch states (green/blue) and drag-to-solve — on top of Phase B tranche 1:
-sweep, loft, split, pattern, text, project, sketch move/rotate, translate,
-rotate-around-axis, align, construction geometry, helix).
+audit against the current source tree.
+
+> **Status audit refreshed 2026-07-22.** The original audit was written at v0.5
+> (post-Phase C tranche 1) and went stale once Phase D/E/F landed: §4.3
+> Chamfer/Fillet, §4.4 Shell, §6.6 Variables, §10.1 History sidebar and §3.1
+> Constraint Settings were all still marked ❌ despite shipping (each now has
+> unit + UI test coverage). Those five are corrected below. When you add a
+> feature, update its Status line here in the same change — a stale audit is
+> worse than no audit, because it causes work to be redone.
+>
+> Ordered roadmap with acceptance criteria: `MODELING_PARITY_GOALS.md`.
+> Kernel split (OCCT vs Euclid): `OCCT_BREP_PORT_DESIGN.md`.
 
 ## Legend
 
@@ -552,7 +559,10 @@ drawing). **Always Show Constraints** (icons for selected elements of the
 active sketch), **Always Show Dimensions** (all locked dimensions shown).
 **Anchored Sketch Entity**: First Selected | Last Selected — which entity stays
 fixed when a constraint is applied (existing constraints override).
-**Status:** ❌. **Feasibility:** [needs constraint solver]
+**Status:** 🟡 partial (Phase C). `ConstraintSettingsView` ships a constraint
+settings surface, and the solver honours the auto-constrain toggles.
+**Missing:** the full per-constraint-type enable/disable matrix Shapr3D
+exposes. **Feasibility:** [mesh-kernel OK] (solver already ships)
 
 ### 3.2 The constraint set
 
@@ -719,10 +729,18 @@ Overflow = Auto | Cliff | Smooth | Notch, Include Tangent Edges toggle,
 Y-Shaped Blend toggle. Existing fillets are editable by selecting the face
 (Edit) or from History (including adding more edges to one step). Hotkey F.
 Zebra analysis recommended for continuity checks.
-**Status:** ❌ not implemented.
-**Feasibility:** [needs B-rep kernel] (a mesh-domain fallback for straight-edge
-chamfers and constant-radius fillets on prismatic edges is possible but will
-not match tangent-propagation/corner behavior)
+**Status:** 🟡 partial (Phase E tranches 1–3). Mesh-domain chamfer AND fillet
+ship: multi-edge selection, live preview rendered in place of the source body,
+drag-to-size arrow with red/blue validity, and `FeatureKind.chamfer/.fillet`
+nodes so the blend is parametric and re-editable. Covered by
+`KernelBlendTests`, `FeatureBlendEvalTests`, `BlendUITests`.
+**Missing:** tangent-chain auto-propagation, concave edges (material-removal
+only), best-effort corners where 3+ blended edges meet, one body per feature,
+variable-radius/G2, and a prismatic quarter-round cross-section rather than a
+true rolling ball.
+**Feasibility:** [needs B-rep kernel] for the missing items — `BRepFilletAPI`
+is goal G1 in `MODELING_PARITY_GOALS.md`. NOTE: a blend currently drops the
+`Body.brep`, so filleting an analytic cylinder reverts it to a faceted mesh.
 
 ### 4.4 Shell
 
@@ -736,9 +754,15 @@ because the resulting body wouldn't be valid" warning — outside the bounded
 valid thickness range (Troubleshoot geometric errors). History params:
 Target face, Thickness. Order matters with fillets (fillet
 before shell → inside follows the fillet). Hotkey H.
-**Status:** ❌ not implemented.
-**Feasibility:** [needs B-rep kernel] (general case; a prismatic-body
-approximation via inset-profile subtract is feasible on the mesh kernel)
+**Status:** 🟡 partial (Phase E tranche 4). Hollow-a-body ships: tap faces to
+open them, whole-body mode when no face is picked, thickness drag with
+validity feedback, and a parametric `FeatureKind.shell` node. Covered by
+`KernelShellTests`, `FeatureShellEvalTests`, `ShellUITests`.
+**Missing:** correctness on CURVED walls (the mesh approach insets a planar
+face outline, which is exact only for prismatic bodies), Offset Face on curved
+faces, and Radius/Diameter + Total-distance thickness types.
+**Feasibility:** [needs B-rep kernel] for the general case —
+`BRepOffsetAPI_MakeThickSolid` is goal G2 in `MODELING_PARITY_GOALS.md`.
 
 ### 4.5 Loft
 
@@ -1208,9 +1232,13 @@ single dimension. Feet/inch symbol notation is accepted with documented
 parser pitfalls: 1/2" mis-parses as 1/(2 in); 1' 1/2" errors. Feature
 dimensions (Extrude distance, Fillet radius, Shell thickness,
 pattern Total/Spacing/Quantity) all accept variables.
-**Status:** ❌ not implemented.
-**Feasibility:** [needs history engine] (plus solver for sketch-dimension
-consumers)
+**Status:** ✅ implemented (Phase D). Named variables with expression formulas
+(`ExpressionEvaluator`), consumed by feature parameters via `Expr`; editing a
+variable rebuilds every dependent feature in one undo step. Covered by
+`ExpressionEvaluatorTests`, `VariablesTests`, `VariableFanoutTests`,
+`PersistedVariableTests`.
+**Missing:** driving SKETCH dimensions from variables (feature parameters only
+today).
 
 ---
 
@@ -1231,7 +1259,10 @@ active tools — sketch-mode drags draw, extrude/face-pull drags pull, gizmo
 drags transform, and drags starting over a filled profile begin a pull
 (`ViewportGestureController.handleOrbit`'s `.began` branch offers the drag
 to the `ViewportView.gestureDragBegan` delegate first and falls back to
-orbit only when no tool claims it). That mirrors Shapr3D's own
+orbit only when no tool claims it). Mid-sketch orbit: tapping the ACTIVE
+sketch tool deselects it (`deselectSketchTool`, `tool: nil`), after which
+empty-space drags orbit and "Look at Sketch" restores head-on. That
+mirrors Shapr3D's own
 convention, so the level stands (`TurntableCamera.orbit/pan/zoom`);
 double-tap empty space fits the scene. The Apple Pencil now draws sketch
 strokes (`.pencil` accepted on the one-finger recognizer, with
@@ -1251,8 +1282,12 @@ resets to default view. Right-click menu: Default View, Top View, Zoom to Fit.
 corner in its own overlay pass (`OrientationCube` + `OrientationCubeRenderer`
 reusing the gizmo pipeline); tapping a face or corner animates the camera to
 that view (`hitPose` → `CameraAnimator`); cube taps never reach the model.
-Missing: edge hits, X/Y/Z labels, drag-to-orbit on the cube, double-tap
-reset, the 2D-planar-view rotation arrows, context menu.
+Drag-to-orbit on the cube works as a UNIVERSAL orbit control (`ViewportView.
+gestureDragBegan` claims any drag starting in `OrientationCube.rect` before any
+mode-specific handling, so the camera can be freely orbited in EVERY mode —
+sketch/extrude/face-pull/gizmo — even when a tool owns the main viewport). A
+tap still snaps to the view; only the drag orbits. Missing: edge hits, X/Y/Z
+labels, double-tap reset, the 2D-planar-view rotation arrows, context menu.
 **Feasibility:** [mesh-kernel OK]
 
 ### 7.3 Views & Appearance panel
@@ -1457,10 +1492,13 @@ steps. Documented repair flows: remove the missing face from a Face Offset
 selection; re-project a lost face, then re-reference the extrusion profile;
 re-select the original face to fix a broken Shell (Action camera pts 2–3;
 Floor fan).
-**Status:** ❌ not implemented — the app has a linear undo/redo command stack
-(`UndoStack`, `DocumentCommand.apply/revert`) with snapshot payloads; there is
-no feature graph, no parameter re-editing, no rebuild.
-**Feasibility:** [needs history engine]
+**Status:** ✅ implemented (Phase D). A real parametric feature graph
+(`FeatureGraph`/`FeatureNode`) with a History sidebar: editable parameters that
+rebuild everything downstream, topological naming so a `FaceRef`/`EdgeRef`
+re-resolves against rebuilt geometry, rollback marker, drag-reorder, suppress/
+un-suppress, and per-node error badges. Covered by `FeatureGraphEvalTests`,
+`HistoryPanelUITests`, `HistoryReorderUITests`.
+**Missing:** feature grouping/folders, and renaming a node from the sidebar.
 
 ### 10.2 Direct modeling with model-aware dimensions
 
@@ -1517,9 +1555,10 @@ Visibility. Names are shared with History (rename in one place updates both).
 `ItemsPanelView`) lists bodies, sketches, construction planes, **images**,
 and **symbols** with type icons; per row: visibility eye
 (`SetItemVisibilityCommand`), inline rename (`RenameItemCommand`), delete,
-tap-to-select, and Zoom To (camera fit to the item's AABB). Extrude
-auto-hides the consumed sketch, and re-opening a hidden sketch for editing
-un-hides it. `isHidden` persists. Missing: folders, filter dropdown,
+tap-to-select, and Zoom To (camera fit to the item's AABB). DELIBERATE
+deviation: consumed sketches are NOT auto-hidden on extrude (read as the
+sketch vanishing — hide manually via the eye); re-opening a hidden sketch
+for editing still un-hides it. `isHidden` persists. Missing: folders, filter dropdown,
 multi-select, per-row image opacity percentage (opacity edits live in the
 image bar), Reveal in Items, Show Hidden Items / Invert Visibility menu,
 shared names with History (no history engine).

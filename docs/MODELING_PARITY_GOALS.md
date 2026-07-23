@@ -69,7 +69,22 @@ This is why G1–G3 come first.
 Each goal states the target, the kernel work, and **acceptance criteria** that
 should become tests.
 
-### G1 — Fillet & Chamfer on B-rep *(spec §4.3)* — **highest priority**
+### G1 — Fillet & Chamfer on B-rep *(spec §4.3)* — **fillet landed 2026-07-22; chamfer pending**
+
+**Done:** `OCCTBridge.filletedShape:atWorldPoints:radius:tolerance:` wraps
+`BRepFilletAPI_MakeFillet`; `evalEdgeBlend` uses it whenever the body carries a
+`brep`, and falls back to the mesh blend when OCCT can't build the round (e.g.
+radius too large). Edge mapping works by sampling each analytic edge and
+matching against the picked mesh-edge midpoints — which means **tangent-chain
+propagation came for free**: a tessellated rim is many mesh segments but ONE
+analytic edge, so picking a single segment rounds the whole circle. Verified by
+`testFilletingACylinderRimStaysAnalytic` (wall survives as one cylindrical
+face, blend adds a curved face, result still tessellates finely).
+
+**Still to do:** chamfer on `BRepFilletAPI_MakeChamfer` (needs the edge's
+adjacent face), concave edges, and surfacing the max-valid-radius in the drag
+feedback from OCCT rather than the mesh heuristic.
+
 
 The original motivation for the whole port, and the biggest visible gap: today a
 fillet on a cylinder throws away the analytic geometry.

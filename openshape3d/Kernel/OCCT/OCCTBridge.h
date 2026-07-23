@@ -124,6 +124,34 @@ NS_ASSUME_NONNULL_BEGIN
                              withShape:(OCCTShape *)b
                                     op:(NSInteger)op;
 
+/// Remove the faces nearest `worldPoints` and heal the result
+/// (`BRepAlgoAPI_Defeaturing`) — spec §4.16 Delete Face. A face counts as picked
+/// when a sample on it lies within `tolerance` of a point. Nil when nothing
+/// matched or the solid couldn't be healed (OCCT refuses when removal would
+/// leave an unclosable gap), so callers can report a recoverable failure.
++ (nullable OCCTShape *)defeaturedShape:(OCCTShape *)shape
+                                 atWorldPoints:(NSData *)worldPoints
+                                     tolerance:(double)tolerance;
+
+/// Analytic face-type histogram of any solid — the check that geometry stayed
+/// exact through an operation (e.g. a filleted cylinder keeps ONE cylindrical
+/// wall and gains a curved blend face).
++ (OCCTFaceTypeCounts *)faceTypeCountsOfShape:(OCCTShape *)shape;
+
+/// Round the edges that pass near `worldPoints` to `radius`
+/// (`BRepFilletAPI_MakeFillet`). `worldPoints` is packed doubles (x,y,z triples)
+/// — typically the midpoints of the mesh edges the user picked. An edge counts
+/// as picked when any sample along it lies within `tolerance` of a point.
+///
+/// Because a tessellated rim is many mesh segments but ONE analytic edge, this
+/// gives tangent-chain propagation for free: picking a single segment of a
+/// cylinder's rim rounds the entire circular edge. Nil if nothing matched or the
+/// blend failed (radius too large for the geometry), so callers can fall back.
++ (nullable OCCTShape *)filletedShape:(OCCTShape *)shape
+                        atWorldPoints:(NSData *)worldPoints
+                               radius:(double)radius
+                            tolerance:(double)tolerance;
+
 /// Serialize a solid to OCCT's BRep text format, so the analytic geometry can be
 /// stored in the document and survive a reload. Nil on failure.
 + (nullable NSData *)serializedShape:(OCCTShape *)shape;

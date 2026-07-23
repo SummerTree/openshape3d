@@ -29,6 +29,67 @@ final class OCCTKernelTests: XCTestCase {
         XCTAssertEqual(c.other, 0, "no other surface types")
     }
 
+    /// G1 acceptance: filleting a cylinder's rim must keep the result ANALYTIC —
+    /// the wall stays one cylindrical face and the blend becomes a real torus —
+    /// instead of collapsing to a faceted mesh blend.
+    func testFilletingACylinderRimStaysAnalytic() {
+        let radius = 5.0, height = 20.0
+        guard let cyl = OCCTKernel.primitiveShape(.cylinder(radius: radius, height: height),
+                                                  placement: .identity) else {
+            return XCTFail("could not build the cylinder")
+        }
+        // Pick ONE point on the top rim. The rim is a single analytic circle, so
+        // one point must select the whole edge (tangent-chain propagation).
+        let rimPoint = SIMD3<Double>(radius, height, 0)
+        guard let filleted = OCCTKernel.fillet(cyl, at: [rimPoint], radius: 1.0,
+                                               tolerance: 0.5) else {
+            return XCTFail("BRepFilletAPI could not round the rim")
+        }
+
+        let before = OCCTKernel.faceTypeCounts(cyl)
+        let after = OCCTKernel.faceTypeCounts(filleted)
+        XCTAssertEqual(before.cylindrical, 1, "a cylinder starts with one curved wall")
+        XCTAssertEqual(after.cylindrical, 1, "the wall must SURVIVE as one analytic face")
+        XCTAssertGreaterThan(after.other, before.other,
+                             "the blend must add a real curved (torus) face")
+
+        // And it must still tessellate round, not faceted.
+        let mesh = OCCTKernel.renderMesh(from: filleted)
+        XCTAssertGreaterThan(mesh.positions.count, 150,
+                             "filleted cylinder still tessellates finely")
+    }
+
+    /// Spec §4.16 Delete Face — previously ❌ [needs B-rep kernel], now possible
+    /// via OCCT defeaturing: removing the blend face of a filleted box must heal
+    /// back to a valid closed solid with fewer faces.
+    func testDeleteFaceRemovesAFilletAndHealsTheSolid() {
+        guard let box = OCCTKernel.primitiveShape(.box(width: 10, depth: 10, height: 10),
+                                                  placement: .identity) else {
+            return XCTFail("could not build the box")
+        }
+        // Round one vertical edge, then delete the resulting blend face.
+        let edgePoint = SIMD3<Double>(5, 5, 5)
+        guard let filleted = OCCTKernel.fillet(box, at: [edgePoint], radius: 2,
+                                               tolerance: 1.0) else {
+            return XCTFail("could not fillet the box edge")
+        }
+        let filletedFaces = OCCTKernel.faceTypeCounts(filleted)
+        XCTAssertGreaterThan(filletedFaces.cylindrical, 0, "fillet adds a curved face")
+
+        // The blend face sits on the rounded corner; sample a point on it.
+        let blendPoint = SIMD3<Double>(5 - 2 + 2 * 0.7071, 5, 5 - 2 + 2 * 0.7071)
+        guard let healed = OCCTKernel.removingFaces(filleted, at: [blendPoint],
+                                                    tolerance: 1.5) else {
+            return XCTFail("defeaturing could not remove the blend face")
+        }
+        let healedFaces = OCCTKernel.faceTypeCounts(healed)
+        XCTAssertEqual(healedFaces.cylindrical, 0,
+                       "the curved blend face must be gone after Delete Face")
+        XCTAssertGreaterThan(healedFaces.planar, 0, "the solid still has its flat faces")
+        XCTAssertFalse(OCCTKernel.renderMesh(from: healed).positions.isEmpty,
+                       "healed solid must still tessellate")
+    }
+
     /// A body carries its own transform, so it must be baked into the solid
     /// before two bodies are combined — otherwise a MOVED body would boolean at
     /// its pre-move position while the Euclid path used the correct one.
