@@ -338,13 +338,13 @@ nonisolated extension FeatureGraph {
         // Euclid render and existing coverage is unperturbed.
         if OCCTKernel.renderCircleExtrudesWithOCCT,
            let handle = OCCTKernel.primitiveShape(spec, placement: placement) {
-            body.brep = handle
             if OCCTKernel.hasCurvedFaces(spec) {
-                let m = OCCTKernel.renderMesh(from: handle)
-                if !m.positions.isEmpty {
-                    body.render = RenderMesh(positions: m.positions, normals: m.normals, indices: m.indices)
-                    body.edges = FeatureEdgeExtractor.edges(from: body.render)
-                }
+                // Curved primitive: OCCT owns render AND CSG (one tessellation).
+                body.adoptBRep(handle)
+            } else {
+                // A box looks identical either way — keep the Euclid mesh it was
+                // built with, but still carry the brep so booleans stay analytic.
+                body.brep = handle
             }
         }
         let table = state.naming.faceTable(for: body, createdBy: node.id, scheme: .primitive(spec))
@@ -417,10 +417,7 @@ nonisolated extension FeatureGraph {
                     holes: holes.map(\.loop), zMin: z.zMin, zMax: z.zMax,
                     origin: plane.origin, xAxis: plane.xAxis,
                     yAxis: plane.yAxis, normal: plane.normal) {
-                    let m = OCCTKernel.renderMesh(from: handle)
-                    body.brep = handle
-                    body.render = RenderMesh(positions: m.positions, normals: m.normals, indices: m.indices)
-                    body.edges = FeatureEdgeExtractor.edges(from: body.render)
+                    body.adoptBRep(handle)
                 }
             }
             let table = state.naming.faceTable(for: body, createdBy: node.id, scheme: .extrude(outer))
@@ -515,12 +512,7 @@ nonisolated extension FeatureGraph {
             if let a = priorBrep, let b = tool.brep,
                let op = Self.occtBooleanOp(kind),
                let resultBrep = OCCTKernel.boolean(a, b, op: op) {
-                let m = OCCTKernel.renderMesh(from: resultBrep)
-                if !m.positions.isEmpty {
-                    next.brep = resultBrep
-                    next.render = RenderMesh(positions: m.positions, normals: m.normals, indices: m.indices)
-                    next.edges = FeatureEdgeExtractor.edges(from: next.render)
-                }
+                next.adoptBRep(resultBrep)
             }
             acc = next
             consumed.append(tool.id)

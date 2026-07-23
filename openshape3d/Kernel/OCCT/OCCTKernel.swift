@@ -206,6 +206,28 @@ nonisolated enum OCCTKernel {
     }
 }
 
+nonisolated extension Body {
+    /// Adopt an OCCT solid as this body's SOURCE OF TRUTH.
+    ///
+    /// Both the render mesh and the CSG (`euclid`) mesh are derived from the same
+    /// OCCT tessellation, so what you see and what booleans/blends actually cut
+    /// can never disagree. Ops not yet ported to OCCT keep working — they just
+    /// operate on the accurate tessellation of the analytic solid instead of a
+    /// coarse 48-gon. Returns false (leaving the body untouched) if the solid
+    /// fails to tessellate, so callers fall back to the Euclid path.
+    @discardableResult
+    mutating func adoptBRep(_ handle: BRepHandle) -> Bool {
+        let m = OCCTKernel.renderMesh(from: handle)
+        guard !m.positions.isEmpty, !m.indices.isEmpty else { return false }
+        let mesh = RenderMesh(positions: m.positions, normals: m.normals, indices: m.indices)
+        brep = handle
+        render = mesh
+        edges = FeatureEdgeExtractor.edges(from: mesh)
+        euclid = EuclidBridge.euclidMesh(from: mesh)
+        return true
+    }
+}
+
 private extension Data {
     /// Reinterpret the packed bytes as tightly-packed `Float`s.
     func floatArray() -> [Float] {
