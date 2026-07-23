@@ -502,8 +502,19 @@ between planes, and the Copy toggle.
 instance propagate to all. Re-select any member sketch to re-activate the
 pattern badges and adjust definition/distance/quantity. Delete via the badge +
 "Delete Constraints": permanently breaks the link, instances become individual.
-**Status:** ❌ not implemented.
-**Feasibility:** [needs constraint solver] + [needs history engine]
+**Status:** 🟡 partial — the pattern LINK ships (`SketchPatternLink` on the
+sketch + `SketchPatternKit`): instances stay slaved to their seed, so editing
+the seed (position, radius, …) regenerates every copy, and instance IDs are
+preserved so selections/references survive. Any member resolves back to its
+link (`link(owning:)`), which is what re-activates the pattern on re-select.
+`unlink` implements "Delete Constraints" — the copies remain as individual
+entities and simply stop following. Links persist, and pre-§2.5 documents
+still load. Covered by `SketchPatternLinkTests`.
+**Missing:** the badge UI for adjusting definition/distance/quantity, and
+wiring the Pattern tool to create the link automatically (it still emits
+unlinked copies).
+**Feasibility:** [mesh-kernel OK] — regeneration is deterministic, so this did
+NOT need the solver.
 
 ### 2.6 Snapping options & guides
 

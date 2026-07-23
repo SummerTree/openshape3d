@@ -195,6 +195,10 @@ nonisolated struct Sketch: Identifiable, Codable, Equatable, Sendable {
     var constraints: [SketchConstraint]
     /// Driving dimensions (spec §2.2) lowered by `SketchSolverBridge`.
     var dimensions: [SketchDimension]
+    /// Live pattern links (spec §2.5): each keeps its instances slaved to a
+    /// seed, so editing the seed re-generates them. Auto-created by the Pattern
+    /// tool, never by hand.
+    var patternLinks: [SketchPatternLink]
 
     init(
         id: SketchID = SketchID(),
@@ -204,7 +208,8 @@ nonisolated struct Sketch: Identifiable, Codable, Equatable, Sendable {
         isHidden: Bool = false,
         constructionEntityIDs: Set<UUID> = [],
         constraints: [SketchConstraint] = [],
-        dimensions: [SketchDimension] = []
+        dimensions: [SketchDimension] = [],
+        patternLinks: [SketchPatternLink] = []
     ) {
         self.id = id
         self.name = name
@@ -214,11 +219,12 @@ nonisolated struct Sketch: Identifiable, Codable, Equatable, Sendable {
         self.constructionEntityIDs = constructionEntityIDs
         self.constraints = constraints
         self.dimensions = dimensions
+        self.patternLinks = patternLinks
     }
 
     private enum CodingKeys: String, CodingKey {
         case id, name, plane, entities, isHidden, constructionEntityIDs
-        case constraints, dimensions
+        case constraints, dimensions, patternLinks
     }
 
     /// `name`/`isHidden`/`constructionEntityIDs`/`constraints`/`dimensions`
@@ -236,6 +242,8 @@ nonisolated struct Sketch: Identifiable, Codable, Equatable, Sendable {
             try container.decodeIfPresent([SketchConstraint].self, forKey: .constraints) ?? []
         dimensions =
             try container.decodeIfPresent([SketchDimension].self, forKey: .dimensions) ?? []
+        patternLinks =
+            try container.decodeIfPresent([SketchPatternLink].self, forKey: .patternLinks) ?? []
     }
 }
 
