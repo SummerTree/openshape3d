@@ -218,6 +218,32 @@ Euclid still computes CSG → suite 500 green. Next: general (polygonal/arc)
 profiles as B-rep source, analytic holes, extrude-into-target boolean, B-rep
 persistence, then fillet/shell on B-rep. Repro: `scripts/run_occt_spike.sh`.
 
+### Shapr3D UI parity review (2026-07-23)
+
+A pass over the sketch and solid-modeling UI against Shapr3D, driving the app
+on the iPad sim and comparing on screen:
+
+- **Live sketch dimensions** while drawing (`LiveDimensionKit` +
+  `SketchLiveDimensionOverlay`): width/height on a rectangle, Ø on a circle
+  (ticked where it meets the curve), length/R for line/arc.
+- **Draw from the current camera** — entering a sketch no longer snaps
+  head-on; it only re-aims from a grazing (>80°) view. Look at Sketch is
+  recomputed on entry so it appears from an angled view.
+- **Orientation-cube face names** (Top/Front/Right…), fading as faces turn away.
+- **Overlay alignment fix** — every projected overlay was ~85pt low (Metal
+  viewport full-bleed vs safe-area-inset SwiftUI overlay); all now
+  `.ignoresSafeArea()` and re-publish the camera on layout/resize.
+- **Named snap chip** (`SnapChipOverlay`) + typed snapping
+  (`SnapEngine.SnapKind`): Endpoint/Midpoint/Center, ranked; rectangles gained
+  edge-midpoint and centre snaps.
+- **Selection accent orange → Shapr3D blue** (with the user's sign-off), kept
+  distinct from the under-defined blue.
+
+Remaining Shapr-vs-ours gaps noted but NOT yet done: the sketch grid is drawn
+on the world ground plane only (Shapr3D re-orients it to the active sketch
+plane); mid-draw numeric entry into the live dimension; rectangle dimensions
+pinning to the drag-facing sides.
+
 ### Spec §1–§12 gap sweep (2026-07-22) — suite 658 green
 
 Every ❌ in `SHAPR3D_PARITY_SPEC.md` through §12 was re-audited and closed
