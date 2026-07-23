@@ -690,6 +690,10 @@ struct EditorView: View {
                 OrientationCubeLabels(viewModel: viewModel)
             }
             .overlay {
+                // Named snap under the pointer while drawing (Endpoint/…).
+                SnapChipOverlay(viewModel: viewModel)
+            }
+            .overlay {
                 // Shapr3D on-arrow value pill for extrude / diameter (§4.1).
                 ExtrudeGizmoOverlay(viewModel: viewModel)
             }

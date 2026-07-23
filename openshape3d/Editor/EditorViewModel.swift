@@ -4709,6 +4709,20 @@ final class EditorViewModel {
     /// readout needs it — a circle's Ø leader swings to follow the finger.
     private var sketchStrokeCurrent: SIMD2<Double>?
 
+    /// The snap the pointer is currently latched to, for the on-screen chip.
+    /// Cleared when the stroke ends so the chip never outlives the gesture.
+    private(set) var activeSnap: (kind: SnapKind, point: SIMD2<Double>)?
+
+    /// Named snap under the pointer, ready for the overlay to place: Shapr3D
+    /// tells you WHICH snap caught you ("Endpoint") so a near miss is obvious
+    /// before you commit. Nil for the grid, which is always on and would just
+    /// label every stroke.
+    var activeSnapLabel: (text: String, world: SIMD3<Double>)? {
+        guard let snap = activeSnap, let text = snap.kind.label,
+              let plane = activeSketch?.plane else { return nil }
+        return (text, plane.toWorld(snap.point))
+    }
+
     // MARK: Live dimensions while drawing (spec §1.1)
 
     /// One live measurement, ready for the overlay to project.
@@ -5529,7 +5543,9 @@ final class EditorViewModel {
     /// Ray → snapped plane-local point, while sketching.
     private func sketchPoint(from ray: Ray) -> SIMD2<Double>? {
         guard let raw = rawSketchPoint(from: ray) else { return nil }
-        return SnapEngine.snap(raw, in: activeSketch).point
+        let result = SnapEngine.snap(raw, in: activeSketch)
+        activeSnap = (result.kind, result.point)
+        return result.point
     }
 
     func beginSketchStroke(ray: Ray) -> Bool {
@@ -5636,6 +5652,7 @@ final class EditorViewModel {
             pendingEntity = nil
             sketchStrokeStart = nil
             sketchStrokeCurrent = nil
+            activeSnap = nil
             activeGuides = []
             pendingInferredConstraints = []
         }
