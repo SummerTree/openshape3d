@@ -635,22 +635,41 @@ nonisolated extension FeatureGraph {
         // the result STAYS analytic (a filleted cylinder keeps its round wall and
         // gains a real torus face) instead of collapsing to a mesh blend. A
         // tessellated rim is many mesh segments but one OCCT edge, so this also
-        // propagates along tangent chains for free. Falls back to the mesh blend
-        // if OCCT can't build it (e.g. radius too large for the geometry).
-        if isFillet, OCCTKernel.useOCCTAsSourceOfTruth, let brep = body.brep {
+        // propagates along tangent chains for free.
+        //
+        // For a body OCCT owns (`brep` present, source of truth), the analytic
+        // blend is the ONLY acceptable result. The Euclid mesh-blend below is a
+        // legacy path for brep-less bodies: on the curved analytic solids that
+        // now flow through OCCT it produces malformed polygons (Euclid asserts
+        // in debug, ships distorted/spiky facets in release) AND desyncs the
+        // render from the brep. So a brep body whose OCCT blend fails ERRORS
+        // with an actionable message rather than silently degrading — the fix
+        // for the "some facets are distorted after filleting" bug. Smaller
+        // radii, which OCCT handles cleanly, just work.
+        if OCCTKernel.useOCCTAsSourceOfTruth, let brep = body.brep {
             let midpoints = specs.map { ($0.p0 + $0.p1) * 0.5 }
-            if let filleted = OCCTKernel.fillet(
-                brep, at: midpoints, radius: amount, tolerance: max(scale * 0.01, 1e-6)) {
-                var result = Body(
-                    id: body.id, name: body.name, transform: .identity, primitive: nil,
-                    euclidMesh: body.euclidMesh(), revision: nextRevision())
-                if result.adoptBRep(filleted) {
-                    let table = state.naming.faceTable(
-                        for: result, createdBy: node.id, scheme: .generic)
-                    state.put(result, table: table)
-                    return
-                }
+            let tolerance = max(scale * 0.01, 1e-6)
+            let blended = isFillet
+                ? OCCTKernel.fillet(brep, at: midpoints, radius: amount, tolerance: tolerance)
+                : OCCTKernel.chamfer(brep, at: midpoints, distance: amount, tolerance: tolerance)
+            guard let blended else {
+                let verb = isFillet ? "fillet" : "chamfer"
+                state.errors[node.id] = .kernelFailure(
+                    "\(verb) radius \(String(format: "%g", amount)) is too large for this "
+                    + "geometry — try a smaller value")
+                return
             }
+            var result = Body(
+                id: body.id, name: body.name, transform: .identity, primitive: nil,
+                euclidMesh: body.euclidMesh(), revision: nextRevision())
+            guard result.adoptBRep(blended) else {
+                state.errors[node.id] = .emptyGeometry
+                return
+            }
+            let table = state.naming.faceTable(
+                for: result, createdBy: node.id, scheme: .generic)
+            state.put(result, table: table)
+            return
         }
 
         let mesh = KernelOps.blendEdges(
