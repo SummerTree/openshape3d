@@ -1164,8 +1164,15 @@ to Face at Point**. All parametrically adjustable later; History param:
 Length (plus the defining references). Adaptive "Add Axis" shortcut: with a
 valid selection the adaptive menu offers Add Axis directly, skipping menu
 steps. Axes serve Revolve, patterns, and transforms.
-**Status:** ❌ not implemented.
-**Feasibility:** [mesh-kernel OK] (cylinder-axis fitting on mesh faces)
+**Status:** 🟡 partial — the GEOMETRY for all five axis tools ships in
+`ConstructionAxisKit` (through-2-points, along-edge, perpendicular-to-face,
+2-plane intersection, and axis-of-revolution recovered from face samples by a
+least-squares fit), with degenerate selections refused rather than producing
+NaNs. Covered by `ConstructionAxisTests`.
+**Missing:** the document entity, the Add Axis tool/adaptive menu entry, the
+History Length parameter, rendering, and using an axis as the operand for
+Revolve / circular pattern / rotate.
+**Feasibility:** [mesh-kernel OK] — remaining work is app/UI, not geometry.
 
 ### 6.3 Insert Image (reference images)
 
