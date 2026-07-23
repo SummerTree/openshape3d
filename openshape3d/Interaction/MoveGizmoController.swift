@@ -65,18 +65,20 @@ nonisolated struct GizmoState: Equatable {
 
 nonisolated enum GizmoGeometry {
     /// Hit radius around an axis arrow, in gizmo units (inflated for touch).
-    static let axisHitRadius: Float = 0.14
+    static let axisHitRadius: Float = 0.16
     static let axisLength: Float = 1.0
     /// Plane handles span [planeMin, planeMax]² on their plane — clustered
     /// close to the centre (Shapr3D style).
     static let planeMin: Float = 0.13
     static let planeMax: Float = 0.34
-    /// Rotation glyphs sit at this radius from the origin (gizmo units),
-    /// between the plane handles and the arrow tips. The hit test uses the
-    /// full circle here even though only a small arc glyph is drawn.
-    static let ringRadius: Float = 0.5
-    /// Radial hit tolerance around a ring (inflated for touch).
-    static let ringHitWidth: Float = 0.14
+    /// Rotation arcs sit at this radius from the origin (gizmo units), outside
+    /// the plane handles and clear of the arrow shafts. The hit test uses the
+    /// full circle here (forgiving for touch) while a prominent quarter-arc
+    /// curved arrow is drawn as the grab affordance.
+    static let ringRadius: Float = 0.62
+    /// Radial hit tolerance around a ring (inflated for touch — a fat band so
+    /// the rotation handle is easy to grab, which was the whole complaint).
+    static let ringHitWidth: Float = 0.22
 
     /// Nearest gizmo part hit by the ray, if any. Ray and state in world space.
     static func hitTest(ray: Ray, gizmo: GizmoState) -> GizmoPart? {

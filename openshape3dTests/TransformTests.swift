@@ -82,6 +82,25 @@ final class TransformTests: XCTestCase {
         XCTAssertNil(session.translationDelta(for: quarterRay))
     }
 
+    /// The rotation handle must be a GENEROUS grab target — the reported bug
+    /// was that it was too small to grab. A tap a good bit off the exact ring
+    /// radius still lands the ring.
+    func testRotationHandleHasAForgivingGrabBand() throws {
+        let gizmo = GizmoState(origin: .zero, scale: 1, highlighted: nil)
+        let r = GizmoGeometry.ringRadius
+        // Off the axes (45°) so no arrow competes, and OUTSIDE the true radius
+        // by most of the tolerance (the outer band never overlaps the plane
+        // tiles) — a sloppy grab still lands the rotation.
+        let outer = (r + GizmoGeometry.ringHitWidth * 0.8) / sqrt(2)
+        let ray = Ray(origin: SIMD3(outer, outer, 10), direction: SIMD3(0, 0, -1))
+        XCTAssertEqual(GizmoGeometry.hitTest(ray: ray, gizmo: gizmo), .zRing,
+                       "a tap off the exact ring radius still rotates")
+
+        // …and the band is meaningfully wide (the fix), not a hairline.
+        XCTAssertGreaterThanOrEqual(GizmoGeometry.ringHitWidth, 0.2,
+                                    "the rotation grab band must stay generous")
+    }
+
     func testArrowsStillWinOverRings() {
         // Regression: a ray down the middle of the Y arrow shaft must keep
         // hitting the arrow, not a ring.

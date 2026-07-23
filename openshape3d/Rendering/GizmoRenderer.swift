@@ -166,11 +166,11 @@ final class GizmoRenderer {
     // MARK: - Mesh generation (gizmo-local space, unit length arrows)
 
     private func appendArrow(along axis: SIMD3<Float>, into vertices: inout [SIMD3<Float>]) {
-        // Shorter, slimmer than before so the gizmo reads as a tight cluster.
-        let shaftRadius: Float = 0.014
-        let shaftLength: Float = 0.62
-        let coneRadius: Float = 0.055
-        let coneLength: Float = 0.2
+        // A tight cluster, but with a chunky arrowhead that is easy to grab.
+        let shaftRadius: Float = 0.016
+        let shaftLength: Float = 0.60
+        let coneRadius: Float = 0.075
+        let coneLength: Float = 0.24
         let segments = 16
 
         let (u, v) = perpendicularBasis(for: axis)
@@ -221,43 +221,51 @@ final class GizmoRenderer {
         vertices.append(contentsOf: [c[0], c[3], c[2]])
     }
 
-    /// A small curved rotation glyph (short arc + arrowheads) in the ring's
-    /// plane — Shapr3D's rotation affordance instead of a full ring. The hit
-    /// test still uses the full circle at GizmoGeometry.ringRadius (forgiving).
+    /// A bold curved rotation arrow in the ring's plane — Shapr3D's rotation
+    /// affordance. A thick ~90° arc with a clear arrowhead at each end, sized
+    /// to be an obvious grab target (the tiny old glyph was the complaint). The
+    /// hit test still uses the full circle at `ringRadius` (forgiving for touch).
     private func appendRotationGlyph(around part: GizmoPart, into vertices: inout [SIMD3<Float>]) {
         let r = GizmoGeometry.ringRadius
-        let half: Float = 0.014            // band half-thickness
+        let half: Float = 0.03             // band half-thickness (was 0.014)
         let (u, v) = GizmoGeometry.ringBasis(for: part)
-        // Arc centred at a fixed local angle, ~70° wide.
+        // A quarter-turn arc, centred at 45° so it sits in the gap between two
+        // axes rather than crossing an arrow.
         let center: Float = .pi / 4
-        let span: Float = 70 * .pi / 180
+        let span: Float = 90 * .pi / 180
+        // Leave room at the ends for the arrowheads so the band doesn't poke
+        // through them.
+        let headArc: Float = 12 * .pi / 180
         let a0 = center - span / 2, a1 = center + span / 2
-        let steps = 16
+        let bandStart = a0 + headArc, bandEnd = a1 - headArc
+        let steps = 20
         func dir(_ a: Float) -> SIMD3<Float> { u * cos(a) + v * sin(a) }
 
         for i in 0..<steps {
-            let t0 = a0 + (a1 - a0) * Float(i) / Float(steps)
-            let t1 = a0 + (a1 - a0) * Float(i + 1) / Float(steps)
+            let t0 = bandStart + (bandEnd - bandStart) * Float(i) / Float(steps)
+            let t1 = bandStart + (bandEnd - bandStart) * Float(i + 1) / Float(steps)
             let d0 = dir(t0), d1 = dir(t1)
             let c0 = d0 * (r - half), c1 = d0 * (r + half)
             let c2 = d1 * (r + half), c3 = d1 * (r - half)
             vertices.append(contentsOf: [c0, c1, c2, c0, c2, c3])
             vertices.append(contentsOf: [c0, c2, c1, c0, c3, c2])
         }
-        // Tangential arrowheads at each arc end.
+        // A broad, flat tangential arrowhead at each arc end.
+        let headLength: Float = 0.15       // along the tangent (was 0.09)
+        let headHalfWidth: Float = 0.09    // across the radial (was 0.05)
         func head(at a: Float, pointing forward: Bool) {
             let p = dir(a) * r
             let radial = dir(a)
             var tangent = u * -sin(a) + v * cos(a)
             if !forward { tangent = -tangent }
-            let tip = p + tangent * 0.09
-            let b1 = p + radial * 0.05
-            let b2 = p - radial * 0.05
+            let tip = p + tangent * headLength
+            let b1 = p + radial * headHalfWidth
+            let b2 = p - radial * headHalfWidth
             vertices.append(contentsOf: [tip, b1, b2])
             vertices.append(contentsOf: [tip, b2, b1])
         }
-        head(at: a0, pointing: false)
-        head(at: a1, pointing: true)
+        head(at: bandStart, pointing: false)
+        head(at: bandEnd, pointing: true)
     }
 
     /// A small cyan sphere-ish dot at the origin (free-move pivot).
