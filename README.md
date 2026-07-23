@@ -283,7 +283,9 @@ round-trip, transform baking); XCUITests drive the real flows
 - Fat-line edge rendering, dark mode viewport theme
 - Assembly-style grouping (Items folders), SVG/DXF drawing export
 
-See `docs/SHAPR3D_PARITY_SPEC.md` for the feature-by-feature status audit and
+See `docs/MODELING_PARITY_GOALS.md` for the ordered sketch + solid modeling
+roadmap (fillet, shell, splines, STEP — with acceptance criteria),
+`docs/SHAPR3D_PARITY_SPEC.md` for the feature-by-feature status audit, and
 `docs/IMPLEMENTATION_PLAN.md` for phase sequencing.
 
 ## License

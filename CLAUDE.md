@@ -11,6 +11,9 @@ Update it at the end of each mission.
 
 Spec/design companions: `docs/SHAPR3D_PARITY_SPEC.md`,
 `docs/IMPLEMENTATION_PLAN.md`, `docs/PHASE_D_DESIGN.md`.
+Modeling-core roadmap (sketch + solid parity, ordered with acceptance
+criteria): `docs/MODELING_PARITY_GOALS.md`. Kernel strategy:
+`docs/OCCT_BREP_PORT_DESIGN.md`.
 
 Architecture seams (never bypass): geometry ops via `KernelOps`, mutations via
 `DocumentCommand` (undoable), all state through `EditorViewModel`. Run tests
