@@ -948,8 +948,21 @@ corner options are mesh-sweep math)
 replace highlight blue, replacing face purple; badge tap swaps roles; Flip
 Alignment toggle extends to the other side. Works on complex non-planar faces
 (imported or native).
-**Status:** ❌ not implemented.
-**Feasibility:** [needs B-rep kernel]
+**Status:** 🟡 partial — `ReplaceFaceKit` covers the planar-face-to-parallel-
+plane case, which is both directions of the spec's "extends or trims": the
+material between the face and the target plane is the prism swept by the
+face's own outline, fused for an extend and cut for a trim. `plan` works out
+which and by how much (Flip Alignment inverts it), and after `apply` the face
+sits exactly on the target plane with the rest of the body untouched. A face
+whose outline the picker hands back as a keyhole (a drilled top) sweeps its
+real area, so extending does not plug the hole. Covered by `ReplaceFaceTests`.
+**Refused rather than approximated:** a non-parallel target — the gap varies
+across the face, so no single prism describes it — and a target coincident
+with the face.
+**Missing:** the blue/purple selection UI with its role-swap badge, non-planar
+and non-parallel targets, and multi-face selections.
+**Feasibility:** [needs B-rep kernel] for the general case; the planar-
+parallel case is [mesh-kernel OK] and ships.
 
 ### 4.13 Offset Edge (3D)
 
