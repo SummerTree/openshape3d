@@ -989,10 +989,27 @@ profiles → select a SINGLE cylindrical/conical target face → gizmo position 
 depth → Done. History params: Items to Wrap, Face to Wrap Onto, Emboss depth
 (positive raised / negative engraved), Rotation (about own center), Center
 (alignment origin on the target).
-**Status:** ❌ not implemented.
-**Feasibility:** [needs B-rep kernel] (a mesh approximation — developable
-unwrap of cylinder/cone + boolean with a wrapped cutter — is feasible but
-tolerance-fragile)
+**Status:** 🟡 partial — `WrapKit` implements the mapping and the emboss
+solid. The no-stretch property holds exactly: profile x is treated as ARC
+LENGTH and y as axial distance, so a 40 mm-wide profile is 40 mm of surface at
+r = 8, 20 or 100 (unlike Project's linear cast), and a full circumference of
+profile closes back on its own start. Rotation and Center (alignment origin)
+are honoured, and a picked `CylindricalFace` converts straight into a target.
+`embossSolid` returns a closed mesh to fuse (positive depth = raised) or
+subtract (negative = engraved); its volume matches the analytic wrapped-slab
+value A·|d|·(1 + d/2r) — signed, since a raised slab's outer face is longer
+than its base while an engraved one's inner face is shorter — to within 1%,
+and fusing a boss onto a real cylinder body adds exactly that much.
+The solid is built in angular BANDS: a single triangulation would chord
+straight through the cylinder wherever a facet spans a wide angle and quietly
+lose volume, so each band is clipped, triangulated and lifted separately, with
+no wall on the interior cuts so the bands tile into one manifold.
+Covered by `WrapEmbossTests`.
+**Missing:** the tool UI (profile/face selection, position + depth gizmo), the
+history node, and conical targets — the mapping generalises but is not
+written.
+**Feasibility:** [mesh-kernel OK] for cylinders — confirmed; the band
+construction is what makes the mesh approximation stable.
 
 ### 4.16 Delete Face (direct modeling)
 
