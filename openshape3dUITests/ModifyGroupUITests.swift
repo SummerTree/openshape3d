@@ -23,6 +23,7 @@ final class ModifyGroupUITests: XCTestCase {
         window.coordinate(withNormalizedOffset: CGVector(dx: 0.80, dy: 0.78)).tap()
         XCTAssertTrue(app.staticTexts["Sketching on ground plane"].waitForExistence(timeout: 3))
         sleep(2)
+        lookAtSketch(app)
         window.coordinate(withNormalizedOffset: CGVector(dx: 0.40, dy: 0.40))
             .press(forDuration: 0.15, thenDragTo: window.coordinate(withNormalizedOffset: CGVector(dx: 0.62, dy: 0.58)))
         app.buttons["Exit Sketching"].tap()
@@ -48,7 +49,7 @@ final class ModifyGroupUITests: XCTestCase {
         window.coordinate(withNormalizedOffset: CGVector(dx: 0.51, dy: 0.49)).tap()
         XCTAssertTrue(app.staticTexts["Extrude"].waitForExistence(timeout: 5),
                       "Tapping the region should open the extrude bar")
-        app.buttons["Extrude"].firstMatch.tap()
+        typeExtrudeHeight(app)
         sleep(1)
         XCTAssertTrue(app.buttons["Undo"].isEnabled, "The extrude should have committed")
     }

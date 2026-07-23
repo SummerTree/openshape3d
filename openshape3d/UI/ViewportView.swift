@@ -80,6 +80,15 @@ final class ViewportCoordinator: NSObject, ViewportGestureDelegate, ViewportCame
         if let bounds = renderer.scene.worldBounds {
             renderer.camera.fit(boundsMin: bounds.min, boundsMax: bounds.max)
         }
+
+        // Re-publish the camera whenever the viewport is laid out or resized.
+        // The MTKView starts at .zero and is sized afterwards, so every SwiftUI
+        // overlay that projects world points evaluates once against an EMPTY
+        // viewport and would stay stale — silently drawing nothing — until the
+        // user happened to move the camera. This also covers rotation and
+        // split-view resizes.
+        renderer.viewportSizeChanged = { [weak self] in self?.cameraDidMove() }
+        cameraDidMove()
     }
 
     func sceneDidChange() {
@@ -116,6 +125,10 @@ final class ViewportCoordinator: NSObject, ViewportGestureDelegate, ViewportCame
     private var sectionDragActive = false
     /// A drag scrubbing the chamfer/fillet size on the edge arrow (spec §4.3).
     private var blendDragActive = false
+    /// A drag on the orientation cube orbiting the camera (spec §7.2): the
+    /// universal orbit control, live in every mode.
+    private var cubeOrbitActive = false
+    private var lastCubeDragPoint: CGPoint = .zero
 
     func gestureTapped(at point: CGPoint) {
         // Orientation cube first: taps on it never reach the model.
@@ -203,9 +216,21 @@ final class ViewportCoordinator: NSObject, ViewportGestureDelegate, ViewportCame
     }
 
     func gestureDragBegan(at point: CGPoint) -> Bool {
-        guard let ray = ray(at: point) else { return false }
         dragStartPoint = point
         pullActive = false
+
+        // Orientation cube = universal orbit control (spec §7.2): a drag that
+        // STARTS on the cube orbits the camera in EVERY mode, so the user can
+        // always reorient even when a tool owns the rest of the viewport. (A
+        // tap on the cube still snaps to that standard view — taps and drags
+        // are separate gestures.)
+        if let view, OrientationCube.rect(in: view.bounds.size).contains(point) {
+            cubeOrbitActive = true
+            lastCubeDragPoint = point
+            return true
+        }
+
+        guard let ray = ray(at: point) else { return false }
 
         // Select mode: one-finger drags draw the marquee (spec §8.2).
         if viewModel.beginMarquee(at: SIMD2(Double(point.x), Double(point.y))) {
@@ -319,6 +344,18 @@ final class ViewportCoordinator: NSObject, ViewportGestureDelegate, ViewportCame
     }
 
     func gestureDragChanged(at point: CGPoint) {
+        if cubeOrbitActive {
+            guard let renderer, let view else { return }
+            let delta = CGSize(
+                width: point.x - lastCubeDragPoint.x,
+                height: point.y - lastCubeDragPoint.y
+            )
+            lastCubeDragPoint = point
+            renderer.camera.orbit(deltaPixels: delta, viewportSize: view.bounds.size)
+            cameraDidMove()
+            view.setNeedsDisplay()
+            return
+        }
         if marqueeActive {
             // The marquee overlay is SwiftUI state — no Metal redraw needed.
             viewModel.updateMarquee(to: SIMD2(Double(point.x), Double(point.y)))
@@ -367,6 +404,10 @@ final class ViewportCoordinator: NSObject, ViewportGestureDelegate, ViewportCame
     }
 
     func gestureDragEnded(at point: CGPoint) {
+        if cubeOrbitActive {
+            cubeOrbitActive = false
+            return
+        }
         if marqueeActive {
             marqueeActive = false
             viewModel.updateMarquee(to: SIMD2(Double(point.x), Double(point.y)))
@@ -487,7 +528,7 @@ final class ViewportCoordinator: NSObject, ViewportGestureDelegate, ViewportCame
     private func cameraDidMove() {
         let available: Bool
         if let plane = viewModel.activeSketch?.plane {
-            available = offAngleDegrees(to: plane) > 10
+            available = offAngleDegrees(to: plane) > EditorViewModel.lookAtSketchThresholdDegrees
         } else {
             available = false
         }
@@ -504,6 +545,12 @@ final class ViewportCoordinator: NSObject, ViewportGestureDelegate, ViewportCame
     /// usable to draw in, and by the Look at Sketch button's visibility.
     func offAxisDegrees(to plane: SketchPlane) -> Double {
         offAngleDegrees(to: plane)
+    }
+
+    func orientationCubeLabels() -> [OrientationCube.FaceLabel] {
+        guard let renderer, let view else { return [] }
+        return OrientationCube.faceLabels(
+            camera: renderer.camera, viewSize: view.bounds.size)
     }
 
     /// World→screen projection for SwiftUI overlays (dimension labels).

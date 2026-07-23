@@ -25,7 +25,45 @@ struct SketchDimensionOverlay: View {
                 }
             }
             .allowsHitTesting(true)
+            // The Metal viewport is full-bleed; a SwiftUI overlay is safe-area
+            // inset by default, which would draw every projected point ~85pt
+            // below the geometry it annotates.
+            .ignoresSafeArea()
         }
+    }
+
+    /// Screen position of the sketch selection gizmo's move handle, if one is
+    /// up. A dimension label that lands on the handle must not swallow the
+    /// drag that moves the selection — the handle is the primary control
+    /// there, and the label can always be reached by nudging the selection.
+    private var gizmoHandlePoint: CGPoint? {
+        guard let centroid = viewModel.sketchSelectionCentroid,
+              let plane = viewModel.activeSketch?.plane else { return nil }
+        return project(plane.toWorld(centroid))
+    }
+
+    /// Points; roughly the handle's own touch target.
+    private static let gizmoHandleRadius: CGFloat = 34
+
+    /// Nudge a label clear of the gizmo handle rather than hiding it: for a
+    /// single selected line the two coincide exactly (the handle sits at the
+    /// centroid, which is also where the length reads), and suppressing the
+    /// label there would make the dimension untappable precisely when it is
+    /// most likely to be edited. Offsetting keeps both reachable.
+    private func clearOfGizmo(_ point: CGPoint, along start: CGPoint,
+                              _ end: CGPoint) -> CGPoint {
+        guard let handle = gizmoHandlePoint,
+              hypot(point.x - handle.x, point.y - handle.y) < Self.gizmoHandleRadius
+        else { return point }
+        let dx = end.x - start.x, dy = end.y - start.y
+        let length = hypot(dx, dy)
+        guard length > 1 else {
+            return CGPoint(x: point.x, y: point.y - Self.gizmoHandleRadius)
+        }
+        // Perpendicular to the dimension line, so the label still reads as
+        // belonging to it.
+        return CGPoint(x: point.x - dy / length * Self.gizmoHandleRadius,
+                       y: point.y + dx / length * Self.gizmoHandleRadius)
     }
 
     @ViewBuilder
@@ -62,7 +100,7 @@ struct SketchDimensionOverlay: View {
                         .foregroundStyle(label.dimensionID == nil ? Color.secondary : Color.blue)
                 }
                 .buttonStyle(.plain)
-                .position(anchor)
+                .position(clearOfGizmo(anchor, along: start, end))
                 .accessibilityIdentifier("DimensionLabel")
             }
         }

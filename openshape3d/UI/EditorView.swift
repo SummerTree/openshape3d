@@ -259,6 +259,7 @@ struct EditorView: View {
             switch tool {
             case .text: return "Tap to place text"
             case .project: return "Tap a body to project its edges"
+            case nil: return "Drag to orbit — pick a tool to draw"
             default: break
             }
         }
@@ -683,6 +684,10 @@ struct EditorView: View {
                 // Above the persisted-dimension layer but non-interactive, so
                 // it never steals a tap from a real dimension label.
                 SketchLiveDimensionOverlay(viewModel: viewModel)
+            }
+            .overlay {
+                // Standard-view names on the orientation cube (§7.2).
+                OrientationCubeLabels(viewModel: viewModel)
             }
             .overlay {
                 // Shapr3D on-arrow value pill for extrude / diameter (§4.1).

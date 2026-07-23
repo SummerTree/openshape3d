@@ -82,7 +82,15 @@ axis — this drawing-time auto-constraint is the ONLY way to tie geometry to
 the axes, because the origin/axes cannot be referenced by dimensions or
 constraints afterwards (see §2.2's origin/axis restriction).
 History params per sketch step: Plane (Edit…/Select…), Projection.
-**Status:** 🟡 partial — drag-defined segments with chain continuation: after
+**Status:** 🟡 partial — **live dimensions while drawing** (`LiveDimensionKit`
++ `SketchLiveDimensionOverlay`): a stroke in flight reads its own size — width
+and height as a rectangle is dragged out, Ø across a circle (swinging to
+follow the drag, ticked where it meets the curve), length for a line, R for an
+arc. Leader offsets are a fraction of the measured span, so a 5 mm shape and a
+5 m shape annotate identically, and the readout honours the Units setting.
+Nothing is stored and the overlay is non-interactive, so it can never steal a
+tap from a real dimension label. Also drag-defined segments with chain
+continuation: after
 a stroke, the next stroke starting on the previous endpoint pre-anchors there
 (`chainAnchor`), and a stroke that closes onto the chain's first point
 finishes the chain (`EditorViewModel.beginSketchStroke/endSketchStroke`,
@@ -1415,8 +1423,14 @@ Drag-to-orbit on the cube works as a UNIVERSAL orbit control (`ViewportView.
 gestureDragBegan` claims any drag starting in `OrientationCube.rect` before any
 mode-specific handling, so the camera can be freely orbited in EVERY mode —
 sketch/extrude/face-pull/gizmo — even when a tool owns the main viewport). A
-tap still snaps to the view; only the drag orbits. Missing: edge hits, X/Y/Z
-labels, double-tap reset, the 2D-planar-view rotation arrows, context menu.
+tap still snaps to the view; only the drag orbits. **Face names** (Top /
+Bottom / Front / Back / Left / Right) are drawn over the cube for the faces
+turned toward the camera, fading out as a face rotates away so only the ones
+you could sensibly tap are named; the names are `StandardView.rawValue`, so
+the cube and the Views menu can never disagree about which way is Front
+(`OrientationCube.faceLabels` + `OrientationCubeLabels`). Missing: edge hits,
+X/Y/Z axis labels, double-tap reset, the 2D-planar-view rotation arrows,
+context menu.
 **Feasibility:** [mesh-kernel OK]
 
 ### 7.3 Views & Appearance panel

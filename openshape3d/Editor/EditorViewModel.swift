@@ -42,6 +42,9 @@ protocol ViewportCameraControl: AnyObject {
     /// 90 = edge-on. Entering a sketch reads this to decide whether the current
     /// view is usable to draw in.
     func offAxisDegrees(to plane: SketchPlane) -> Double
+    /// Standard-view names for the orientation-cube faces currently turned
+    /// toward the camera, in screen points (spec §7.2).
+    func orientationCubeLabels() -> [OrientationCube.FaceLabel]
 }
 
 @MainActor
@@ -1551,18 +1554,18 @@ final class EditorViewModel {
         if case .pickingBlendEdges = mode { mode = .idle }
     }
 
-    /// The source mesh with the pending blend applied to every selected edge.
+    /// The source mesh with the pending blend applied to every selected edge
+    /// (one batched boolean — a rim chain is dozens of segments).
     private func blendedMesh(_ kind: BlendKind, source: Body) -> Euclid.Mesh {
         func d3(_ v: SIMD3<Float>) -> SIMD3<Double> { SIMD3(Double(v.x), Double(v.y), Double(v.z)) }
-        var mesh = source.euclidMesh()
-        for edge in blendSelectedEdges {
-            let p0 = d3(edge.start), p1 = d3(edge.end)
-            let nA = d3(edge.normalA), nB = d3(edge.normalB)
-            mesh = kind == .fillet
-                ? KernelOps.filletEdge(mesh: mesh, p0: p0, p1: p1, normalA: nA, normalB: nB, radius: blendValue)
-                : KernelOps.chamferEdge(mesh: mesh, p0: p0, p1: p1, normalA: nA, normalB: nB, setback: blendValue)
+        let specs = blendSelectedEdges.map {
+            BlendEdgeSpec(
+                p0: d3($0.start), p1: d3($0.end),
+                normalA: d3($0.normalA), normalB: d3($0.normalB))
         }
-        return mesh
+        return KernelOps.blendEdges(
+            mesh: source.euclidMesh(), edges: specs,
+            amount: blendValue, isFillet: kind == .fillet)
     }
 
     /// Recompute the live blend preview (edge toggles and size edits call this).
@@ -1643,13 +1646,25 @@ final class EditorViewModel {
                 < Self.pointSegmentDistance(localPoint, $1.start, $1.end)
         }) else { return }
 
-        // Toggle: same edge (≈ midpoint) already picked → deselect.
-        if let idx = blendSelectedEdges.firstIndex(where: {
-            simd_length($0.midpoint - nearest.midpoint) < 1e-4
-        }) {
-            blendSelectedEdges.remove(at: idx)
+        // A curved rim (cylinder top, rounded pocket) tessellates into many
+        // short segments; expand the pick to the whole tangent-continuous chain
+        // so one tap blends the full rim. A straight edge is its own chain.
+        let chain = EdgeTopology.smoothChain(containing: nearest, in: edges)
+        func isSelected(_ edge: SelectableEdge) -> Int? {
+            blendSelectedEdges.firstIndex {
+                simd_length($0.midpoint - edge.midpoint) < 1e-4
+            }
+        }
+
+        // Toggle the chain as a unit: fully selected → deselect it all.
+        if chain.allSatisfy({ isSelected($0) != nil }) {
+            for edge in chain {
+                if let idx = isSelected(edge) { blendSelectedEdges.remove(at: idx) }
+            }
         } else {
-            blendSelectedEdges.append(nearest)
+            for edge in chain where isSelected(edge) == nil {
+                blendSelectedEdges.append(edge)
+            }
         }
         updateBlendPreview()
     }
@@ -2315,6 +2330,36 @@ final class EditorViewModel {
             deleteImage(image.id)
             return
         }
+        // Sketch entities picked with the Select tool (tap or marquee) delete
+        // OUTSIDE sketch mode too — one undo step across their owning sketches.
+        if !selectedSketchEntityIDs.isEmpty {
+            var commands: [DocumentCommand] = []
+            var touchedSketchIDs: [SketchID] = []
+            for sketch in session.document.sketches {
+                let ids = Set(sketch.entities.map(\.id)).intersection(selectedSketchEntityIDs)
+                guard !ids.isEmpty else { continue }
+                commands.append(RemoveSketchEntitiesCommand(ids: ids, sketch: sketch))
+                touchedSketchIDs.append(sketch.id)
+            }
+            if !selection.isEmpty {
+                cancelTransientPicks()
+                commands.append(DeleteBodiesCommand(ids: selection, document: session.document))
+            }
+            guard !commands.isEmpty else { return }
+            if commands.count == 1 {
+                session.perform(commands[0])
+            } else {
+                session.perform(CompositeCommand(title: "Delete", commands: commands))
+            }
+            selectedSketchEntityIDs.removeAll()
+            selection.removeAll()
+            for id in touchedSketchIDs {
+                session.rebuildForSketchChange(id)
+            }
+            cancelTool()
+            mode = .idle
+            return
+        }
         guard !selection.isEmpty else { return }
         // Revert any transient preview first (the rotate preview mutates
         // transforms outside undo) so the delete captures clean state.
@@ -2429,9 +2474,16 @@ final class EditorViewModel {
     /// Orthographic projection toggle state (mirrored to the camera).
     var orthographicEnabled = false
 
-    /// True while sketching with the camera >10° off head-on; maintained by
-    /// the viewport as the camera moves (shows the Look at Sketch button).
+    /// True while sketching with the camera off head-on; shows the Look at
+    /// Sketch button. Maintained by the viewport as the camera moves AND
+    /// recomputed on sketch entry — entering a sketch no longer moves the
+    /// camera, so waiting for motion would hide the affordance exactly when
+    /// an angled view makes it most useful.
     var lookAtSketchAvailable = false
+
+    /// Degrees off head-on past which Look at Sketch is offered. Shared with
+    /// the viewport so the button's appearance and the angle it reports agree.
+    static let lookAtSketchThresholdDegrees: Double = 10
 
     func applyStandardView(_ view: StandardView) {
         cameraControl?.animateToStandardView(view)
@@ -2738,9 +2790,17 @@ final class EditorViewModel {
         if selectionAdditive {
             if let hit = bodyHit {
                 toggleSelection(of: hit.bodyID)
+            } else {
+                // Select-mode taps also gather sketch entities (spec §8.2),
+                // matching what the marquee offers.
+                _ = toggleSketchEntityUnderRay(ray)
             }
             return
         }
+
+        // Plain (non-additive) taps drop any sketch-entity selection left
+        // over from Select mode, so the orange highlight can't get stuck.
+        selectedSketchEntityIDs.removeAll()
 
         if bodyHit == nil, case .faceSelected = mode, let context = toolContext,
            let distance = context.distance, abs(distance) > 1e-4 {
@@ -2899,7 +2959,7 @@ final class EditorViewModel {
                 item: .body(body.id), points: points, isHidden: body.isHidden
             ))
         }
-        if filter == .bodiesAndSketchEntities {
+        if filter != .bodiesOnly {
             for sketch in session.document.sketches {
                 for entity in sketch.entities {
                     candidates.append(AreaSelectCandidate(
@@ -2936,6 +2996,29 @@ final class EditorViewModel {
             selectedSketchEntityIDs = entities
         }
         updateModeForSelection()
+    }
+
+    /// Select-mode tap fallback: toggle the sketch entity under the ray
+    /// (nearest across every visible sketch). Returns false on a miss.
+    private func toggleSketchEntityUnderRay(_ ray: Ray) -> Bool {
+        var best: (id: UUID, distance: Double)?
+        for sketch in session.document.sketches where !sketch.isHidden {
+            guard let local = localPoint(of: ray, on: sketch.plane),
+                  let hit = SketchHitTester.nearestEntity(
+                      to: local, in: sketch.entities, tolerance: entityPickTolerance
+                  )
+            else { continue }
+            if best == nil || hit.distance < best!.distance {
+                best = (hit.entity.id, hit.distance)
+            }
+        }
+        guard let best else { return false }
+        if selectedSketchEntityIDs.contains(best.id) {
+            selectedSketchEntityIDs.remove(best.id)
+        } else {
+            selectedSketchEntityIDs.insert(best.id)
+        }
+        return true
     }
 
     // MARK: - Select mode (plan §B13 UI, spec §8.2)
@@ -3319,8 +3402,9 @@ final class EditorViewModel {
         return best
     }
 
-    /// Tap on a filled profile "jumps right into the Extrude command"
-    /// (Shapr3D): opens the numeric extrude with a default pull.
+    /// Tap on a filled profile arms the Extrude command at ZERO distance:
+    /// just the pull arrow + numeric bar, no geometry until the user drags
+    /// the arrow or types a height (Shapr3D). Committing at 0 cancels.
     private func startExtrude(
         with hit: (profile: Profile, holes: [Profile], plane: SketchPlane, sketchID: SketchID, distance: Float)
     ) {
@@ -3330,7 +3414,7 @@ final class EditorViewModel {
             holes: hit.holes,
             plane: hit.plane,
             sketchID: hit.sketchID,
-            kind: .extrude(distance: 2)
+            kind: .extrude(distance: 0)
         )
         rebuildToolPreview(&context)
         toolContext = context
@@ -4034,13 +4118,16 @@ final class EditorViewModel {
         }
 
         // Scan: which bodies does the tool touch, and does it push into any?
+        // "Touch" requires REAL overlap volume — a body merely flush against
+        // the tool (shared wall) intersects into zero-volume slivers and must
+        // stay untouched, or extrudes would grab adjacent bodies.
         var touched: [(target: Body, worldTarget: Euclid.Mesh, pushesIn: Bool)] = []
         for target in booleanCandidates(for: context) {
             let worldTarget = target.euclidMesh().transformed(by: target.transform.euclid)
             let pushesIn = sample.map { worldTarget.intersects($0) } ?? false
             let touches = pushesIn
                 || context.sourceBody == target.id
-                || !worldTarget.intersection(mergeTool).polygons.isEmpty
+                || KernelOps.volume(of: worldTarget.intersection(mergeTool)) > 1e-4
             if touches {
                 touched.append((target, worldTarget, pushesIn))
             }
@@ -4110,11 +4197,9 @@ final class EditorViewModel {
             commands.append(ReplaceBodyCommand(title: title, before: entry.target, after: after))
         }
 
-        // Spec §11: sketches auto-hide once a tool consumes them, in the
-        // same undo step.
-        if let hide = consumedSketchHideCommand(context) {
-            commands.append(hide)
-        }
+        // Consumed sketches stay VISIBLE after the tool commits (they can be
+        // hidden manually from Items) — hiding them mid-flow read as the
+        // sketch vanishing whenever a body was made from it.
         // Phase D: record the tool's feature node (extrude in tranche 1;
         // revolve / sweep / loft in tranche 2) with the resolved boolean intent,
         // but only for a SINGLE feature-owned target — the evaluators apply one
@@ -4162,9 +4247,6 @@ final class EditorViewModel {
             revision: preview.meshRevision
         )
         var commands: [DocumentCommand] = [AddBodyCommand(body: body, title: title)]
-        if let hide = consumedSketchHideCommand(context) {
-            commands.append(hide)
-        }
         // Phase D: a new stand-alone tool body becomes a `.newBody` history node
         // — extrude in tranche 1, or revolve / sweep / loft in tranche 2.
         if let node = toolFeatureNode(
@@ -4182,16 +4264,6 @@ final class EditorViewModel {
         mode = .selected(body.id)
         selection = [body.id]
         session.save()
-    }
-
-    /// Hide-the-consumed-sketch command for a committing tool, or nil when the
-    /// tool has no sketch (face pulls) or it is already hidden.
-    private func consumedSketchHideCommand(_ context: ToolContext) -> DocumentCommand? {
-        guard let sketchID = context.sketchID,
-              let sketch = session.document.sketches.first(where: { $0.id == sketchID }),
-              !sketch.isHidden
-        else { return nil }
-        return SetItemVisibilityCommand(item: .sketch(sketchID), isHidden: true)
     }
 
     func cancelTool() {
@@ -4382,6 +4454,12 @@ final class EditorViewModel {
                 segmentsPerTurn: SketchTessellator.circleSegments
             )
             return points.count >= 2 ? points : nil
+        case let .spline(_, points, closed):
+            // An open spline is a valid sweep spine — this is the main reason
+            // to have splines at all (spec §4.11 sweeps along a drawn curve).
+            guard !closed else { return nil }
+            let curve = SketchEntity.splinePoints(points, closed: false)
+            return curve.count >= 2 ? curve : nil
         case .rect, .circle, .ellipse, .polygon:
             return nil
         }
@@ -4855,6 +4933,10 @@ final class EditorViewModel {
         case let .circle(_, center, _), let .arc(_, center, _, _, _),
              let .ellipse(_, center, _, _, _), let .polygon(_, center, _, _, _):
             center
+        case let .spline(_, points, _):
+            points.isEmpty
+                ? .zero
+                : points.reduce(SIMD2<Double>.zero, +) / Double(points.count)
         }
     }
 
@@ -5038,7 +5120,7 @@ final class EditorViewModel {
 
     /// Tap while sketching: Trim cuts the span under the tap; other tools
     /// toggle entity selection, or finalize/clear pending state on empty space.
-    private func handleSketchTap(ray: Ray, tool: SketchTool) {
+    private func handleSketchTap(ray: Ray, tool: SketchTool?) {
         if tool == .trim {
             performTrim(ray: ray)
             return
@@ -5307,6 +5389,16 @@ final class EditorViewModel {
         mode = .pickingSketchPlane(tool: tool)
     }
 
+    /// Tap the active tool off (palette toggle, same pattern as CreateTool):
+    /// stay in the sketch with no drawing tool armed, so empty-space drags
+    /// orbit the camera instead of drawing.
+    func deselectSketchTool() {
+        guard case .sketching(let id, _) = mode else { return }
+        commitPendingArc()
+        clearChain()
+        mode = .sketching(id, tool: nil)
+    }
+
     func cancelPlanePicking() {
         if case .pickingSketchPlane = mode {
             mode = .idle
@@ -5379,9 +5471,14 @@ final class EditorViewModel {
         // projects to nearly a line, so a drag maps to a wildly amplified
         // distance on it and drawing is guesswork. `lookAtSketch()` (the
         // Look at Sketch button) is always there for a deliberate re-aim.
-        if let control = cameraControl,
-           control.offAxisDegrees(to: sketch.plane) > Self.grazingSketchAngle {
-            control.moveCameraHeadOn(to: sketch.plane)
+        if let control = cameraControl {
+            let offAxis = control.offAxisDegrees(to: sketch.plane)
+            if offAxis > Self.grazingSketchAngle {
+                control.moveCameraHeadOn(to: sketch.plane)
+                lookAtSketchAvailable = false
+            } else {
+                lookAtSketchAvailable = offAxis > Self.lookAtSketchThresholdDegrees
+            }
         }
     }
 
@@ -5475,6 +5572,10 @@ final class EditorViewModel {
             return true
         }
 
+        // No drawing tool armed: empty-space drags orbit the camera so the
+        // sketch can be viewed from an angle (Shapr3D).
+        guard tool != nil else { return false }
+
         var point = SnapEngine.snap(raw, in: activeSketch).point
         if tool == .line, let anchor = chainAnchor {
             if simd_length(raw - anchor) <= SnapEngine.pointTolerance {
@@ -5507,7 +5608,7 @@ final class EditorViewModel {
             updateSketchEntityDrag(raw: raw)
             return
         }
-        guard let start = sketchStrokeStart,
+        guard let tool, let start = sketchStrokeStart,
               var current = sketchPoint(from: ray)
         else { return }
         // Live auto-constraint inference (plan §B): snap the moving endpoint,
@@ -5557,7 +5658,7 @@ final class EditorViewModel {
             session.rebuildForSketchChange(drag.sketchID)
             return
         }
-        guard case .sketching(let sketchID, let tool) = mode,
+        guard case .sketching(let sketchID, .some(let tool)) = mode,
               let start = sketchStrokeStart,
               let sketch = activeSketch
         else { return }
@@ -7240,7 +7341,9 @@ final class EditorViewModel {
         cancelTool()
         selectedImageID = nil
         selection.removeAll()
-        mode = .sketching(id, tool: .line)
+        // Re-opening an existing sketch starts with no tool armed (Shapr3D):
+        // taps select, drags edit or orbit; arm a tool from the palette to draw.
+        mode = .sketching(id, tool: nil)
         cameraControl?.moveCameraHeadOn(to: sketch.plane)
     }
 

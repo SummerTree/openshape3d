@@ -49,6 +49,7 @@ final class ParityWalkthroughUITests: XCTestCase {
         window.coordinate(withNormalizedOffset: CGVector(dx: 0.80, dy: 0.78)).tap()
         XCTAssertTrue(app.staticTexts["Sketching on ground plane"].waitForExistence(timeout: 3))
         sleep(2)
+        lookAtSketch(app)
         window.coordinate(withNormalizedOffset: CGVector(dx: 0.35, dy: 0.35))
             .press(forDuration: 0.15, thenDragTo: window.coordinate(withNormalizedOffset: CGVector(dx: 0.62, dy: 0.60)))
         startSketchTool(app, "Circle")
@@ -72,6 +73,7 @@ final class ParityWalkthroughUITests: XCTestCase {
         _ = app.staticTexts["Choose a sketch plane"].waitForExistence(timeout: 3)
         window.coordinate(withNormalizedOffset: CGVector(dx: 0.80, dy: 0.78)).tap()
         _ = app.staticTexts["Sketching on ground plane"].waitForExistence(timeout: 3)
+        lookAtSketch(app)
         sleep(2)
         window.coordinate(withNormalizedOffset: CGVector(dx: 0.40, dy: 0.40))
             .press(forDuration: 0.15, thenDragTo: window.coordinate(withNormalizedOffset: CGVector(dx: 0.62, dy: 0.58)))
@@ -155,6 +157,7 @@ final class ParityWalkthroughUITests: XCTestCase {
         _ = app.staticTexts["Choose a sketch plane"].waitForExistence(timeout: 3)
         window.coordinate(withNormalizedOffset: CGVector(dx: 0.80, dy: 0.78)).tap()
         _ = app.staticTexts["Sketching on ground plane"].waitForExistence(timeout: 3)
+        lookAtSketch(app)
         sleep(2)
         window.coordinate(withNormalizedOffset: CGVector(dx: 0.52, dy: 0.40))
             .press(forDuration: 0.15, thenDragTo: window.coordinate(withNormalizedOffset: CGVector(dx: 0.68, dy: 0.56)))
@@ -318,6 +321,7 @@ final class ParityWalkthroughUITests: XCTestCase {
         _ = app.staticTexts["Choose a sketch plane"].waitForExistence(timeout: 3)
         window.coordinate(withNormalizedOffset: CGVector(dx: 0.80, dy: 0.78)).tap()
         _ = app.staticTexts["Sketching on ground plane"].waitForExistence(timeout: 3)
+        lookAtSketch(app)
         sleep(2)
 
         func point(_ dx: CGFloat, _ dy: CGFloat) -> XCUICoordinate {
@@ -370,6 +374,7 @@ final class ParityWalkthroughUITests: XCTestCase {
         window.coordinate(withNormalizedOffset: CGVector(dx: 0.80, dy: 0.78)).tap()
         XCTAssertTrue(app.staticTexts["Sketching on ground plane"].waitForExistence(timeout: 3))
         sleep(2)
+        lookAtSketch(app)
     }
 
     /// Constraints tranche: the sketch-state chip flipping blue→green, and the

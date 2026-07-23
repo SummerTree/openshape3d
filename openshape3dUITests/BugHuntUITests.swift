@@ -48,6 +48,7 @@ final class BugHuntUITests: XCTestCase {
         p(0.80, 0.78).tap()
         XCTAssertTrue(app.staticTexts["Sketching on ground plane"].waitForExistence(timeout: 3))
         sleep(2)
+        lookAtSketch(app)
         p(0.32, 0.32).press(forDuration: 0.15, thenDragTo: p(0.68, 0.62))
 
         // 2) A circle inside it (the hole).
@@ -67,8 +68,8 @@ final class BugHuntUITests: XCTestCase {
         logReadouts(app, "extrude-armed")
         shot("03-extrude-armed")
 
-        // 4) Commit the default (2mm) extrude.
-        app.buttons["Extrude"].firstMatch.tap()
+        // 4) Type a 2mm height — profile taps arm at zero now.
+        typeExtrudeHeight(app)
         sleep(1)
         logReadouts(app, "after-extrude")
         // Isometric so the hole is visible.
@@ -106,6 +107,7 @@ final class BugHuntUITests: XCTestCase {
         window.coordinate(withNormalizedOffset: CGVector(dx: 0.80, dy: 0.78)).tap()
         XCTAssertTrue(app.staticTexts["Sketching on ground plane"].waitForExistence(timeout: 3))
         sleep(2)
+        lookAtSketch(app)
     }
 
     func testCircleAloneDraws() throws {
@@ -169,7 +171,7 @@ final class BugHuntUITests: XCTestCase {
         app.buttons["Exit Sketching"].tap(); sleep(1)
         p(0.5, 0.47).tap()
         XCTAssertTrue(app.staticTexts["Extrude"].waitForExistence(timeout: 5))
-        app.buttons["Extrude"].firstMatch.tap(); sleep(1)
+        typeExtrudeHeight(app); sleep(1)
         app.buttons["ViewsMenu"].tap(); app.buttons["Isometric"].tap(); sleep(2)
         logReadouts(app, "base-body"); shot("f01-base-body")
         NSLog("OS3D_BUG features-after-base=\(bodyCount())")
@@ -190,7 +192,7 @@ final class BugHuntUITests: XCTestCase {
         // Extrude the boss up.
         p(0.5, 0.32).tap()
         if app.staticTexts["Extrude"].waitForExistence(timeout: 5) {
-            app.buttons["Extrude"].firstMatch.tap(); sleep(1)
+            typeExtrudeHeight(app); sleep(1)
         } else {
             NSLog("OS3D_BUG boss-extrude-not-armed")
         }

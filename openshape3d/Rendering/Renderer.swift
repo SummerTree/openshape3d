@@ -36,9 +36,15 @@ final class Renderer: NSObject, MTKViewDelegate {
         super.init()
     }
 
+    /// Called when the viewport is laid out or resized (rotation, split view).
+    /// The coordinator uses it to re-publish the camera, since every SwiftUI
+    /// overlay that projects world points is sized off this view.
+    var viewportSizeChanged: (() -> Void)?
+
     func mtkView(_ view: MTKView, drawableSizeWillChange size: CGSize) {
         if size.width > 0, size.height > 0 {
             viewportSize = size
+            viewportSizeChanged?()
         }
     }
 

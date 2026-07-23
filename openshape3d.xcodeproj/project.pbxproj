@@ -89,6 +89,7 @@
 				7F704325300C0ED7003471DC /* openshape3dTests */,
 				7F70432F300C0ED7003471DC /* openshape3dUITests */,
 				7F704314300C0ED6003471DC /* Products */,
+				7F70455B3010EDEB003471DC /* Recovered References */,
 			);
 			sourceTree = "<group>";
 		};
@@ -100,6 +101,14 @@
 				7F70432C300C0ED7003471DC /* openshape3dUITests.xctest */,
 			);
 			name = Products;
+			sourceTree = "<group>";
+		};
+		7F70455B3010EDEB003471DC /* Recovered References */ = {
+			isa = PBXGroup;
+			children = (
+				0CC70CC70CC70CC70CC700F1 /* OCCT.xcframework */,
+			);
+			name = "Recovered References";
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -413,6 +422,10 @@
 				ENABLE_PREVIEWS = YES;
 				ENABLE_USER_SELECTED_FILES = readonly;
 				GENERATE_INFOPLIST_FILE = YES;
+				HEADER_SEARCH_PATHS = (
+					"$(SRCROOT)/ThirdParty/OCCT.xcframework/ios-arm64/Headers",
+					"$(SRCROOT)/ThirdParty/OCCT.xcframework/ios-arm64-simulator/Headers",
+				);
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphoneos*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphonesimulator*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents[sdk=iphoneos*]" = YES;
@@ -437,10 +450,6 @@
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
 				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
 				SWIFT_EMIT_LOC_STRINGS = YES;
-				HEADER_SEARCH_PATHS = (
-					"$(SRCROOT)/ThirdParty/OCCT.xcframework/ios-arm64/Headers",
-					"$(SRCROOT)/ThirdParty/OCCT.xcframework/ios-arm64-simulator/Headers",
-				);
 				SWIFT_OBJC_BRIDGING_HEADER = "openshape3d/openshape3d-Bridging-Header.h";
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 5.0;
@@ -462,6 +471,10 @@
 				ENABLE_PREVIEWS = YES;
 				ENABLE_USER_SELECTED_FILES = readonly;
 				GENERATE_INFOPLIST_FILE = YES;
+				HEADER_SEARCH_PATHS = (
+					"$(SRCROOT)/ThirdParty/OCCT.xcframework/ios-arm64/Headers",
+					"$(SRCROOT)/ThirdParty/OCCT.xcframework/ios-arm64-simulator/Headers",
+				);
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphoneos*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphonesimulator*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents[sdk=iphoneos*]" = YES;
@@ -486,10 +499,6 @@
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
 				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
 				SWIFT_EMIT_LOC_STRINGS = YES;
-				HEADER_SEARCH_PATHS = (
-					"$(SRCROOT)/ThirdParty/OCCT.xcframework/ios-arm64/Headers",
-					"$(SRCROOT)/ThirdParty/OCCT.xcframework/ios-arm64-simulator/Headers",
-				);
 				SWIFT_OBJC_BRIDGING_HEADER = "openshape3d/openshape3d-Bridging-Header.h";
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 5.0;

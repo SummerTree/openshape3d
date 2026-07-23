@@ -34,6 +34,7 @@ final class PlanesUITests: XCTestCase {
         window.coordinate(withNormalizedOffset: CGVector(dx: 0.80, dy: 0.78)).tap()
         XCTAssertTrue(app.staticTexts["Sketching on ground plane"].waitForExistence(timeout: 3),
                       "Tapping the ground should start sketching there")
+        lookAtSketch(app)
         sleep(2) // camera animation
 
         // Draw a rectangle: one undoable command.
@@ -62,6 +63,7 @@ final class PlanesUITests: XCTestCase {
         window.coordinate(withNormalizedOffset: CGVector(dx: 0.68, dy: 0.39)).tap()
         XCTAssertTrue(app.staticTexts["Sketching on plane"].waitForExistence(timeout: 3),
                       "Tapping a plane tile should start sketching on that (non-ground) plane")
+        lookAtSketch(app)
 
         app.buttons["Exit Sketching"].tap()
         XCTAssertFalse(app.staticTexts["Sketching on plane"].exists)
@@ -89,6 +91,7 @@ final class PlanesUITests: XCTestCase {
         startSketchTool(app, "Rect")
         XCTAssertTrue(app.staticTexts["Sketching on plane"].waitForExistence(timeout: 3),
                       "Sketch tools should start on the selected face's plane")
+        lookAtSketch(app)
         sleep(2) // head-on camera animation
 
         // Draw a rectangle on the face.
@@ -108,7 +111,7 @@ final class PlanesUITests: XCTestCase {
         let newBodySegment = app.buttons["New Body"].firstMatch
         XCTAssertTrue(newBodySegment.waitForExistence(timeout: 3))
         newBodySegment.tap()
-        app.buttons["Extrude"].firstMatch.tap()
+        typeExtrudeHeight(app)
 
         // The new body is selected; delete it — the box must survive as a
         // separate body (two bodies existed).

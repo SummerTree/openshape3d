@@ -32,6 +32,7 @@ final class HistoryPanelUITests: XCTestCase {
         window.coordinate(withNormalizedOffset: CGVector(dx: 0.80, dy: 0.78)).tap()
         XCTAssertTrue(app.staticTexts["Sketching on ground plane"].waitForExistence(timeout: 3))
         sleep(1)
+        lookAtSketch(app)
         window.coordinate(withNormalizedOffset: CGVector(dx: 0.42, dy: 0.42))
             .press(forDuration: 0.15,
                    thenDragTo: window.coordinate(withNormalizedOffset: CGVector(dx: 0.65, dy: 0.60)))
@@ -41,7 +42,7 @@ final class HistoryPanelUITests: XCTestCase {
         // Tap inside the filled profile → Extrude command → commit a new body.
         window.coordinate(withNormalizedOffset: CGVector(dx: 0.53, dy: 0.51)).tap()
         XCTAssertTrue(app.staticTexts["Extrude"].waitForExistence(timeout: 5))
-        app.buttons["Extrude"].firstMatch.tap()
+        typeExtrudeHeight(app)
         sleep(1)
 
         // Open the History panel — the committed extrude must appear as a step

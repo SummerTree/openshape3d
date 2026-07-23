@@ -144,14 +144,22 @@ nonisolated enum EdgeTopology {
     private static func mergeCollinear(
         _ raw: [RawEdge], positions: [SIMD3<Float>]
     ) -> [RawEdge] {
-        // Bucket by a quantized line key + sorted normal-pair key.
-        struct BucketKey: Hashable { let line: Int64; let dir: Int32; let na: Int64; let nb: Int64 }
-        func q(_ v: Float, _ s: Float) -> Int32 { Int32((v * s).rounded()) }
-        func normalKey(_ n: SIMD3<Float>) -> Int64 {
-            let s: Float = 1e3
-            let x = Int64(q(n.x, s)), y = Int64(q(n.y, s)), z = Int64(q(n.z, s))
-            return (x &* 73856093) ^ (y &* 19349663) ^ (z &* 83492791)
+        // Bucket by a quantized line key + sorted normal-pair key. The key is
+        // STRUCTURAL (every quantized component compared), not a scalar hash —
+        // XOR-folded hashes collide for antipodal segments (negating the inputs
+        // can preserve the fold), which used to weld opposite sides of a
+        // cylinder rim into bogus diameter-length "edges".
+        struct QVec: Hashable, Comparable {
+            let x, y, z: Int32
+            static func < (l: QVec, r: QVec) -> Bool {
+                (l.x, l.y, l.z) < (r.x, r.y, r.z)
+            }
         }
+        func q(_ v: Float, _ s: Float) -> Int32 { Int32((v * s).rounded()) }
+        func qv(_ v: SIMD3<Float>, _ s: Float) -> QVec {
+            QVec(x: q(v.x, s), y: q(v.y, s), z: q(v.z, s))
+        }
+        struct BucketKey: Hashable { let line: QVec; let dir: QVec; let na: QVec; let nb: QVec }
 
         var buckets = [BucketKey: [RawEdge]]()
         for e in raw {
@@ -167,13 +175,9 @@ nonisolated enum EdgeTopology {
             if dominant < 0 { cd = -cd }
             // Line anchor: point on the line closest to origin, quantized.
             let anchor = pa - cd * simd_dot(pa, cd)
-            let lineHash = Int64(q(anchor.x, 1e4)) &* 73856093
-                ^ Int64(q(anchor.y, 1e4)) &* 19349663
-                ^ Int64(q(anchor.z, 1e4)) &* 83492791
-            let dirHash = q(cd.x, 1e3) &+ q(cd.y, 1e3) &* 31 &+ q(cd.z, 1e3) &* 961
             // Face-pair key (order-independent).
-            let n0 = normalKey(e.normalA), n1 = normalKey(e.normalB)
-            let key = BucketKey(line: lineHash, dir: dirHash,
+            let n0 = qv(e.normalA, 1e3), n1 = qv(e.normalB, 1e3)
+            let key = BucketKey(line: qv(anchor, 1e4), dir: qv(cd, 1e3),
                                 na: min(n0, n1), nb: max(n0, n1))
             buckets[key, default: []].append(e)
         }
@@ -201,6 +205,58 @@ nonisolated enum EdgeTopology {
                                   normalA: first.normalA, normalB: first.normalB))
         }
         return result
+    }
+
+    // MARK: - Smooth chains
+
+    /// Expand `seed` to the maximal tangent-continuous chain of edges it belongs
+    /// to. A tessellated curved rim (cylinder top, rounded slot) is many short
+    /// straight segments, each bordering a DIFFERENT side facet, so
+    /// `mergeCollinear` can never join them; walking endpoint-to-endpoint while
+    /// both the edge direction and the adjacent-face normals turn less than
+    /// `maxTurnDegrees` per step recovers the whole rim. A genuinely sharp
+    /// corner (box edges meet at 90°) fails the turn test, so straight feature
+    /// edges stay individually selectable.
+    static func smoothChain(
+        containing seed: SelectableEdge,
+        in edges: [SelectableEdge],
+        maxTurnDegrees: Float = 35
+    ) -> [SelectableEdge] {
+        guard let seedIndex = edges.firstIndex(where: {
+            simd_length($0.midpoint - seed.midpoint) < 1e-4
+        }) else { return [seed] }
+        let cosTurn = cos(maxTurnDegrees * .pi / 180)
+
+        var byEndpoint = [PositionKey: [Int]]()
+        for (i, e) in edges.enumerated() {
+            byEndpoint[PositionKey(e.start), default: []].append(i)
+            byEndpoint[PositionKey(e.end), default: []].append(i)
+        }
+
+        // Two segments continue each other when the edge direction stays within
+        // the turn threshold AND their face pairs match up side-for-side (the
+        // cap normal tracks the cap, the wall normal tracks the wall).
+        func continues(_ a: SelectableEdge, _ b: SelectableEdge) -> Bool {
+            guard abs(simd_dot(a.direction, b.direction)) >= cosTurn else { return false }
+            let direct = min(simd_dot(a.normalA, b.normalA), simd_dot(a.normalB, b.normalB))
+            let swapped = min(simd_dot(a.normalA, b.normalB), simd_dot(a.normalB, b.normalA))
+            return max(direct, swapped) >= cosTurn
+        }
+
+        var visited: Set<Int> = [seedIndex]
+        var queue = [seedIndex]
+        while let i = queue.popLast() {
+            let e = edges[i]
+            for key in [PositionKey(e.start), PositionKey(e.end)] {
+                for j in byEndpoint[key] ?? [] where !visited.contains(j) {
+                    if continues(e, edges[j]) {
+                        visited.insert(j)
+                        queue.append(j)
+                    }
+                }
+            }
+        }
+        return visited.sorted().map { edges[$0] }
     }
 
     // MARK: - Signature / resolution

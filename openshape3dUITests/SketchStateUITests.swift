@@ -25,6 +25,7 @@ final class SketchStateUITests: XCTestCase {
         window.coordinate(withNormalizedOffset: CGVector(dx: 0.80, dy: 0.78)).tap()
         XCTAssertTrue(app.staticTexts["Sketching on ground plane"].waitForExistence(timeout: 3))
         sleep(2) // let the head-on camera animation settle
+        lookAtSketch(app)
     }
 
     private func applyConstraint(_ app: XCUIApplication, _ identifier: String) {

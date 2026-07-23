@@ -47,7 +47,7 @@ struct NumericInputBar: View {
             case .loft:
                 loftBar(context)
             }
-        } else if case .sketching(_, .polygon) = viewModel.mode {
+        } else if case .sketching(_, .some(.polygon)) = viewModel.mode {
             polygonBar
         } else if let body = viewModel.editingPrimitiveBody, let spec = body.primitive {
             HStack(spacing: 16) {

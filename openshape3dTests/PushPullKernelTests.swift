@@ -112,4 +112,30 @@ final class PushPullKernelTests: XCTestCase {
         XCTAssertEqual(volume(result), volume(box), accuracy: 1e-9)
         XCTAssertEqual(result.polygons.count, box.polygons.count)
     }
+
+    // MARK: - Flush-neighbor discrimination (extrude auto-boolean scan)
+
+    /// Bodies sharing a flush wall intersect into (at most) zero-volume
+    /// slivers, while a real overlap has meaningful volume. The extrude
+    /// auto-boolean uses `KernelOps.volume(of:)` on the intersection to tell
+    /// them apart so extruding next to a body never grabs the neighbor.
+    func testFlushPrismsHaveNoIntersectionVolume() {
+        let ground = SketchPlane.ground
+        func rect(_ x0: Double, _ x1: Double) -> Profile {
+            Profile(loop: [SIMD2(x0, 0), SIMD2(x1, 0), SIMD2(x1, 10), SIMD2(x0, 10)],
+                    kind: .polygonal, sourceEntityIDs: [])
+        }
+        let body = KernelOps.extrude(
+            profile: rect(0, 10), holes: [], in: ground, distance: 10, symmetric: false)
+        let flush = KernelOps.extrude(
+            profile: rect(10, 20), holes: [], in: ground, distance: 10, symmetric: false)
+        let overlapping = KernelOps.extrude(
+            profile: rect(9.5, 20), holes: [], in: ground, distance: 10, symmetric: false)
+
+        XCTAssertEqual(KernelOps.volume(of: body), 1000, accuracy: 1)
+        XCTAssertLessThan(KernelOps.volume(of: body.intersection(flush)), 1e-4,
+                          "flush neighbors must not count as touching")
+        XCTAssertGreaterThan(KernelOps.volume(of: body.intersection(overlapping)), 1e-4,
+                             "real overlap must count as touching")
+    }
 }

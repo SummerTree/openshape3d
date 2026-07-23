@@ -30,6 +30,7 @@ final class SketchTransformUITests: XCTestCase {
         window.coordinate(withNormalizedOffset: CGVector(dx: 0.80, dy: 0.78)).tap()
         XCTAssertTrue(app.staticTexts["Sketching on ground plane"].waitForExistence(timeout: 3),
                       "Sketch status bar should appear")
+        lookAtSketch(app)
         sleep(2) // let the head-on camera animation settle
 
         func point(_ dx: CGFloat, _ dy: CGFloat) -> XCUICoordinate {

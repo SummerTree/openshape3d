@@ -618,23 +618,43 @@ nonisolated extension FeatureGraph {
             SIMD3(Double(v.x), Double(v.y), Double(v.z))
         }
 
-        var mesh = body.euclidMesh()
-        var resolvedAny = false
+        var specs = [BlendEdgeSpec]()
         for ref in edgeRefs {
             guard let edge = EdgeTopology.resolve(
                 ref.signature, in: available, sizeScale: scale), edge.isConvex
             else { continue }
-            let p0 = d3(edge.start), p1 = d3(edge.end)
-            let nA = d3(edge.normalA), nB = d3(edge.normalB)
-            mesh = isFillet
-                ? KernelOps.filletEdge(mesh: mesh, p0: p0, p1: p1, normalA: nA, normalB: nB, radius: amount)
-                : KernelOps.chamferEdge(mesh: mesh, p0: p0, p1: p1, normalA: nA, normalB: nB, setback: amount)
-            resolvedAny = true
+            specs.append(BlendEdgeSpec(
+                p0: d3(edge.start), p1: d3(edge.end),
+                normalA: d3(edge.normalA), normalB: d3(edge.normalB)))
         }
-        guard resolvedAny else {
+        guard !specs.isEmpty else {
             state.errors[node.id] = .brokenRef("no blend edge resolved")
             return
         }
+        // B-rep fillet: when the body is analytic, round it with BRepFilletAPI so
+        // the result STAYS analytic (a filleted cylinder keeps its round wall and
+        // gains a real torus face) instead of collapsing to a mesh blend. A
+        // tessellated rim is many mesh segments but one OCCT edge, so this also
+        // propagates along tangent chains for free. Falls back to the mesh blend
+        // if OCCT can't build it (e.g. radius too large for the geometry).
+        if isFillet, OCCTKernel.useOCCTAsSourceOfTruth, let brep = body.brep {
+            let midpoints = specs.map { ($0.p0 + $0.p1) * 0.5 }
+            if let filleted = OCCTKernel.fillet(
+                brep, at: midpoints, radius: amount, tolerance: max(scale * 0.01, 1e-6)) {
+                var result = Body(
+                    id: body.id, name: body.name, transform: .identity, primitive: nil,
+                    euclidMesh: body.euclidMesh(), revision: nextRevision())
+                if result.adoptBRep(filleted) {
+                    let table = state.naming.faceTable(
+                        for: result, createdBy: node.id, scheme: .generic)
+                    state.put(result, table: table)
+                    return
+                }
+            }
+        }
+
+        let mesh = KernelOps.blendEdges(
+            mesh: body.euclidMesh(), edges: specs, amount: amount, isFillet: isFillet)
         guard !mesh.polygons.isEmpty else {
             state.errors[node.id] = .emptyGeometry
             return

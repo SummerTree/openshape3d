@@ -94,4 +94,62 @@ final class KernelBlendTests: XCTestCase {
         // length; loose bound guards against a wildly wrong tool.
         XCTAssertEqual(vFillet, 8 - r * r * (1 - .pi / 4) * 2, accuracy: 0.05)
     }
+
+    // MARK: Smooth chains (curved rims)
+
+    func testCubeEdgeChainStaysSingle() {
+        let render = EuclidBridge.renderMesh(from: cube(side: 2))
+        let edges = EdgeTopology.selectableEdges(from: render)
+        let chain = EdgeTopology.smoothChain(containing: edges[0], in: edges)
+        XCTAssertEqual(chain.count, 1, "90° corners never chain")
+    }
+
+    func testCylinderRimChainsIntoFullCircle() {
+        let slices = 48
+        let mesh = Euclid.Mesh.cylinder(radius: 1, height: 2, slices: slices)
+        let render = EuclidBridge.renderMesh(from: mesh)
+        let edges = EdgeTopology.selectableEdges(from: render).filter { $0.isConvex }
+        XCTAssertEqual(edges.count, slices * 2,
+                       "each rim tessellates into one segment per slice")
+
+        let chain = EdgeTopology.smoothChain(containing: edges[0], in: edges)
+        XCTAssertEqual(chain.count, slices,
+                       "one tap expands to the segment's whole rim, not the other rim")
+        // Every chained segment lies on ONE cap plane (all same y).
+        let ys = Set(chain.map { Int(($0.midpoint.y * 1e4).rounded()) })
+        XCTAssertEqual(ys.count, 1, "the chain stays on a single rim")
+    }
+
+    func testFilletWholeCylinderRimCutsEverySegment() {
+        let slices = 16
+        let mesh = Euclid.Mesh.cylinder(radius: 1, height: 2, slices: slices)
+        let render = EuclidBridge.renderMesh(from: mesh)
+        let edges = EdgeTopology.selectableEdges(from: render).filter { $0.isConvex }
+        // At 16 slices the wall facets themselves pass the crease threshold, so
+        // the VERTICAL seams are selectable too — seed from a top-rim segment
+        // (borders the +y cap) like a user tapping the rim.
+        let seed = edges.first {
+            max($0.normalA.y, $0.normalB.y) > 0.9
+        }!
+        let rim = EdgeTopology.smoothChain(containing: seed, in: edges)
+        XCTAssertEqual(rim.count, slices,
+                       "the chain covers the rim and never leaks down a seam")
+
+        let r = 0.3
+        let specs = rim.map {
+            BlendEdgeSpec(p0: d3($0.start), p1: d3($0.end),
+                          normalA: d3($0.normalA), normalB: d3($0.normalB))
+        }
+        let out = KernelOps.blendEdges(mesh: mesh, edges: specs, amount: r, isFillet: true)
+        XCTAssertFalse(out.polygons.isEmpty, "rim fillet produced geometry")
+
+        // Removed ≈ circumference · r²(1 − π/4) ≈ 2π·0.09·0.2146 ≈ 0.12; the
+        // faceted approximation is loose, but a one-segment cut (the bug this
+        // guards against) removes only 1/16 of that.
+        let removed = volume(mesh) - volume(out)
+        let analytic = 2 * Double.pi * r * r * (1 - .pi / 4)
+        XCTAssertGreaterThan(removed, analytic * 0.5,
+                             "the whole rim is rounded, not one segment")
+        XCTAssertLessThan(removed, analytic * 3, "the cut stays a rim-sized ring")
+    }
 }

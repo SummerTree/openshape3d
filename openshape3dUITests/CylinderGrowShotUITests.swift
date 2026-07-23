@@ -26,6 +26,7 @@ final class CylinderGrowShotUITests: XCTestCase {
         window.coordinate(withNormalizedOffset: CGVector(dx: 0.80, dy: 0.80)).tap()
         XCTAssertTrue(app.staticTexts["Sketching on ground plane"].waitForExistence(timeout: 3))
         sleep(2)
+        lookAtSketch(app)
         window.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
             .press(forDuration: 0.15,
                    thenDragTo: window.coordinate(withNormalizedOffset: CGVector(dx: 0.63, dy: 0.40)))
@@ -33,7 +34,7 @@ final class CylinderGrowShotUITests: XCTestCase {
         sleep(1)
         window.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
         XCTAssertTrue(app.staticTexts["Extrude"].waitForExistence(timeout: 5))
-        app.buttons["Extrude"].firstMatch.tap()
+        typeExtrudeHeight(app)
         sleep(1)
 
         // Front view: the cylinder's side wall faces the camera, so a
