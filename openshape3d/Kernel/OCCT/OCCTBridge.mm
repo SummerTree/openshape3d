@@ -12,6 +12,11 @@
 #include <vector>
 #include <algorithm>
 #include <cstdint>
+#include <sstream>
+#include <string>
+
+#include <BRepTools.hxx>
+#include <BRep_Builder.hxx>
 
 #include <Standard_Version.hxx>
 
@@ -376,6 +381,35 @@ static TopoDS_Wire PolyWire(NSData *loop, double z) {
         if (result.IsNull()) return nil;
         OCCTShape *out = [OCCTShape new];
         out->_shape = result;
+        return out;
+    } catch (...) {
+        return nil;
+    }
+}
+
++ (nullable NSData *)serializedShape:(OCCTShape *)shape {
+    if (shape == nil) return nil;
+    try {
+        std::ostringstream os;
+        BRepTools::Write(shape->_shape, os);
+        const std::string s = os.str();
+        if (s.empty()) return nil;
+        return [NSData dataWithBytes:s.data() length:s.size()];
+    } catch (...) {
+        return nil;
+    }
+}
+
++ (nullable OCCTShape *)shapeFromSerialized:(NSData *)data {
+    if (data.length == 0) return nil;
+    try {
+        std::istringstream is(std::string((const char *)data.bytes, data.length));
+        TopoDS_Shape shape;
+        BRep_Builder builder;
+        BRepTools::Read(shape, is, builder);
+        if (shape.IsNull()) return nil;
+        OCCTShape *out = [OCCTShape new];
+        out->_shape = shape;
         return out;
     } catch (...) {
         return nil;

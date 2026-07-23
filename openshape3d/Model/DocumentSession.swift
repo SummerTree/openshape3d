@@ -511,6 +511,10 @@ final class DocumentSession {
             body.material = persisted.materialData.flatMap {
                 try? JSONDecoder().decode(BodyMaterialSpec.self, from: $0)
             }
+            // Restore the analytic B-rep so a reloaded cylinder stays round and
+            // can still compose booleans. A nil/unreadable blob just leaves the
+            // body Euclid-only — the persisted render mesh is already correct.
+            body.brep = persisted.brepData.flatMap { OCCTKernel.deserialize($0) }
             loaded.bodies.append(body)
         }
         for persisted in project.sketches {
@@ -596,6 +600,9 @@ final class DocumentSession {
             let primitiveData = body.primitive.flatMap { try? JSONEncoder().encode($0) }
             let meshData = MeshBlob.encode(body.render)
             let materialData = body.material.flatMap { try? JSONEncoder().encode($0) }
+            // Analytic geometry, when this body has it — so roundness and boolean
+            // composability survive a reload instead of degrading to triangles.
+            let brepData = body.brep.flatMap { OCCTKernel.serialize($0) }
 
             if let persisted = persistedByID[body.id.raw] {
                 persisted.name = body.name
@@ -604,6 +611,7 @@ final class DocumentSession {
                 persisted.meshData = meshData
                 persisted.isHidden = body.isHidden
                 persisted.materialData = materialData
+                persisted.brepData = brepData
             } else {
                 let persisted = PersistedBody(
                     bodyID: body.id.raw,
@@ -614,6 +622,7 @@ final class DocumentSession {
                 )
                 persisted.isHidden = body.isHidden
                 persisted.materialData = materialData
+                persisted.brepData = brepData
                 persisted.project = project
                 modelContext.insert(persisted)
             }

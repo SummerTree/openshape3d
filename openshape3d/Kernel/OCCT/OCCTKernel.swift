@@ -152,6 +152,18 @@ nonisolated enum OCCTKernel {
         OCCTBridge.boolean(of: a.shape, with: b.shape, op: op).map(BRepHandle.init)
     }
 
+    /// Serialize a solid so the analytic geometry survives a document reload.
+    static func serialize(_ handle: BRepHandle) -> Data? {
+        OCCTBridge.serializedShape(handle.shape)
+    }
+
+    /// Restore a solid from `serialize(_:)`. Nil on any failure — callers keep
+    /// the persisted render mesh, so a bad/incompatible blob degrades to the
+    /// pre-B-rep behaviour instead of breaking the document.
+    static func deserialize(_ data: Data) -> BRepHandle? {
+        OCCTBridge.shape(fromSerialized: data).map(BRepHandle.init)
+    }
+
     /// Smooth world-space render mesh for a B-rep solid.
     static func renderMesh(from handle: BRepHandle)
         -> (positions: [SIMD3<Float>], normals: [SIMD3<Float>], indices: [UInt32]) {

@@ -69,6 +69,11 @@ final class PersistedBody {
     /// JSON-encoded BodyMaterialSpec (plan §B15); nil (pre-B15 stores) keeps
     /// the legacy default look.
     var materialData: Data?
+    /// OCCT BRep blob for bodies built through the B-rep path, so analytic
+    /// geometry (round cylinders, boolean composability) survives a reload.
+    /// Nil for Euclid-only bodies and every pre-OCCT store — those keep the
+    /// persisted render mesh exactly as before.
+    @Attribute(.externalStorage) var brepData: Data?
     var project: Project?
 
     init(bodyID: UUID, name: String, transformData: Data, primitiveData: Data?, meshData: Data) {

@@ -226,10 +226,27 @@ mesh coincide. Consequences:
   keeps the Euclid render** (identical look, so no reason to perturb coverage).
 - Suite still 500 green.
 
+### B-rep persistence ✅ (2026-07-22)
+
+`Body.brep` was transient, and bodies are restored from the persisted mesh blob
+(the graph only re-evaluates on edits) — so after a reload a body *looked* right
+(the smooth render mesh persists) but was Euclid-only, meaning a later boolean or
+fillet would silently fall back to faceted.
+
+`OCCTBridge` now serializes/deserializes via `BRepTools::Write/Read`, and
+`PersistedBody` carries an optional externally-stored `brepData`. Both directions
+degrade safely — a nil or unreadable blob (pre-OCCT store, or one written by an
+incompatible OCCT build) leaves the body Euclid-only with its persisted render
+mesh, exactly as before. No migration needed; same shape as the `materialData`
+addition. Covered by a pure-value round-trip test (`DocumentSession` is
+deliberately not unit-tested — SwiftData-in-XCTest gotcha).
+
+**Not yet persisted:** the `.os3d` project archive (`ProjectArchive.BodyRecord`)
+doesn't carry the blob, so export/import still drops to Euclid-only.
+
 Remaining for a full port: general (polygonal/arc/ellipse) profiles as B-rep
-source, analytic circular holes, the extrude-into-target boolean path, B-rep
-persistence (survives reload), and fillet/shell on B-rep. Those are the next
-milestones (M2/M3).
+source, analytic circular holes, the extrude-into-target boolean path, the
+archive format, and fillet/shell on B-rep. Those are the next milestones (M2/M3).
 
 **Still ahead — the remaining geometry-op port (behind `OS3D_BREP`):** port `KernelOps.extrude` (use
 `BRepPrimAPI_MakePrism` on a `BRepBuilderAPI_MakeFace` from analytic

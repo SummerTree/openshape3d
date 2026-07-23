@@ -118,6 +118,15 @@ NS_ASSUME_NONNULL_BEGIN
                              withShape:(OCCTShape *)b
                                     op:(NSInteger)op;
 
+/// Serialize a solid to OCCT's BRep text format, so the analytic geometry can be
+/// stored in the document and survive a reload. Nil on failure.
++ (nullable NSData *)serializedShape:(OCCTShape *)shape;
+
+/// Rebuild a solid from `serializedShape:` output. Nil on failure (including a
+/// blob written by a different/incompatible OCCT version — callers fall back to
+/// the persisted render mesh).
++ (nullable OCCTShape *)shapeFromSerialized:(NSData *)data;
+
 /// Tessellate a world-space shape into a smooth-normalled render mesh (world
 /// coordinates). Same deflection semantics as the cylinder method.
 + (OCCTRenderMesh *)renderMeshFromShape:(OCCTShape *)shape

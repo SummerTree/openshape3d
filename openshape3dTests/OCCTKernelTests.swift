@@ -29,6 +29,39 @@ final class OCCTKernelTests: XCTestCase {
         XCTAssertEqual(c.other, 0, "no other surface types")
     }
 
+    /// A body's analytic geometry must survive being written to and read back
+    /// from the document, or a reloaded cylinder would silently go faceted.
+    func testBRepSerializationRoundTripKeepsGeometryAnalytic() {
+        guard let handle = OCCTKernel.primitiveShape(.cylinder(radius: 3, height: 5),
+                                                     placement: .identity) else {
+            return XCTFail("could not build the primitive B-rep")
+        }
+        guard let data = OCCTKernel.serialize(handle) else {
+            return XCTFail("serialize returned nil")
+        }
+        XCTAssertGreaterThan(data.count, 0, "serialized B-rep must not be empty")
+
+        guard let restored = OCCTKernel.deserialize(data) else {
+            return XCTFail("deserialize returned nil")
+        }
+        let before = OCCTKernel.renderMesh(from: handle)
+        let after = OCCTKernel.renderMesh(from: restored)
+        XCTAssertEqual(after.positions.count, before.positions.count,
+                       "restored solid must tessellate identically")
+        XCTAssertEqual(after.indices.count, before.indices.count)
+        XCTAssertGreaterThan(after.positions.count, 100, "restored cylinder is still finely tessellated")
+
+        // Still analytically round after the round-trip.
+        var directions = Set<Int>()
+        for (p, n) in zip(after.positions, after.normals) where abs(n.y) < 0.05 {
+            let radial = simd_normalize(SIMD2<Float>(p.x, p.z))
+            let nrm = simd_normalize(SIMD2<Float>(n.x, n.z))
+            XCTAssertGreaterThan(simd_dot(radial, nrm), 0.999, "side normal stays radial")
+            directions.insert(Int(atan2(n.z, n.x) / (2 * .pi) * 360))
+        }
+        XCTAssertGreaterThan(directions.count, 40, "restored wall still spans many normal directions")
+    }
+
     /// The render mesh that actually reaches the GPU must be finely tessellated
     /// with SMOOTH radial normals — that's what makes the cylinder look round
     /// (vs the Euclid 48-gon prism with hard per-facet normals).
