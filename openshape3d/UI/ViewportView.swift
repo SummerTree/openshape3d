@@ -499,6 +499,13 @@ final class ViewportCoordinator: NSObject, ViewportGestureDelegate, ViewportCame
         viewModel.cameraEpoch &+= 1
     }
 
+    /// Degrees between the camera eye-line and `plane`'s normal — 0 head-on,
+    /// 90 edge-on. Used by sketch entry to decide whether the current view is
+    /// usable to draw in, and by the Look at Sketch button's visibility.
+    func offAxisDegrees(to plane: SketchPlane) -> Double {
+        offAngleDegrees(to: plane)
+    }
+
     /// World→screen projection for SwiftUI overlays (dimension labels).
     /// Mirrors the private `worldToScreen`, taking Double world coordinates.
     func worldToScreenPoint(_ world: SIMD3<Double>) -> CGPoint? {

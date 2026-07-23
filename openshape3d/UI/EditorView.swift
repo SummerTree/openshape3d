@@ -679,6 +679,12 @@ struct EditorView: View {
                 SketchPointStateOverlay(viewModel: viewModel)
             }
             .overlay {
+                // Live width/height/Ø readout for the stroke in flight (§1.1).
+                // Above the persisted-dimension layer but non-interactive, so
+                // it never steals a tap from a real dimension label.
+                SketchLiveDimensionOverlay(viewModel: viewModel)
+            }
+            .overlay {
                 // Shapr3D on-arrow value pill for extrude / diameter (§4.1).
                 ExtrudeGizmoOverlay(viewModel: viewModel)
             }

@@ -38,6 +38,10 @@ protocol ViewportCameraControl: AnyObject {
     /// or nil when it is behind the camera. Used to place SwiftUI overlays such
     /// as dimension labels (plan §C2).
     func worldToScreenPoint(_ world: SIMD3<Double>) -> CGPoint?
+    /// Degrees between the camera eye-line and a plane's normal, 0 = head-on,
+    /// 90 = edge-on. Entering a sketch reads this to decide whether the current
+    /// view is usable to draw in.
+    func offAxisDegrees(to plane: SketchPlane) -> Double
 }
 
 @MainActor
@@ -4623,6 +4627,47 @@ final class EditorViewModel {
     /// In-progress entity during a sketch drag (rubber band).
     var pendingEntity: SketchEntity?
     private var sketchStrokeStart: SIMD2<Double>?
+    /// Where the drag currently is, plane-local. Only the live dimension
+    /// readout needs it — a circle's Ø leader swings to follow the finger.
+    private var sketchStrokeCurrent: SIMD2<Double>?
+
+    // MARK: Live dimensions while drawing (spec §1.1)
+
+    /// One live measurement, ready for the overlay to project.
+    struct LiveDimensionLabel: Identifiable {
+        let id: String
+        let text: String
+        /// Ends of the dimension line itself.
+        let worldLineStart: SIMD3<Double>
+        let worldLineEnd: SIMD3<Double>
+        /// The points on the geometry the measurement refers to; the witness
+        /// lines run from these out to the dimension line.
+        let worldWitnessStart: SIMD3<Double>
+        let worldWitnessEnd: SIMD3<Double>
+        let worldLabel: SIMD3<Double>
+    }
+
+    /// Dimensions for the stroke in flight — width/height while dragging a
+    /// rectangle, Ø while dragging a circle. Empty when nothing is being drawn,
+    /// so the overlay disappears the moment the stroke commits.
+    var liveDimensionLabels: [LiveDimensionLabel] {
+        guard let sketch = activeSketch else { return [] }
+        // A pending arc is still being shaped (its bulge is draggable), so it
+        // keeps its readout after the initial drag ends.
+        guard let entity = pendingEntity ?? pendingArcEntity else { return [] }
+        let unit = AppSettings.shared.unit
+        return LiveDimensionKit.dimensions(for: entity, towards: sketchStrokeCurrent)
+            .map { d in
+                LiveDimensionLabel(
+                    id: d.id,
+                    text: LiveDimensionKit.label(d, unit: unit),
+                    worldLineStart: sketch.plane.toWorld(d.lineStart),
+                    worldLineEnd: sketch.plane.toWorld(d.lineEnd),
+                    worldWitnessStart: sketch.plane.toWorld(d.start),
+                    worldWitnessEnd: sketch.plane.toWorld(d.end),
+                    worldLabel: sketch.plane.toWorld(d.labelPoint))
+            }
+    }
 
     // MARK: - Auto-constraint / inference (plan §B, spec §3, contract D)
 
@@ -5319,8 +5364,22 @@ final class EditorViewModel {
             sketch = created
         }
         mode = .sketching(sketch.id, tool: tool)
-        cameraControl?.moveCameraHeadOn(to: sketch.plane)
+        // Keep the camera where the user put it — Shapr3D sketches in the
+        // current view, and yanking to head-on loses the 3D context they were
+        // working in (and their sense of which way the plane faces).
+        //
+        // The one exception is a grazing view: past this angle the plane
+        // projects to nearly a line, so a drag maps to a wildly amplified
+        // distance on it and drawing is guesswork. `lookAtSketch()` (the
+        // Look at Sketch button) is always there for a deliberate re-aim.
+        if let control = cameraControl,
+           control.offAxisDegrees(to: sketch.plane) > Self.grazingSketchAngle {
+            control.moveCameraHeadOn(to: sketch.plane)
+        }
     }
+
+    /// Degrees off head-on past which a sketch plane is too edge-on to draw on.
+    static let grazingSketchAngle: Double = 80
 
     func finishSketch() {
         commitPendingArc()
@@ -5418,6 +5477,7 @@ final class EditorViewModel {
             }
         }
         sketchStrokeStart = point
+        sketchStrokeCurrent = point
         pendingEntity = nil
         return true
     }
@@ -5459,6 +5519,7 @@ final class EditorViewModel {
             activeGuides = []
             pendingInferredConstraints = []
         }
+        sketchStrokeCurrent = current
         pendingEntity = makeEntity(tool: tool, from: start, to: current)
     }
 
@@ -5466,6 +5527,7 @@ final class EditorViewModel {
         defer {
             pendingEntity = nil
             sketchStrokeStart = nil
+            sketchStrokeCurrent = nil
             activeGuides = []
             pendingInferredConstraints = []
         }
