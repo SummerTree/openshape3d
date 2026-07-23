@@ -170,6 +170,16 @@ NS_ASSUME_NONNULL_BEGIN
                            thickness:(double)thickness
                            tolerance:(double)tolerance;
 
+// MARK: - STEP interchange (spec §12.1 / §12.2)
+
+/// Write `shapes` to a STEP AP214 file at `path`. Exports EXACT B-rep geometry
+/// (analytic surfaces survive), unlike the mesh formats. NO on failure.
++ (BOOL)writeSTEPShapes:(NSArray<OCCTShape *> *)shapes toPath:(NSString *)path;
+
+/// Read every solid from the STEP file at `path`. Empty array on failure — the
+/// caller reports an unreadable/unsupported file rather than crashing.
++ (NSArray<OCCTShape *> *)readSTEPFromPath:(NSString *)path;
+
 /// Serialize a solid to OCCT's BRep text format, so the analytic geometry can be
 /// stored in the document and survive a reload. Nil on failure.
 + (nullable NSData *)serializedShape:(OCCTShape *)shape;

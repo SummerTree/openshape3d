@@ -234,6 +234,23 @@ nonisolated enum OCCTKernel {
         return flat.withUnsafeBytes { Data($0) }
     }
 
+    // MARK: - STEP interchange (spec §12.1 / §12.2)
+
+    /// Write solids to a STEP AP214 file. Unlike STL/OBJ/3MF (which export
+    /// triangles), STEP carries the EXACT B-rep, so analytic surfaces survive
+    /// into other CAD. False if any transfer or the write fails.
+    @discardableResult
+    static func writeSTEP(_ handles: [BRepHandle], to url: URL) -> Bool {
+        guard !handles.isEmpty else { return false }
+        return OCCTBridge.writeSTEP(handles.map(\.shape), toPath: url.path)
+    }
+
+    /// Read every solid from a STEP file; empty when the file is unreadable or
+    /// holds no solids, so the caller surfaces a recoverable import error.
+    static func readSTEP(from url: URL) -> [BRepHandle] {
+        OCCTBridge.readSTEP(fromPath: url.path).map(BRepHandle.init)
+    }
+
     /// Serialize a solid so the analytic geometry survives a document reload.
     static func serialize(_ handle: BRepHandle) -> Data? {
         OCCTBridge.serializedShape(handle.shape)

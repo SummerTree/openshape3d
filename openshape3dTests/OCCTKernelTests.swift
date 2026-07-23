@@ -59,6 +59,41 @@ final class OCCTKernelTests: XCTestCase {
                              "filleted cylinder still tessellates finely")
     }
 
+    /// G6 acceptance (spec §12.1/§12.2) — round-trip a FILLETED, SHELLED part
+    /// through STEP with its faces and solid topology intact. This is what the
+    /// mesh exporters (STL/OBJ/3MF) cannot do: they ship triangles, so analytic
+    /// surfaces are lost.
+    func testSTEPRoundTripPreservesAnalyticTopology() throws {
+        // A FILLETED cylinder: planar caps + a cylindrical wall + a torus blend.
+        // If STEP round-trips that face mix intact, it is carrying real B-rep
+        // rather than triangles.
+        guard let cyl = OCCTKernel.primitiveShape(.cylinder(radius: 5, height: 20),
+                                                  placement: .identity),
+              let part = OCCTKernel.fillet(cyl, at: [SIMD3(5, 20, 0)],
+                                           radius: 1, tolerance: 0.6)
+        else { return XCTFail("could not build the filleted part") }
+
+        let expected = OCCTKernel.faceTypeCounts(part)
+        XCTAssertEqual(expected.cylindrical, 1, "the analytic wall survives filleting")
+        XCTAssertGreaterThan(expected.other, 0, "the blend contributes a curved face")
+
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("os3d_step_roundtrip.step")
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        XCTAssertTrue(OCCTKernel.writeSTEP([part], to: url), "STEP write must succeed")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: url.path))
+
+        let restored = OCCTKernel.readSTEP(from: url)
+        XCTAssertEqual(restored.count, 1, "one solid in, one solid out")
+        let after = OCCTKernel.faceTypeCounts(try XCTUnwrap(restored.first))
+        XCTAssertEqual(after.cylindrical, expected.cylindrical,
+                       "cylindrical faces must survive STEP — not be triangulated")
+        XCTAssertEqual(after.planar, expected.planar, "planar faces preserved")
+        XCTAssertFalse(OCCTKernel.renderMesh(from: try XCTUnwrap(restored.first)).positions.isEmpty,
+                       "imported solid still tessellates")
+    }
+
     /// G1 (chamfer half) — bevelling a box edge must produce a NEW planar face
     /// and keep the solid valid.
     func testChamferingABoxEdgeAddsAPlanarFace() {

@@ -21,6 +21,9 @@
 #include <BRepAlgoAPI_Defeaturing.hxx>
 #include <TopTools_ListOfShape.hxx>
 #include <BRepFilletAPI_MakeChamfer.hxx>
+#include <STEPControl_Writer.hxx>
+#include <STEPControl_Reader.hxx>
+#include <IFSelect_ReturnStatus.hxx>
 #include <BRepOffsetAPI_MakeThickSolid.hxx>
 #include <TopTools_IndexedDataMapOfShapeListOfShape.hxx>
 #include <BRepAdaptor_Curve.hxx>
@@ -637,6 +640,51 @@ static TopoDS_Wire PolyWire(NSData *loop, double z) {
     } catch (...) {
         return nil;
     }
+}
+
++ (BOOL)writeSTEPShapes:(NSArray<OCCTShape *> *)shapes toPath:(NSString *)path {
+    if (shapes.count == 0 || path.length == 0) return NO;
+    try {
+        STEPControl_Writer writer;
+        for (OCCTShape *s in shapes) {
+            if (s == nil || s->_shape.IsNull()) continue;
+            if (writer.Transfer(s->_shape, STEPControl_AsIs) != IFSelect_RetDone) return NO;
+        }
+        return writer.Write(path.fileSystemRepresentation) == IFSelect_RetDone;
+    } catch (...) {
+        return NO;
+    }
+}
+
++ (NSArray<OCCTShape *> *)readSTEPFromPath:(NSString *)path {
+    NSMutableArray<OCCTShape *> *out = [NSMutableArray array];
+    if (path.length == 0) return out;
+    try {
+        STEPControl_Reader reader;
+        if (reader.ReadFile(path.fileSystemRepresentation) != IFSelect_RetDone) return out;
+        reader.TransferRoots();
+        for (Standard_Integer i = 1; i <= reader.NbShapes(); ++i) {
+            const TopoDS_Shape shape = reader.Shape(i);
+            if (shape.IsNull()) continue;
+            // A STEP root can be a compound; emit each solid separately so each
+            // becomes its own body.
+            TopExp_Explorer solids(shape, TopAbs_SOLID);
+            if (solids.More()) {
+                for (; solids.More(); solids.Next()) {
+                    OCCTShape *w = [OCCTShape new];
+                    w->_shape = solids.Current();
+                    [out addObject:w];
+                }
+            } else {
+                OCCTShape *w = [OCCTShape new];
+                w->_shape = shape;
+                [out addObject:w];
+            }
+        }
+    } catch (...) {
+        return [NSMutableArray array];
+    }
+    return out;
 }
 
 + (nullable NSData *)serializedShape:(OCCTShape *)shape {

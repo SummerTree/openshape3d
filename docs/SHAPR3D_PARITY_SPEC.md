@@ -1581,7 +1581,10 @@ Import Planar Curves as Sketches. .shapr imports keep editable per-feature
 history; all other formats arrive as a single Import history step. STEP
 assembly hierarchy → nested folders. Mesh rules: booleans work only on closed
 mesh bodies; any boolean involving a mesh yields a mesh.
-**Status:** 🟡 partial — toolbar Import menu: STL (binary or ASCII, parsed
+**Status:** 🟡 partial. **STEP import now ships** (`OCCTKernel.readSTEP`,
+OCCT DataExchange) — each solid in the file becomes a body carrying its
+analytic B-rep, so imported geometry is exact rather than tessellated. Also
+toolbar Import menu: STL (binary or ASCII, parsed
 and welded into a solid mesh body — `STLImporter` → `EuclidBridge` weld path
 → `AddBodyCommand`; imported bodies boolean like any native body since
 everything is a mesh here), DXF (R12/R2000-common subset — LINE, CIRCLE,
@@ -1609,7 +1612,12 @@ unitless so the unit is declared at export). Favorite formats (star) persist;
 batch export multiple formats; isolated parts exportable in any type except
 .shapr. Screenshot tool: grid on/off, transparency, body edges, item chooser,
 resolution Actual/Double/FullHD/4K/8K, remembers settings, clipboard shortcut.
-**Status:** 🟡 partial — toolbar Export menu (1 unit = 1 mm): STL (binary,
+**Status:** 🟡 partial. **STEP (AP214) export now ships** via OCCT
+DataExchange (`OCCTKernel.writeSTEP`) — unlike every mesh format below it
+carries the EXACT B-rep, so analytic surfaces survive into other CAD
+(`OCCTKernelTests.testSTEPRoundTripPreservesAnalyticTopology` round-trips a
+filleted cylinder with its cylindrical/torus/planar faces intact). Mesh
+formats, toolbar Export menu (1 unit = 1 mm): STL (binary,
 `STLExporter`), OBJ (`OBJExporter`), 3MF (`ThreeMFExporter`, zip + XML),
 **GLB** (`GLBExporter`, glTF 2.0 binary, one node/mesh per body), **USDZ**
 via ModelIO where the platform can write it (`USDZExporter`; the menu entry

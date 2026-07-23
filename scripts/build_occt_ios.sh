@@ -11,10 +11,10 @@
 # TKPrim, TKBO, TKBool, TKFillet, TKOffset, TKMesh, TKShHealing, …) — 18
 # toolkits, everything the B-rep port needs (extrude/boolean/fillet/shell/mesh).
 #
-# DataExchange (STEP/IGES) + ApplicationFramework (XDE) are OFF: they ~double the
-# static lib (18→47 toolkits, ~74MB→~140MB/arch) and aren't on the critical path.
-# Flip both to ON here to add STEP/IGES import/export when a feature needs it —
-# it rides the same OCCTBridge seam, no other changes required.
+# DataExchange (STEP/IGES) + ApplicationFramework (XDE) are ON — spec §12 needs
+# STEP interchange. They roughly double the static lib (18→47 toolkits,
+# ~74MB→~140MB/arch, measured); flip both to OFF for a modeling-only build if
+# binary size ever matters more than interchange.
 #
 # Prereqs: cmake (>=3.16; tested with 4.4), Xcode with iOS SDK, an OCCT source
 # tree, and the leetal ios-cmake toolchain file. Paths are passed via env:
@@ -67,8 +67,8 @@ for PLAT in $PLATFORMS; do
     -DBUILD_MODULE_FoundationClasses=ON \
     -DBUILD_MODULE_ModelingData=ON \
     -DBUILD_MODULE_ModelingAlgorithms=ON \
-    -DBUILD_MODULE_ApplicationFramework=OFF \
-    -DBUILD_MODULE_DataExchange=OFF \
+    -DBUILD_MODULE_ApplicationFramework=ON \
+    -DBUILD_MODULE_DataExchange=ON \
     -DBUILD_MODULE_Visualization=OFF \
     -DBUILD_MODULE_DETools=OFF \
     -DBUILD_MODULE_Draw=OFF \
