@@ -90,9 +90,10 @@ struct MoveGizmoOverlay: View {
         if pts.count >= 3 {
             let colored = viewModel.gizmoHighlight == part ? Self.highlight : Self.fill
             // Outline pass (fat, dark) then the fill pass, both with arrowheads
-            // at each end — the double-ended curved arrow.
-            curvedArrow(pts, width: 6.5, arrow: 12, color: Self.outline)
-            curvedArrow(pts, width: 3.2, arrow: 9, color: colored)
+            // at each end — the double-ended curved arrow. Wider + shorter than
+            // before (the shorter arc comes from GizmoScreenLayout).
+            curvedArrow(pts, width: 9, arrow: 16, color: Self.outline)
+            curvedArrow(pts, width: 5, arrow: 13, color: colored)
         }
     }
 

@@ -21,9 +21,13 @@ nonisolated enum GizmoScreenLayout {
     static let planeLocal: Float = 0.235 // plane-tile centre
 
     /// Screen grab tolerances (points). Generous — these are touch targets.
-    static let arrowHitRadius: CGFloat = 34
-    static let planeHitRadius: CGFloat = 22
-    static let ringHitRadius: CGFloat = 26
+    static let arrowHitRadius: CGFloat = 44
+    static let planeHitRadius: CGFloat = 20
+    static let ringHitRadius: CGFloat = 40
+    /// Dead zone around the pivot (the free-move dot). A tap here grabs nothing
+    /// rather than a random nearby handle, and it keeps the generous arrow band
+    /// from claiming a dead-centre tap.
+    static let pivotDeadZone: CGFloat = 18
 
     static let axes: [GizmoPart] = [.xAxis, .yAxis, .zAxis]
     static let rings: [GizmoPart] = [.xRing, .yRing, .zRing]
@@ -45,8 +49,8 @@ nonisolated enum GizmoScreenLayout {
     static func ringPolyline(_ part: GizmoPart,
                              project: (SIMD3<Float>) -> CGPoint?) -> [CGPoint] {
         let (u, v) = GizmoGeometry.ringBasis(for: part)
-        let a0 = Float.pi / 4 - 33 * .pi / 180
-        let a1 = Float.pi / 4 + 33 * .pi / 180
+        let a0 = Float.pi / 4 - 22 * .pi / 180
+        let a1 = Float.pi / 4 + 22 * .pi / 180
         let steps = 14
         var pts: [CGPoint] = []
         for i in 0...steps {
@@ -87,6 +91,10 @@ nonisolated enum GizmoScreenLayout {
         // pointing into the screen) is skipped: the overlay fades it and
         // grabbing it there would be a surprise.
         let center = project(.zero)
+        // Dead-centre taps are the free-move pivot — grab nothing.
+        if let center, hypot(point.x - center.x, point.y - center.y) < pivotDeadZone {
+            return nil
+        }
         for part in axes {
             guard let tip = axisAnchor(part, project: project) else { continue }
             if let center {
