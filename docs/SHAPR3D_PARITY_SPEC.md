@@ -97,12 +97,24 @@ entry mid-draw, auto-constraints, dimension labels.
 sketch mode and auto-detects whether a stroke is a line or an arc; WIGGLE the
 pen mid-stroke to switch between arc and line. Override via the "Line Type"
 menu below Line/Arc: Automatic (default) | Line | Arc.
-**Status:** ❌ not implemented — no line/arc auto-detection. The former
-Pencil exclusion is fixed: the one-finger recognizer now accepts `.pencil`
-touches (`ViewportGestureController.attach`), so the Pencil draws sketch
-strokes; but the auto line-vs-arc classification and the Line Type menu do
-not exist.
-**Feasibility:** [mesh-kernel OK] (stroke classification is app code)
+**Status:** 🟡 partial — `StrokeClassifier` implements the detection and the
+`LineType` (Automatic | Line | Arc) override. Automatic reads a stroke as an
+arc only when it bows past 2% of its chord AND a Kåsa circle fit explains the
+samples clearly better than the straight chord does, so ordinary hand tremor
+and a 3°-of-a-huge-circle stroke both stay lines. Fitted arcs recover the
+drawn radius and centre and are stored CCW, so a clockwise stroke becomes the
+same arc walked the other way rather than a 270° one. **Wiggling mid-stroke
+toggles the result** (spec §1.2): the scribble is detected from repeated
+sharp direction reversals over segments short relative to the stroke, its own
+samples are excluded from the fit so the geometry is not dragged with it, and
+a straight stroke toggled to an arc gets a visible tenth-of-chord default bow
+(there is no fitted curvature to use) that the §1.3 bulge drag can then
+adjust. Both thresholds are relative to the chord, so classification does not
+change with zoom. The Pencil-exclusion fix stands
+(`ViewportGestureController.attach` accepts `.pencil`). Covered by
+`StrokeClassifierTests`. **Missing:** the Line Type menu UI and wiring the
+classifier into the live stroke preview.
+**Feasibility:** [mesh-kernel OK] — confirmed, this is all app code.
 
 ### 1.3 Arc
 
