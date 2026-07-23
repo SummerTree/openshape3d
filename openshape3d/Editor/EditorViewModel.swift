@@ -7986,6 +7986,8 @@ final class EditorViewModel {
             return openFaces.isEmpty
                 ? "Shell \(fmt(thickness.value)) mm (hollow)"
                 : "Shell \(fmt(thickness.value)) mm (\(openFaces.count) face\(openFaces.count == 1 ? "" : "s") open)"
+        case let .deleteFace(_, faces):
+            return "Delete Face (\(faces.count) face\(faces.count == 1 ? "" : "s"))"
         }
     }
 

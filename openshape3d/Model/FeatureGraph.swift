@@ -95,6 +95,10 @@ nonisolated enum FeatureKind: Codable, Sendable {
     /// Phase E: hollow `body` to a wall of `thickness`, cutting the referenced
     /// planar faces open (empty = fully enclosed hollow).
     case shell(body: BodyRef, openFaces: [FaceRef], thickness: Expr)
+    /// Spec §4.16: remove the referenced faces and HEAL the surrounding
+    /// surfaces back together, deleting the feature (hole, pocket, boss) they
+    /// belong to. B-rep only — a mesh has no surfaces to extend.
+    case deleteFace(body: BodyRef, faces: [FaceRef])
 }
 
 /// A node in the feature graph: stable identity, display name, its operation, a
@@ -151,7 +155,7 @@ nonisolated extension FeatureNode {
         case let .mirror(_, plane, _):
             addPlane(plane)
         case .primitive, .boolean, .transform, .pattern, .pushPull,
-             .chamfer, .fillet, .shell:
+             .chamfer, .fillet, .shell, .deleteFace:
             break
         }
         return ids
@@ -297,6 +301,9 @@ nonisolated extension FeatureGraph {
             evalShell(
                 node, bodyRef: body, openFaceRefs: openFaces,
                 thickness: thickness.value, into: &state, next: nextRevision)
+        case let .deleteFace(body, faces):
+            evalDeleteFace(
+                node, bodyRef: body, faceRefs: faces, into: &state, next: nextRevision)
 
         // Defined but not evaluated yet — keep the graph total.
         case .transform:
@@ -714,6 +721,94 @@ nonisolated extension FeatureGraph {
         // Shelling rebuilds every face; relabel by geometry like the blends.
         let newTable = state.naming.faceTable(for: result, createdBy: node.id, scheme: .generic)
         state.put(result, table: newTable)
+    }
+
+    // MARK: Delete Face (direct modeling, spec §4.16)
+
+    /// Remove the referenced faces and let the neighbouring surfaces extend to
+    /// re-close the body — the direct-modeling gesture that deletes a hole or
+    /// pocket without unwinding the history that made it.
+    ///
+    /// This is B-rep-only on purpose. Healing means EXTENDING the adjacent
+    /// surfaces to their new intersections; a triangle soup has no surfaces to
+    /// extend, so a mesh fallback would silently produce a hole-shaped dent
+    /// instead of a clean solid. Without a `brep` the node errors and the input
+    /// body passes through untouched.
+    private func evalDeleteFace(
+        _ node: FeatureNode,
+        bodyRef: BodyRef,
+        faceRefs: [FaceRef],
+        into state: inout EvalState,
+        next nextRevision: () -> UInt64
+    ) {
+        guard let body = state.bodies[bodyRef.bodyID] else {
+            state.errors[node.id] = .brokenRef("delete-face body unresolved")
+            return
+        }
+        guard !faceRefs.isEmpty else {
+            state.errors[node.id] = .kernelFailure("delete face needs at least one face")
+            return
+        }
+        guard OCCTKernel.useOCCTAsSourceOfTruth, let brep = body.brep else {
+            state.errors[node.id] = .kernelFailure(
+                "delete face needs a B-rep body — surfaces cannot heal on a mesh")
+            return
+        }
+
+        let table = state.faceTables[body.id]
+        var points = [SIMD3<Double>]()
+        for ref in faceRefs {
+            guard let resolved = state.naming.resolve(ref, in: body, table: table),
+                  let point = Self.samplePoint(on: resolved) else {
+                state.errors[node.id] = .brokenRef("delete-face target did not resolve")
+                return
+            }
+            points.append(point)
+        }
+
+        let aabb = body.render.localAABB
+        let scale = Double(simd_length(aabb.max - aabb.min))
+        guard let healed = OCCTKernel.removingFaces(
+            brep, at: points, tolerance: max(scale * 0.02, 1e-6)) else {
+            // Defeaturing legitimately fails when the neighbours cannot close
+            // (§4.16: those deletions leave sheet bodies). Report rather than
+            // ship a broken solid.
+            state.errors[node.id] = .kernelFailure("the surrounding faces could not heal")
+            return
+        }
+        var result = Body(
+            id: body.id, name: body.name, transform: .identity, primitive: nil,
+            euclidMesh: body.euclidMesh(), revision: nextRevision())
+        guard result.adoptBRep(healed) else {
+            state.errors[node.id] = .emptyGeometry
+            return
+        }
+        // Every remaining face may have been re-trimmed; relabel by geometry.
+        let newTable = state.naming.faceTable(for: result, createdBy: node.id, scheme: .generic)
+        state.put(result, table: newTable)
+    }
+
+    /// A world point lying ON the resolved face — how OCCT is told which face
+    /// to remove. Planar faces use their outline centroid (always interior for
+    /// the convex outlines the picker produces); cylinders use a point at
+    /// mid-height on the surface itself, not on the axis.
+    private static func samplePoint(on face: ResolvedFace) -> SIMD3<Double>? {
+        if let planar = face.planar, !planar.outline.isEmpty {
+            let c = planar.outline.reduce(SIMD2<Double>.zero, +) / Double(planar.outline.count)
+            return planar.origin + planar.basisX * c.x + planar.basisY * c.y
+        }
+        if let cyl = face.cylinder {
+            let axis = simd_normalize(cyl.axisDir)
+            // Any unit vector perpendicular to the axis puts us on the surface.
+            let seed = abs(axis.x) < 0.9 ? SIMD3<Double>(1, 0, 0) : SIMD3<Double>(0, 1, 0)
+            let radial = simd_normalize(simd_cross(axis, seed))
+            let mid = (cyl.minT + cyl.maxT) / 2
+            // axisPoint is on the axis but at an arbitrary axial position;
+            // re-anchor it to the mid-height plane before stepping outward.
+            let onAxis = cyl.axisPoint + axis * (mid - simd_dot(cyl.axisPoint, axis))
+            return onAxis + radial * cyl.radius
+        }
+        return nil
     }
 
     // MARK: Revolve / Sweep / Loft (full-solid ops)

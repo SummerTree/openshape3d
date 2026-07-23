@@ -980,11 +980,21 @@ holes/pockets when adjusting components; simplifying molds ("Lampshade
 positive mold") and dies. Companion workflow: Offset Face a redundant
 feature to nothing, then delete the leftover surfaces. Deletions that cannot
 heal leave sheet/surface bodies (see the §4 body-types intro).
-**Status:** ❌ not implemented — nothing in the app deletes faces or heals
-surfaces; Delete removes whole bodies only.
-**Feasibility:** [needs B-rep kernel] (face removal + surface
-extension/healing); a mesh fallback for simple prismatic holes is possible
-but fragile
+**Status:** 🟡 partial — the healing engine ships as a feature-graph node,
+`.deleteFace(body:faces:)`, evaluated through OCCT's `BRepAlgoAPI_Defeaturing`
+(`evalDeleteFace`). Persisted `FaceRef`s re-resolve against the input body on
+every rebuild — including CYLINDRICAL faces, so deleting a hole's wall is one
+tap — and the surrounding surfaces extend to re-close the solid (a Ø4 hole
+deleted from a 10 mm box heals back to exactly six planar faces and its full
+1000 mm³). Failures are reported, never swallowed: an unresolvable face, an
+empty selection, or a set of neighbours that cannot close errors the node and
+leaves the body untouched. Covered by `DeleteFaceEvalTests`.
+**Missing:** the tap-a-face-then-Delete gesture in the viewport, Shift-chain
+face selection, and the sheet/surface-body fallback for deletions that cannot
+heal (today those simply error).
+**Feasibility:** [needs B-rep kernel] — confirmed; this is B-rep-only on
+purpose, since healing means EXTENDING adjacent surfaces and a mesh has no
+surfaces to extend.
 
 ---
 

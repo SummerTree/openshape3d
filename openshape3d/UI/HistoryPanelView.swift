@@ -141,6 +141,7 @@ struct HistoryPanelView: View {
         case .chamfer: return "square.on.circle"
         case .fillet: return "circle.circle"
         case .shell: return "cube.transparent"
+        case .deleteFace: return "square.slash"
         }
     }
 
