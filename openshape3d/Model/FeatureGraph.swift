@@ -673,6 +673,35 @@ nonisolated extension FeatureGraph {
             }
             openFaces.append(planar)
         }
+        // B-rep shell: when the body is analytic, hollow it with
+        // BRepOffsetAPI_MakeThickSolid so CURVED walls are correct — the mesh
+        // path insets a planar face outline, which is only honest on prismatic
+        // bodies (a shelled cylinder must end up with two concentric walls).
+        // Falls back to the mesh shell when OCCT can't offset the solid.
+        if OCCTKernel.useOCCTAsSourceOfTruth, let brep = body.brep {
+            // A point at the centroid of each open face identifies it to OCCT.
+            let openPoints: [SIMD3<Double>] = openFaces.map { face in
+                let n = Double(max(face.outline.count, 1))
+                let c = face.outline.reduce(SIMD2<Double>.zero, +) / n
+                return face.origin + face.basisX * c.x + face.basisY * c.y
+            }
+            let aabb = body.render.localAABB
+            let scale = Double(simd_length(aabb.max - aabb.min))
+            if let hollow = OCCTKernel.shell(
+                brep, openingAt: openPoints, thickness: thickness,
+                tolerance: max(scale * 0.02, 1e-6)) {
+                var result = Body(
+                    id: body.id, name: body.name, transform: .identity, primitive: nil,
+                    euclidMesh: body.euclidMesh(), revision: nextRevision())
+                if result.adoptBRep(hollow) {
+                    let newTable = state.naming.faceTable(
+                        for: result, createdBy: node.id, scheme: .generic)
+                    state.put(result, table: newTable)
+                    return
+                }
+            }
+        }
+
         let mesh = KernelOps.shell(
             mesh: body.euclidMesh(), thickness: thickness, openFaces: openFaces)
         guard !mesh.polygons.isEmpty else {

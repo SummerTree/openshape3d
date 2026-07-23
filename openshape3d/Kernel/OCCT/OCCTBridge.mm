@@ -619,7 +619,14 @@ static TopoDS_Wire PolyWire(NSData *loop, double z) {
         }
 
         BRepOffsetAPI_MakeThickSolid mk;
-        mk.MakeThickSolidByJoin(shape->_shape, openFaces, -fabs(thickness), 1.0e-3);
+        if (openFaces.IsEmpty()) {
+            // Fully-enclosed hollow. ByJoin with an empty closing-face list has
+            // nothing to remove and hands back the original solid, so the simple
+            // form is the correct one here.
+            mk.MakeThickSolidBySimple(shape->_shape, -fabs(thickness));
+        } else {
+            mk.MakeThickSolidByJoin(shape->_shape, openFaces, -fabs(thickness), 1.0e-3);
+        }
         if (!mk.IsDone()) return nil;
         const TopoDS_Shape result = mk.Shape();
         if (result.IsNull()) return nil;
