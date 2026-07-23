@@ -59,6 +59,46 @@ final class OCCTKernelTests: XCTestCase {
                              "filleted cylinder still tessellates finely")
     }
 
+    /// G1 (chamfer half) — bevelling a box edge must produce a NEW planar face
+    /// and keep the solid valid.
+    func testChamferingABoxEdgeAddsAPlanarFace() {
+        guard let box = OCCTKernel.primitiveShape(.box(width: 10, depth: 10, height: 10),
+                                                  placement: .identity) else {
+            return XCTFail("could not build the box")
+        }
+        let before = OCCTKernel.faceTypeCounts(box)
+        guard let chamfered = OCCTKernel.chamfer(box, at: [SIMD3(5, 5, 5)],
+                                                 distance: 1.5, tolerance: 1.0) else {
+            return XCTFail("BRepFilletAPI_MakeChamfer could not bevel the edge")
+        }
+        let after = OCCTKernel.faceTypeCounts(chamfered)
+        XCTAssertGreaterThan(after.planar, before.planar,
+                             "a chamfer replaces an edge with a new flat face")
+        XCTAssertFalse(OCCTKernel.renderMesh(from: chamfered).positions.isEmpty)
+    }
+
+    /// G2 acceptance — shelling a CYLINDER must give a tube: two concentric
+    /// cylindrical faces. This is the case the mesh inset approximation gets
+    /// wrong, since it is only honest on prismatic bodies.
+    func testShellingACylinderProducesATube() {
+        guard let cyl = OCCTKernel.primitiveShape(.cylinder(radius: 5, height: 20),
+                                                  placement: .identity) else {
+            return XCTFail("could not build the cylinder")
+        }
+        XCTAssertEqual(OCCTKernel.faceTypeCounts(cyl).cylindrical, 1)
+
+        // Open the top cap (y == height) so the result is a tube.
+        guard let tube = OCCTKernel.shell(cyl, openingAt: [SIMD3(0, 20, 0)],
+                                          thickness: 1.0, tolerance: 1.0) else {
+            return XCTFail("BRepOffsetAPI_MakeThickSolid could not hollow the cylinder")
+        }
+        let faces = OCCTKernel.faceTypeCounts(tube)
+        XCTAssertGreaterThanOrEqual(faces.cylindrical, 2,
+                                    "a shelled cylinder has inner AND outer curved walls")
+        XCTAssertFalse(OCCTKernel.renderMesh(from: tube).positions.isEmpty,
+                       "shelled solid must tessellate")
+    }
+
     /// Spec §4.16 Delete Face — previously ❌ [needs B-rep kernel], now possible
     /// via OCCT defeaturing: removing the blend face of a filleted box must heal
     /// back to a valid closed solid with fewer faces.

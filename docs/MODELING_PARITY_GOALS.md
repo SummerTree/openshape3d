@@ -107,16 +107,17 @@ fillet on a cylinder throws away the analytic geometry.
 - Existing blend UI (multi-edge pick, live preview, drag-to-size arrow, red/blue
   validity) keeps working unchanged.
 
-### G2 — Shell on B-rep *(spec §4.4)*
+### G2 — Shell on B-rep *(spec §4.4)* — **kernel landed 2026-07-22; wiring pending**
 
-- `BRepOffsetAPI_MakeThickSolid`, replacing the prismatic mesh approximation.
-- Face-removal mode and whole-body hollow.
-- Correct on **curved** walls (the current approximation is only honest on
-  prismatic bodies).
+**Done (kernel):** `OCCTBridge.shelledShape:atWorldPoints:thickness:tolerance:`
+wraps `BRepOffsetAPI_MakeThickSolid`, supporting both face-removal (points pick
+the faces to open) and whole-body hollow (empty selection). Verified by
+`testShellingACylinderProducesATube` — shelling a cylinder yields **two
+concentric cylindrical faces**, precisely the case the mesh inset gets wrong.
 
-**Acceptance:** shelling a cylinder gives a tube with two concentric cylindrical
-faces; the valid-thickness range drives the existing red/blue drag feedback;
-result retains its brep.
+**Still to do:** route `evalShell` through it (see the note in §Sequencing about
+the blend/shell eval wiring), and drive the red/blue drag feedback from OCCT's
+valid-thickness range rather than the mesh heuristic.
 
 ### G3 — Remaining solid creators on B-rep *(spec §4.10, §4.11, §4.5)*
 

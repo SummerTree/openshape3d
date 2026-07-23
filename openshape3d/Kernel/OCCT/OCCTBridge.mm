@@ -20,6 +20,9 @@
 #include <BRepFilletAPI_MakeFillet.hxx>
 #include <BRepAlgoAPI_Defeaturing.hxx>
 #include <TopTools_ListOfShape.hxx>
+#include <BRepFilletAPI_MakeChamfer.hxx>
+#include <BRepOffsetAPI_MakeThickSolid.hxx>
+#include <TopTools_IndexedDataMapOfShapeListOfShape.hxx>
 #include <BRepAdaptor_Curve.hxx>
 #include <TopExp.hxx>
 #include <TopTools_IndexedMapOfShape.hxx>
@@ -517,6 +520,106 @@ static TopoDS_Wire PolyWire(NSData *loop, double z) {
         if (added == 0) return nil;
 
         mk.Build();
+        if (!mk.IsDone()) return nil;
+        const TopoDS_Shape result = mk.Shape();
+        if (result.IsNull()) return nil;
+
+        OCCTShape *out = [OCCTShape new];
+        out->_shape = result;
+        return out;
+    } catch (...) {
+        return nil;
+    }
+}
+
++ (nullable OCCTShape *)chamferedShape:(OCCTShape *)shape
+                        atWorldPoints:(NSData *)worldPoints
+                             distance:(double)distance
+                            tolerance:(double)tolerance {
+    if (shape == nil || distance <= 0.0) return nil;
+    const NSUInteger count = worldPoints.length / (3 * sizeof(double));
+    if (count == 0) return nil;
+    const double *pts = (const double *)worldPoints.bytes;
+
+    try {
+        TopTools_IndexedMapOfShape edgeMap;
+        TopExp::MapShapes(shape->_shape, TopAbs_EDGE, edgeMap);
+
+        BRepFilletAPI_MakeChamfer mk(shape->_shape);
+        int added = 0;
+
+        for (Standard_Integer i = 1; i <= edgeMap.Extent(); ++i) {
+            const TopoDS_Edge edge = TopoDS::Edge(edgeMap(i));
+            if (BRep_Tool::Degenerated(edge)) continue;
+
+            BRepAdaptor_Curve curve(edge);
+            const double first = curve.FirstParameter(), last = curve.LastParameter();
+            const int samples = 16;
+            bool hit = false;
+            for (int s = 0; s <= samples && !hit; ++s) {
+                const gp_Pnt q = curve.Value(first + (last - first) * (double)s / (double)samples);
+                for (NSUInteger k = 0; k < count; ++k) {
+                    const gp_Pnt t(pts[3*k], pts[3*k+1], pts[3*k+2]);
+                    if (q.Distance(t) <= tolerance) { hit = true; break; }
+                }
+            }
+            if (!hit) continue;
+
+            // Symmetric chamfer: equal setback on both adjacent faces.
+            mk.Add(distance, edge);
+            ++added;
+        }
+        if (added == 0) return nil;
+
+        mk.Build();
+        if (!mk.IsDone()) return nil;
+        const TopoDS_Shape result = mk.Shape();
+        if (result.IsNull()) return nil;
+
+        OCCTShape *out = [OCCTShape new];
+        out->_shape = result;
+        return out;
+    } catch (...) {
+        return nil;
+    }
+}
+
++ (nullable OCCTShape *)shelledShape:(OCCTShape *)shape
+                       atWorldPoints:(NSData *)worldPoints
+                           thickness:(double)thickness
+                           tolerance:(double)tolerance {
+    if (shape == nil || thickness == 0.0) return nil;
+    const NSUInteger count = worldPoints.length / (3 * sizeof(double));
+    const double *pts = count > 0 ? (const double *)worldPoints.bytes : NULL;
+
+    try {
+        // Faces to open: those with a sample within tolerance of a picked point.
+        // Empty selection => fully-enclosed hollow.
+        TopTools_ListOfShape openFaces;
+        if (count > 0) {
+            for (TopExp_Explorer ex(shape->_shape, TopAbs_FACE); ex.More(); ex.Next()) {
+                const TopoDS_Face face = TopoDS::Face(ex.Current());
+                BRepAdaptor_Surface surf(face);
+                const double u0 = surf.FirstUParameter(), u1 = surf.LastUParameter();
+                const double v0 = surf.FirstVParameter(), v1 = surf.LastVParameter();
+                bool hit = false;
+                const int S = 4;
+                for (int i = 0; i <= S && !hit; ++i) {
+                    for (int j = 0; j <= S && !hit; ++j) {
+                        const gp_Pnt q = surf.Value(u0 + (u1 - u0) * i / (double)S,
+                                                    v0 + (v1 - v0) * j / (double)S);
+                        for (NSUInteger k = 0; k < count; ++k) {
+                            const gp_Pnt t(pts[3*k], pts[3*k+1], pts[3*k+2]);
+                            if (q.Distance(t) <= tolerance) { hit = true; break; }
+                        }
+                    }
+                }
+                if (hit) openFaces.Append(face);
+            }
+        }
+
+        BRepOffsetAPI_MakeThickSolid mk;
+        mk.MakeThickSolidByJoin(shape->_shape, openFaces, -fabs(thickness), 1.0e-3);
         if (!mk.IsDone()) return nil;
         const TopoDS_Shape result = mk.Shape();
         if (result.IsNull()) return nil;

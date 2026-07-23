@@ -207,6 +207,33 @@ nonisolated enum OCCTKernel {
             .map(BRepHandle.init)
     }
 
+    /// Bevel the analytic edges nearest `points` by `distance` (spec §4.3
+    /// chamfer). Same fallback contract as `fillet`.
+    static func chamfer(_ handle: BRepHandle, at points: [SIMD3<Double>],
+                        distance: Double, tolerance: Double) -> BRepHandle? {
+        guard !points.isEmpty, distance > 0 else { return nil }
+        return OCCTBridge.chamferedShape(handle.shape, atWorldPoints: pack(points),
+                                         distance: distance, tolerance: tolerance)
+            .map(BRepHandle.init)
+    }
+
+    /// Hollow a solid to `thickness`, opening the faces nearest `points` (spec
+    /// §4.4 Shell). Empty `points` = fully-enclosed hollow. Correct on curved
+    /// walls, unlike the mesh inset. Nil when the thickness is out of range.
+    static func shell(_ handle: BRepHandle, openingAt points: [SIMD3<Double>],
+                      thickness: Double, tolerance: Double) -> BRepHandle? {
+        guard thickness > 0 else { return nil }
+        return OCCTBridge.shelledShape(handle.shape, atWorldPoints: pack(points),
+                                       thickness: thickness, tolerance: tolerance)
+            .map(BRepHandle.init)
+    }
+
+    private static func pack(_ points: [SIMD3<Double>]) -> Data {
+        var flat = [Double](); flat.reserveCapacity(points.count * 3)
+        for p in points { flat.append(p.x); flat.append(p.y); flat.append(p.z) }
+        return flat.withUnsafeBytes { Data($0) }
+    }
+
     /// Serialize a solid so the analytic geometry survives a document reload.
     static func serialize(_ handle: BRepHandle) -> Data? {
         OCCTBridge.serializedShape(handle.shape)

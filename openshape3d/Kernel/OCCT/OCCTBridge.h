@@ -152,6 +152,24 @@ NS_ASSUME_NONNULL_BEGIN
                                radius:(double)radius
                             tolerance:(double)tolerance;
 
+/// Bevel the edges near `worldPoints` by `distance`
+/// (`BRepFilletAPI_MakeChamfer`) — the chamfer half of spec §4.3. Same
+/// edge-matching and tangent-chain behaviour as `filletedShape:`.
++ (nullable OCCTShape *)chamferedShape:(OCCTShape *)shape
+                        atWorldPoints:(NSData *)worldPoints
+                             distance:(double)distance
+                            tolerance:(double)tolerance;
+
+/// Hollow a solid to a wall of `thickness`, opening the faces near
+/// `worldPoints` (`BRepOffsetAPI_MakeThickSolid`) — spec §4.4 Shell. Pass an
+/// empty `worldPoints` for a fully-enclosed hollow. Correct on CURVED walls,
+/// unlike the mesh inset approximation. Nil when OCCT can't offset the solid
+/// (thickness out of the valid range), so the caller can report it.
++ (nullable OCCTShape *)shelledShape:(OCCTShape *)shape
+                       atWorldPoints:(NSData *)worldPoints
+                           thickness:(double)thickness
+                           tolerance:(double)tolerance;
+
 /// Serialize a solid to OCCT's BRep text format, so the analytic geometry can be
 /// stored in the document and survive a reload. Nil on failure.
 + (nullable NSData *)serializedShape:(OCCTShape *)shape;
