@@ -7232,6 +7232,78 @@ final class EditorViewModel {
             insertImage(data: Self.debugSeedImagePNG, on: .ground)
             selectedImageID = nil
         }
+        // OS3D_DEBUG_SEED_CYLINDER: seed a circle extrude so screenshots show the
+        // OCCT B-rep render path (a true smooth cylinder). Mirrors evalExtrude.
+        if ProcessInfo.processInfo.environment["OS3D_DEBUG_SEED_CYLINDER"] != nil,
+           session.document.bodies.isEmpty {
+            var seedDoc = session.document
+            let radius = 3.0
+            let loop = (0..<48).map { i -> SIMD2<Double> in
+                let a = Double(i) / 48 * 2 * .pi
+                return SIMD2(cos(a), sin(a)) * radius
+            }
+            let profile = Profile(loop: loop, kind: .circle(center: .zero, radius: radius),
+                                  sourceEntityIDs: [])
+            let plane = SketchPlane.ground
+            let solid = KernelOps.extrude(profile: profile, holes: [], in: plane,
+                                          distance: 5, symmetric: false)
+            var body = Body(name: "Cylinder", transform: .identity, primitive: nil,
+                            euclidMesh: solid, revision: seedDoc.nextRevision())
+            let z = OCCTKernel.extrudeZRange(distance: 5, symmetric: false)
+            let m = OCCTKernel.cylinderRenderMesh(
+                center: .zero, radius: radius, zMin: z.zMin, zMax: z.zMax,
+                origin: plane.origin, xAxis: plane.xAxis,
+                yAxis: plane.yAxis, normal: plane.normal)
+            body.render = RenderMesh(positions: m.positions, normals: m.normals, indices: m.indices)
+            body.edges = FeatureEdgeExtractor.edges(from: body.render)
+            body.material = BodyMaterialSpec.default
+            session.perform(AddBodyCommand(body: body))
+            return
+        }
+
+        // OS3D_DEBUG_SEED_BOOLEAN: cylinder − offset cylinder, to show a BOOLEAN
+        // result staying round through the OCCT source-of-truth path.
+        if ProcessInfo.processInfo.environment["OS3D_DEBUG_SEED_BOOLEAN"] != nil,
+           session.document.bodies.isEmpty {
+            var seedDoc = session.document
+            let plane = SketchPlane.ground
+            func ring(_ r: Double, _ cx: Double) -> [SIMD2<Double>] {
+                (0..<48).map { i in
+                    let a = Double(i) / 48 * 2 * .pi
+                    return SIMD2(cx + cos(a) * r, sin(a) * r)
+                }
+            }
+            let za = OCCTKernel.extrudeZRange(distance: 5, symmetric: false)
+            let bigProfile = Profile(loop: ring(3, 0), kind: .circle(center: .zero, radius: 3),
+                                     sourceEntityIDs: [])
+            let cutProfile = Profile(loop: ring(1.5, 2), kind: .circle(center: SIMD2(2, 0), radius: 1.5),
+                                     sourceEntityIDs: [])
+            let euclidBig = KernelOps.extrude(profile: bigProfile, holes: [], in: plane,
+                                              distance: 5, symmetric: false)
+            let euclidCut = KernelOps.extrude(profile: cutProfile, holes: [], in: plane,
+                                              distance: 6, symmetric: false)
+            let euclidResult = euclidBig.subtracting(euclidCut)
+            if let a = OCCTKernel.extrudeShape(
+                   outerLoop: bigProfile.loop, isCircle: true, circleCenter: .zero, circleRadius: 3,
+                   holes: [], zMin: za.zMin, zMax: za.zMax, origin: plane.origin,
+                   xAxis: plane.xAxis, yAxis: plane.yAxis, normal: plane.normal),
+               let b = OCCTKernel.extrudeShape(
+                   outerLoop: cutProfile.loop, isCircle: true, circleCenter: SIMD2(2, 0), circleRadius: 1.5,
+                   holes: [], zMin: -0.5, zMax: 6, origin: plane.origin,
+                   xAxis: plane.xAxis, yAxis: plane.yAxis, normal: plane.normal),
+               let cut = OCCTKernel.boolean(a, b, op: 1) {
+                var body = Body(name: "Boolean", transform: .identity, primitive: nil,
+                                euclidMesh: euclidResult, revision: seedDoc.nextRevision())
+                let m = OCCTKernel.renderMesh(from: cut)
+                body.brep = cut
+                body.render = RenderMesh(positions: m.positions, normals: m.normals, indices: m.indices)
+                body.edges = FeatureEdgeExtractor.edges(from: body.render)
+                body.material = BodyMaterialSpec.default
+                session.perform(AddBodyCommand(body: body))
+            }
+            return
+        }
+
         guard ProcessInfo.processInfo.environment["OS3D_DEBUG_SEED"] != nil,
               session.document.bodies.isEmpty
         else { return }

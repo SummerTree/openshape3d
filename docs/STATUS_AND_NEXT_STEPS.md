@@ -123,6 +123,13 @@ multi-edge additivity, error surfacing),
 7. **Selection mutation**: `deleteSelection` deletes whatever is in
    `selection` — internal cleanup paths must never write to `selection`
    (that's why `resetBlendState` exists apart from `cancelBlend`).
+8. **Isolated-deinit double-free**: with `SWIFT_DEFAULT_ACTOR_ISOLATION =
+   MainActor`, an implicitly-`@MainActor` `@Observable` class gets a
+   MainActor-*isolated* `deinit` (SE-0371). Deallocating one routes through
+   `swift_task_deinitOnExecutorImpl`, which double-frees on the current
+   toolchain (Xcode 26.2 / Swift 6.2) — deterministic malloc crash whenever a
+   test lets such an instance go out of scope (bit `AppSettings`). Fix: give
+   the class an explicit `nonisolated deinit {}` (no teardown work to isolate).
 
 ---
 
@@ -158,6 +165,27 @@ the render/preview path. Unlocks true fillets (tangent chains, rolling-ball
 corners, G2), robust booleans, shell/offset-face quality. Start with a spike:
 build OCCT.xcframework, round-trip one box through
 `BRepPrimAPI_MakeBox` → mesh → `RenderMesh`.
+**Concrete ordered scope + spike/kill-criteria: `docs/OCCT_BREP_PORT_DESIGN.md`.**
+This is what fixes extruded circles rendering as 48-gon prisms (no mesh-side fix
+exists — the representation itself must become analytic).
+**M0 spike + M1 wiring DONE (2026-07-22):** OCCT 7.8.1 cross-built for iOS
+(`scripts/build_occt_ios.sh` → `ThirdParty/OCCT.xcframework`, gitignored,
+modeling-only ~74 MB/arch). OCCT is now **linked into the app** and callable
+from Swift via `OCCTKernel` (Obj-C++ `OCCTBridge` behind a dedicated bridging
+header — NOT `ShaderTypes.h`, which Metal shares). `openshape3dTests/
+OCCTKernelTests` proves it in-suite (extruded circle = 1 analytic cylinder);
+**full suite 499 green**. STEP/IGES deferred (build-flag flip; ~doubles the lib).
+**A circle extrude now renders as a TRUE smooth cylinder** (OCCT analytic
+tessellation + surface normals), visually confirmed on-device — behind
+`OCCTKernel.renderCircleExtrudesWithOCCT`, Euclid still owns CSG. Seed a demo
+with `SIMCTL_CHILD_OS3D_FRESH=1 SIMCTL_CHILD_OS3D_DEBUG_SEED_CYLINDER=1`.
+**OCCT is now the source of truth for circle extrude + boolean:** `Body.brep`
+(`BRepHandle`) carries the analytic solid; `evalBoolean` composes breps
+(`BRepAlgoAPI_Fuse/Cut/Common`) and renders smooth — so a cylinder MINUS a
+cylinder stays round (verified on-device: `SIMCTL_CHILD_OS3D_DEBUG_SEED_BOOLEAN=1`).
+Euclid still computes CSG → suite 500 green. Next: general (polygonal/arc)
+profiles as B-rep source, analytic holes, extrude-into-target boolean, B-rep
+persistence, then fillet/shell on B-rep. Repro: `scripts/run_occt_spike.sh`.
 
 ### Deferred backlog (from Phase D)
 - Transform-as-a-feature — **design blocker documented** in

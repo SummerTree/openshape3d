@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		0CC70CC70CC70CC70CC700B1 /* OCCT.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = 0CC70CC70CC70CC70CC700F1 /* OCCT.xcframework */; };
 		7F70435B300C1217003471DC /* Euclid in Frameworks */ = {isa = PBXBuildFile; productRef = 7F7043F1300C0ED8003471DC /* Euclid */; };
 		7F70435C300C1217003471DC /* Euclid in Frameworks */ = {isa = PBXBuildFile; productRef = 7F7043F2300C0ED8003471DC /* Euclid */; };
 /* End PBXBuildFile section */
@@ -29,6 +30,7 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		0CC70CC70CC70CC70CC700F1 /* OCCT.xcframework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; name = OCCT.xcframework; path = ThirdParty/OCCT.xcframework; sourceTree = SOURCE_ROOT; };
 		7F704313300C0ED6003471DC /* openshape3d.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = openshape3d.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		7F704322300C0ED7003471DC /* openshape3dTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = openshape3dTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		7F70432C300C0ED7003471DC /* openshape3dUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = openshape3dUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -57,6 +59,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				0CC70CC70CC70CC70CC700B1 /* OCCT.xcframework in Frameworks */,
 				7F70435B300C1217003471DC /* Euclid in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -434,7 +437,11 @@
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
 				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
 				SWIFT_EMIT_LOC_STRINGS = YES;
-				SWIFT_OBJC_BRIDGING_HEADER = openshape3d/Shaders/ShaderTypes.h;
+				HEADER_SEARCH_PATHS = (
+					"$(SRCROOT)/ThirdParty/OCCT.xcframework/ios-arm64/Headers",
+					"$(SRCROOT)/ThirdParty/OCCT.xcframework/ios-arm64-simulator/Headers",
+				);
+				SWIFT_OBJC_BRIDGING_HEADER = "openshape3d/openshape3d-Bridging-Header.h";
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2,7";
@@ -479,7 +486,11 @@
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
 				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
 				SWIFT_EMIT_LOC_STRINGS = YES;
-				SWIFT_OBJC_BRIDGING_HEADER = openshape3d/Shaders/ShaderTypes.h;
+				HEADER_SEARCH_PATHS = (
+					"$(SRCROOT)/ThirdParty/OCCT.xcframework/ios-arm64/Headers",
+					"$(SRCROOT)/ThirdParty/OCCT.xcframework/ios-arm64-simulator/Headers",
+				);
+				SWIFT_OBJC_BRIDGING_HEADER = "openshape3d/openshape3d-Bridging-Header.h";
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2,7";

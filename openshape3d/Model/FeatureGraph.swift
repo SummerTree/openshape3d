@@ -385,9 +385,29 @@ nonisolated extension FeatureGraph {
                 state.errors[node.id] = .brokenRef("extrude node has no output BodyID")
                 return
             }
-            let body = Body(
+            var body = Body(
                 id: id, name: node.name, transform: .identity, primitive: nil,
                 euclidMesh: solid, revision: nextRevision())
+            // B-rep source of truth for CIRCLE extrudes: build an analytic OCCT
+            // solid (true cylinder), store it on the body so booleans stay
+            // analytic, and render it smooth (round) instead of the 48-gon prism.
+            // Scoped to circles so polygonal profiles keep the Euclid path exactly
+            // (no perturbation of existing coverage). Euclid still owns CSG/volume.
+            if OCCTKernel.renderCircleExtrudesWithOCCT, extras.isEmpty,
+               case let .circle(center, radius) = outer.kind {
+                let z = OCCTKernel.extrudeZRange(distance: distance.value, symmetric: symmetric)
+                if let handle = OCCTKernel.extrudeShape(
+                    outerLoop: outer.loop, isCircle: true,
+                    circleCenter: center, circleRadius: radius,
+                    holes: holes.map(\.loop), zMin: z.zMin, zMax: z.zMax,
+                    origin: plane.origin, xAxis: plane.xAxis,
+                    yAxis: plane.yAxis, normal: plane.normal) {
+                    let m = OCCTKernel.renderMesh(from: handle)
+                    body.brep = handle
+                    body.render = RenderMesh(positions: m.positions, normals: m.normals, indices: m.indices)
+                    body.edges = FeatureEdgeExtractor.edges(from: body.render)
+                }
+            }
             let table = state.naming.faceTable(for: body, createdBy: node.id, scheme: .extrude(outer))
             state.put(body, table: table)
             return
@@ -434,6 +454,15 @@ nonisolated extension FeatureGraph {
 
     // MARK: Boolean
 
+    /// Map a `BooleanKind` to `OCCTBridge`'s op code (0 union, 1 subtract, 2 intersect).
+    private static func occtBooleanOp(_ kind: BooleanKind) -> Int? {
+        switch kind {
+        case .union: return 0
+        case .subtract: return 1
+        case .intersect: return 2
+        }
+    }
+
     private func evalBoolean(
         _ node: FeatureNode,
         kind: BooleanKind,
@@ -456,14 +485,29 @@ nonisolated extension FeatureGraph {
                 return
             }
             if let t = state.faceTables[tool.id] { inputTables.append(t) }
+            let priorBrep = acc.brep
             let mesh = KernelOps.boolean(kind, target: acc, tool: tool)
             guard !mesh.polygons.isEmpty else {
                 state.errors[node.id] = .emptyGeometry
                 return
             }
-            acc = Body(
+            var next = Body(
                 id: target.id, name: target.name, transform: .identity, primitive: nil,
                 euclidMesh: mesh, revision: nextRevision())
+            // B-rep source of truth: when BOTH operands are analytic (OCCT), compose
+            // them with an OCCT boolean and render the result smooth — so a boolean
+            // involving a cylinder stays round. Euclid still owns the CSG `mesh`.
+            if let a = priorBrep, let b = tool.brep,
+               let op = Self.occtBooleanOp(kind),
+               let resultBrep = OCCTKernel.boolean(a, b, op: op) {
+                let m = OCCTKernel.renderMesh(from: resultBrep)
+                if !m.positions.isEmpty {
+                    next.brep = resultBrep
+                    next.render = RenderMesh(positions: m.positions, normals: m.normals, indices: m.indices)
+                    next.edges = FeatureEdgeExtractor.edges(from: next.render)
+                }
+            }
+            acc = next
             consumed.append(tool.id)
         }
 
