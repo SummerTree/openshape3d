@@ -1299,9 +1299,24 @@ see §12.
 into the current one INCLUDING its full history — its feature steps appear
 individually in History and stay editable (used to insert a motor reference
 model in the Wall Clock tutorial).
-**Status:** ❌ not implemented.
-**Feasibility:** geometry merge [mesh-kernel OK]; history merge
-[needs history engine]
+**Status:** 🟡 partial — `ProjectMergeKit.insert` merges another document
+into the open one WITH its history: the guest's feature nodes are appended, so
+they appear individually in History, still evaluate, and stay editable (a test
+edits an inserted step and watches the inserted geometry rebuild). Every
+identity — feature, body, sketch, construction plane, sketch entity — is
+re-minted and every reference rewritten in step, including sketch constraints,
+dimensions and §2.5 pattern links; inserting a project INTO ITSELF produces
+two independent copies rather than cross-wiring the history, which is the
+silent-corruption case two template-derived projects would otherwise hit. A
+translation offsets the incoming geometry so it does not land inside the host,
+and a clashing variable name keeps the HOST's value (its formulas depend on
+it) and is reported via `droppedVariableNames` rather than swallowed. The
+host's rollback marker extends so inserted steps do not arrive rolled back.
+Covered by `ProjectMergeTests`.
+**Missing:** the Insert > Project UI and Dashboard picker, and nesting the
+inserted steps under their own History folder.
+**Feasibility:** geometry merge [mesh-kernel OK]; history merge — confirmed
+possible on the existing feature graph, no new engine needed.
 
 ### 6.6 Variables & expressions
 
