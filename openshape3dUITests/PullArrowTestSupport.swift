@@ -27,6 +27,26 @@ extension XCTestCase {
             .press(forDuration: duration, thenDragTo: end)
     }
 
+    // MARK: - Sketch camera
+
+    /// Square the camera up to the active sketch plane.
+    ///
+    /// Entering a sketch KEEPS the camera where the user left it (Shapr3D
+    /// behaviour — you draw on the plane from whatever view you were in), so a
+    /// test that drives a sketch by normalized screen coordinates has to face
+    /// the plane first; otherwise its taps land somewhere else entirely on the
+    /// plane and the geometry it thinks it drew is not the geometry it drew.
+    ///
+    /// The Look at Sketch button only exists while the camera is off-axis, so
+    /// its absence means we are already head-on and there is nothing to do.
+    func lookAtSketch(_ app: XCUIApplication, settle: UInt32 = 2) {
+        let button = app.buttons["Look at Sketch"]
+        if button.waitForExistence(timeout: 3), button.isHittable {
+            button.tap()
+        }
+        sleep(settle) // camera flight
+    }
+
     // MARK: - Context-sensitive palette (Shapr3D-style)
     //
     // Tools now live in flyout groups (Sketch/Modify/Transform/Combine in body
@@ -60,5 +80,16 @@ extension XCTestCase {
     /// Start a sketch by choosing a draw tool from the body-mode Sketch flyout.
     func startSketchTool(_ app: XCUIApplication, _ label: String) {
         tapPaletteTool(app, group: "Sketch", label: label)
+    }
+
+    /// Tapping a profile arms Extrude at ZERO height (arrow only, no default
+    /// pull) — type a height into the bar's Distance field; submitting
+    /// commits the tool.
+    func typeExtrudeHeight(_ app: XCUIApplication, _ value: String = "2") {
+        let field = app.textFields["Distance"].firstMatch
+        XCTAssertTrue(field.waitForExistence(timeout: 3),
+                      "Extrude Distance field should be visible")
+        field.tap()
+        field.typeText("\(value)\n") // onSubmit commits the extrude
     }
 }

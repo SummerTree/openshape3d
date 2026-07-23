@@ -246,7 +246,8 @@ struct ToolPaletteView: View {
         ToolItem(id: "Delete", label: "Delete", icon: "trash",
                  enabled: viewModel.mode.isSketching
                     ? (!viewModel.selectedSketchEntityIDs.isEmpty || viewModel.hasSketchGlyphSelection)
-                    : (!viewModel.selection.isEmpty || viewModel.selectedImage != nil),
+                    : (!viewModel.selection.isEmpty || viewModel.selectedImage != nil
+                       || !viewModel.selectedSketchEntityIDs.isEmpty),
                  accessibilityID: "DeleteButton", run: { viewModel.deleteSelection() })
     }
 
@@ -257,8 +258,16 @@ struct ToolPaletteView: View {
             if case .sketching(_, let current) = viewModel.mode { return current == tool }
             return false
         }()
+        // Tapping the active tool deselects it (same toggle as CreateTool):
+        // with no tool armed, empty-space drags orbit the sketch view.
         return ToolItem(id: label, label: label, icon: icon, active: active,
-                        run: { viewModel.startSketch(tool: tool) })
+                        run: {
+                            if active {
+                                viewModel.deselectSketchTool()
+                            } else {
+                                viewModel.startSketch(tool: tool)
+                            }
+                        })
     }
 
     private func modifyItem(_ label: String, _ icon: String, _ tool: CreateTool, _ axid: String) -> ToolItem {

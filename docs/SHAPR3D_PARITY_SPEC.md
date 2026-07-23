@@ -2,11 +2,18 @@
 
 **openshape3d** — feature-for-feature product spec derived from the Shapr3D Help
 Center (manual + tutorial corpus, extracted 2026-07-18), with an honest status
-audit against the current source tree (v0.5, post-Phase C tranche 1: a
-pure-Swift 2D constraint solver, geometric constraints, driving dimensions,
-sketch states (green/blue) and drag-to-solve — on top of Phase B tranche 1:
-sweep, loft, split, pattern, text, project, sketch move/rotate, translate,
-rotate-around-axis, align, construction geometry, helix).
+audit against the current source tree.
+
+> **Status audit refreshed 2026-07-22.** The original audit was written at v0.5
+> (post-Phase C tranche 1) and went stale once Phase D/E/F landed: §4.3
+> Chamfer/Fillet, §4.4 Shell, §6.6 Variables, §10.1 History sidebar and §3.1
+> Constraint Settings were all still marked ❌ despite shipping (each now has
+> unit + UI test coverage). Those five are corrected below. When you add a
+> feature, update its Status line here in the same change — a stale audit is
+> worse than no audit, because it causes work to be redone.
+>
+> Ordered roadmap with acceptance criteria: `MODELING_PARITY_GOALS.md`.
+> Kernel split (OCCT vs Euclid): `OCCT_BREP_PORT_DESIGN.md`.
 
 ## Legend
 
@@ -75,7 +82,15 @@ axis — this drawing-time auto-constraint is the ONLY way to tie geometry to
 the axes, because the origin/axes cannot be referenced by dimensions or
 constraints afterwards (see §2.2's origin/axis restriction).
 History params per sketch step: Plane (Edit…/Select…), Projection.
-**Status:** 🟡 partial — drag-defined segments with chain continuation: after
+**Status:** 🟡 partial — **live dimensions while drawing** (`LiveDimensionKit`
++ `SketchLiveDimensionOverlay`): a stroke in flight reads its own size — width
+and height as a rectangle is dragged out, Ø across a circle (swinging to
+follow the drag, ticked where it meets the curve), length for a line, R for an
+arc. Leader offsets are a fraction of the measured span, so a 5 mm shape and a
+5 m shape annotate identically, and the readout honours the Units setting.
+Nothing is stored and the overlay is non-interactive, so it can never steal a
+tap from a real dimension label. Also drag-defined segments with chain
+continuation: after
 a stroke, the next stroke starting on the previous endpoint pre-anchors there
 (`chainAnchor`), and a stroke that closes onto the chain's first point
 finishes the chain (`EditorViewModel.beginSketchStroke/endSketchStroke`,
@@ -90,12 +105,24 @@ entry mid-draw, auto-constraints, dimension labels.
 sketch mode and auto-detects whether a stroke is a line or an arc; WIGGLE the
 pen mid-stroke to switch between arc and line. Override via the "Line Type"
 menu below Line/Arc: Automatic (default) | Line | Arc.
-**Status:** ❌ not implemented — no line/arc auto-detection. The former
-Pencil exclusion is fixed: the one-finger recognizer now accepts `.pencil`
-touches (`ViewportGestureController.attach`), so the Pencil draws sketch
-strokes; but the auto line-vs-arc classification and the Line Type menu do
-not exist.
-**Feasibility:** [mesh-kernel OK] (stroke classification is app code)
+**Status:** 🟡 partial — `StrokeClassifier` implements the detection and the
+`LineType` (Automatic | Line | Arc) override. Automatic reads a stroke as an
+arc only when it bows past 2% of its chord AND a Kåsa circle fit explains the
+samples clearly better than the straight chord does, so ordinary hand tremor
+and a 3°-of-a-huge-circle stroke both stay lines. Fitted arcs recover the
+drawn radius and centre and are stored CCW, so a clockwise stroke becomes the
+same arc walked the other way rather than a 270° one. **Wiggling mid-stroke
+toggles the result** (spec §1.2): the scribble is detected from repeated
+sharp direction reversals over segments short relative to the stroke, its own
+samples are excluded from the fit so the geometry is not dragged with it, and
+a straight stroke toggled to an arc gets a visible tenth-of-chord default bow
+(there is no fitted curvature to use) that the §1.3 bulge drag can then
+adjust. Both thresholds are relative to the chord, so classification does not
+change with zoom. The Pencil-exclusion fix stands
+(`ViewportGestureController.attach` accepts `.pencil`). Covered by
+`StrokeClassifierTests`. **Missing:** the Line Type menu UI and wiring the
+classifier into the live stroke preview.
+**Feasibility:** [mesh-kernel OK] — confirmed, this is all app code.
 
 ### 1.3 Arc
 
@@ -127,9 +154,22 @@ collinear control points produce tangency (1 collinear point = G1, 2 = G2).
 Hotkey I. Splines never have midpoints or center points. Segment-insertion
 workflow: make an existing spline point sharp, Disconnect it, drag open a
 gap, draw the new segment into the gap, then re-smooth the junction points.
-**Status:** ❌ not implemented.
-**Feasibility:** drawing/editing [mesh-kernel OK]; green/fully-defined state and
-tangent constraints [needs constraint solver]
+**Status:** 🟡 partial — the **fit spline** ships as a first-class
+`SketchEntity.spline(points:closed:)`, integrated across the whole sketch
+pipeline: centripetal Catmull–Rom tessellation (interpolates every control
+point; will not cusp on unevenly-spaced input), rendering, hit-testing,
+snapping to fit points, translate/rotate/scale, mirror, pattern, symbols,
+length measurement, DXF export (as a POLYLINE — the R12 subset has no SPLINE
+entity), profile chaining through an open spline's ends, and **use as a sweep
+spine** (§4.11). Open splines expose their endpoints to the solver and
+auto-constrainer so they weld to neighbouring geometry. Covered by
+`SplineTests`.
+**Missing:** the DRAWING tool + UI (placing/dragging fit points, the
+Fit/Control mode switch), control-point (non-interpolating) splines, interior
+points as solver variables, tangent constraints at the ends, and spline trim/
+offset (both would have to re-fit the curve).
+**Feasibility:** drawing/editing [mesh-kernel OK]; tangent constraints
+[needs constraint solver]
 
 ### 1.5 Rectangle (Center / Diagonal / Three-point)
 
@@ -464,7 +504,16 @@ translate a sketch along/between planes (set default view first via
 double-tapping the Orientation Cube). Selecting a sketch outside sketch mode
 shows the transform gizmo auto-aligned to the sketch's orientation; the Copy
 toggle produces sketch copies.
-**Status:** ❌ not implemented — sketches are not selectable as objects.
+**Status:** 🟡 partial — a sketch can be RE-HOSTED on another plane:
+`ChangeSketchPlaneCommand` + `EditorViewModel.changeSketchPlane(of:to:)`
+(one undo step) with `availableSketchPlanes(for:)` listing the ground plane
+plus every construction plane, excluding the current one. Entity coordinates
+are plane-local so the drawing keeps its shape and simply lands on the new
+plane, and dependent features rebuild — an extrude follows the sketch.
+Covered by `ChangeSketchPlaneTests`.
+**Missing:** the UI entry point for it, sketches being selectable as objects
+outside sketch mode, the auto-aligned transform gizmo, dragging a sketch
+between planes, and the Copy toggle.
 **Feasibility:** [mesh-kernel OK]
 
 ### 2.5 Sketch pattern constraint
@@ -473,8 +522,19 @@ toggle produces sketch copies.
 instance propagate to all. Re-select any member sketch to re-activate the
 pattern badges and adjust definition/distance/quantity. Delete via the badge +
 "Delete Constraints": permanently breaks the link, instances become individual.
-**Status:** ❌ not implemented.
-**Feasibility:** [needs constraint solver] + [needs history engine]
+**Status:** 🟡 partial — the pattern LINK ships (`SketchPatternLink` on the
+sketch + `SketchPatternKit`): instances stay slaved to their seed, so editing
+the seed (position, radius, …) regenerates every copy, and instance IDs are
+preserved so selections/references survive. Any member resolves back to its
+link (`link(owning:)`), which is what re-activates the pattern on re-select.
+`unlink` implements "Delete Constraints" — the copies remain as individual
+entities and simply stop following. Links persist, and pre-§2.5 documents
+still load. Covered by `SketchPatternLinkTests`.
+**Missing:** the badge UI for adjusting definition/distance/quantity, and
+wiring the Pattern tool to create the link automatically (it still emits
+unlinked copies).
+**Feasibility:** [mesh-kernel OK] — regeneration is deterministic, so this did
+NOT need the solver.
 
 ### 2.6 Snapping options & guides
 
@@ -552,7 +612,10 @@ drawing). **Always Show Constraints** (icons for selected elements of the
 active sketch), **Always Show Dimensions** (all locked dimensions shown).
 **Anchored Sketch Entity**: First Selected | Last Selected — which entity stays
 fixed when a constraint is applied (existing constraints override).
-**Status:** ❌. **Feasibility:** [needs constraint solver]
+**Status:** 🟡 partial (Phase C). `ConstraintSettingsView` ships a constraint
+settings surface, and the solver honours the auto-constrain toggles.
+**Missing:** the full per-constraint-type enable/disable matrix Shapr3D
+exposes. **Feasibility:** [mesh-kernel OK] (solver already ships)
 
 ### 3.2 The constraint set
 
@@ -719,10 +782,18 @@ Overflow = Auto | Cliff | Smooth | Notch, Include Tangent Edges toggle,
 Y-Shaped Blend toggle. Existing fillets are editable by selecting the face
 (Edit) or from History (including adding more edges to one step). Hotkey F.
 Zebra analysis recommended for continuity checks.
-**Status:** ❌ not implemented.
-**Feasibility:** [needs B-rep kernel] (a mesh-domain fallback for straight-edge
-chamfers and constant-radius fillets on prismatic edges is possible but will
-not match tangent-propagation/corner behavior)
+**Status:** 🟡 partial (Phase E tranches 1–3). Mesh-domain chamfer AND fillet
+ship: multi-edge selection, live preview rendered in place of the source body,
+drag-to-size arrow with red/blue validity, and `FeatureKind.chamfer/.fillet`
+nodes so the blend is parametric and re-editable. Covered by
+`KernelBlendTests`, `FeatureBlendEvalTests`, `BlendUITests`.
+**Missing:** tangent-chain auto-propagation, concave edges (material-removal
+only), best-effort corners where 3+ blended edges meet, one body per feature,
+variable-radius/G2, and a prismatic quarter-round cross-section rather than a
+true rolling ball.
+**Feasibility:** [needs B-rep kernel] for the missing items — `BRepFilletAPI`
+is goal G1 in `MODELING_PARITY_GOALS.md`. NOTE: a blend currently drops the
+`Body.brep`, so filleting an analytic cylinder reverts it to a faceted mesh.
 
 ### 4.4 Shell
 
@@ -736,9 +807,15 @@ because the resulting body wouldn't be valid" warning — outside the bounded
 valid thickness range (Troubleshoot geometric errors). History params:
 Target face, Thickness. Order matters with fillets (fillet
 before shell → inside follows the fillet). Hotkey H.
-**Status:** ❌ not implemented.
-**Feasibility:** [needs B-rep kernel] (general case; a prismatic-body
-approximation via inset-profile subtract is feasible on the mesh kernel)
+**Status:** 🟡 partial (Phase E tranche 4). Hollow-a-body ships: tap faces to
+open them, whole-body mode when no face is picked, thickness drag with
+validity feedback, and a parametric `FeatureKind.shell` node. Covered by
+`KernelShellTests`, `FeatureShellEvalTests`, `ShellUITests`.
+**Missing:** correctness on CURVED walls (the mesh approach insets a planar
+face outline, which is exact only for prismatic bodies), Offset Face on curved
+faces, and Radius/Diameter + Total-distance thickness types.
+**Feasibility:** [needs B-rep kernel] for the general case —
+`BRepOffsetAPI_MakeThickSolid` is goal G2 in `MODELING_PARITY_GOALS.md`.
 
 ### 4.5 Loft
 
@@ -879,18 +956,42 @@ corner options are mesh-sweep math)
 replace highlight blue, replacing face purple; badge tap swaps roles; Flip
 Alignment toggle extends to the other side. Works on complex non-planar faces
 (imported or native).
-**Status:** ❌ not implemented.
-**Feasibility:** [needs B-rep kernel]
+**Status:** 🟡 partial — `ReplaceFaceKit` covers the planar-face-to-parallel-
+plane case, which is both directions of the spec's "extends or trims": the
+material between the face and the target plane is the prism swept by the
+face's own outline, fused for an extend and cut for a trim. `plan` works out
+which and by how much (Flip Alignment inverts it), and after `apply` the face
+sits exactly on the target plane with the rest of the body untouched. A face
+whose outline the picker hands back as a keyhole (a drilled top) sweeps its
+real area, so extending does not plug the hole. Covered by `ReplaceFaceTests`.
+**Refused rather than approximated:** a non-parallel target — the gap varies
+across the face, so no single prism describes it — and a target coincident
+with the face.
+**Missing:** the blue/purple selection UI with its role-swap badge, non-planar
+and non-parallel targets, and multi-face selections.
+**Feasibility:** [needs B-rep kernel] for the general case; the planar-
+parallel case is [mesh-kernel OK] and ships.
 
 ### 4.13 Offset Edge (3D)
 
 **Spec:** From a 3D body: choose Single | Chain, select edge(s), gizmo sets
 offset direction and distance; output is sketch geometry in an auto-created
 sketch on the relevant plane/face. History param: Plane.
-**Status:** ❌ not implemented.
-**Feasibility:** [mesh-kernel OK] for planar-face edges (feature edges are
-already extracted in `FeatureEdges`); curved-surface edge offsets
-[needs B-rep kernel]
+**Status:** 🟡 partial — `EdgeOffsetKit` implements the geometry for
+planar-face edges, both selection modes: **Chain** offsets the face's whole
+outer boundary as a closed, mitred loop; **Single** offsets just the tapped
+segments as open polylines (a pick snaps to the nearest boundary segment, and
+picks are emitted in outline order so adjacent ones stay connected). Sign
+follows the sketch tool — positive grows outward on a CCW outline, negative
+inward — and an offset that consumes the face reports failure instead of
+emitting a flipped loop. The output is hosted on the face's OWN plane
+(`EdgeOffsetKit.plane(of:)`), so it lands back on the face it came from.
+Covered by `EdgeOffsetTests`.
+**Missing:** the tool entry point and drag gizmo, auto-creating the sketch to
+receive the output, the history node with its Plane param, and offsets of
+edges on curved surfaces.
+**Feasibility:** [mesh-kernel OK] for planar-face edges — confirmed;
+curved-surface edge offsets [needs B-rep kernel]
 
 ### 4.14 Project (Tools)
 
@@ -898,7 +999,13 @@ already extracted in `FeatureEdges`); curved-surface edge offsets
 body → 2D outline symbol; face → engraving; edges → reference distances; merge
 same-plane sketches into one; project onto non-planar faces (edges only);
 edge projections split the target surface (per-region materials, embossing).
-**Status:** ❌ not implemented.
+**Status:** 🟡 partial — this IS §1.13's tool, and its 3D entry point is
+exactly what ships there: tap a visible BODY and its feature edges flatten
+onto the active sketch plane as editable line entities in one undo step
+(`ProjectionKit.project`, `projectTappedBody`). That covers the body → 2D
+outline and edges → reference-geometry uses. Missing (as §1.13): face →
+engraving, non-planar targets, same-plane sketch merging, and edge projections
+splitting the target surface into regions.
 **Feasibility:** as 1.13
 
 ### 4.15 Wrap & Emboss
@@ -909,10 +1016,27 @@ profiles → select a SINGLE cylindrical/conical target face → gizmo position 
 depth → Done. History params: Items to Wrap, Face to Wrap Onto, Emboss depth
 (positive raised / negative engraved), Rotation (about own center), Center
 (alignment origin on the target).
-**Status:** ❌ not implemented.
-**Feasibility:** [needs B-rep kernel] (a mesh approximation — developable
-unwrap of cylinder/cone + boolean with a wrapped cutter — is feasible but
-tolerance-fragile)
+**Status:** 🟡 partial — `WrapKit` implements the mapping and the emboss
+solid. The no-stretch property holds exactly: profile x is treated as ARC
+LENGTH and y as axial distance, so a 40 mm-wide profile is 40 mm of surface at
+r = 8, 20 or 100 (unlike Project's linear cast), and a full circumference of
+profile closes back on its own start. Rotation and Center (alignment origin)
+are honoured, and a picked `CylindricalFace` converts straight into a target.
+`embossSolid` returns a closed mesh to fuse (positive depth = raised) or
+subtract (negative = engraved); its volume matches the analytic wrapped-slab
+value A·|d|·(1 + d/2r) — signed, since a raised slab's outer face is longer
+than its base while an engraved one's inner face is shorter — to within 1%,
+and fusing a boss onto a real cylinder body adds exactly that much.
+The solid is built in angular BANDS: a single triangulation would chord
+straight through the cylinder wherever a facet spans a wide angle and quietly
+lose volume, so each band is clipped, triangulated and lifted separately, with
+no wall on the interior cuts so the bands tile into one manifold.
+Covered by `WrapEmbossTests`.
+**Missing:** the tool UI (profile/face selection, position + depth gizmo), the
+history node, and conical targets — the mapping generalises but is not
+written.
+**Feasibility:** [mesh-kernel OK] for cylinders — confirmed; the band
+construction is what makes the mesh approximation stable.
 
 ### 4.16 Delete Face (direct modeling)
 
@@ -923,11 +1047,21 @@ holes/pockets when adjusting components; simplifying molds ("Lampshade
 positive mold") and dies. Companion workflow: Offset Face a redundant
 feature to nothing, then delete the leftover surfaces. Deletions that cannot
 heal leave sheet/surface bodies (see the §4 body-types intro).
-**Status:** ❌ not implemented — nothing in the app deletes faces or heals
-surfaces; Delete removes whole bodies only.
-**Feasibility:** [needs B-rep kernel] (face removal + surface
-extension/healing); a mesh fallback for simple prismatic holes is possible
-but fragile
+**Status:** 🟡 partial — the healing engine ships as a feature-graph node,
+`.deleteFace(body:faces:)`, evaluated through OCCT's `BRepAlgoAPI_Defeaturing`
+(`evalDeleteFace`). Persisted `FaceRef`s re-resolve against the input body on
+every rebuild — including CYLINDRICAL faces, so deleting a hole's wall is one
+tap — and the surrounding surfaces extend to re-close the solid (a Ø4 hole
+deleted from a 10 mm box heals back to exactly six planar faces and its full
+1000 mm³). Failures are reported, never swallowed: an unresolvable face, an
+empty selection, or a set of neighbours that cannot close errors the node and
+leaves the body untouched. Covered by `DeleteFaceEvalTests`.
+**Missing:** the tap-a-face-then-Delete gesture in the viewport, Shift-chain
+face selection, and the sheet/surface-body fallback for deletions that cannot
+heal (today those simply error).
+**Feasibility:** [needs B-rep kernel] — confirmed; this is B-rep-only on
+purpose, since healing means EXTENDING adjacent surfaces and a mesh has no
+surfaces to extend.
 
 ---
 
@@ -1140,8 +1274,15 @@ to Face at Point**. All parametrically adjustable later; History param:
 Length (plus the defining references). Adaptive "Add Axis" shortcut: with a
 valid selection the adaptive menu offers Add Axis directly, skipping menu
 steps. Axes serve Revolve, patterns, and transforms.
-**Status:** ❌ not implemented.
-**Feasibility:** [mesh-kernel OK] (cylinder-axis fitting on mesh faces)
+**Status:** 🟡 partial — the GEOMETRY for all five axis tools ships in
+`ConstructionAxisKit` (through-2-points, along-edge, perpendicular-to-face,
+2-plane intersection, and axis-of-revolution recovered from face samples by a
+least-squares fit), with degenerate selections refused rather than producing
+NaNs. Covered by `ConstructionAxisTests`.
+**Missing:** the document entity, the Add Axis tool/adaptive menu entry, the
+History Length parameter, rendering, and using an axis as the operand for
+Revolve / circular pattern / rotate.
+**Feasibility:** [mesh-kernel OK] — remaining work is app/UI, not geometry.
 
 ### 6.3 Insert Image (reference images)
 
@@ -1170,7 +1311,12 @@ images as Split Body cutters.
 project; reposition with Move/Rotate or Translate afterwards. Non-native
 formats arrive as one "Import" history step (with an editable settings control);
 STEP preserves assembly hierarchy as nested folders.
-**Status:** ❌ not implemented (no import of any kind).
+**Status:** 🟡 partial — importing into the open project ships via the
+toolbar Import menu (STEP, OBJ, STL, DXF, reference images — see §12.1); an
+imported body lands as a normal body and can be repositioned with
+Move/Rotate like any other. Missing: the Insert > File entry point itself,
+the single editable "Import" history step with its settings control, and
+STEP assembly hierarchy as nested folders.
 **Feasibility:** STL/OBJ/3MF [mesh-kernel OK]; STEP/IGES [needs B-rep kernel];
 see §12.
 
@@ -1180,9 +1326,24 @@ see §12.
 into the current one INCLUDING its full history — its feature steps appear
 individually in History and stay editable (used to insert a motor reference
 model in the Wall Clock tutorial).
-**Status:** ❌ not implemented.
-**Feasibility:** geometry merge [mesh-kernel OK]; history merge
-[needs history engine]
+**Status:** 🟡 partial — `ProjectMergeKit.insert` merges another document
+into the open one WITH its history: the guest's feature nodes are appended, so
+they appear individually in History, still evaluate, and stay editable (a test
+edits an inserted step and watches the inserted geometry rebuild). Every
+identity — feature, body, sketch, construction plane, sketch entity — is
+re-minted and every reference rewritten in step, including sketch constraints,
+dimensions and §2.5 pattern links; inserting a project INTO ITSELF produces
+two independent copies rather than cross-wiring the history, which is the
+silent-corruption case two template-derived projects would otherwise hit. A
+translation offsets the incoming geometry so it does not land inside the host,
+and a clashing variable name keeps the HOST's value (its formulas depend on
+it) and is reported via `droppedVariableNames` rather than swallowed. The
+host's rollback marker extends so inserted steps do not arrive rolled back.
+Covered by `ProjectMergeTests`.
+**Missing:** the Insert > Project UI and Dashboard picker, and nesting the
+inserted steps under their own History folder.
+**Feasibility:** geometry merge [mesh-kernel OK]; history merge — confirmed
+possible on the existing feature graph, no new engine needed.
 
 ### 6.6 Variables & expressions
 
@@ -1208,9 +1369,13 @@ single dimension. Feet/inch symbol notation is accepted with documented
 parser pitfalls: 1/2" mis-parses as 1/(2 in); 1' 1/2" errors. Feature
 dimensions (Extrude distance, Fillet radius, Shell thickness,
 pattern Total/Spacing/Quantity) all accept variables.
-**Status:** ❌ not implemented.
-**Feasibility:** [needs history engine] (plus solver for sketch-dimension
-consumers)
+**Status:** ✅ implemented (Phase D). Named variables with expression formulas
+(`ExpressionEvaluator`), consumed by feature parameters via `Expr`; editing a
+variable rebuilds every dependent feature in one undo step. Covered by
+`ExpressionEvaluatorTests`, `VariablesTests`, `VariableFanoutTests`,
+`PersistedVariableTests`.
+**Missing:** driving SKETCH dimensions from variables (feature parameters only
+today).
 
 ---
 
@@ -1231,7 +1396,10 @@ active tools — sketch-mode drags draw, extrude/face-pull drags pull, gizmo
 drags transform, and drags starting over a filled profile begin a pull
 (`ViewportGestureController.handleOrbit`'s `.began` branch offers the drag
 to the `ViewportView.gestureDragBegan` delegate first and falls back to
-orbit only when no tool claims it). That mirrors Shapr3D's own
+orbit only when no tool claims it). Mid-sketch orbit: tapping the ACTIVE
+sketch tool deselects it (`deselectSketchTool`, `tool: nil`), after which
+empty-space drags orbit and "Look at Sketch" restores head-on. That
+mirrors Shapr3D's own
 convention, so the level stands (`TurntableCamera.orbit/pan/zoom`);
 double-tap empty space fits the scene. The Apple Pencil now draws sketch
 strokes (`.pencil` accepted on the one-finger recognizer, with
@@ -1251,8 +1419,18 @@ resets to default view. Right-click menu: Default View, Top View, Zoom to Fit.
 corner in its own overlay pass (`OrientationCube` + `OrientationCubeRenderer`
 reusing the gizmo pipeline); tapping a face or corner animates the camera to
 that view (`hitPose` → `CameraAnimator`); cube taps never reach the model.
-Missing: edge hits, X/Y/Z labels, drag-to-orbit on the cube, double-tap
-reset, the 2D-planar-view rotation arrows, context menu.
+Drag-to-orbit on the cube works as a UNIVERSAL orbit control (`ViewportView.
+gestureDragBegan` claims any drag starting in `OrientationCube.rect` before any
+mode-specific handling, so the camera can be freely orbited in EVERY mode —
+sketch/extrude/face-pull/gizmo — even when a tool owns the main viewport). A
+tap still snaps to the view; only the drag orbits. **Face names** (Top /
+Bottom / Front / Back / Left / Right) are drawn over the cube for the faces
+turned toward the camera, fading out as a face rotates away so only the ones
+you could sensibly tap are named; the names are `StandardView.rawValue`, so
+the cube and the Views menu can never disagree about which way is Front
+(`OrientationCube.faceLabels` + `OrientationCubeLabels`). Missing: edge hits,
+X/Y/Z axis labels, double-tap reset, the 2D-planar-view rotation arrows,
+context menu.
 **Feasibility:** [mesh-kernel OK]
 
 ### 7.3 Views & Appearance panel
@@ -1369,8 +1547,23 @@ Duplicate, Delete. **Command Search:** X or Cmd+F opens a
 fuzzy launcher ("p3" → "Add Plane - 3 Points", "snu" → "Scale - Non-uniform");
 arrows cycle, Enter runs, recents shown when empty; pre-selection scopes
 results.
-**Status:** ❌ not implemented — no keyboard handling, no command search.
-(Undo/Redo exist as toolbar buttons only.)
+**Status:** 🟡 partial — `CommandRegistry` is the single catalog both paths
+resolve against, which is what makes Single Key Action possible at all: a bare
+letter is EITHER a hotkey or the first character of a Command Search query,
+and with the setting on Command Search bare letters stop dispatching while
+modified chords still fire. The spec's key map is bound: sketch A/C/G/I/L/O/
+R/T, modeling E/F/H/M/N/P/S/V/W, booleans ⌘U/B/I, ⌘Z / ⇧⌘Z / ⌘A, views ⌘1–7,
+Space, and — as the spec insists — ⇧⌘I (import into the current project) and
+⌥⌘I (import as a NEW project) as separate commands. Tests assert no two
+commands share a chord, since a duplicate makes one unreachable.
+**Command Search** is a fuzzy launcher biased toward word starts, which is
+what makes the spec's own examples work: "p3" → "Add Plane - 3 Points" and
+"snu" → "Scale - Non-uniform" both rank first. An empty query shows recents
+(most-recent-first, de-duplicated, capped), and a category scope implements
+"pre-selection scopes results". `cheatSheet` groups the bound commands for the
+long-press-⌘ sheet. Covered by `CommandRegistryTests`.
+**Missing:** the UIKit key-command wiring and the launcher/cheat-sheet UI,
+user-customizable shortcuts, and the three-finger undo/redo swipe.
 **Feasibility:** [mesh-kernel OK]
 
 ---
@@ -1457,10 +1650,13 @@ steps. Documented repair flows: remove the missing face from a Face Offset
 selection; re-project a lost face, then re-reference the extrusion profile;
 re-select the original face to fix a broken Shell (Action camera pts 2–3;
 Floor fan).
-**Status:** ❌ not implemented — the app has a linear undo/redo command stack
-(`UndoStack`, `DocumentCommand.apply/revert`) with snapshot payloads; there is
-no feature graph, no parameter re-editing, no rebuild.
-**Feasibility:** [needs history engine]
+**Status:** ✅ implemented (Phase D). A real parametric feature graph
+(`FeatureGraph`/`FeatureNode`) with a History sidebar: editable parameters that
+rebuild everything downstream, topological naming so a `FaceRef`/`EdgeRef`
+re-resolves against rebuilt geometry, rollback marker, drag-reorder, suppress/
+un-suppress, and per-node error badges. Covered by `FeatureGraphEvalTests`,
+`HistoryPanelUITests`, `HistoryReorderUITests`.
+**Missing:** feature grouping/folders, and renaming a node from the sidebar.
 
 ### 10.2 Direct modeling with model-aware dimensions
 
@@ -1517,9 +1713,10 @@ Visibility. Names are shared with History (rename in one place updates both).
 `ItemsPanelView`) lists bodies, sketches, construction planes, **images**,
 and **symbols** with type icons; per row: visibility eye
 (`SetItemVisibilityCommand`), inline rename (`RenameItemCommand`), delete,
-tap-to-select, and Zoom To (camera fit to the item's AABB). Extrude
-auto-hides the consumed sketch, and re-opening a hidden sketch for editing
-un-hides it. `isHidden` persists. Missing: folders, filter dropdown,
+tap-to-select, and Zoom To (camera fit to the item's AABB). DELIBERATE
+deviation: consumed sketches are NOT auto-hidden on extrude (read as the
+sketch vanishing — hide manually via the eye); re-opening a hidden sketch
+for editing still un-hides it. `isHidden` persists. Missing: folders, filter dropdown,
 multi-select, per-row image opacity percentage (opacity edits live in the
 image bar), Reveal in Items, Show Hidden Items / Invert Visibility menu,
 shared names with History (no history engine).
@@ -1542,7 +1739,14 @@ Import Planar Curves as Sketches. .shapr imports keep editable per-feature
 history; all other formats arrive as a single Import history step. STEP
 assembly hierarchy → nested folders. Mesh rules: booleans work only on closed
 mesh bodies; any boolean involving a mesh yields a mesh.
-**Status:** 🟡 partial — toolbar Import menu: STL (binary or ASCII, parsed
+**Status:** 🟡 partial. **STEP import now ships** (`OCCTKernel.readSTEP`,
+OCCT DataExchange) — each solid in the file becomes a body carrying its
+analytic B-rep, so imported geometry is exact rather than tessellated. Also
+toolbar Import menu: **OBJ** (`OBJImporter` — the read half of `OBJExporter`,
+so an export/edit-elsewhere/re-import round trip returns the same volume and
+bounds; `o`/`g` groups import as separate bodies, polygon faces fan-
+triangulate, and `v/vt/vn`, `v//vn`, and negative indices all parse, with
+normals recomputed from winding rather than trusted), STL (binary or ASCII, parsed
 and welded into a solid mesh body — `STLImporter` → `EuclidBridge` weld path
 → `AddBodyCommand`; imported bodies boolean like any native body since
 everything is a mesh here), DXF (R12/R2000-common subset — LINE, CIRCLE,
@@ -1570,7 +1774,12 @@ unitless so the unit is declared at export). Favorite formats (star) persist;
 batch export multiple formats; isolated parts exportable in any type except
 .shapr. Screenshot tool: grid on/off, transparency, body edges, item chooser,
 resolution Actual/Double/FullHD/4K/8K, remembers settings, clipboard shortcut.
-**Status:** 🟡 partial — toolbar Export menu (1 unit = 1 mm): STL (binary,
+**Status:** 🟡 partial. **STEP (AP214) export now ships** via OCCT
+DataExchange (`OCCTKernel.writeSTEP`) — unlike every mesh format below it
+carries the EXACT B-rep, so analytic surfaces survive into other CAD
+(`OCCTKernelTests.testSTEPRoundTripPreservesAnalyticTopology` round-trips a
+filleted cylinder with its cylindrical/torus/planar faces intact). Mesh
+formats, toolbar Export menu (1 unit = 1 mm): STL (binary,
 `STLExporter`), OBJ (`OBJExporter`), 3MF (`ThreeMFExporter`, zip + XML),
 **GLB** (`GLBExporter`, glTF 2.0 binary, one node/mesh per body), **USDZ**
 via ModelIO where the platform can write it (`USDZExporter`; the menu entry
@@ -1835,7 +2044,14 @@ Navigation: presets, 2-Finger Rotation, zoom direction, start screen
 mode (show touches/keys); Sync status + manual sync; About (version, terms,
 usage-data opt-out); Account deletion. Units: mm/cm/m/in/ft; angle decimal or
 fractional.
-**Status:** ❌ not implemented — no settings surface at all.
+**Status:** 🟡 partial — a Settings surface ships (`AppSettings`, Phase F
+tranche 1): display Units (mm/cm/m/in/ft), Theme System/Light/Dark, Interface
+Left/Right, and Anti-Aliasing (Disabled | 2x | 4x MSAA), persisted across
+launches. Missing: everything else — language, accent colour, Single Key
+Action (the model for it exists in `CommandRegistry`, §8.4, but no UI),
+shortcut customization, spline point type, Pencil pressure, import
+preferences, tessellation quality, navigation presets, tutorial mode, and the
+account/sync/about sections.
 **Feasibility:** app-local settings [mesh-kernel OK]; account/sync sections
 [platform/service]
 

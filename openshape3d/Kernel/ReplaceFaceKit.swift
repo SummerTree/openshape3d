@@ -1,0 +1,128 @@
+//
+//  ReplaceFaceKit.swift
+//  openshape3d
+//
+//  Spec §4.12 Replace Face — extend or trim selected face(s) until they lie on
+//  another face's surface, with Flip Alignment choosing which side to extend to.
+//
+//  For a planar face moving to a parallel plane, both directions are the SAME
+//  operation on the same solid: the prism swept by the face's own outline
+//  between the two planes. Extending fuses that prism onto the body; trimming
+//  cuts it out. Working out which, and by how much, is all this kit does — the
+//  boolean itself is `KernelOps`.
+//
+//  Non-parallel targets are refused rather than approximated: the gap between
+//  the planes varies across the face, so a single prism would be wrong
+//  everywhere except one line, and silently shipping that is worse than saying
+//  no.
+//
+
+import Foundation
+import simd
+import Euclid
+
+nonisolated enum ReplaceFaceKit {
+
+    /// What replacing a face resolves to.
+    nonisolated enum Plan: Equatable, Sendable {
+        /// The target lies OUTSIDE the body past this face: grow by `distance`.
+        case extend(distance: Double)
+        /// The target lies inside: cut `distance` of material away.
+        case trim(distance: Double)
+
+        var distance: Double {
+            switch self {
+            case let .extend(d), let .trim(d): d
+            }
+        }
+    }
+
+    nonisolated enum Refusal: Error, Equatable, Sendable {
+        /// The planes are not parallel, so no single prism describes the change.
+        case targetNotParallel
+        /// The target plane passes through the face itself, or coincides with it.
+        case noChange
+        case degenerateFace
+    }
+
+    /// Which way to move the face when the target plane is ambiguous — the
+    /// spec's Flip Alignment toggle.
+    static let parallelTolerance: Double = 1e-6
+
+    // MARK: - Planning
+
+    /// Resolve the replace into a direction and distance.
+    ///
+    /// `targetOrigin`/`targetNormal` describe the replacing face's plane.
+    /// `flip` extends to the other side, which is what the spec's Flip
+    /// Alignment does when both readings are geometrically valid.
+    static func plan(
+        face: PlanarFace, targetOrigin: SIMD3<Double>, targetNormal: SIMD3<Double>,
+        flip: Bool = false
+    ) throws -> Plan {
+        guard !face.outline.isEmpty else { throw Refusal.degenerateFace }
+        let normal = simd_normalize(SIMD3<Double>(
+            Double(face.normal.x), Double(face.normal.y), Double(face.normal.z)))
+        let target = simd_normalize(targetNormal)
+        guard abs(abs(simd_dot(normal, target)) - 1) < parallelTolerance else {
+            throw Refusal.targetNotParallel
+        }
+
+        // Signed gap along the FACE's outward normal: positive means the target
+        // sits outside the body past this face.
+        let signed = simd_dot(targetOrigin - face.origin, normal)
+        guard abs(signed) > 1e-9 else { throw Refusal.noChange }
+
+        let effective = flip ? -signed : signed
+        return effective > 0 ? .extend(distance: effective) : .trim(distance: -effective)
+    }
+
+    // MARK: - The solid
+
+    /// The prism swept by the face's outline between the old and new planes —
+    /// the material that is added (extend) or removed (trim).
+    ///
+    /// Holes in the face are carried through, so replacing the top of a drilled
+    /// boss does not fill its hole in.
+    static func sweptSolid(face: PlanarFace, plan: Plan) -> Euclid.Mesh? {
+        guard face.outline.count >= 3, plan.distance > 1e-9 else { return nil }
+        let plane = SketchPlane(
+            origin: face.origin, xAxis: face.basisX, yAxis: face.basisY)
+
+        // The face's basis may be left-handed relative to its outward normal;
+        // extruding along +z of that basis would then go INTO the body. Sign the
+        // distance so the prism always spans face → target.
+        let basisNormal = simd_cross(face.basisX, face.basisY)
+        let outward = SIMD3<Double>(
+            Double(face.normal.x), Double(face.normal.y), Double(face.normal.z))
+        let sign: Double = simd_dot(basisNormal, outward) >= 0 ? 1 : -1
+        // Trimming sweeps INWARD from the face; extending sweeps outward.
+        let direction: Double = {
+            switch plan {
+            case .extend: 1
+            case .trim: -1
+            }
+        }()
+
+        return KernelOps.extrude(
+            profile: Profile(loop: face.outline, kind: .polygonal, sourceEntityIDs: []),
+            holes: face.holes.map {
+                Profile(loop: $0, kind: .polygonal, sourceEntityIDs: [])
+            },
+            in: plane,
+            distance: plan.distance * sign * direction)
+    }
+
+    /// Apply the replace to a body's mesh: fuse the prism for an extend, cut it
+    /// for a trim. Nil when the prism is degenerate.
+    static func apply(
+        to mesh: Euclid.Mesh, face: PlanarFace, plan: Plan
+    ) -> Euclid.Mesh? {
+        guard let prism = sweptSolid(face: face, plan: plan),
+              !prism.polygons.isEmpty else { return nil }
+        switch plan {
+        case .extend: return mesh.union(prism).makeWatertight()
+        case .trim: return mesh.subtracting(prism).makeWatertight()
+        }
+    }
+}

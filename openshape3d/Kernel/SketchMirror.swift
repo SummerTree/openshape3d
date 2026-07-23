@@ -82,6 +82,12 @@ nonisolated func mirroredSketchEntity(
             id: newID, center: reflect(c),
             radius: r, sides: sides, rotation: 2 * axisAngle - rotation
         )
+
+    case let .spline(_, points, closed):
+        // Reflecting the fit points reflects the curve exactly. Reversing the
+        // order preserves the traversal direction after the mirror flips
+        // orientation, matching how the arc case swaps its sweep endpoints.
+        return .spline(id: newID, points: points.map(reflect).reversed(), closed: closed)
     }
 }
 
@@ -94,6 +100,9 @@ nonisolated extension SketchEntity {
         switch self {
         case .line, .rect: return [.endpointA, .endpointB]
         case .circle, .arc, .ellipse, .polygon: return [.center]
+        // An open spline exposes its ends, matching `mutableSlots`; a closed
+        // one has no distinguished point pair to mirror.
+        case let .spline(_, _, closed): return closed ? [] : [.endpointA, .endpointB]
         }
     }
 

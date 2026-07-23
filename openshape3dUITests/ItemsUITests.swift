@@ -23,6 +23,7 @@ final class ItemsUITests: XCTestCase {
         window.coordinate(withNormalizedOffset: CGVector(dx: 0.80, dy: 0.78)).tap()
         XCTAssertTrue(app.staticTexts["Sketching on ground plane"].waitForExistence(timeout: 3))
         sleep(2) // camera animation
+        lookAtSketch(app)
         let start = window.coordinate(withNormalizedOffset: CGVector(dx: 0.42, dy: 0.42))
         let end = window.coordinate(withNormalizedOffset: CGVector(dx: 0.65, dy: 0.60))
         start.press(forDuration: 0.15, thenDragTo: end)
@@ -40,7 +41,7 @@ final class ItemsUITests: XCTestCase {
         let window = app.windows.firstMatch
         window.coordinate(withNormalizedOffset: CGVector(dx: 0.53, dy: 0.51)).tap()
         XCTAssertTrue(app.staticTexts["Extrude"].waitForExistence(timeout: 5))
-        app.buttons["Extrude"].firstMatch.tap()
+        typeExtrudeHeight(app)
         XCTAssertFalse(app.staticTexts["Extrude"].exists)
 
         // Open the Items panel.
@@ -49,12 +50,13 @@ final class ItemsUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["Sketches"].exists)
         XCTAssertTrue(app.staticTexts["Planes"].exists)
 
-        // The consumed sketch auto-hid on extrude; toggle its eye on, then off.
+        // The consumed sketch stays VISIBLE after extrude; the eye still
+        // toggles it off and back on.
         let sketchEye = app.buttons["ItemEye-Sketch 1"]
         XCTAssertTrue(sketchEye.waitForExistence(timeout: 3),
                       "The consumed sketch should be listed")
-        sketchEye.tap() // show
-        sketchEye.tap() // hide again
+        sketchEye.tap() // hide
+        sketchEye.tap() // show again
         XCTAssertTrue(sketchEye.exists)
 
         // Rename the extruded body.

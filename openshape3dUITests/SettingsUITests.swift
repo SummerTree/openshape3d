@@ -26,11 +26,12 @@ final class SettingsUITests: XCTestCase {
         p(0.80, 0.78).tap()
         XCTAssertTrue(app.staticTexts["Sketching on ground plane"].waitForExistence(timeout: 3))
         sleep(2)
+        lookAtSketch(app)
         p(0.32, 0.32).press(forDuration: 0.15, thenDragTo: p(0.68, 0.62))
         app.buttons["Exit Sketching"].tap(); sleep(1)
         p(0.45, 0.45).tap()
         XCTAssertTrue(app.staticTexts["Extrude"].waitForExistence(timeout: 5))
-        app.buttons["Extrude"].firstMatch.tap(); sleep(1)
+        typeExtrudeHeight(app); sleep(1)
         p(0.5, 0.5).doubleTap(); sleep(1)
     }
 

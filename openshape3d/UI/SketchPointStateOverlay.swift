@@ -32,6 +32,10 @@ struct SketchPointStateOverlay: View {
             }
             // Informational only — must never steal taps from the canvas/gizmo.
             .allowsHitTesting(false)
+            // The Metal viewport is full-bleed; a SwiftUI overlay is safe-area
+            // inset by default, which would draw every projected point ~85pt
+            // below the geometry it annotates.
+            .ignoresSafeArea()
             .accessibilityIdentifier("SketchPointStateOverlay")
         }
     }

@@ -35,6 +35,8 @@ nonisolated enum SketchTransform {
             case let .polygon(id, center, radius, sides, rotation):
                 .polygon(id: id, center: center + delta, radius: radius, sides: sides,
                          rotation: rotation)
+            case let .spline(id, points, closed):
+                .spline(id: id, points: points.map { $0 + delta }, closed: closed)
             }
         }
     }
@@ -95,6 +97,10 @@ nonisolated enum SketchTransform {
                     id: id, center: rotated(center), radius: radius, sides: sides,
                     rotation: rotation + angle
                 ))
+            case let .spline(id, points, closed):
+                // A fit spline is defined purely by its points, so rotating
+                // them rotates the curve exactly — no angle parameter needed.
+                result.append(.spline(id: id, points: points.map(rotated), closed: closed))
             }
         }
         return result
@@ -135,6 +141,8 @@ nonisolated enum SketchTransform {
             case let .polygon(id, center, radius, sides, rotation):
                 .polygon(id: id, center: scaled(center), radius: radius * radiusFactor,
                          sides: sides, rotation: rotation + angleShift)
+            case let .spline(id, points, closed):
+                .spline(id: id, points: points.map(scaled), closed: closed)
             }
         }
     }

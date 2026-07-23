@@ -35,6 +35,13 @@ nonisolated extension ProfileDetector {
                     SketchEntity.arcPoint(center: center, radius: radius, angle: startAngle),
                     SketchEntity.arcPoint(center: center, radius: radius, angle: endAngle),
                 ]
+            case let .spline(_, points, closed):
+                // An OPEN spline chains through its first/last fit points, so it
+                // can close a profile together with lines and arcs; a closed one
+                // is a loop on its own, like a circle.
+                guard !closed, let first = points.first, let last = points.last,
+                      points.count >= 2 else { return [] }
+                return [first, last]
             case .rect, .circle, .ellipse, .polygon:
                 return [] // closed: no endpoints to chain through
             }

@@ -74,6 +74,26 @@ nonisolated enum KernelOps {
         return solid.transformed(by: transform)
     }
 
+    /// Unsigned enclosed volume via the divergence theorem (mm³ for a closed
+    /// outward-oriented mesh). Used to tell a REAL boolean overlap from mere
+    /// coplanar sliver contact: two bodies sharing a flush wall can intersect
+    /// into zero-volume sliver polygons, which must not count as touching.
+    static func volume(of mesh: Euclid.Mesh) -> Double {
+        var total = 0.0
+        for polygon in mesh.polygons {
+            let vertices = polygon.vertices
+            guard vertices.count >= 3 else { continue }
+            let pa = vertices[0].position
+            let a = SIMD3(pa.x, pa.y, pa.z)
+            for i in 1..<(vertices.count - 1) {
+                let pb = vertices[i].position
+                let pc = vertices[i + 1].position
+                total += simd_dot(a, simd_cross(SIMD3(pb.x, pb.y, pb.z), SIMD3(pc.x, pc.y, pc.z))) / 6
+            }
+        }
+        return abs(total)
+    }
+
     /// A slightly overlapped extrude prism (union of all profile prisms) for use
     /// as a boolean CUT tool: the prism is padded ~0.001–0.002 past the flush
     /// extent so coplanar / flush cut faces merge cleanly instead of leaving
@@ -310,6 +330,16 @@ nonisolated enum KernelOps {
 
 // MARK: - Chamfer / Fillet (edge blends)
 
+/// One straight edge (or one segment of a tessellated curved edge) to blend:
+/// endpoints plus the outward normals of the two faces meeting there, all in
+/// the mesh's coordinate space.
+nonisolated struct BlendEdgeSpec: Sendable {
+    var p0: SIMD3<Double>
+    var p1: SIMD3<Double>
+    var normalA: SIMD3<Double>
+    var normalB: SIMD3<Double>
+}
+
 nonisolated extension KernelOps {
 
     /// Chamfer a single convex straight edge by `setback` (the flat width on
@@ -327,11 +357,10 @@ nonisolated extension KernelOps {
         normalB: SIMD3<Double>,
         setback: Double
     ) -> Euclid.Mesh {
-        guard let tool = cornerWedge(
-            p0: p0, p1: p1, normalA: normalA, normalB: normalB,
-            setback: setback, round: nil
-        ) else { return mesh }
-        return mesh.subtracting(tool).makeWatertight()
+        blendEdges(
+            mesh: mesh,
+            edges: [BlendEdgeSpec(p0: p0, p1: p1, normalA: normalA, normalB: normalB)],
+            amount: setback, isFillet: false)
     }
 
     /// Fillet (round) a single convex straight edge to `radius`. Subtracts the
@@ -347,11 +376,321 @@ nonisolated extension KernelOps {
         normalB: SIMD3<Double>,
         radius: Double
     ) -> Euclid.Mesh {
-        guard let tool = cornerWedge(
-            p0: p0, p1: p1, normalA: normalA, normalB: normalB,
-            setback: radius, round: radius
-        ) else { return mesh }
-        return mesh.subtracting(tool).makeWatertight()
+        blendEdges(
+            mesh: mesh,
+            edges: [BlendEdgeSpec(p0: p0, p1: p1, normalA: normalA, normalB: normalB)],
+            amount: radius, isFillet: true)
+    }
+
+    /// Blend many edges at once. Edges are first grouped into tangent-continuous
+    /// CHAINS (a tessellated cylinder rim arrives as ~48 short segments); each
+    /// multi-segment chain becomes ONE swept tool — the blend cross-section
+    /// mitred along the chain — subtracted in a single boolean. Per-segment
+    /// corner wedges overlap near-tangentially on a curved rim, and unioning or
+    /// serially subtracting dozens of them is both slow and crashes Euclid's
+    /// healer; the swept tool avoids the pile-up entirely. Isolated straight
+    /// edges keep the original corner-wedge path. Degenerate edges are skipped;
+    /// returns `mesh` unchanged when nothing yields a tool.
+    static func blendEdges(
+        mesh: Euclid.Mesh,
+        edges: [BlendEdgeSpec],
+        amount: Double,
+        isFillet: Bool
+    ) -> Euclid.Mesh {
+        guard amount > 1e-6 else { return mesh }
+        var result = mesh
+        for chain in chainedSpecs(edges) {
+            let tool: Euclid.Mesh?
+            if chain.segments.count == 1 {
+                let s = chain.segments[0]
+                tool = cornerWedge(
+                    p0: s.p0, p1: s.p1, normalA: s.normalA, normalB: s.normalB,
+                    setback: amount, round: isFillet ? amount : nil)
+            } else {
+                tool = sweptBlendTool(chain: chain, amount: amount, isFillet: isFillet)
+            }
+            if let tool, !tool.polygons.isEmpty {
+                result = result.subtracting(tool).makeWatertight()
+            }
+        }
+        return result
+    }
+
+    // MARK: Chain assembly (multi-segment blends)
+
+    /// An ordered head-to-tail run of blend segments. `closed` means the last
+    /// segment's end meets the first segment's start (a full rim loop).
+    private struct BlendChain {
+        var segments: [BlendEdgeSpec]   // oriented: segments[i].p1 == segments[i+1].p0
+        var closed: Bool
+    }
+
+    /// Group loose edge specs into tangent-continuous chains, mirroring
+    /// `EdgeTopology.smoothChain`'s rules (shared endpoint, direction and
+    /// face-normal turns under ~35°), then orient each chain head-to-tail with
+    /// the A/B normal assignment kept consistent from segment to segment (the
+    /// sweep needs "face A" to mean the SAME physical surface all along).
+    private static func chainedSpecs(_ specs: [BlendEdgeSpec]) -> [BlendChain] {
+        guard !specs.isEmpty else { return [] }
+        let cosTurn = cos(35.0 * Double.pi / 180)
+
+        struct QKey: Hashable { let x, y, z: Int64 }
+        func key(_ p: SIMD3<Double>) -> QKey {
+            let s = 1e5
+            return QKey(x: Int64((p.x * s).rounded()),
+                        y: Int64((p.y * s).rounded()),
+                        z: Int64((p.z * s).rounded()))
+        }
+        func dir(_ s: BlendEdgeSpec) -> SIMD3<Double> {
+            let d = s.p1 - s.p0
+            let l = simd_length(d)
+            return l > 1e-12 ? d / l : SIMD3(0, 0, 1)
+        }
+        func continues(_ a: BlendEdgeSpec, _ b: BlendEdgeSpec) -> Bool {
+            guard abs(simd_dot(dir(a), dir(b))) >= cosTurn else { return false }
+            let direct = min(simd_dot(a.normalA, b.normalA), simd_dot(a.normalB, b.normalB))
+            let swapped = min(simd_dot(a.normalA, b.normalB), simd_dot(a.normalB, b.normalA))
+            return max(direct, swapped) >= cosTurn
+        }
+
+        var byEndpoint = [QKey: [Int]]()
+        for (i, s) in specs.enumerated() {
+            byEndpoint[key(s.p0), default: []].append(i)
+            byEndpoint[key(s.p1), default: []].append(i)
+        }
+
+        var assigned = [Bool](repeating: false, count: specs.count)
+        var chains = [BlendChain]()
+
+        for start in specs.indices where !assigned[start] {
+            // Collect the connected continuity component.
+            var component = [start]
+            assigned[start] = true
+            var frontier = [start]
+            while let i = frontier.popLast() {
+                for k in [key(specs[i].p0), key(specs[i].p1)] {
+                    for j in byEndpoint[k] ?? [] where !assigned[j] {
+                        if continues(specs[i], specs[j]) {
+                            assigned[j] = true
+                            component.append(j)
+                            frontier.append(j)
+                        }
+                    }
+                }
+            }
+            if component.count == 1 {
+                chains.append(BlendChain(segments: [specs[start]], closed: false))
+                continue
+            }
+
+            // Order the component head-to-tail. Walk neighbor-to-neighbor from
+            // an endpoint touched by only one member (open chain) or anywhere
+            // (loop), flipping segments and their A/B normals as needed.
+            let members = Set(component)
+            var degree = [QKey: Int]()
+            for i in component {
+                degree[key(specs[i].p0), default: 0] += 1
+                degree[key(specs[i].p1), default: 0] += 1
+            }
+            let first = component.first {
+                degree[key(specs[$0].p0)] == 1 || degree[key(specs[$0].p1)] == 1
+            } ?? component[0]
+            var used: Set<Int> = [first]
+            var seg = specs[first]
+            if degree[key(seg.p1)] == 1 {   // orient so the open end trails
+                seg = BlendEdgeSpec(p0: seg.p1, p1: seg.p0,
+                                    normalA: seg.normalA, normalB: seg.normalB)
+            }
+            var ordered = [seg]
+            while ordered.count < component.count {
+                let tailKey = key(ordered[ordered.count - 1].p1)
+                guard let nextIndex = (byEndpoint[tailKey] ?? []).first(where: {
+                    members.contains($0) && !used.contains($0)
+                }) else { break }
+                used.insert(nextIndex)
+                var next = specs[nextIndex]
+                if key(next.p0) != tailKey {
+                    next = BlendEdgeSpec(p0: next.p1, p1: next.p0,
+                                         normalA: next.normalA, normalB: next.normalB)
+                }
+                // Keep the A/B faces consistent along the sweep.
+                let prev = ordered[ordered.count - 1]
+                let direct = simd_dot(prev.normalA, next.normalA)
+                    + simd_dot(prev.normalB, next.normalB)
+                let swapped = simd_dot(prev.normalA, next.normalB)
+                    + simd_dot(prev.normalB, next.normalA)
+                if swapped > direct {
+                    next = BlendEdgeSpec(p0: next.p0, p1: next.p1,
+                                         normalA: next.normalB, normalB: next.normalA)
+                }
+                ordered.append(next)
+            }
+            let closed = ordered.count > 2
+                && key(ordered[ordered.count - 1].p1) == key(ordered[0].p0)
+            chains.append(BlendChain(segments: ordered, closed: closed))
+        }
+        return chains
+    }
+
+    // MARK: Swept blend tool
+
+    /// The removal solid for a multi-segment chain: the corner cross-section
+    /// (triangle for chamfer; corner-minus-arc for fillet) placed at every chain
+    /// vertex on the mitred frame (adjacent segment frames averaged), lofted
+    /// segment-by-segment, capped at open ends. One well-formed solid replaces
+    /// dozens of overlapping per-segment wedges.
+    private static func sweptBlendTool(
+        chain: BlendChain,
+        amount: Double,
+        isFillet: Bool
+    ) -> Euclid.Mesh? {
+        let segs = chain.segments
+        guard segs.count >= 2 else { return nil }
+
+        // Per-segment frames: edge direction + into-face tangents (same
+        // construction as cornerWedge).
+        struct Frame { var e, tA, tB: SIMD3<Double> }
+        var frames = [Frame]()
+        for s in segs {
+            let axis = s.p1 - s.p0
+            let len = simd_length(axis)
+            guard len > 1e-9 else { return nil }
+            let e = axis / len
+            let nA = simd_normalize(s.normalA), nB = simd_normalize(s.normalB)
+            var tA = simd_cross(nA, e), tB = simd_cross(nB, e)
+            let lA = simd_length(tA), lB = simd_length(tB)
+            guard lA > 1e-6, lB > 1e-6 else { return nil }
+            tA /= lA; tB /= lB
+            if simd_dot(tA, nB) > 0 { tA = -tA }
+            if simd_dot(tB, nA) > 0 { tB = -tB }
+            frames.append(Frame(e: e, tA: tA, tB: tB))
+        }
+
+        // Cross-section at one vertex from a (possibly averaged) frame. Points
+        // run apex → faceA setback → (arc samples) → faceB setback; every
+        // section must emit the SAME count for the loft.
+        let arcSteps = 8
+        func section(at apex: SIMD3<Double>, frame: Frame) -> [SIMD3<Double>]? {
+            let sa = apex + frame.tA * amount
+            let sb = apex + frame.tB * amount
+            var bis = frame.tA + frame.tB
+            let bl = simd_length(bis)
+            guard bl > 1e-6 else { return nil }
+            bis /= bl
+            // Nudge the apex OUTWARD (−bis) so the tool's flat faces sit just
+            // proud of the body's faces: the removed region is unchanged (the
+            // extra sliver lies outside the solid), but every contact becomes
+            // transversal instead of exactly coplanar — the case Euclid's CSG
+            // healer is flakiest about.
+            let apexOut = apex - bis * max(amount * 0.02, 1e-4)
+            guard isFillet else { return [apexOut, sa, sb] }
+            // Center on the inward bisector at r/sin(h), h = half the angle
+            // between the face tangents — the inscribed circle tangent to both
+            // faces (cos 2h = tA·tB; same math as cornerWedge via normals).
+            let cosT = max(-0.999, min(0.999, simd_dot(frame.tA, frame.tB)))
+            let sinHalf = max(((1 - cosT) / 2).squareRoot(), 1e-3)
+            let center = apex + bis * (amount / sinHalf)
+            var u = sa - center
+            let w = sb - center
+            let cross = simd_cross(u, w)
+            let crossLen = simd_length(cross)
+            guard crossLen > 1e-12 else { return nil }
+            let axis = cross / crossLen
+            let angle = atan2(crossLen, simd_dot(u, w))
+            var points = [apexOut, sa]
+            let rot = simd_quatd(angle: angle / Double(arcSteps), axis: axis)
+            for _ in 1..<arcSteps {
+                u = rot.act(u)
+                points.append(center + u)
+            }
+            points.append(sb)
+            return points
+        }
+
+        // Mitred vertex frames: average the neighbor segments' frames. Open
+        // ends extend past the chain by the usual boolean-overlap epsilon.
+        func averaged(_ a: Frame, _ b: Frame) -> Frame {
+            Frame(e: simd_normalize(a.e + b.e),
+                  tA: simd_normalize(a.tA + b.tA),
+                  tB: simd_normalize(a.tB + b.tB))
+        }
+        var sections = [[SIMD3<Double>]]()
+        if chain.closed {
+            for i in segs.indices {
+                let prev = (i + segs.count - 1) % segs.count
+                guard let s = section(at: segs[i].p0,
+                                      frame: averaged(frames[prev], frames[i]))
+                else { return nil }
+                sections.append(s)
+            }
+        } else {
+            let lenFirst = simd_length(segs[0].p1 - segs[0].p0)
+            let lenLast = simd_length(segs[segs.count - 1].p1 - segs[segs.count - 1].p0)
+            let epsStart = max(lenFirst * 0.02, 1e-3)
+            let epsEnd = max(lenLast * 0.02, 1e-3)
+            guard let head = section(
+                at: segs[0].p0 - frames[0].e * epsStart, frame: frames[0])
+            else { return nil }
+            sections.append(head)
+            for i in 1..<segs.count {
+                guard let s = section(at: segs[i].p0,
+                                      frame: averaged(frames[i - 1], frames[i]))
+                else { return nil }
+                sections.append(s)
+            }
+            guard let tail = section(
+                at: segs[segs.count - 1].p1 + frames[segs.count - 1].e * epsEnd,
+                frame: frames[segs.count - 1])
+            else { return nil }
+            sections.append(tail)
+        }
+
+        // Loft: lateral triangles between consecutive sections (wrapping the
+        // section ring), end caps when open. Windings are made consistent by
+        // sign-checking the enclosed volume below.
+        var triangles = [(SIMD3<Double>, SIMD3<Double>, SIMD3<Double>)]()
+        let ringCount = chain.closed ? sections.count : sections.count - 1
+        let pointCount = sections[0].count
+        for i in 0..<ringCount {
+            let a = sections[i], b = sections[(i + 1) % sections.count]
+            for j in 0..<pointCount {
+                let k = (j + 1) % pointCount
+                triangles.append((a[j], a[k], b[k]))
+                triangles.append((a[j], b[k], b[j]))
+            }
+        }
+        if !chain.closed {
+            let head = sections[0], tail = sections[sections.count - 1]
+            for j in 1..<(pointCount - 1) {
+                triangles.append((head[0], head[j + 1], head[j]))
+                triangles.append((tail[0], tail[j], tail[j + 1]))
+            }
+        }
+
+        var signedVolume = 0.0
+        for (a, b, c) in triangles {
+            signedVolume += simd_dot(a, simd_cross(b, c)) / 6
+        }
+        let flip = signedVolume < 0
+
+        var polygons = [Euclid.Polygon]()
+        polygons.reserveCapacity(triangles.count)
+        for (a, b, c) in triangles {
+            let (v0, v1, v2) = flip ? (a, c, b) : (a, b, c)
+            let n = simd_cross(v1 - v0, v2 - v0)
+            let nl = simd_length(n)
+            guard nl > 1e-14 else { continue }   // mitring can collapse a sliver
+            let normal = Vector(n.x / nl, n.y / nl, n.z / nl)
+            if let poly = Euclid.Polygon([
+                Euclid.Vertex(Vector(v0.x, v0.y, v0.z), normal),
+                Euclid.Vertex(Vector(v1.x, v1.y, v1.z), normal),
+                Euclid.Vertex(Vector(v2.x, v2.y, v2.z), normal),
+            ]) {
+                polygons.append(poly)
+            }
+        }
+        guard !polygons.isEmpty else { return nil }
+        return Euclid.Mesh(polygons)
     }
 
     /// The corner-removal tool shared by chamfer and fillet. Without `round` it

@@ -74,6 +74,14 @@ nonisolated enum DXFKit {
                     ),
                     closed: true, to: &out
                 )
+            case let .spline(_, points, closed):
+                // Exported as a tessellated POLYLINE rather than a DXF SPLINE:
+                // it round-trips through every reader (the R12 subset we target
+                // has no SPLINE entity) at the cost of exact curvature.
+                appendPolyline(
+                    SketchEntity.splinePoints(points, closed: closed),
+                    closed: closed, to: &out
+                )
             }
         }
         out += "0\nENDSEC\n0\nEOF\n"

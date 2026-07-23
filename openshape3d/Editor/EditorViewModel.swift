@@ -38,6 +38,13 @@ protocol ViewportCameraControl: AnyObject {
     /// or nil when it is behind the camera. Used to place SwiftUI overlays such
     /// as dimension labels (plan §C2).
     func worldToScreenPoint(_ world: SIMD3<Double>) -> CGPoint?
+    /// Degrees between the camera eye-line and a plane's normal, 0 = head-on,
+    /// 90 = edge-on. Entering a sketch reads this to decide whether the current
+    /// view is usable to draw in.
+    func offAxisDegrees(to plane: SketchPlane) -> Double
+    /// Standard-view names for the orientation-cube faces currently turned
+    /// toward the camera, in screen points (spec §7.2).
+    func orientationCubeLabels() -> [OrientationCube.FaceLabel]
 }
 
 @MainActor
@@ -1547,18 +1554,18 @@ final class EditorViewModel {
         if case .pickingBlendEdges = mode { mode = .idle }
     }
 
-    /// The source mesh with the pending blend applied to every selected edge.
+    /// The source mesh with the pending blend applied to every selected edge
+    /// (one batched boolean — a rim chain is dozens of segments).
     private func blendedMesh(_ kind: BlendKind, source: Body) -> Euclid.Mesh {
         func d3(_ v: SIMD3<Float>) -> SIMD3<Double> { SIMD3(Double(v.x), Double(v.y), Double(v.z)) }
-        var mesh = source.euclidMesh()
-        for edge in blendSelectedEdges {
-            let p0 = d3(edge.start), p1 = d3(edge.end)
-            let nA = d3(edge.normalA), nB = d3(edge.normalB)
-            mesh = kind == .fillet
-                ? KernelOps.filletEdge(mesh: mesh, p0: p0, p1: p1, normalA: nA, normalB: nB, radius: blendValue)
-                : KernelOps.chamferEdge(mesh: mesh, p0: p0, p1: p1, normalA: nA, normalB: nB, setback: blendValue)
+        let specs = blendSelectedEdges.map {
+            BlendEdgeSpec(
+                p0: d3($0.start), p1: d3($0.end),
+                normalA: d3($0.normalA), normalB: d3($0.normalB))
         }
-        return mesh
+        return KernelOps.blendEdges(
+            mesh: source.euclidMesh(), edges: specs,
+            amount: blendValue, isFillet: kind == .fillet)
     }
 
     /// Recompute the live blend preview (edge toggles and size edits call this).
@@ -1639,13 +1646,25 @@ final class EditorViewModel {
                 < Self.pointSegmentDistance(localPoint, $1.start, $1.end)
         }) else { return }
 
-        // Toggle: same edge (≈ midpoint) already picked → deselect.
-        if let idx = blendSelectedEdges.firstIndex(where: {
-            simd_length($0.midpoint - nearest.midpoint) < 1e-4
-        }) {
-            blendSelectedEdges.remove(at: idx)
+        // A curved rim (cylinder top, rounded pocket) tessellates into many
+        // short segments; expand the pick to the whole tangent-continuous chain
+        // so one tap blends the full rim. A straight edge is its own chain.
+        let chain = EdgeTopology.smoothChain(containing: nearest, in: edges)
+        func isSelected(_ edge: SelectableEdge) -> Int? {
+            blendSelectedEdges.firstIndex {
+                simd_length($0.midpoint - edge.midpoint) < 1e-4
+            }
+        }
+
+        // Toggle the chain as a unit: fully selected → deselect it all.
+        if chain.allSatisfy({ isSelected($0) != nil }) {
+            for edge in chain {
+                if let idx = isSelected(edge) { blendSelectedEdges.remove(at: idx) }
+            }
         } else {
-            blendSelectedEdges.append(nearest)
+            for edge in chain where isSelected(edge) == nil {
+                blendSelectedEdges.append(edge)
+            }
         }
         updateBlendPreview()
     }
@@ -2311,6 +2330,36 @@ final class EditorViewModel {
             deleteImage(image.id)
             return
         }
+        // Sketch entities picked with the Select tool (tap or marquee) delete
+        // OUTSIDE sketch mode too — one undo step across their owning sketches.
+        if !selectedSketchEntityIDs.isEmpty {
+            var commands: [DocumentCommand] = []
+            var touchedSketchIDs: [SketchID] = []
+            for sketch in session.document.sketches {
+                let ids = Set(sketch.entities.map(\.id)).intersection(selectedSketchEntityIDs)
+                guard !ids.isEmpty else { continue }
+                commands.append(RemoveSketchEntitiesCommand(ids: ids, sketch: sketch))
+                touchedSketchIDs.append(sketch.id)
+            }
+            if !selection.isEmpty {
+                cancelTransientPicks()
+                commands.append(DeleteBodiesCommand(ids: selection, document: session.document))
+            }
+            guard !commands.isEmpty else { return }
+            if commands.count == 1 {
+                session.perform(commands[0])
+            } else {
+                session.perform(CompositeCommand(title: "Delete", commands: commands))
+            }
+            selectedSketchEntityIDs.removeAll()
+            selection.removeAll()
+            for id in touchedSketchIDs {
+                session.rebuildForSketchChange(id)
+            }
+            cancelTool()
+            mode = .idle
+            return
+        }
         guard !selection.isEmpty else { return }
         // Revert any transient preview first (the rotate preview mutates
         // transforms outside undo) so the delete captures clean state.
@@ -2425,9 +2474,16 @@ final class EditorViewModel {
     /// Orthographic projection toggle state (mirrored to the camera).
     var orthographicEnabled = false
 
-    /// True while sketching with the camera >10° off head-on; maintained by
-    /// the viewport as the camera moves (shows the Look at Sketch button).
+    /// True while sketching with the camera off head-on; shows the Look at
+    /// Sketch button. Maintained by the viewport as the camera moves AND
+    /// recomputed on sketch entry — entering a sketch no longer moves the
+    /// camera, so waiting for motion would hide the affordance exactly when
+    /// an angled view makes it most useful.
     var lookAtSketchAvailable = false
+
+    /// Degrees off head-on past which Look at Sketch is offered. Shared with
+    /// the viewport so the button's appearance and the angle it reports agree.
+    static let lookAtSketchThresholdDegrees: Double = 10
 
     func applyStandardView(_ view: StandardView) {
         cameraControl?.animateToStandardView(view)
@@ -2734,9 +2790,17 @@ final class EditorViewModel {
         if selectionAdditive {
             if let hit = bodyHit {
                 toggleSelection(of: hit.bodyID)
+            } else {
+                // Select-mode taps also gather sketch entities (spec §8.2),
+                // matching what the marquee offers.
+                _ = toggleSketchEntityUnderRay(ray)
             }
             return
         }
+
+        // Plain (non-additive) taps drop any sketch-entity selection left
+        // over from Select mode, so the orange highlight can't get stuck.
+        selectedSketchEntityIDs.removeAll()
 
         if bodyHit == nil, case .faceSelected = mode, let context = toolContext,
            let distance = context.distance, abs(distance) > 1e-4 {
@@ -2895,7 +2959,7 @@ final class EditorViewModel {
                 item: .body(body.id), points: points, isHidden: body.isHidden
             ))
         }
-        if filter == .bodiesAndSketchEntities {
+        if filter != .bodiesOnly {
             for sketch in session.document.sketches {
                 for entity in sketch.entities {
                     candidates.append(AreaSelectCandidate(
@@ -2932,6 +2996,29 @@ final class EditorViewModel {
             selectedSketchEntityIDs = entities
         }
         updateModeForSelection()
+    }
+
+    /// Select-mode tap fallback: toggle the sketch entity under the ray
+    /// (nearest across every visible sketch). Returns false on a miss.
+    private func toggleSketchEntityUnderRay(_ ray: Ray) -> Bool {
+        var best: (id: UUID, distance: Double)?
+        for sketch in session.document.sketches where !sketch.isHidden {
+            guard let local = localPoint(of: ray, on: sketch.plane),
+                  let hit = SketchHitTester.nearestEntity(
+                      to: local, in: sketch.entities, tolerance: entityPickTolerance
+                  )
+            else { continue }
+            if best == nil || hit.distance < best!.distance {
+                best = (hit.entity.id, hit.distance)
+            }
+        }
+        guard let best else { return false }
+        if selectedSketchEntityIDs.contains(best.id) {
+            selectedSketchEntityIDs.remove(best.id)
+        } else {
+            selectedSketchEntityIDs.insert(best.id)
+        }
+        return true
     }
 
     // MARK: - Select mode (plan §B13 UI, spec §8.2)
@@ -3315,8 +3402,9 @@ final class EditorViewModel {
         return best
     }
 
-    /// Tap on a filled profile "jumps right into the Extrude command"
-    /// (Shapr3D): opens the numeric extrude with a default pull.
+    /// Tap on a filled profile arms the Extrude command at ZERO distance:
+    /// just the pull arrow + numeric bar, no geometry until the user drags
+    /// the arrow or types a height (Shapr3D). Committing at 0 cancels.
     private func startExtrude(
         with hit: (profile: Profile, holes: [Profile], plane: SketchPlane, sketchID: SketchID, distance: Float)
     ) {
@@ -3326,7 +3414,7 @@ final class EditorViewModel {
             holes: hit.holes,
             plane: hit.plane,
             sketchID: hit.sketchID,
-            kind: .extrude(distance: 2)
+            kind: .extrude(distance: 0)
         )
         rebuildToolPreview(&context)
         toolContext = context
@@ -4030,13 +4118,16 @@ final class EditorViewModel {
         }
 
         // Scan: which bodies does the tool touch, and does it push into any?
+        // "Touch" requires REAL overlap volume — a body merely flush against
+        // the tool (shared wall) intersects into zero-volume slivers and must
+        // stay untouched, or extrudes would grab adjacent bodies.
         var touched: [(target: Body, worldTarget: Euclid.Mesh, pushesIn: Bool)] = []
         for target in booleanCandidates(for: context) {
             let worldTarget = target.euclidMesh().transformed(by: target.transform.euclid)
             let pushesIn = sample.map { worldTarget.intersects($0) } ?? false
             let touches = pushesIn
                 || context.sourceBody == target.id
-                || !worldTarget.intersection(mergeTool).polygons.isEmpty
+                || KernelOps.volume(of: worldTarget.intersection(mergeTool)) > 1e-4
             if touches {
                 touched.append((target, worldTarget, pushesIn))
             }
@@ -4106,11 +4197,9 @@ final class EditorViewModel {
             commands.append(ReplaceBodyCommand(title: title, before: entry.target, after: after))
         }
 
-        // Spec §11: sketches auto-hide once a tool consumes them, in the
-        // same undo step.
-        if let hide = consumedSketchHideCommand(context) {
-            commands.append(hide)
-        }
+        // Consumed sketches stay VISIBLE after the tool commits (they can be
+        // hidden manually from Items) — hiding them mid-flow read as the
+        // sketch vanishing whenever a body was made from it.
         // Phase D: record the tool's feature node (extrude in tranche 1;
         // revolve / sweep / loft in tranche 2) with the resolved boolean intent,
         // but only for a SINGLE feature-owned target — the evaluators apply one
@@ -4158,9 +4247,6 @@ final class EditorViewModel {
             revision: preview.meshRevision
         )
         var commands: [DocumentCommand] = [AddBodyCommand(body: body, title: title)]
-        if let hide = consumedSketchHideCommand(context) {
-            commands.append(hide)
-        }
         // Phase D: a new stand-alone tool body becomes a `.newBody` history node
         // — extrude in tranche 1, or revolve / sweep / loft in tranche 2.
         if let node = toolFeatureNode(
@@ -4178,16 +4264,6 @@ final class EditorViewModel {
         mode = .selected(body.id)
         selection = [body.id]
         session.save()
-    }
-
-    /// Hide-the-consumed-sketch command for a committing tool, or nil when the
-    /// tool has no sketch (face pulls) or it is already hidden.
-    private func consumedSketchHideCommand(_ context: ToolContext) -> DocumentCommand? {
-        guard let sketchID = context.sketchID,
-              let sketch = session.document.sketches.first(where: { $0.id == sketchID }),
-              !sketch.isHidden
-        else { return nil }
-        return SetItemVisibilityCommand(item: .sketch(sketchID), isHidden: true)
     }
 
     func cancelTool() {
@@ -4378,6 +4454,12 @@ final class EditorViewModel {
                 segmentsPerTurn: SketchTessellator.circleSegments
             )
             return points.count >= 2 ? points : nil
+        case let .spline(_, points, closed):
+            // An open spline is a valid sweep spine — this is the main reason
+            // to have splines at all (spec §4.11 sweeps along a drawn curve).
+            guard !closed else { return nil }
+            let curve = SketchEntity.splinePoints(points, closed: false)
+            return curve.count >= 2 ? curve : nil
         case .rect, .circle, .ellipse, .polygon:
             return nil
         }
@@ -4623,6 +4705,54 @@ final class EditorViewModel {
     /// In-progress entity during a sketch drag (rubber band).
     var pendingEntity: SketchEntity?
     private var sketchStrokeStart: SIMD2<Double>?
+    /// Where the drag currently is, plane-local. Only the live dimension
+    /// readout needs it — a circle's Ø leader swings to follow the finger.
+    private var sketchStrokeCurrent: SIMD2<Double>?
+
+    // MARK: Live dimensions while drawing (spec §1.1)
+
+    /// One live measurement, ready for the overlay to project.
+    struct LiveDimensionLabel: Identifiable {
+        let id: String
+        let text: String
+        /// Ends of the dimension line itself.
+        let worldLineStart: SIMD3<Double>
+        let worldLineEnd: SIMD3<Double>
+        /// The points on the geometry the measurement refers to; the witness
+        /// lines run from these out to the dimension line.
+        let worldWitnessStart: SIMD3<Double>
+        let worldWitnessEnd: SIMD3<Double>
+        let worldLabel: SIMD3<Double>
+        /// Ticks marking where the measurement meets the geometry (diameters).
+        let drawsEdgeTicks: Bool
+        /// False when the dimension line sits ON the geometry, so the witness
+        /// leaders would be zero-length.
+        let hasWitnessLines: Bool
+    }
+
+    /// Dimensions for the stroke in flight — width/height while dragging a
+    /// rectangle, Ø while dragging a circle. Empty when nothing is being drawn,
+    /// so the overlay disappears the moment the stroke commits.
+    var liveDimensionLabels: [LiveDimensionLabel] {
+        guard let sketch = activeSketch else { return [] }
+        // A pending arc is still being shaped (its bulge is draggable), so it
+        // keeps its readout after the initial drag ends.
+        guard let entity = pendingEntity ?? pendingArcEntity else { return [] }
+        let unit = AppSettings.shared.unit
+        return LiveDimensionKit.dimensions(for: entity, towards: sketchStrokeCurrent)
+            .map { d in
+                LiveDimensionLabel(
+                    id: d.id,
+                    text: LiveDimensionKit.label(d, unit: unit),
+                    worldLineStart: sketch.plane.toWorld(d.lineStart),
+                    worldLineEnd: sketch.plane.toWorld(d.lineEnd),
+                    worldWitnessStart: sketch.plane.toWorld(d.start),
+                    worldWitnessEnd: sketch.plane.toWorld(d.end),
+                    worldLabel: sketch.plane.toWorld(d.labelPoint),
+                    drawsEdgeTicks: d.kind.drawsEdgeTicks,
+                    hasWitnessLines: simd_length(d.offset) > 1e-9)
+            }
+    }
 
     // MARK: - Auto-constraint / inference (plan §B, spec §3, contract D)
 
@@ -4803,6 +4933,10 @@ final class EditorViewModel {
         case let .circle(_, center, _), let .arc(_, center, _, _, _),
              let .ellipse(_, center, _, _, _), let .polygon(_, center, _, _, _):
             center
+        case let .spline(_, points, _):
+            points.isEmpty
+                ? .zero
+                : points.reduce(SIMD2<Double>.zero, +) / Double(points.count)
         }
     }
 
@@ -4986,7 +5120,7 @@ final class EditorViewModel {
 
     /// Tap while sketching: Trim cuts the span under the tap; other tools
     /// toggle entity selection, or finalize/clear pending state on empty space.
-    private func handleSketchTap(ray: Ray, tool: SketchTool) {
+    private func handleSketchTap(ray: Ray, tool: SketchTool?) {
         if tool == .trim {
             performTrim(ray: ray)
             return
@@ -5255,6 +5389,16 @@ final class EditorViewModel {
         mode = .pickingSketchPlane(tool: tool)
     }
 
+    /// Tap the active tool off (palette toggle, same pattern as CreateTool):
+    /// stay in the sketch with no drawing tool armed, so empty-space drags
+    /// orbit the camera instead of drawing.
+    func deselectSketchTool() {
+        guard case .sketching(let id, _) = mode else { return }
+        commitPendingArc()
+        clearChain()
+        mode = .sketching(id, tool: nil)
+    }
+
     func cancelPlanePicking() {
         if case .pickingSketchPlane = mode {
             mode = .idle
@@ -5319,8 +5463,27 @@ final class EditorViewModel {
             sketch = created
         }
         mode = .sketching(sketch.id, tool: tool)
-        cameraControl?.moveCameraHeadOn(to: sketch.plane)
+        // Keep the camera where the user put it — Shapr3D sketches in the
+        // current view, and yanking to head-on loses the 3D context they were
+        // working in (and their sense of which way the plane faces).
+        //
+        // The one exception is a grazing view: past this angle the plane
+        // projects to nearly a line, so a drag maps to a wildly amplified
+        // distance on it and drawing is guesswork. `lookAtSketch()` (the
+        // Look at Sketch button) is always there for a deliberate re-aim.
+        if let control = cameraControl {
+            let offAxis = control.offAxisDegrees(to: sketch.plane)
+            if offAxis > Self.grazingSketchAngle {
+                control.moveCameraHeadOn(to: sketch.plane)
+                lookAtSketchAvailable = false
+            } else {
+                lookAtSketchAvailable = offAxis > Self.lookAtSketchThresholdDegrees
+            }
+        }
     }
+
+    /// Degrees off head-on past which a sketch plane is too edge-on to draw on.
+    static let grazingSketchAngle: Double = 80
 
     func finishSketch() {
         commitPendingArc()
@@ -5409,6 +5572,10 @@ final class EditorViewModel {
             return true
         }
 
+        // No drawing tool armed: empty-space drags orbit the camera so the
+        // sketch can be viewed from an angle (Shapr3D).
+        guard tool != nil else { return false }
+
         var point = SnapEngine.snap(raw, in: activeSketch).point
         if tool == .line, let anchor = chainAnchor {
             if simd_length(raw - anchor) <= SnapEngine.pointTolerance {
@@ -5418,6 +5585,7 @@ final class EditorViewModel {
             }
         }
         sketchStrokeStart = point
+        sketchStrokeCurrent = point
         pendingEntity = nil
         return true
     }
@@ -5440,7 +5608,7 @@ final class EditorViewModel {
             updateSketchEntityDrag(raw: raw)
             return
         }
-        guard let start = sketchStrokeStart,
+        guard let tool, let start = sketchStrokeStart,
               var current = sketchPoint(from: ray)
         else { return }
         // Live auto-constraint inference (plan §B): snap the moving endpoint,
@@ -5459,6 +5627,7 @@ final class EditorViewModel {
             activeGuides = []
             pendingInferredConstraints = []
         }
+        sketchStrokeCurrent = current
         pendingEntity = makeEntity(tool: tool, from: start, to: current)
     }
 
@@ -5466,6 +5635,7 @@ final class EditorViewModel {
         defer {
             pendingEntity = nil
             sketchStrokeStart = nil
+            sketchStrokeCurrent = nil
             activeGuides = []
             pendingInferredConstraints = []
         }
@@ -5488,7 +5658,7 @@ final class EditorViewModel {
             session.rebuildForSketchChange(drag.sketchID)
             return
         }
-        guard case .sketching(let sketchID, let tool) = mode,
+        guard case .sketching(let sketchID, .some(let tool)) = mode,
               let start = sketchStrokeStart,
               let sketch = activeSketch
         else { return }
@@ -5920,6 +6090,34 @@ final class EditorViewModel {
 
     /// Adaptive enablement (Shapr3D rule, spec §3.2): a constraint is offered
     /// only when the current selection supports it.
+    // MARK: - Sketch plane (spec §2.4)
+
+    /// Planes a sketch can be re-hosted onto: the ground plane plus every
+    /// construction plane in the document, minus the one it already sits on.
+    func availableSketchPlanes(for sketchID: SketchID) -> [SketchPlane] {
+        let current = session.document.sketches.first { $0.id == sketchID }?.plane
+        let candidates = [SketchPlane.ground] + session.document.planes.map(\.plane)
+        return candidates.filter { plane in
+            guard let current else { return true }
+            // Same origin AND same normal ⇒ effectively the same plane.
+            return simd_length(plane.origin - current.origin) > 1e-6
+                || abs(simd_dot(plane.normal, current.normal)) < 0.999999
+        }
+    }
+
+    /// Re-host `sketchID` on `plane` (spec §2.4). Entity coordinates are
+    /// plane-local, so the drawing keeps its shape and moves to the new plane;
+    /// dependent features rebuild so an extrude follows it. One undo step.
+    func changeSketchPlane(of sketchID: SketchID, to plane: SketchPlane) {
+        guard let sketch = session.document.sketches.first(where: { $0.id == sketchID }),
+              sketch.plane != plane
+        else { return }
+        session.perform(ChangeSketchPlaneCommand(
+            sketchID: sketchID, before: sketch.plane, after: plane))
+        session.rebuildForSketchChange(sketchID)
+        session.save()
+    }
+
     func canApplyConstraint(_ kind: SketchConstraintKind) -> Bool {
         guard mode.isSketching else { return false }
         let points = selectedSketchPoints.count
@@ -5931,7 +6129,13 @@ final class EditorViewModel {
             return points >= 2 || (lines == 2 && nearestEndpointPair(selectedLineEntities) != nil)
         case .horizontal, .vertical:
             return lines >= 1 || points == 2
-        case .parallel, .perpendicular, .equalLength:
+        // Spec §3.2: Parallel takes "2+ lines" — parallelism is transitive, so a
+        // run of lines chains pairwise. Perpendicular stays strictly 2 (three
+        // mutually perpendicular lines are impossible in 2D), and Equal Length
+        // keeps its documented pair form.
+        case .parallel:
+            return lines >= 2
+        case .perpendicular, .equalLength:
             return lines == 2
         case .equalRadius, .concentric:
             return circles == 2
@@ -5954,16 +6158,15 @@ final class EditorViewModel {
     func applyConstraint(_ kind: SketchConstraintKind) {
         guard canApplyConstraint(kind),
               case .sketching(let sketchID, _) = mode,
-              let sketch = activeSketch,
-              let refs = constraintRefs(for: kind, in: sketch)
+              let sketch = activeSketch
         else { return }
-
-        let constraint = SketchConstraint(kind: kind, refs: refs)
+        let newConstraints = constraintsToApply(kind, in: sketch)
+        guard !newConstraints.isEmpty else { return }
 
         // Solve the sketch with the new constraint in place; the bridge welds
         // coincident points and pulls under-defined geometry to satisfy it.
         var proposed = sketch
-        proposed.constraints.append(constraint)
+        proposed.constraints.append(contentsOf: newConstraints)
 
         // Over-constraint guard (spec §2.2): if the added constraint makes the
         // system unsatisfiable (conflicting), refuse it — never corrupt the
@@ -5979,9 +6182,9 @@ final class EditorViewModel {
             proposed, movingEntity: nil, dragTarget: nil
         )
 
-        var commands: [DocumentCommand] = [
-            AddSketchConstraintCommand(sketchID: sketchID, constraint: constraint)
-        ]
+        var commands: [DocumentCommand] = newConstraints.map {
+            AddSketchConstraintCommand(sketchID: sketchID, constraint: $0)
+        }
         for (before, after) in zip(sketch.entities, solvedEntities) where before != after {
             commands.append(UpdateSketchEntityCommand(
                 sketchID: sketchID, before: before, after: after
@@ -6013,6 +6216,29 @@ final class EditorViewModel {
         case .colinear: "Colinear"
         case .fixed: "Lock"
         }
+    }
+
+    /// The constraint(s) the current selection produces. Every kind yields
+    /// exactly one, EXCEPT Parallel with more than two lines (spec §3.2 allows
+    /// "2+"): those chain pairwise — line0∥line1, line1∥line2, … — which is
+    /// equivalent to all-parallel because parallelism is transitive, and keeps
+    /// each stored constraint in the two-operand form the solver expects.
+    private func constraintsToApply(
+        _ kind: SketchConstraintKind, in sketch: Sketch
+    ) -> [SketchConstraint] {
+        if kind == .parallel {
+            let lines = selectedLineEntities
+            if lines.count > 2 {
+                return (0..<(lines.count - 1)).map { i in
+                    SketchConstraint(kind: .parallel, refs: [
+                        ConstraintRef(entityID: lines[i].id, role: .whole),
+                        ConstraintRef(entityID: lines[i + 1].id, role: .whole),
+                    ])
+                }
+            }
+        }
+        guard let refs = constraintRefs(for: kind, in: sketch) else { return [] }
+        return [SketchConstraint(kind: kind, refs: refs)]
     }
 
     /// Map the selection to the ref layout each constraint kind expects
@@ -7115,7 +7341,9 @@ final class EditorViewModel {
         cancelTool()
         selectedImageID = nil
         selection.removeAll()
-        mode = .sketching(id, tool: .line)
+        // Re-opening an existing sketch starts with no tool armed (Shapr3D):
+        // taps select, drags edit or orbit; arm a tool from the palette to draw.
+        mode = .sketching(id, tool: nil)
         cameraControl?.moveCameraHeadOn(to: sketch.plane)
     }
 
@@ -7232,6 +7460,104 @@ final class EditorViewModel {
             insertImage(data: Self.debugSeedImagePNG, on: .ground)
             selectedImageID = nil
         }
+        // OS3D_DEBUG_SEED_CYLINDER: seed a circle extrude so screenshots show the
+        // OCCT B-rep render path (a true smooth cylinder). Mirrors evalExtrude.
+        if ProcessInfo.processInfo.environment["OS3D_DEBUG_SEED_CYLINDER"] != nil,
+           session.document.bodies.isEmpty {
+            var seedDoc = session.document
+            let radius = 3.0
+            let loop = (0..<48).map { i -> SIMD2<Double> in
+                let a = Double(i) / 48 * 2 * .pi
+                return SIMD2(cos(a), sin(a)) * radius
+            }
+            let profile = Profile(loop: loop, kind: .circle(center: .zero, radius: radius),
+                                  sourceEntityIDs: [])
+            let plane = SketchPlane.ground
+            let solid = KernelOps.extrude(profile: profile, holes: [], in: plane,
+                                          distance: 5, symmetric: false)
+            var body = Body(name: "Cylinder", transform: .identity, primitive: nil,
+                            euclidMesh: solid, revision: seedDoc.nextRevision())
+            let z = OCCTKernel.extrudeZRange(distance: 5, symmetric: false)
+            let m = OCCTKernel.cylinderRenderMesh(
+                center: .zero, radius: radius, zMin: z.zMin, zMax: z.zMax,
+                origin: plane.origin, xAxis: plane.xAxis,
+                yAxis: plane.yAxis, normal: plane.normal)
+            body.render = RenderMesh(positions: m.positions, normals: m.normals, indices: m.indices)
+            body.edges = FeatureEdgeExtractor.edges(from: body.render)
+            body.material = BodyMaterialSpec.default
+            session.perform(AddBodyCommand(body: body))
+            return
+        }
+
+        // OS3D_DEBUG_SEED_BOOLEAN: cylinder − offset cylinder, to show a BOOLEAN
+        // result staying round through the OCCT source-of-truth path.
+        if ProcessInfo.processInfo.environment["OS3D_DEBUG_SEED_BOOLEAN"] != nil,
+           session.document.bodies.isEmpty {
+            var seedDoc = session.document
+            let plane = SketchPlane.ground
+            func ring(_ r: Double, _ cx: Double) -> [SIMD2<Double>] {
+                (0..<48).map { i in
+                    let a = Double(i) / 48 * 2 * .pi
+                    return SIMD2(cx + cos(a) * r, sin(a) * r)
+                }
+            }
+            let za = OCCTKernel.extrudeZRange(distance: 5, symmetric: false)
+            let bigProfile = Profile(loop: ring(3, 0), kind: .circle(center: .zero, radius: 3),
+                                     sourceEntityIDs: [])
+            let cutProfile = Profile(loop: ring(1.5, 2), kind: .circle(center: SIMD2(2, 0), radius: 1.5),
+                                     sourceEntityIDs: [])
+            let euclidBig = KernelOps.extrude(profile: bigProfile, holes: [], in: plane,
+                                              distance: 5, symmetric: false)
+            let euclidCut = KernelOps.extrude(profile: cutProfile, holes: [], in: plane,
+                                              distance: 6, symmetric: false)
+            let euclidResult = euclidBig.subtracting(euclidCut)
+            if let a = OCCTKernel.extrudeShape(
+                   outerLoop: bigProfile.loop, isCircle: true, circleCenter: .zero, circleRadius: 3,
+                   holes: [], zMin: za.zMin, zMax: za.zMax, origin: plane.origin,
+                   xAxis: plane.xAxis, yAxis: plane.yAxis, normal: plane.normal),
+               let b = OCCTKernel.extrudeShape(
+                   outerLoop: cutProfile.loop, isCircle: true, circleCenter: SIMD2(2, 0), circleRadius: 1.5,
+                   holes: [], zMin: -0.5, zMax: 6, origin: plane.origin,
+                   xAxis: plane.xAxis, yAxis: plane.yAxis, normal: plane.normal),
+               let cut = OCCTKernel.boolean(a, b, op: 1) {
+                var body = Body(name: "Boolean", transform: .identity, primitive: nil,
+                                euclidMesh: euclidResult, revision: seedDoc.nextRevision())
+                let m = OCCTKernel.renderMesh(from: cut)
+                body.brep = cut
+                body.render = RenderMesh(positions: m.positions, normals: m.normals, indices: m.indices)
+                body.edges = FeatureEdgeExtractor.edges(from: body.render)
+                body.material = BodyMaterialSpec.default
+                session.perform(AddBodyCommand(body: body))
+            }
+            return
+        }
+
+        // OS3D_DEBUG_SEED_PRIMBOOL: cylinder PRIMITIVE − box PRIMITIVE, proving a
+        // MIXED boolean (both operands analytic via primitive breps) stays round.
+        if ProcessInfo.processInfo.environment["OS3D_DEBUG_SEED_PRIMBOOL"] != nil,
+           session.document.bodies.isEmpty {
+            var seedDoc = session.document
+            let cylSpec = PrimitiveSpec.cylinder(radius: 3, height: 5)
+            let boxSpec = PrimitiveSpec.box(width: 3, depth: 3, height: 7)
+            let boxPlacement = Transform3D(translation: SIMD3(3, -1, 0))
+            var ebox = Euclid.Mesh.primitive(boxSpec)
+            ebox = ebox.transformed(by: boxPlacement.euclid)
+            let euclidResult = Euclid.Mesh.primitive(cylSpec).subtracting(ebox)
+            if let a = OCCTKernel.primitiveShape(cylSpec, placement: .identity),
+               let b = OCCTKernel.primitiveShape(boxSpec, placement: boxPlacement),
+               let cut = OCCTKernel.boolean(a, b, op: 1) {
+                var body = Body(name: "PrimBoolean", transform: .identity, primitive: nil,
+                                euclidMesh: euclidResult, revision: seedDoc.nextRevision())
+                let m = OCCTKernel.renderMesh(from: cut)
+                body.brep = cut
+                body.render = RenderMesh(positions: m.positions, normals: m.normals, indices: m.indices)
+                body.edges = FeatureEdgeExtractor.edges(from: body.render)
+                body.material = BodyMaterialSpec.default
+                session.perform(AddBodyCommand(body: body))
+            }
+            return
+        }
+
         guard ProcessInfo.processInfo.environment["OS3D_DEBUG_SEED"] != nil,
               session.document.bodies.isEmpty
         else { return }
@@ -7832,6 +8158,8 @@ final class EditorViewModel {
             return openFaces.isEmpty
                 ? "Shell \(fmt(thickness.value)) mm (hollow)"
                 : "Shell \(fmt(thickness.value)) mm (\(openFaces.count) face\(openFaces.count == 1 ? "" : "s") open)"
+        case let .deleteFace(_, faces):
+            return "Delete Face (\(faces.count) face\(faces.count == 1 ? "" : "s"))"
         }
     }
 

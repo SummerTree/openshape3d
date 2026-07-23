@@ -380,6 +380,27 @@ struct UpdateSketchEntityCommand: DocumentCommand {
     }
 }
 
+/// Re-host a sketch on a different plane (spec §2.4). Entity coordinates are
+/// plane-LOCAL, so they are left untouched: the drawing keeps its shape and
+/// simply lands on the new plane, which is what "change the sketch plane"
+/// means to the user. Everything built from the sketch re-evaluates against the
+/// new orientation, so an extrude follows the sketch onto the new plane.
+struct ChangeSketchPlaneCommand: DocumentCommand {
+    let title = "Change Sketch Plane"
+    let sketchID: SketchID
+    let before: SketchPlane
+    let after: SketchPlane
+
+    private func setPlane(_ plane: SketchPlane, in document: inout DesignDocument) {
+        guard let index = document.sketches.firstIndex(where: { $0.id == sketchID })
+        else { return }
+        document.sketches[index].plane = plane
+    }
+
+    func apply(to document: inout DesignDocument) { setPlane(after, in: &document) }
+    func revert(in document: inout DesignDocument) { setPlane(before, in: &document) }
+}
+
 /// Solve-on-edit multi-entity update (plan §C1): a constraint solve during a
 /// drag moves several entities at once. `before`/`after` are full snapshots
 /// keyed by ID and applied ABSOLUTELY (set-by-ID, not delta), so the command

@@ -1,8 +1,11 @@
 # openshape3d
 
 An open-source, Shapr3D-inspired direct-modeling CAD app for iPad and iPhone,
-built with SwiftUI, a **custom Metal renderer**, and the MIT-licensed
-[Euclid](https://github.com/nicklockwood/Euclid) geometry library.
+built with SwiftUI, a **custom Metal renderer**, and a dual geometry kernel:
+[OpenCASCADE](https://github.com/Open-Cascade-SAS/OCCT) (OCCT) for exact B-rep
+solids, with the MIT-licensed
+[Euclid](https://github.com/nicklockwood/Euclid) mesh-CSG library alongside it.
+See [Geometry kernels](#geometry-kernels-occt--euclid).
 
 ![Platform](https://img.shields.io/badge/platform-iPadOS%20%7C%20iOS-blue)
 ![Swift](https://img.shields.io/badge/Swift-5-orange)
@@ -128,9 +131,12 @@ built with SwiftUI, a **custom Metal renderer**, and the MIT-licensed
 ## Architecture
 
 ```
-Kernel/       Geometry: Euclid bridge, profiles, extrude, booleans, STL,
-              feature-edge extraction. Pure Swift, Double precision, fully
-              unit-tested, nonisolated (runs off the main actor).
+Kernel/       Geometry: profiles, extrude, booleans, STL, feature-edge
+              extraction, behind the `KernelOps` facade. Double precision,
+              nonisolated (runs off the main actor), fully unit-tested.
+Kernel/OCCT/  The B-rep kernel seam: `OCCTBridge` (Obj-C++, the ONLY place
+              OCCT's C++ headers are included) and `OCCTKernel` (the Swift
+              API the rest of the app calls). See Geometry kernels below.
 Model/        DesignDocument (value type), undoable commands, SwiftData
               persistence with a compact binary mesh format ("OS3D").
 Rendering/    Custom Metal renderer: MTKView (on-demand drawing), Blinn-Phong
@@ -158,14 +164,95 @@ feature edges come from a 20° dihedral-angle threshold.
 Shapr3D itself pairs a licensed Siemens Parasolid kernel with a proprietary
 Metal renderer. Parasolid isn't an option for an open-source app, so —
 like Shapr3D's own v1, which shipped on the open-source OpenCascade kernel —
-openshape3d uses an open geometry library (Euclid, mesh-CSG based) behind a
-kernel facade (`KernelOps`) that a stronger kernel could replace later.
+openshape3d started on an open mesh library (Euclid) behind a kernel facade
+(`KernelOps`) that a stronger kernel could replace later. That replacement is
+now underway: **OCCT**.
+
+## Geometry kernels: OCCT + Euclid
+
+### Why two kernels
+
+Euclid is a **polygon-mesh** CSG library: it has no analytic surfaces. A sketched
+circle is tessellated to a fixed segment count (`ProfileDetector.circleSegments
+= 48`) *before* any solid exists, so "extrude a circle" produced a 48-sided
+prism, not a cylinder — visibly faceted, and impossible to fillet properly.
+There is no mesh-side fix; the representation itself has to become exact. That
+means a B-rep kernel, and the open option is **OpenCASCADE (LGPL 2.1 + OCC
+exception)**.
+
+Euclid is *not* being deleted. It stays as the mesh path for ops not yet ported
+and as the fallback when OCCT can't build or boolean a shape.
+
+### How they divide today
+
+`Body.brep` holds an optional OCCT solid (`TopoDS_Shape`). When present it is the
+**source of truth**: `Body.adoptBRep(_:)` derives *both* the render mesh and the
+CSG (`euclid`) mesh from the same OCCT tessellation, so what you see and what
+booleans actually cut can never disagree.
+
+| Op | Kernel |
+|---|---|
+| Extrude (all profiles; circle → analytic cylinder) | **OCCT** |
+| Primitives (box / cylinder / sphere) | **OCCT** |
+| Boolean between two B-rep bodies | **OCCT** |
+| Revolve, sweep, loft, shell, chamfer/fillet, push-pull, pattern, mirror, split | Euclid |
+| Extrude-into-target boolean; multi-profile extrudes | Euclid |
+| STL import; live drag previews | Euclid |
+
+Smooth shading comes from normals evaluated on the **analytic surface**
+(`BRepAdaptor_Surface` D1 → dU×dV), not per-facet — that, plus a size-independent
+angular deflection, is what makes a cylinder read as round.
+
+### Known limitations (honest list)
+
+- **Un-ported ops drop the brep.** Fillet or shell a cylinder and the result
+  reverts to Euclid-only, so it goes faceted again. Porting fillet
+  (`BRepFilletAPI`) is the next milestone.
+- **Circular holes are polygonal** — only the outer profile of a circle is
+  analytic.
+- **The `.os3d` archive doesn't carry the brep**, so export/import degrades to
+  Euclid-only. In-app SwiftData persistence *does* round-trip it.
+- **iOS slices only** — the xcframework has `ios-arm64` + `ios-arm64-simulator`;
+  macOS/visionOS builds would need slices added.
+- **STEP/IGES are off.** `DataExchange` + XDE roughly double the static library
+  (18 → 47 toolkits, ~74 → ~140 MB/arch), so they're disabled until a feature
+  needs them — a one-line flip in `scripts/build_occt_ios.sh`.
+
+Everything B-rep sits behind `OCCTKernel.useOCCTAsSourceOfTruth`; set it to
+`false` to fall back to the pure-Euclid kernel everywhere.
+
+### Licensing
+
+OCCT is LGPL 2.1 with the Open CASCADE exception. The app's own code is MIT;
+OCCT keeps its own license. Shipping requires the usual LGPL obligations —
+prominent notice, license text, and a route for users to relink the library
+(the checked-in `scripts/build_occt_ios.sh` reproduces the exact binary).
 
 ## Building
 
-Open `openshape3d.xcodeproj` in Xcode 26+ and run the `openshape3d` scheme on
-an iPad (or iPhone) simulator or device. The Euclid package resolves
+**First build only — OCCT must be built once.** The app links
+`ThirdParty/OCCT.xcframework`, which is *not* checked in (~190 MB build
+artifact). Build it with the checked-in recipe:
+
+```sh
+brew install cmake                       # if you don't have it
+# OCCT source + an iOS CMake toolchain file, then:
+OCCT_SRC=/path/to/OCCT-7_8_1 \
+IOS_TOOLCHAIN=/path/to/ios.toolchain.cmake \
+scripts/build_occt_ios.sh
+```
+
+It cross-compiles a minimal headless OCCT (modeling only — no visualization,
+no third-party deps) for device + simulator and assembles the xcframework.
+Takes a few minutes; you only do it once.
+
+Then open `openshape3d.xcodeproj` in Xcode 26+ and run the `openshape3d` scheme
+on an iPad (or iPhone) simulator or device. The Euclid package resolves
 automatically.
+
+Sanity-check the kernel on a booted simulator any time with
+`scripts/run_occt_spike.sh` (builds a box and an extruded circle, and asserts
+the circle yields exactly one analytic cylindrical face).
 
 Tests: `⌘U`, or
 
@@ -175,8 +262,10 @@ xcodebuild test -project openshape3d.xcodeproj -scheme openshape3d \
 ```
 
 Unit tests cover the geometry kernel (bridge/weld, blob serialization,
-profiles, extrusion conventions, booleans, STL layout); XCUITests drive the
-real flows (place → edit → move → sketch → extrude → subtract).
+profiles, extrusion conventions, booleans, STL layout) and the OCCT seam
+(analytic face types, smooth-normal tessellation, B-rep serialization
+round-trip, transform baking); XCUITests drive the real flows
+(place → edit → move → sketch → extrude → subtract).
 
 ## Roadmap
 
@@ -185,13 +274,18 @@ real flows (place → edit → move → sketch → extrude → subtract).
   tranche 2+); the 2D constraint solver, constraints, dimensions, and sketch
   states already ship (Phase C tranche 1)
 - Parametric history sidebar with editable steps (Phase D)
-- Fillets/chamfers, shell, STEP/IGES via a B-rep kernel (Phase E)
+- **B-rep kernel (Phase E) — in progress.** OCCT is live for extrude,
+  primitives and booleans (see [Geometry kernels](#geometry-kernels-occt--euclid));
+  next up are fillet/chamfer on `BRepFilletAPI`, then shell, revolve/sweep/loft,
+  and STEP/IGES
 - Keyboard shortcuts + Command Search, face/edge selection filters
 - PBR visualization space (environments, per-face materials, capture)
 - Fat-line edge rendering, dark mode viewport theme
 - Assembly-style grouping (Items folders), SVG/DXF drawing export
 
-See `docs/SHAPR3D_PARITY_SPEC.md` for the feature-by-feature status audit and
+See `docs/MODELING_PARITY_GOALS.md` for the ordered sketch + solid modeling
+roadmap (fillet, shell, splines, STEP — with acceptance criteria),
+`docs/SHAPR3D_PARITY_SPEC.md` for the feature-by-feature status audit, and
 `docs/IMPLEMENTATION_PLAN.md` for phase sequencing.
 
 ## License

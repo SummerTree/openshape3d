@@ -25,6 +25,7 @@ final class ExtrudeFlowUITests: XCTestCase {
         window.coordinate(withNormalizedOffset: CGVector(dx: 0.80, dy: 0.78)).tap()
         XCTAssertTrue(app.staticTexts["Sketching on ground plane"].waitForExistence(timeout: 3))
         sleep(2) // camera animation
+        lookAtSketch(app)
         let start = window.coordinate(withNormalizedOffset: CGVector(dx: 0.42, dy: 0.42))
         let end = window.coordinate(withNormalizedOffset: CGVector(dx: 0.65, dy: 0.60))
         start.press(forDuration: 0.15, thenDragTo: end)
@@ -45,7 +46,8 @@ final class ExtrudeFlowUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["Extrude"].waitForExistence(timeout: 5),
                       "Tapping a filled profile should start extruding")
 
-        app.buttons["Extrude"].firstMatch.tap()
+        // Arming starts at zero height — type one to commit.
+        typeExtrudeHeight(app)
 
         // Commit selects the new body: Delete lights up, extrude bar dismisses.
         let deleteButton = app.buttons.containing(.staticText, identifier: "Delete").firstMatch
@@ -71,7 +73,7 @@ final class ExtrudeFlowUITests: XCTestCase {
         XCTAssertTrue(symmetric.waitForExistence(timeout: 3), "Extrude bar shows the Symmetric toggle")
         symmetric.tap()
 
-        app.buttons["Extrude"].firstMatch.tap()
+        typeExtrudeHeight(app)
 
         // Commit selects the new body; two undoable commands (sketch + extrude).
         let deleteButton = app.buttons.containing(.staticText, identifier: "Delete").firstMatch
@@ -101,12 +103,13 @@ final class ExtrudeFlowUITests: XCTestCase {
         window.coordinate(withNormalizedOffset: CGVector(dx: 0.80, dy: 0.78)).tap()
         XCTAssertTrue(app.staticTexts["Sketching on ground plane"].waitForExistence(timeout: 3))
         sleep(2) // camera animation
+        lookAtSketch(app)
         window.coordinate(withNormalizedOffset: CGVector(dx: 0.30, dy: 0.42))
             .press(forDuration: 0.15, thenDragTo: window.coordinate(withNormalizedOffset: CGVector(dx: 0.45, dy: 0.58)))
         app.buttons["Exit Sketching"].tap()
         window.coordinate(withNormalizedOffset: CGVector(dx: 0.37, dy: 0.50)).tap()
         XCTAssertTrue(app.staticTexts["Extrude"].waitForExistence(timeout: 5))
-        app.buttons["Extrude"].firstMatch.tap()
+        typeExtrudeHeight(app)
         XCTAssertFalse(app.staticTexts["Extrude"].exists)
 
         // Profile B overlaps body A; tap point sits outside A's footprint.
@@ -115,6 +118,7 @@ final class ExtrudeFlowUITests: XCTestCase {
         window.coordinate(withNormalizedOffset: CGVector(dx: 0.80, dy: 0.78)).tap()
         XCTAssertTrue(app.staticTexts["Sketching on ground plane"].waitForExistence(timeout: 3))
         sleep(2)
+        lookAtSketch(app)
         // Drawn from the far corner: the stroke must START on empty space
         // (a stroke starting on rect A's outline would drag-edit it, A3).
         window.coordinate(withNormalizedOffset: CGVector(dx: 0.60, dy: 0.58))
@@ -127,7 +131,7 @@ final class ExtrudeFlowUITests: XCTestCase {
         let newBodySegment = app.buttons["New Body"].firstMatch
         XCTAssertTrue(newBodySegment.waitForExistence(timeout: 3), "Extrude bar shows the boolean badge")
         newBodySegment.tap()
-        app.buttons["Extrude"].firstMatch.tap()
+        typeExtrudeHeight(app)
 
         // Commit selects the new body — delete it.
         let deleteButton = app.buttons.containing(.staticText, identifier: "Delete").firstMatch

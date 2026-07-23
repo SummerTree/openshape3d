@@ -30,6 +30,7 @@ final class RevolveFlowUITests: XCTestCase {
         window.coordinate(withNormalizedOffset: CGVector(dx: 0.80, dy: 0.78)).tap()
         XCTAssertTrue(app.staticTexts["Sketching on ground plane"].waitForExistence(timeout: 3))
         sleep(2) // camera animation
+        lookAtSketch(app)
         let rectStart = window.coordinate(withNormalizedOffset: CGVector(dx: 0.50, dy: 0.40))
         let rectEnd = window.coordinate(withNormalizedOffset: CGVector(dx: 0.68, dy: 0.58))
         rectStart.press(forDuration: 0.15, thenDragTo: rectEnd)

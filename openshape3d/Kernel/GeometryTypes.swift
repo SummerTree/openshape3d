@@ -131,6 +131,10 @@ nonisolated struct Body: Identifiable, Sendable {
     /// Euclid source mesh, if this body was just built/booleaned in-session.
     /// Nil after loading from disk; use `euclidMesh()` which rebuilds on demand.
     var euclid: Euclid.Mesh?
+    /// OCCT B-rep handle when this body was built through the OCCT source-of-truth
+    /// path (extrude/boolean). Transient (not persisted); lets downstream ops
+    /// (boolean composition, smooth re-render) stay analytic. Nil = Euclid-only.
+    var brep: BRepHandle?
 
     /// Build from a freshly generated Euclid mesh (primitive, extrude, boolean).
     init(

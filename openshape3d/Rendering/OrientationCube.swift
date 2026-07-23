@@ -39,6 +39,69 @@ nonisolated enum OrientationCube {
         )
     }
 
+    // MARK: - Face labels (spec §7.2)
+
+    /// A standard-view name drawn over the cube face that snaps to it.
+    nonisolated struct FaceLabel: Identifiable, Equatable, Sendable {
+        var id: String { name }
+        /// Matches `StandardView.rawValue`, so the cube and the Views menu
+        /// never disagree about which way is Front.
+        var name: String
+        var point: CGPoint
+        /// Fades as the face turns away, so only the faces you could actually
+        /// tap are named and the cube does not turn into a wall of text.
+        var opacity: Double
+    }
+
+    /// Outward normal of each named face. Derived from `StandardView`: azimuth
+    /// 0 / elevation 0 puts the eye on +Z, which is Front.
+    static let faceNormals: [(name: String, normal: SIMD3<Float>)] = [
+        (StandardView.front.rawValue, SIMD3(0, 0, 1)),
+        (StandardView.back.rawValue, SIMD3(0, 0, -1)),
+        (StandardView.right.rawValue, SIMD3(1, 0, 0)),
+        (StandardView.left.rawValue, SIMD3(-1, 0, 0)),
+        (StandardView.top.rawValue, SIMD3(0, 1, 0)),
+        (StandardView.bottom.rawValue, SIMD3(0, -1, 0)),
+    ]
+
+    /// A face must be turned at least this far toward the camera to be named.
+    /// Geometrically a face is visible whenever this is above 0, but the last
+    /// few degrees are too foreshortened to read; 0.25 (~75° off head-on) keeps
+    /// every face you could sensibly tap — including the shallow Top face of
+    /// the default isometric, whose facing is only 0.43 — and drops the rest.
+    static let labelMinFacing: Float = 0.25
+
+    /// Named faces currently turned toward the camera, in screen points.
+    ///
+    /// Pure layout: the same projection the cube is drawn with, so a label
+    /// always sits on the face it names, at any orientation.
+    static func faceLabels(camera: TurntableCamera, viewSize: CGSize) -> [FaceLabel] {
+        guard viewSize.width > 0, viewSize.height > 0 else { return [] }
+        let eyeOffset = camera.position - camera.target
+        guard simd_length(eyeOffset) > 1e-6 else { return [] }
+        let eye = simd_normalize(eyeOffset)
+        let vp = viewProjection(camera: camera, viewSize: viewSize)
+
+        return faceNormals.compactMap { face in
+            let facing = simd_dot(face.normal, eye)
+            guard facing > labelMinFacing else { return nil }
+            // Sit slightly proud of the surface so the label is never buried
+            // in the face colour at a grazing angle.
+            let centre = face.normal * (halfExtent * 1.02)
+            let clip = vp * SIMD4(centre.x, centre.y, centre.z, 1)
+            guard abs(clip.w) > 1e-6 else { return nil }
+            let ndc = SIMD3(clip.x, clip.y, clip.z) / clip.w
+            let point = CGPoint(
+                x: CGFloat(ndc.x * 0.5 + 0.5) * viewSize.width,
+                y: CGFloat(1 - (ndc.y * 0.5 + 0.5)) * viewSize.height
+            )
+            // Ramp from just-visible to fully opaque across the usable range.
+            let t = (facing - labelMinFacing) / (1 - labelMinFacing)
+            return FaceLabel(name: face.name, point: point,
+                             opacity: Double(min(max(t * 1.6, 0.25), 1)))
+        }
+    }
+
     /// Rotation-only view of the camera (world → view, no translation).
     static func rotationView(of camera: TurntableCamera) -> simd_float4x4 {
         var view = camera.viewMatrix

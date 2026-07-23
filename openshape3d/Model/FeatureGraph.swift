@@ -95,6 +95,10 @@ nonisolated enum FeatureKind: Codable, Sendable {
     /// Phase E: hollow `body` to a wall of `thickness`, cutting the referenced
     /// planar faces open (empty = fully enclosed hollow).
     case shell(body: BodyRef, openFaces: [FaceRef], thickness: Expr)
+    /// Spec §4.16: remove the referenced faces and HEAL the surrounding
+    /// surfaces back together, deleting the feature (hole, pocket, boss) they
+    /// belong to. B-rep only — a mesh has no surfaces to extend.
+    case deleteFace(body: BodyRef, faces: [FaceRef])
 }
 
 /// A node in the feature graph: stable identity, display name, its operation, a
@@ -151,7 +155,7 @@ nonisolated extension FeatureNode {
         case let .mirror(_, plane, _):
             addPlane(plane)
         case .primitive, .boolean, .transform, .pattern, .pushPull,
-             .chamfer, .fillet, .shell:
+             .chamfer, .fillet, .shell, .deleteFace:
             break
         }
         return ids
@@ -297,6 +301,9 @@ nonisolated extension FeatureGraph {
             evalShell(
                 node, bodyRef: body, openFaceRefs: openFaces,
                 thickness: thickness.value, into: &state, next: nextRevision)
+        case let .deleteFace(body, faces):
+            evalDeleteFace(
+                node, bodyRef: body, faceRefs: faces, into: &state, next: nextRevision)
 
         // Defined but not evaluated yet — keep the graph total.
         case .transform:
@@ -328,10 +335,25 @@ nonisolated extension FeatureGraph {
             state.errors[node.id] = .emptyGeometry
             return
         }
-        let body = Body(
+        var body = Body(
             id: id, name: node.name, transform: .identity,
             primitive: placement == .identity ? spec : nil,
             euclidMesh: mesh, revision: nextRevision())
+        // Give primitives an analytic B-rep too, so booleans that mix a primitive
+        // with a cylinder stay analytic (and round). Only CURVED primitives take
+        // the OCCT render mesh — a box looks identical either way, so it keeps the
+        // Euclid render and existing coverage is unperturbed.
+        if OCCTKernel.useOCCTAsSourceOfTruth,
+           let handle = OCCTKernel.primitiveShape(spec, placement: placement) {
+            if OCCTKernel.hasCurvedFaces(spec) {
+                // Curved primitive: OCCT owns render AND CSG (one tessellation).
+                body.adoptBRep(handle)
+            } else {
+                // A box looks identical either way — keep the Euclid mesh it was
+                // built with, but still carry the brep so booleans stay analytic.
+                body.brep = handle
+            }
+        }
         let table = state.naming.faceTable(for: body, createdBy: node.id, scheme: .primitive(spec))
         state.put(body, table: table)
     }
@@ -385,9 +407,27 @@ nonisolated extension FeatureGraph {
                 state.errors[node.id] = .brokenRef("extrude node has no output BodyID")
                 return
             }
-            let body = Body(
+            var body = Body(
                 id: id, name: node.name, transform: .identity, primitive: nil,
                 euclidMesh: solid, revision: nextRevision())
+            // B-rep source of truth for EVERY extrude: circles become an analytic
+            // cylinder (round), other profiles an exact polygonal prism. Either
+            // way the body carries a brep, so downstream booleans stay analytic.
+            if OCCTKernel.useOCCTAsSourceOfTruth, extras.isEmpty {
+                var isCircle = false
+                var center = SIMD2<Double>.zero
+                var radius = 0.0
+                if case let .circle(c, r) = outer.kind { isCircle = true; center = c; radius = r }
+                let z = OCCTKernel.extrudeZRange(distance: distance.value, symmetric: symmetric)
+                if let handle = OCCTKernel.extrudeShape(
+                    outerLoop: outer.loop, isCircle: isCircle,
+                    circleCenter: center, circleRadius: radius,
+                    holes: holes.map(\.loop), zMin: z.zMin, zMax: z.zMax,
+                    origin: plane.origin, xAxis: plane.xAxis,
+                    yAxis: plane.yAxis, normal: plane.normal) {
+                    body.adoptBRep(handle)
+                }
+            }
             let table = state.naming.faceTable(for: body, createdBy: node.id, scheme: .extrude(outer))
             state.put(body, table: table)
             return
@@ -434,6 +474,15 @@ nonisolated extension FeatureGraph {
 
     // MARK: Boolean
 
+    /// Map a `BooleanKind` to `OCCTBridge`'s op code (0 union, 1 subtract, 2 intersect).
+    private static func occtBooleanOp(_ kind: BooleanKind) -> Int? {
+        switch kind {
+        case .union: return 0
+        case .subtract: return 1
+        case .intersect: return 2
+        }
+    }
+
     private func evalBoolean(
         _ node: FeatureNode,
         kind: BooleanKind,
@@ -456,14 +505,32 @@ nonisolated extension FeatureGraph {
                 return
             }
             if let t = state.faceTables[tool.id] { inputTables.append(t) }
+            let priorBrep = acc.brep
+            let priorTransform = acc.transform
             let mesh = KernelOps.boolean(kind, target: acc, tool: tool)
             guard !mesh.polygons.isEmpty else {
                 state.errors[node.id] = .emptyGeometry
                 return
             }
-            acc = Body(
+            var next = Body(
                 id: target.id, name: target.name, transform: .identity, primitive: nil,
                 euclidMesh: mesh, revision: nextRevision())
+            // B-rep source of truth: when BOTH operands are analytic (OCCT), compose
+            // them with an OCCT boolean and render the result smooth — so a boolean
+            // involving a cylinder stays round. Euclid still owns the CSG `mesh`.
+            // Place BOTH solids into a common space first (each body carries its
+            // own transform — a moved body's brep would otherwise be booleaned at
+            // its pre-move position), mirroring what KernelOps.boolean does for
+            // the Euclid meshes. The result is world-space, and `next` is built
+            // with an identity transform, so the two stay consistent.
+            if let a0 = priorBrep, let b0 = tool.brep,
+               let op = Self.occtBooleanOp(kind),
+               let a = OCCTKernel.transformed(a0, by: priorTransform),
+               let b = OCCTKernel.transformed(b0, by: tool.transform),
+               let resultBrep = OCCTKernel.boolean(a, b, op: op) {
+                next.adoptBRep(resultBrep)
+            }
+            acc = next
             consumed.append(tool.id)
         }
 
@@ -551,23 +618,43 @@ nonisolated extension FeatureGraph {
             SIMD3(Double(v.x), Double(v.y), Double(v.z))
         }
 
-        var mesh = body.euclidMesh()
-        var resolvedAny = false
+        var specs = [BlendEdgeSpec]()
         for ref in edgeRefs {
             guard let edge = EdgeTopology.resolve(
                 ref.signature, in: available, sizeScale: scale), edge.isConvex
             else { continue }
-            let p0 = d3(edge.start), p1 = d3(edge.end)
-            let nA = d3(edge.normalA), nB = d3(edge.normalB)
-            mesh = isFillet
-                ? KernelOps.filletEdge(mesh: mesh, p0: p0, p1: p1, normalA: nA, normalB: nB, radius: amount)
-                : KernelOps.chamferEdge(mesh: mesh, p0: p0, p1: p1, normalA: nA, normalB: nB, setback: amount)
-            resolvedAny = true
+            specs.append(BlendEdgeSpec(
+                p0: d3(edge.start), p1: d3(edge.end),
+                normalA: d3(edge.normalA), normalB: d3(edge.normalB)))
         }
-        guard resolvedAny else {
+        guard !specs.isEmpty else {
             state.errors[node.id] = .brokenRef("no blend edge resolved")
             return
         }
+        // B-rep fillet: when the body is analytic, round it with BRepFilletAPI so
+        // the result STAYS analytic (a filleted cylinder keeps its round wall and
+        // gains a real torus face) instead of collapsing to a mesh blend. A
+        // tessellated rim is many mesh segments but one OCCT edge, so this also
+        // propagates along tangent chains for free. Falls back to the mesh blend
+        // if OCCT can't build it (e.g. radius too large for the geometry).
+        if isFillet, OCCTKernel.useOCCTAsSourceOfTruth, let brep = body.brep {
+            let midpoints = specs.map { ($0.p0 + $0.p1) * 0.5 }
+            if let filleted = OCCTKernel.fillet(
+                brep, at: midpoints, radius: amount, tolerance: max(scale * 0.01, 1e-6)) {
+                var result = Body(
+                    id: body.id, name: body.name, transform: .identity, primitive: nil,
+                    euclidMesh: body.euclidMesh(), revision: nextRevision())
+                if result.adoptBRep(filleted) {
+                    let table = state.naming.faceTable(
+                        for: result, createdBy: node.id, scheme: .generic)
+                    state.put(result, table: table)
+                    return
+                }
+            }
+        }
+
+        let mesh = KernelOps.blendEdges(
+            mesh: body.euclidMesh(), edges: specs, amount: amount, isFillet: isFillet)
         guard !mesh.polygons.isEmpty else {
             state.errors[node.id] = .emptyGeometry
             return
@@ -613,6 +700,35 @@ nonisolated extension FeatureGraph {
             }
             openFaces.append(planar)
         }
+        // B-rep shell: when the body is analytic, hollow it with
+        // BRepOffsetAPI_MakeThickSolid so CURVED walls are correct — the mesh
+        // path insets a planar face outline, which is only honest on prismatic
+        // bodies (a shelled cylinder must end up with two concentric walls).
+        // Falls back to the mesh shell when OCCT can't offset the solid.
+        if OCCTKernel.useOCCTAsSourceOfTruth, let brep = body.brep {
+            // A point at the centroid of each open face identifies it to OCCT.
+            let openPoints: [SIMD3<Double>] = openFaces.map { face in
+                let n = Double(max(face.outline.count, 1))
+                let c = face.outline.reduce(SIMD2<Double>.zero, +) / n
+                return face.origin + face.basisX * c.x + face.basisY * c.y
+            }
+            let aabb = body.render.localAABB
+            let scale = Double(simd_length(aabb.max - aabb.min))
+            if let hollow = OCCTKernel.shell(
+                brep, openingAt: openPoints, thickness: thickness,
+                tolerance: max(scale * 0.02, 1e-6)) {
+                var result = Body(
+                    id: body.id, name: body.name, transform: .identity, primitive: nil,
+                    euclidMesh: body.euclidMesh(), revision: nextRevision())
+                if result.adoptBRep(hollow) {
+                    let newTable = state.naming.faceTable(
+                        for: result, createdBy: node.id, scheme: .generic)
+                    state.put(result, table: newTable)
+                    return
+                }
+            }
+        }
+
         let mesh = KernelOps.shell(
             mesh: body.euclidMesh(), thickness: thickness, openFaces: openFaces)
         guard !mesh.polygons.isEmpty else {
@@ -625,6 +741,94 @@ nonisolated extension FeatureGraph {
         // Shelling rebuilds every face; relabel by geometry like the blends.
         let newTable = state.naming.faceTable(for: result, createdBy: node.id, scheme: .generic)
         state.put(result, table: newTable)
+    }
+
+    // MARK: Delete Face (direct modeling, spec §4.16)
+
+    /// Remove the referenced faces and let the neighbouring surfaces extend to
+    /// re-close the body — the direct-modeling gesture that deletes a hole or
+    /// pocket without unwinding the history that made it.
+    ///
+    /// This is B-rep-only on purpose. Healing means EXTENDING the adjacent
+    /// surfaces to their new intersections; a triangle soup has no surfaces to
+    /// extend, so a mesh fallback would silently produce a hole-shaped dent
+    /// instead of a clean solid. Without a `brep` the node errors and the input
+    /// body passes through untouched.
+    private func evalDeleteFace(
+        _ node: FeatureNode,
+        bodyRef: BodyRef,
+        faceRefs: [FaceRef],
+        into state: inout EvalState,
+        next nextRevision: () -> UInt64
+    ) {
+        guard let body = state.bodies[bodyRef.bodyID] else {
+            state.errors[node.id] = .brokenRef("delete-face body unresolved")
+            return
+        }
+        guard !faceRefs.isEmpty else {
+            state.errors[node.id] = .kernelFailure("delete face needs at least one face")
+            return
+        }
+        guard OCCTKernel.useOCCTAsSourceOfTruth, let brep = body.brep else {
+            state.errors[node.id] = .kernelFailure(
+                "delete face needs a B-rep body — surfaces cannot heal on a mesh")
+            return
+        }
+
+        let table = state.faceTables[body.id]
+        var points = [SIMD3<Double>]()
+        for ref in faceRefs {
+            guard let resolved = state.naming.resolve(ref, in: body, table: table),
+                  let point = Self.samplePoint(on: resolved) else {
+                state.errors[node.id] = .brokenRef("delete-face target did not resolve")
+                return
+            }
+            points.append(point)
+        }
+
+        let aabb = body.render.localAABB
+        let scale = Double(simd_length(aabb.max - aabb.min))
+        guard let healed = OCCTKernel.removingFaces(
+            brep, at: points, tolerance: max(scale * 0.02, 1e-6)) else {
+            // Defeaturing legitimately fails when the neighbours cannot close
+            // (§4.16: those deletions leave sheet bodies). Report rather than
+            // ship a broken solid.
+            state.errors[node.id] = .kernelFailure("the surrounding faces could not heal")
+            return
+        }
+        var result = Body(
+            id: body.id, name: body.name, transform: .identity, primitive: nil,
+            euclidMesh: body.euclidMesh(), revision: nextRevision())
+        guard result.adoptBRep(healed) else {
+            state.errors[node.id] = .emptyGeometry
+            return
+        }
+        // Every remaining face may have been re-trimmed; relabel by geometry.
+        let newTable = state.naming.faceTable(for: result, createdBy: node.id, scheme: .generic)
+        state.put(result, table: newTable)
+    }
+
+    /// A world point lying ON the resolved face — how OCCT is told which face
+    /// to remove. Planar faces use their outline centroid (always interior for
+    /// the convex outlines the picker produces); cylinders use a point at
+    /// mid-height on the surface itself, not on the axis.
+    private static func samplePoint(on face: ResolvedFace) -> SIMD3<Double>? {
+        if let planar = face.planar, !planar.outline.isEmpty {
+            let c = planar.outline.reduce(SIMD2<Double>.zero, +) / Double(planar.outline.count)
+            return planar.origin + planar.basisX * c.x + planar.basisY * c.y
+        }
+        if let cyl = face.cylinder {
+            let axis = simd_normalize(cyl.axisDir)
+            // Any unit vector perpendicular to the axis puts us on the surface.
+            let seed = abs(axis.x) < 0.9 ? SIMD3<Double>(1, 0, 0) : SIMD3<Double>(0, 1, 0)
+            let radial = simd_normalize(simd_cross(axis, seed))
+            let mid = (cyl.minT + cyl.maxT) / 2
+            // axisPoint is on the axis but at an arbitrary axial position;
+            // re-anchor it to the mid-height plane before stepping outward.
+            let onAxis = cyl.axisPoint + axis * (mid - simd_dot(cyl.axisPoint, axis))
+            return onAxis + radial * cyl.radius
+        }
+        return nil
     }
 
     // MARK: Revolve / Sweep / Loft (full-solid ops)

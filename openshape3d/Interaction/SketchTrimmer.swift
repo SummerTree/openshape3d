@@ -42,8 +42,10 @@ nonisolated enum SketchTrimmer {
                 center: center, radius: radius, sides: sides, rotation: rotation
             )
             return trimExplodedLoop(corners, at: p, obstacles: obstacles)
-        case .ellipse:
-            return nil // no exact param split; ellipse trim is out of scope
+        case .ellipse, .spline:
+            // No exact parameter split for these; trim is out of scope (a spline
+            // trim would have to re-fit the curve, changing its shape).
+            return nil
         }
     }
 
@@ -248,6 +250,15 @@ nonisolated enum SketchTrimmer {
                 appendLoop(SketchEntity.polygonPoints(
                     center: center, radius: radius, sides: sides, rotation: rotation
                 ), &out)
+            case let .spline(_, points, closed):
+                // A spline still ACTS as an obstacle for trimming other
+                // entities, even though it cannot itself be trimmed.
+                let curve = SketchEntity.splinePoints(points, closed: closed)
+                if closed {
+                    appendLoop(curve, &out)
+                } else if curve.count >= 2 {
+                    for i in 1..<curve.count { out.append((curve[i - 1], curve[i])) }
+                }
             }
         }
         return out

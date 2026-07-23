@@ -32,6 +32,7 @@ final class SketchEditUITests: XCTestCase {
 
         XCTAssertTrue(app.staticTexts["Sketching on ground plane"].waitForExistence(timeout: 3),
                       "Sketch status bar should appear")
+        lookAtSketch(app)
 
         // Let the head-on camera animation settle.
         sleep(2)

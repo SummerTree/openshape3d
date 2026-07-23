@@ -33,6 +33,7 @@ final class SweepLoftUITests: XCTestCase {
         window.coordinate(withNormalizedOffset: CGVector(dx: 0.80, dy: 0.78)).tap()
         XCTAssertTrue(app.staticTexts["Sketching on ground plane"].waitForExistence(timeout: 3))
         sleep(2) // camera animation
+        lookAtSketch(app)
         let circleCenter = window.coordinate(withNormalizedOffset: CGVector(dx: 0.40, dy: 0.50))
         let circleEdge = window.coordinate(withNormalizedOffset: CGVector(dx: 0.48, dy: 0.50))
         circleCenter.press(forDuration: 0.15, thenDragTo: circleEdge)
@@ -96,6 +97,7 @@ final class SweepLoftUITests: XCTestCase {
         window.coordinate(withNormalizedOffset: CGVector(dx: 0.80, dy: 0.78)).tap()
         XCTAssertTrue(app.staticTexts["Sketching on ground plane"].waitForExistence(timeout: 3))
         sleep(2) // camera animation
+        lookAtSketch(app)
         window.coordinate(withNormalizedOffset: CGVector(dx: 0.34, dy: 0.40))
             .press(forDuration: 0.15, thenDragTo:
                 window.coordinate(withNormalizedOffset: CGVector(dx: 0.48, dy: 0.56)))

@@ -44,6 +44,7 @@ final class ViewsUITests: XCTestCase {
 
         XCTAssertTrue(app.staticTexts["Sketching on plane"].waitForExistence(timeout: 3),
                       "Sketch mode should start after the Front view snap")
+        lookAtSketch(app)
 
         // Let the head-on camera animation settle.
         sleep(2)

@@ -23,6 +23,37 @@ Also landed recently (all on `main`): context-sensitive Shapr3D-style tool
 palette with flyout groups; extrude gizmo = SF Symbol `arrow.up.and.down` +
 value pill; drag-reorder of History rows; bug-hunt regression tests.
 
+Sketch/select UX pass (2026-07-21):
+- **Orbit mid-sketch**: `EditorMode.sketching`'s tool is now OPTIONAL. Tapping
+  the active sketch tool deselects it (same toggle pattern as CreateTool);
+  with no tool armed, empty-space drags orbit (taps still select, drags on
+  entities/gizmo still edit), so a plane can be sketched from any angle —
+  the existing "Look at Sketch" pill button restores head-on. Re-opening a
+  sketch from Items now starts with no tool armed.
+- **Profile tap arms extrude at 0 mm** (`startExtrude`): pull arrow + bar
+  only, no default 2 mm slab; committing at 0 cancels. UI tests type a height
+  via the shared `typeExtrudeHeight(_:)` helper (`PullArrowTestSupport`).
+- **Select mode selects sketch entities**: tap fallback
+  (`toggleSketchEntityUnderRay`) + marquee candidates now built for the
+  Sketches-only filter too (was `filter == .bodiesAndSketchEntities`).
+- **Consumed sketches stay visible after extrude/revolve/…** — the spec §11
+  auto-hide (`consumedSketchHideCommand`) was removed as a UX bug; hide
+  manually from Items when wanted.
+- **Delete works on Select-mode sketch picks** (`deleteSelection`): selected
+  sketch entities delete outside sketch mode too (bodies + entities in one
+  undo step); the palette Delete button enables for them; a plain tap
+  elsewhere clears a stale sketch-entity highlight.
+- **Extrude no longer grabs flush neighbors** (`commitToolResult`): the
+  auto-boolean "touch" test now requires real overlap VOLUME
+  (`KernelOps.volume(of:)` on the intersection > 1e-4) instead of any
+  intersection polygon — bodies sharing a flush wall produced zero-volume
+  slivers that falsely counted as touching. Covered by
+  `PushPullKernelTests.testFlushPrismsHaveNoIntersectionVolume`.
+- **Orientation Cube = universal orbit control** (`ViewportView.
+  gestureDragBegan`): a drag starting on the cube orbits the camera in every
+  mode (checked before all mode-specific drag handling); a tap still snaps to
+  the view. See spec §7.2.
+
 **Test baseline: 464 unit tests, ~78 UI tests — all green.** Two UI tests
 (`FaceFlowUITests/testTypeNegativeIntoArrowPill`,
 `SweepLoftUITests/testSweepCircleAlongTwoSegmentLinePath`) are long-run flaky
@@ -123,6 +154,13 @@ multi-edge additivity, error surfacing),
 7. **Selection mutation**: `deleteSelection` deletes whatever is in
    `selection` — internal cleanup paths must never write to `selection`
    (that's why `resetBlendState` exists apart from `cancelBlend`).
+8. **Isolated-deinit double-free**: with `SWIFT_DEFAULT_ACTOR_ISOLATION =
+   MainActor`, an implicitly-`@MainActor` `@Observable` class gets a
+   MainActor-*isolated* `deinit` (SE-0371). Deallocating one routes through
+   `swift_task_deinitOnExecutorImpl`, which double-frees on the current
+   toolchain (Xcode 26.2 / Swift 6.2) — deterministic malloc crash whenever a
+   test lets such an instance go out of scope (bit `AppSettings`). Fix: give
+   the class an explicit `nonisolated deinit {}` (no teardown work to isolate).
 
 ---
 
@@ -158,6 +196,55 @@ the render/preview path. Unlocks true fillets (tangent chains, rolling-ball
 corners, G2), robust booleans, shell/offset-face quality. Start with a spike:
 build OCCT.xcframework, round-trip one box through
 `BRepPrimAPI_MakeBox` → mesh → `RenderMesh`.
+**Concrete ordered scope + spike/kill-criteria: `docs/OCCT_BREP_PORT_DESIGN.md`.**
+This is what fixes extruded circles rendering as 48-gon prisms (no mesh-side fix
+exists — the representation itself must become analytic).
+**M0 spike + M1 wiring DONE (2026-07-22):** OCCT 7.8.1 cross-built for iOS
+(`scripts/build_occt_ios.sh` → `ThirdParty/OCCT.xcframework`, gitignored,
+modeling-only ~74 MB/arch). OCCT is now **linked into the app** and callable
+from Swift via `OCCTKernel` (Obj-C++ `OCCTBridge` behind a dedicated bridging
+header — NOT `ShaderTypes.h`, which Metal shares). `openshape3dTests/
+OCCTKernelTests` proves it in-suite (extruded circle = 1 analytic cylinder);
+**full suite 499 green**. STEP/IGES deferred (build-flag flip; ~doubles the lib).
+**A circle extrude now renders as a TRUE smooth cylinder** (OCCT analytic
+tessellation + surface normals), visually confirmed on-device — behind
+`OCCTKernel.renderCircleExtrudesWithOCCT`, Euclid still owns CSG. Seed a demo
+with `SIMCTL_CHILD_OS3D_FRESH=1 SIMCTL_CHILD_OS3D_DEBUG_SEED_CYLINDER=1`.
+**OCCT is now the source of truth for circle extrude + boolean:** `Body.brep`
+(`BRepHandle`) carries the analytic solid; `evalBoolean` composes breps
+(`BRepAlgoAPI_Fuse/Cut/Common`) and renders smooth — so a cylinder MINUS a
+cylinder stays round (verified on-device: `SIMCTL_CHILD_OS3D_DEBUG_SEED_BOOLEAN=1`).
+Euclid still computes CSG → suite 500 green. Next: general (polygonal/arc)
+profiles as B-rep source, analytic holes, extrude-into-target boolean, B-rep
+persistence, then fillet/shell on B-rep. Repro: `scripts/run_occt_spike.sh`.
+
+### Spec §1–§12 gap sweep (2026-07-22) — suite 658 green
+
+Every ❌ in `SHAPR3D_PARITY_SPEC.md` through §12 was re-audited and closed
+except §7.5 (SpaceMouse/Wacom — needs a vendor SDK and physical hardware, so
+it cannot be built or tested here). Each landed as a tested backend with the
+UI wiring called out as missing in its spec entry:
+
+| § | What shipped | Where |
+|---|---|---|
+| 1.2 | Automatic line/arc from a pen stroke; wiggle toggles it | `StrokeClassifier` |
+| 2.4 | Re-host a sketch on another plane | `ChangeSketchPlaneCommand` |
+| 2.5 | Live sketch pattern link (edit seed → instances follow) | `SketchPatternLink` |
+| 4.12 | Replace Face: extend/trim onto a parallel plane | `ReplaceFaceKit` |
+| 4.13 | Offset Edge (3D), Single + Chain | `EdgeOffsetKit` |
+| 4.15 | Wrap & Emboss onto a cylinder, no stretch | `WrapKit` |
+| 4.16 | Delete Face + surface healing (OCCT defeaturing) | `FeatureGraph.evalDeleteFace` |
+| 6.5 | Insert Project WITH editable history | `ProjectMergeKit` |
+| 8.4 | Hotkeys + fuzzy Command Search | `CommandRegistry` |
+| 12.1 | OBJ import (round-trips `OBJExporter`) | `OBJImporter` |
+
+Stale statuses corrected in the same pass: §4.14 (ships as §1.13's 3D entry
+point), §6.4 (import exists), §17 (Settings ships).
+
+**Next:** these are backends without UI. The highest-value follow-on is wiring
+them into the palette/gizmo layer — Delete Face and Replace Face are single
+gestures on an existing face selection, and Command Search needs only a
+UIKit key-command bridge plus a launcher sheet.
 
 ### Deferred backlog (from Phase D)
 - Transform-as-a-feature — **design blocker documented** in

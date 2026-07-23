@@ -24,12 +24,13 @@ final class HistoryReorderUITests: XCTestCase {
         window.coordinate(withNormalizedOffset: CGVector(dx: 0.80, dy: 0.78)).tap()
         XCTAssertTrue(app.staticTexts["Sketching on ground plane"].waitForExistence(timeout: 3))
         sleep(2)
+        lookAtSketch(app)
         window.coordinate(withNormalizedOffset: a)
             .press(forDuration: 0.15, thenDragTo: window.coordinate(withNormalizedOffset: b))
         app.buttons["Exit Sketching"].tap(); sleep(1)
         window.coordinate(withNormalizedOffset: tapInside).tap()
         XCTAssertTrue(app.staticTexts["Extrude"].waitForExistence(timeout: 5))
-        app.buttons["Extrude"].firstMatch.tap(); sleep(1)
+        typeExtrudeHeight(app); sleep(1)
     }
 
     func testDragReorderTwoExtrudes() throws {

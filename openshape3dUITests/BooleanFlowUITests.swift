@@ -29,6 +29,7 @@ final class BooleanFlowUITests: XCTestCase {
         window.coordinate(withNormalizedOffset: CGVector(dx: 0.80, dy: 0.78)).tap()
         XCTAssertTrue(app.staticTexts["Sketching on ground plane"].waitForExistence(timeout: 3))
         sleep(2) // camera animation to head-on
+        lookAtSketch(app)
 
         window.coordinate(withNormalizedOffset: start)
             .press(forDuration: 0.15, thenDragTo: window.coordinate(withNormalizedOffset: end))
@@ -36,7 +37,7 @@ final class BooleanFlowUITests: XCTestCase {
 
         window.coordinate(withNormalizedOffset: tapInside).tap()
         XCTAssertTrue(app.staticTexts["Extrude"].waitForExistence(timeout: 5))
-        app.buttons["Extrude"].firstMatch.tap()
+        typeExtrudeHeight(app)
         XCTAssertFalse(app.staticTexts["Extrude"].exists)
     }
 

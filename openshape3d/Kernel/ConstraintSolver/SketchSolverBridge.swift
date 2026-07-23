@@ -149,6 +149,15 @@ nonisolated enum SketchSolverBridge {
             return [RawSlot(entityID: id, role: .center, position: c, endpointLike: false)]
         case let .polygon(id, c, _, _, _):
             return [RawSlot(entityID: id, role: .center, position: c, endpointLike: false)]
+        case let .spline(id, points, closed):
+            // Expose the OPEN spline's ends so it can be constrained/welded to
+            // neighbouring geometry like a line. Interior fit points are not
+            // solver variables yet (spec §1.4 spline constraints are future
+            // work), so the curve keeps its shape when the ends move.
+            guard !closed, let first = points.first, let last = points.last,
+                  points.count >= 2 else { return [] }
+            return [RawSlot(entityID: id, role: .endpointA, position: first, endpointLike: true),
+                    RawSlot(entityID: id, role: .endpointB, position: last, endpointLike: true)]
         }
     }
 
@@ -489,6 +498,17 @@ nonisolated enum SketchSolverBridge {
             case let .polygon(id, c, r, sides, rot):
                 return .polygon(id: id, center: pt(id, .center) ?? c, radius: rad(id, r),
                                 sides: sides, rotation: rot)
+            case let .spline(id, points, closed):
+                // Move the ends the solver placed; interior points ride along by
+                // the same translation so the curve is not distorted.
+                guard !closed, points.count >= 2,
+                      let a = pt(id, .endpointA) ?? points.first,
+                      let b = pt(id, .endpointB) ?? points.last
+                else { return e }
+                var moved = points
+                moved[0] = a
+                moved[moved.count - 1] = b
+                return .spline(id: id, points: moved, closed: closed)
             }
         }
     }

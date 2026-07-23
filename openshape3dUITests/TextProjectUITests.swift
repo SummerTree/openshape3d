@@ -32,6 +32,7 @@ final class TextProjectUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["Tap to place text"].waitForExistence(timeout: 3),
                       "The Text tool should prompt for a placement tap")
         sleep(2) // head-on camera animation
+        lookAtSketch(app)
 
         // Tap-to-place left of center so the 'O' (about 11mm wide at height
         // 10) stays on screen, then fill in the dialog. Height defaults to
@@ -69,8 +70,8 @@ final class TextProjectUITests: XCTestCase {
         XCTAssertTrue(extrudeTitle.exists,
                       "Tapping a glyph fill should start the Extrude tool")
 
-        // Commit the default pull: a body appears and is selected.
-        app.buttons["Extrude"].firstMatch.tap()
+        // Type a height (arming starts at zero): a body appears, selected.
+        typeExtrudeHeight(app)
         let deleteButton = app.buttons.containing(.staticText, identifier: "Delete").firstMatch
         XCTAssertTrue(deleteButton.waitForExistence(timeout: 3))
         let predicate = NSPredicate(format: "isEnabled == true")
@@ -97,6 +98,7 @@ final class TextProjectUITests: XCTestCase {
             "The Project tool should prompt for a body tap"
         )
         sleep(2) // head-on (top-down) camera animation
+        lookAtSketch(app)
 
         // Tap the box at screen center: its feature edges flatten onto the
         // ground sketch as one undoable command.

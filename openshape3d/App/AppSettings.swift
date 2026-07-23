@@ -143,4 +143,14 @@ final class AppSettings {
         paletteOnRight = defaults.bool(forKey: Key.paletteOnRight)
         antiAliasing = Self.launchSampleCount(defaults: defaults)
     }
+
+    // Under `SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor`, this class is
+    // implicitly `@MainActor`, and (SE-0371) a global-actor-isolated `deinit`
+    // is isolated to that actor. Deallocating an isolated-`deinit` `@Observable`
+    // then routes through `swift_task_deinitOnExecutorImpl`, which double-frees
+    // in the current toolchain — deterministically crashing any test that lets
+    // an `AppSettings` instance go out of scope (malloc "pointer being freed
+    // was not allocated"). There's no teardown work to do here, so opt the
+    // deinit out of actor isolation to skip the executor hop entirely.
+    nonisolated deinit {}
 }

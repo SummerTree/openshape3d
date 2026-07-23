@@ -111,6 +111,10 @@ nonisolated enum SketchHitTester {
         case let .circle(_, center, _), let .arc(_, center, _, _, _),
              let .ellipse(_, center, _, _, _), let .polygon(_, center, _, _, _):
             return [(.center, center)]
+        case let .spline(_, points, closed):
+            guard !closed, let a = points.first, let b = points.last,
+                  points.count >= 2 else { return [] }
+            return [(.endpointA, a), (.endpointB, b)]
         }
     }
 
@@ -146,6 +150,10 @@ nonisolated enum SketchHitTester {
                 center: center, radius: radius, sides: sides, rotation: rotation
             ).first ?? center
             return [(.center, center), (.radius, vertex0)]
+        case let .spline(_, points, _):
+            // Every FIT point is draggable — that is how a spline is edited.
+            guard let first = points.first, let last = points.last else { return [] }
+            return [(.lineStart, first), (.lineEnd, last)]
         }
     }
 
@@ -184,6 +192,18 @@ nonisolated enum SketchHitTester {
             return distanceToLoop(p, SketchEntity.polygonPoints(
                 center: center, radius: radius, sides: sides, rotation: rotation
             ))
+        case let .spline(_, points, closed):
+            let curve = SketchEntity.splinePoints(points, closed: closed)
+            guard curve.count >= 2 else {
+                return curve.first.map { simd_length(p - $0) } ?? .greatestFiniteMagnitude
+            }
+            if closed { return distanceToLoop(p, curve) }
+            // Open curve: nearest of the tessellated spans.
+            var best = Double.greatestFiniteMagnitude
+            for i in 0..<(curve.count - 1) {
+                best = min(best, distanceToSegment(p, a: curve[i], b: curve[i + 1]))
+            }
+            return best
         }
     }
 
@@ -294,6 +314,8 @@ nonisolated enum SketchHitTester {
                 id: id, center: center + delta, radius: radius,
                 sides: sides, rotation: rotation
             )
+        case let .spline(id, points, closed):
+            return .spline(id: id, points: points.map { $0 + delta }, closed: closed)
         }
     }
 
