@@ -484,7 +484,16 @@ translate a sketch along/between planes (set default view first via
 double-tapping the Orientation Cube). Selecting a sketch outside sketch mode
 shows the transform gizmo auto-aligned to the sketch's orientation; the Copy
 toggle produces sketch copies.
-**Status:** ❌ not implemented — sketches are not selectable as objects.
+**Status:** 🟡 partial — a sketch can be RE-HOSTED on another plane:
+`ChangeSketchPlaneCommand` + `EditorViewModel.changeSketchPlane(of:to:)`
+(one undo step) with `availableSketchPlanes(for:)` listing the ground plane
+plus every construction plane, excluding the current one. Entity coordinates
+are plane-local so the drawing keeps its shape and simply lands on the new
+plane, and dependent features rebuild — an extrude follows the sketch.
+Covered by `ChangeSketchPlaneTests`.
+**Missing:** the UI entry point for it, sketches being selectable as objects
+outside sketch mode, the auto-aligned transform gizmo, dragging a sketch
+between planes, and the Copy toggle.
 **Feasibility:** [mesh-kernel OK]
 
 ### 2.5 Sketch pattern constraint

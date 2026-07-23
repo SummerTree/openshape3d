@@ -5920,6 +5920,34 @@ final class EditorViewModel {
 
     /// Adaptive enablement (Shapr3D rule, spec §3.2): a constraint is offered
     /// only when the current selection supports it.
+    // MARK: - Sketch plane (spec §2.4)
+
+    /// Planes a sketch can be re-hosted onto: the ground plane plus every
+    /// construction plane in the document, minus the one it already sits on.
+    func availableSketchPlanes(for sketchID: SketchID) -> [SketchPlane] {
+        let current = session.document.sketches.first { $0.id == sketchID }?.plane
+        let candidates = [SketchPlane.ground] + session.document.planes.map(\.plane)
+        return candidates.filter { plane in
+            guard let current else { return true }
+            // Same origin AND same normal ⇒ effectively the same plane.
+            return simd_length(plane.origin - current.origin) > 1e-6
+                || abs(simd_dot(plane.normal, current.normal)) < 0.999999
+        }
+    }
+
+    /// Re-host `sketchID` on `plane` (spec §2.4). Entity coordinates are
+    /// plane-local, so the drawing keeps its shape and moves to the new plane;
+    /// dependent features rebuild so an extrude follows it. One undo step.
+    func changeSketchPlane(of sketchID: SketchID, to plane: SketchPlane) {
+        guard let sketch = session.document.sketches.first(where: { $0.id == sketchID }),
+              sketch.plane != plane
+        else { return }
+        session.perform(ChangeSketchPlaneCommand(
+            sketchID: sketchID, before: sketch.plane, after: plane))
+        session.rebuildForSketchChange(sketchID)
+        session.save()
+    }
+
     func canApplyConstraint(_ kind: SketchConstraintKind) -> Bool {
         guard mode.isSketching else { return false }
         let points = selectedSketchPoints.count
