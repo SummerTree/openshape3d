@@ -563,7 +563,7 @@ final class Renderer: NSObject, MTKViewDelegate {
         frame.groundColor = SIMD4(0.62, 0.60, 0.58, 1)
         frame.backgroundTop = SIMD4(0.94, 0.95, 0.97, 1)
         frame.backgroundBottom = SIMD4(0.82, 0.84, 0.88, 1)
-        frame.accentColor = SIMD4(0.98, 0.55, 0.12, 1) // Shapr3D-ish orange
+        frame.accentColor = SIMD4(0.0, 0.52, 1.0, 1) // Shapr3D selection blue
         frame.gridParams = SIMD4(1, 10, 120, 0)
         frame.gridCenter = SIMD4(camera.target.x, 0, camera.target.z, 0)
         frame.edgeDepthBiasNDC = 1e-4

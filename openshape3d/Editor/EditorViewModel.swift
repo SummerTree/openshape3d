@@ -489,9 +489,13 @@ final class EditorViewModel {
         // defined, BLUE when under-defined.
         let committedColor = SIMD4<Float>(0.15, 0.17, 0.20, 1)
         let pendingColor = SIMD4<Float>(0.20, 0.48, 0.95, 1)
-        let selectedColor = SIMD4<Float>(0.98, 0.55, 0.12, 1)
+        // Selection is Shapr3D blue (matches the body accent). It has to read
+        // as DISTINCT from the under-defined blue below — both are blue in
+        // Shapr3D too — so selection is a brighter, more saturated azure while
+        // under-defined stays the calmer mid-blue.
+        let selectedColor = SIMD4<Float>(0.0, 0.60, 1.0, 1)
         let definedColor = SIMD4<Float>(0.20, 0.70, 0.35, 1)      // fully defined
-        let underDefinedColor = SIMD4<Float>(0.20, 0.48, 0.95, 1) // under-defined
+        let underDefinedColor = SIMD4<Float>(0.22, 0.44, 0.82, 1) // under-defined
         // Hidden sketches are skipped — except the one being edited.
         let activeSketchID: SketchID? = {
             if case .sketching(let id, _) = mode { return id }
@@ -629,8 +633,8 @@ final class EditorViewModel {
             let pending = offsetPlanePreview(context, distance: distance)
             appendPlaneQuad(
                 pending.plane, size: pending.size,
-                fill: SIMD4(0.98, 0.55, 0.12, 0.20),
-                border: SIMD4(0.98, 0.55, 0.12, 0.9),
+                fill: SIMD4(0.0, 0.52, 1.0, 0.20),
+                border: SIMD4(0.0, 0.52, 1.0, 0.9),
                 into: &scene
             )
         }
@@ -664,7 +668,7 @@ final class EditorViewModel {
                 scene.sketchLines.append(SketchLineBatch(
                     segments: [corners[0], corners[1], corners[1], corners[2],
                                corners[2], corners[3], corners[3], corners[0]],
-                    color: SIMD4(0.98, 0.55, 0.12, 1)
+                    color: SIMD4(0.0, 0.52, 1.0, 1)
                 ))
             }
         }
@@ -697,8 +701,8 @@ final class EditorViewModel {
             quadPlane.origin += keep * 1e-3
             appendPlaneQuad(
                 quadPlane, size: section.size,
-                fill: SIMD4(0.98, 0.55, 0.12, 0.10),
-                border: SIMD4(0.98, 0.55, 0.12, 0.85),
+                fill: SIMD4(0.0, 0.52, 1.0, 0.10),
+                border: SIMD4(0.0, 0.52, 1.0, 0.85),
                 into: &scene
             )
             // Pull arrow moves the plane along its normal (offset-plane drag
@@ -741,7 +745,7 @@ final class EditorViewModel {
             }
             scene.sketchLines.append(SketchLineBatch(
                 segments: segments,
-                color: SIMD4(0.98, 0.55, 0.12, 1)
+                color: SIMD4(0.0, 0.52, 1.0, 1)
             ))
         }
         return scene
