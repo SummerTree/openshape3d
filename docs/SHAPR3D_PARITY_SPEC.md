@@ -94,7 +94,13 @@ continuation: after
 a stroke, the next stroke starting on the previous endpoint pre-anchors there
 (`chainAnchor`), and a stroke that closes onto the chain's first point
 finishes the chain (`EditorViewModel.beginSketchStroke/endSketchStroke`,
-`SketchEntity.line`), with endpoint/midpoint + grid snap (`SnapEngine`).
+`SketchEntity.line`), with typed snapping (`SnapEngine.SnapKind`): endpoint,
+midpoint, centre (rectangles now expose edge midpoints and a centre snap) and
+grid, ranked so the expected snap wins when several are in range. The snap
+under the pointer is NAMED on screen while drawing — "Endpoint" / "Midpoint" /
+"Center" (`SnapChipOverlay`), the way Shapr3D makes an otherwise invisible
+snap legible before the stroke commits; the grid stays unnamed since it is
+always on.
 Missing: tap-tap polyline chaining, Escape/Enter semantics, numeric length
 entry mid-draw, auto-constraints, dimension labels.
 **Feasibility:** core [mesh-kernel OK]; locked dimensions [needs constraint solver]
