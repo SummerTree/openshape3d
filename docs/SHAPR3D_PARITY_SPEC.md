@@ -1514,8 +1514,23 @@ Duplicate, Delete. **Command Search:** X or Cmd+F opens a
 fuzzy launcher ("p3" → "Add Plane - 3 Points", "snu" → "Scale - Non-uniform");
 arrows cycle, Enter runs, recents shown when empty; pre-selection scopes
 results.
-**Status:** ❌ not implemented — no keyboard handling, no command search.
-(Undo/Redo exist as toolbar buttons only.)
+**Status:** 🟡 partial — `CommandRegistry` is the single catalog both paths
+resolve against, which is what makes Single Key Action possible at all: a bare
+letter is EITHER a hotkey or the first character of a Command Search query,
+and with the setting on Command Search bare letters stop dispatching while
+modified chords still fire. The spec's key map is bound: sketch A/C/G/I/L/O/
+R/T, modeling E/F/H/M/N/P/S/V/W, booleans ⌘U/B/I, ⌘Z / ⇧⌘Z / ⌘A, views ⌘1–7,
+Space, and — as the spec insists — ⇧⌘I (import into the current project) and
+⌥⌘I (import as a NEW project) as separate commands. Tests assert no two
+commands share a chord, since a duplicate makes one unreachable.
+**Command Search** is a fuzzy launcher biased toward word starts, which is
+what makes the spec's own examples work: "p3" → "Add Plane - 3 Points" and
+"snu" → "Scale - Non-uniform" both rank first. An empty query shows recents
+(most-recent-first, de-duplicated, capped), and a category scope implements
+"pre-selection scopes results". `cheatSheet` groups the bound commands for the
+long-press-⌘ sheet. Covered by `CommandRegistryTests`.
+**Missing:** the UIKit key-command wiring and the launcher/cheat-sheet UI,
+user-customizable shortcuts, and the three-finger undo/redo swipe.
 **Feasibility:** [mesh-kernel OK]
 
 ---
