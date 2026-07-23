@@ -29,6 +29,34 @@ final class OCCTKernelTests: XCTestCase {
         XCTAssertEqual(c.other, 0, "no other surface types")
     }
 
+    /// A body carries its own transform, so it must be baked into the solid
+    /// before two bodies are combined — otherwise a MOVED body would boolean at
+    /// its pre-move position while the Euclid path used the correct one.
+    func testBodyTransformIsBakedIntoTheBRep() {
+        guard let base = OCCTKernel.primitiveShape(.cylinder(radius: 2, height: 4),
+                                                   placement: .identity) else {
+            return XCTFail("could not build the base solid")
+        }
+        guard let moved = OCCTKernel.transformed(
+            base, by: Transform3D(translation: SIMD3(10, 0, 0))) else {
+            return XCTFail("transform returned nil")
+        }
+        let before = OCCTKernel.renderMesh(from: base)
+        let after = OCCTKernel.renderMesh(from: moved)
+        guard let x0 = before.positions.map(\.x).min(),
+              let x1 = after.positions.map(\.x).min() else {
+            return XCTFail("empty tessellation")
+        }
+        XCTAssertEqual(Double(x1 - x0), 10, accuracy: 1e-3,
+                       "the translation must be baked into the analytic solid")
+
+        // Identity must be a cheap no-op that preserves the solid.
+        let same = OCCTKernel.transformed(base, by: .identity)
+        XCTAssertNotNil(same)
+        XCTAssertEqual(OCCTKernel.renderMesh(from: same!).positions.count,
+                       before.positions.count)
+    }
+
     /// A body's analytic geometry must survive being written to and read back
     /// from the document, or a reloaded cylinder would silently go faceted.
     func testBRepSerializationRoundTripKeepsGeometryAnalytic() {

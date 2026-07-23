@@ -336,7 +336,7 @@ nonisolated extension FeatureGraph {
         // with a cylinder stay analytic (and round). Only CURVED primitives take
         // the OCCT render mesh — a box looks identical either way, so it keeps the
         // Euclid render and existing coverage is unperturbed.
-        if OCCTKernel.renderCircleExtrudesWithOCCT,
+        if OCCTKernel.useOCCTAsSourceOfTruth,
            let handle = OCCTKernel.primitiveShape(spec, placement: placement) {
             if OCCTKernel.hasCurvedFaces(spec) {
                 // Curved primitive: OCCT owns render AND CSG (one tessellation).
@@ -403,16 +403,17 @@ nonisolated extension FeatureGraph {
             var body = Body(
                 id: id, name: node.name, transform: .identity, primitive: nil,
                 euclidMesh: solid, revision: nextRevision())
-            // B-rep source of truth for CIRCLE extrudes: build an analytic OCCT
-            // solid (true cylinder), store it on the body so booleans stay
-            // analytic, and render it smooth (round) instead of the 48-gon prism.
-            // Scoped to circles so polygonal profiles keep the Euclid path exactly
-            // (no perturbation of existing coverage). Euclid still owns CSG/volume.
-            if OCCTKernel.renderCircleExtrudesWithOCCT, extras.isEmpty,
-               case let .circle(center, radius) = outer.kind {
+            // B-rep source of truth for EVERY extrude: circles become an analytic
+            // cylinder (round), other profiles an exact polygonal prism. Either
+            // way the body carries a brep, so downstream booleans stay analytic.
+            if OCCTKernel.useOCCTAsSourceOfTruth, extras.isEmpty {
+                var isCircle = false
+                var center = SIMD2<Double>.zero
+                var radius = 0.0
+                if case let .circle(c, r) = outer.kind { isCircle = true; center = c; radius = r }
                 let z = OCCTKernel.extrudeZRange(distance: distance.value, symmetric: symmetric)
                 if let handle = OCCTKernel.extrudeShape(
-                    outerLoop: outer.loop, isCircle: true,
+                    outerLoop: outer.loop, isCircle: isCircle,
                     circleCenter: center, circleRadius: radius,
                     holes: holes.map(\.loop), zMin: z.zMin, zMax: z.zMax,
                     origin: plane.origin, xAxis: plane.xAxis,
@@ -498,6 +499,7 @@ nonisolated extension FeatureGraph {
             }
             if let t = state.faceTables[tool.id] { inputTables.append(t) }
             let priorBrep = acc.brep
+            let priorTransform = acc.transform
             let mesh = KernelOps.boolean(kind, target: acc, tool: tool)
             guard !mesh.polygons.isEmpty else {
                 state.errors[node.id] = .emptyGeometry
@@ -509,8 +511,15 @@ nonisolated extension FeatureGraph {
             // B-rep source of truth: when BOTH operands are analytic (OCCT), compose
             // them with an OCCT boolean and render the result smooth — so a boolean
             // involving a cylinder stays round. Euclid still owns the CSG `mesh`.
-            if let a = priorBrep, let b = tool.brep,
+            // Place BOTH solids into a common space first (each body carries its
+            // own transform — a moved body's brep would otherwise be booleaned at
+            // its pre-move position), mirroring what KernelOps.boolean does for
+            // the Euclid meshes. The result is world-space, and `next` is built
+            // with an identity transform, so the two stay consistent.
+            if let a0 = priorBrep, let b0 = tool.brep,
                let op = Self.occtBooleanOp(kind),
+               let a = OCCTKernel.transformed(a0, by: priorTransform),
+               let b = OCCTKernel.transformed(b0, by: tool.transform),
                let resultBrep = OCCTKernel.boolean(a, b, op: op) {
                 next.adoptBRep(resultBrep)
             }

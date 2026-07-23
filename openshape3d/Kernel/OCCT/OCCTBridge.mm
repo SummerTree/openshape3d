@@ -367,6 +367,25 @@ static TopoDS_Wire PolyWire(NSData *loop, double z) {
     }
 }
 
++ (nullable OCCTShape *)transformedShape:(OCCTShape *)shape
+                                  matrix:(NSData *)transform {
+    if (shape == nil || transform.length < 12 * sizeof(double)) return nil;
+    try {
+        const double *m = (const double *)transform.bytes;  // row-major 3x4
+        gp_Trsf t;
+        t.SetValues(m[0], m[1], m[2],  m[3],
+                    m[4], m[5], m[6],  m[7],
+                    m[8], m[9], m[10], m[11]);
+        TopoDS_Shape moved = BRepBuilderAPI_Transform(shape->_shape, t, Standard_True).Shape();
+        if (moved.IsNull()) return nil;
+        OCCTShape *out = [OCCTShape new];
+        out->_shape = moved;
+        return out;
+    } catch (...) {
+        return nil;
+    }
+}
+
 + (nullable OCCTShape *)booleanOfShape:(OCCTShape *)a
                              withShape:(OCCTShape *)b
                                     op:(NSInteger)op {

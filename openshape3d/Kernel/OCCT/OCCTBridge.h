@@ -112,6 +112,12 @@ NS_ASSUME_NONNULL_BEGIN
                                            c:(double)c
                                    transform:(nullable NSData *)transform;
 
+/// Apply a rigid placement to a solid. `transform` is 12 packed doubles
+/// (row-major 3×4). Needed because a `Body` carries its own transform, which
+/// must be baked in before two solids can be booleaned in a common space.
++ (nullable OCCTShape *)transformedShape:(OCCTShape *)shape
+                                  matrix:(NSData *)transform;
+
 /// Boolean of two world-space shapes. `op`: 0 = union (fuse), 1 = subtract
 /// (cut a from ... i.e. a − b), 2 = intersect (common). Nil on failure.
 + (nullable OCCTShape *)booleanOfShape:(OCCTShape *)a

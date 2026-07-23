@@ -31,10 +31,11 @@ nonisolated enum OCCTKernel {
     static let renderAngularDeflection = 0.08
     static let renderLinearDeflection = 0.1
 
-    /// Feature flag for the B-rep render path. When true, a circle extrude is
-    /// displayed with OCCT's analytic-cylinder tessellation (smooth normals,
-    /// truly round) instead of the Euclid 48-gon prism. Euclid still owns CSG.
-    static let renderCircleExtrudesWithOCCT = true
+    /// Master switch for the B-rep path. When true, solids that OCCT can build
+    /// (extrudes, primitives, and booleans between them) carry an analytic
+    /// `Body.brep` and derive BOTH their render and CSG meshes from it. Flip to
+    /// false to fall back to the pure-Euclid kernel everywhere.
+    static let useOCCTAsSourceOfTruth = true
 
     /// The linked OCCT version (proves the xcframework is present + linked).
     static var version: String { OCCTBridge.occtVersion() }
@@ -145,6 +146,19 @@ nonisolated enum OCCTKernel {
         case .box: return false
         case .cylinder, .sphere: return true
         }
+    }
+
+    /// Bake a `Body.transform` into a solid. A body's `brep` lives in the SAME
+    /// space as its `render` mesh (body-local), so any op combining two bodies
+    /// must place both into a common space first — exactly what
+    /// `KernelOps.boolean` does for the Euclid meshes. Identity is a no-op.
+    static func transformed(_ handle: BRepHandle, by transform: Transform3D) -> BRepHandle? {
+        guard transform != .identity else { return handle }
+        let m = transform.matrix  // simd is column-major: m[col][row]
+        var flat = [Double]()
+        for r in 0..<3 { for col in 0..<4 { flat.append(m[col][r]) } }
+        let data = flat.withUnsafeBytes { Data($0) }
+        return OCCTBridge.transformedShape(handle.shape, matrix: data).map(BRepHandle.init)
     }
 
     /// OCCT boolean of two solids. op: 0 = union, 1 = subtract (a − b), 2 = intersect.
