@@ -563,6 +563,14 @@ final class EditorViewModel {
                     color: pendingColor
                 ))
             }
+            // Line tool tap-chaining: mark the vertex the next tap extends from,
+            // so a first tap (which draws no segment yet) still reads as landed.
+            if tapChainActive, let anchor = chainAnchor {
+                scene.sketchLines.append(SketchLineBatch(
+                    segments: Self.chainAnchorMarkerSegments(at: anchor, on: sketch.plane),
+                    color: pendingColor
+                ))
+            }
             // Selection gizmo (plan §B6, spec §1.10): move handle at the
             // selection centroid plus a rotate ring around it.
             if let centroid = sketchSelectionCentroid {
@@ -2764,6 +2772,12 @@ final class EditorViewModel {
     /// connected chain (spec §1.10, endpoint adjacency).
     private func handleDoubleTap(ray: Ray) {
         if case .sketching = mode {
+            // A double-tap ends an in-progress line tap-chain (finish an open
+            // polyline without closing it), matching the Shapr3D line tool.
+            if tapChainActive {
+                clearChain()
+                return
+            }
             guard let sketch = activeSketch,
                   let raw = rawSketchPoint(from: ray),
                   let hit = SketchHitTester.nearestEntity(
@@ -5167,19 +5181,40 @@ final class EditorViewModel {
             placePendingSymbol(ray: ray)
             return
         }
-        clearChain() // a tap ends line chaining
         if pendingArc != nil {
             // Tap elsewhere finalizes the bulge-adjustable pending arc.
+            clearChain()
             commitPendingArc()
             return
         }
+        // Line tool: taps place polyline vertices (extend the chain / close the
+        // polygon) rather than ending it — the Shapr3D line workflow.
+        if tool == .line {
+            placeLineChainPoint(ray: ray)
+            return
+        }
+        clearChain() // a tap ends line chaining (other tools)
         guard let sketch = activeSketch, let raw = rawSketchPoint(from: ray) else { return }
+        if !selectSketchGeometryTap(at: raw, in: sketch) {
+            // Empty tap: clear the current sketch selection.
+            selectedSketchEntityIDs.removeAll()
+            selectedSketchPoints.removeAll()
+        }
+    }
+
+    /// Toggle-select the sketch point or entity under `raw` (the constraint /
+    /// dimension pick, plan §C3). A tap near a model point (endpoint/center)
+    /// selects that POINT; the tight point tolerance means the body of a
+    /// line/curve still selects the whole entity. Returns true when something
+    /// was hit, false on an empty tap so the caller can decide what an empty
+    /// tap means (clear the selection, or extend a line chain).
+    @discardableResult
+    private func selectSketchGeometryTap(
+        at raw: SIMD2<Double>, in sketch: Sketch
+    ) -> Bool {
         // Tapping geometry clears any constraint/dimension glyph selection.
         selectedConstraintID = nil
         selectedDimensionID = nil
-        // A tap landing near a model point (endpoint/center) selects that POINT
-        // for constraints (plan §C3); the tight point tolerance means the body
-        // of a line/curve still selects the whole entity.
         if let pt = SketchHitTester.nearestPoint(
             to: raw, in: sketch.entities, tolerance: controlPointTolerance
         ) {
@@ -5189,7 +5224,7 @@ final class EditorViewModel {
             } else {
                 selectedSketchPoints.insert(sel)
             }
-            return
+            return true
         }
         if let hit = SketchHitTester.nearestEntity(
             to: raw, in: sketch.entities, tolerance: entityPickTolerance
@@ -5199,10 +5234,9 @@ final class EditorViewModel {
             } else {
                 selectedSketchEntityIDs.insert(hit.entity.id)
             }
-        } else {
-            selectedSketchEntityIDs.removeAll()
-            selectedSketchPoints.removeAll()
+            return true
         }
+        return false
     }
 
     /// Trim (spec §1.14): delete the tapped span between the entity's nearest
@@ -5360,15 +5394,44 @@ final class EditorViewModel {
         return Self.arcEntity(id: arc.id, a: arc.a, b: arc.b, sagitta: arc.sagitta)
     }
 
+    /// How near the chain's start a tap must land (plane-local mm) to close the
+    /// polygon. Larger than `SnapEngine.pointTolerance` so finger-closing a
+    /// loop is forgiving, while the committed endpoint still welds exactly onto
+    /// the start.
+    static let lineCloseTolerance: Double = 1.2
+
     /// Line chaining: the endpoint of the last committed line; the next line
     /// stroke starting within snap tolerance pre-anchors exactly there.
     private var chainAnchor: SIMD2<Double>?
     /// First point of the chain — a stroke closing onto it ends the chain.
     private var chainStart: SIMD2<Double>?
+    /// True while the user is building a polyline by TAPS (tap-to-place
+    /// vertices, close on the start). A drag-drawn line still sets `chainAnchor`
+    /// for drag-continuation, but leaves this false so a follow-up tap selects
+    /// the line (to dimension it) instead of extending a chain.
+    private(set) var tapChainActive = false
 
     private func clearChain() {
         chainAnchor = nil
         chainStart = nil
+        tapChainActive = false
+    }
+
+    /// A small "+" marker (world-space segment pairs) at the line chain's
+    /// current anchor, so the tap-to-place vertex is visible even before the
+    /// next segment is drawn.
+    nonisolated static func chainAnchorMarkerSegments(
+        at anchor: SIMD2<Double>, on plane: SketchPlane
+    ) -> [SIMD3<Float>] {
+        let arm = 0.22
+        let pts = [
+            anchor + SIMD2(-arm, 0), anchor + SIMD2(arm, 0),
+            anchor + SIMD2(0, -arm), anchor + SIMD2(0, arm),
+        ]
+        return pts.map {
+            let w = plane.toWorld($0)
+            return SIMD3(Float(w.x), Float(w.y), Float(w.z))
+        }
     }
 
     /// The active sketch while in sketching mode.
@@ -5704,20 +5767,7 @@ final class EditorViewModel {
             pendingArc = PendingArc(a: start, b: end, sagitta: Self.defaultSagitta(a: start, b: end))
             return
         }
-        // Fold any auto-inferred constraints into the SAME undo step as the
-        // entity add (plan §B); each survivor is checked so it never
-        // over-constrains, then the accepted set is solved so geometry settles.
-        let addEntity = AddSketchEntityCommand(sketchID: sketchID, entity: entity)
-        let constraintCommands = inferredConstraintCommands(
-            for: entity, sketchID: sketchID, in: sketch
-        )
-        if constraintCommands.isEmpty {
-            session.perform(addEntity)
-        } else {
-            var commands: [DocumentCommand] = [addEntity]
-            commands.append(contentsOf: constraintCommands)
-            session.perform(CompositeCommand(title: "Draw", commands: commands))
-        }
+        commitDrawnEntity(entity, sketchID: sketchID, in: sketch)
         if tool == .line {
             let first = chainStart ?? start
             if simd_length(end - first) <= 1e-9 {
@@ -5726,6 +5776,102 @@ final class EditorViewModel {
                 chainStart = first
                 chainAnchor = end
             }
+        }
+    }
+
+    /// Commit a freshly drawn entity, folding any inferred auto-constraints
+    /// into the SAME "Draw" undo step (plan §B); each survivor is checked so
+    /// it never over-constrains, then the accepted set is solved so geometry
+    /// settles. Shared by drag-draw (`endSketchStroke`) and the line tool's
+    /// tap-to-place chaining (`placeLineChainPoint`).
+    private func commitDrawnEntity(
+        _ entity: SketchEntity, sketchID: SketchID, in sketch: Sketch
+    ) {
+        let addEntity = AddSketchEntityCommand(sketchID: sketchID, entity: entity)
+        let constraintCommands = inferredConstraintCommands(
+            for: entity, sketchID: sketchID, in: sketch
+        )
+        if constraintCommands.isEmpty {
+            session.perform(addEntity)
+        } else {
+            session.perform(CompositeCommand(
+                title: "Draw", commands: [addEntity] + constraintCommands
+            ))
+        }
+    }
+
+    /// Line tool tap (spec §1): build a polyline by tapping vertices, the
+    /// Shapr3D line workflow.
+    ///
+    /// While a tap-chain is in progress each tap extends it (or closes it on the
+    /// start point). When no tap-chain is active, a tap that lands on existing
+    /// geometry SELECTS it (so a just-drawn line can be tapped to dimension it),
+    /// and a tap on empty space STARTS a new chain.
+    private func placeLineChainPoint(ray: Ray) {
+        guard case .sketching(let sketchID, _) = mode,
+              let sketch = activeSketch,
+              let raw = rawSketchPoint(from: ray)
+        else { return }
+
+        let target = SnapEngine.snap(raw, in: sketch).point
+
+        guard tapChainActive, let anchor = chainAnchor, let start = chainStart else {
+            // Not chaining: a tap on geometry selects it (dimension/constraint
+            // pick); an empty tap starts a fresh chain at that point.
+            if selectSketchGeometryTap(at: raw, in: sketch) { return }
+            chainStart = target
+            chainAnchor = target
+            tapChainActive = true
+            return
+        }
+
+        // Close the loop: a tap near the start of a chain that already has a
+        // segment welds shut and ends the chain. The close target is more
+        // generous than the point-weld tolerance (Shapr3D highlights the start
+        // as you approach) so finger-closing a polygon is reliable.
+        if simd_length(start - anchor) > SnapEngine.pointTolerance,
+           simd_length(raw - start) <= Self.lineCloseTolerance {
+            commitChainSegment(from: anchor, to: start, closing: true,
+                               sketchID: sketchID, in: sketch)
+            return
+        }
+
+        // Extend the chain by one segment.
+        if simd_length(target - anchor) <= SnapEngine.pointTolerance { return }
+        commitChainSegment(from: anchor, to: target, closing: false,
+                           sketchID: sketchID, in: sketch)
+    }
+
+    /// Commit one polyline segment for the line tool's tap chaining, folding in
+    /// auto-constraints like a drag (except when closing, where the weld onto
+    /// the start must stay exact so the loop actually closes), then re-anchor
+    /// or clear the chain.
+    private func commitChainSegment(
+        from anchor: SIMD2<Double>, to rawEnd: SIMD2<Double>,
+        closing: Bool, sketchID: SketchID, in sketch: Sketch
+    ) {
+        var end = rawEnd
+        if !closing, autoConstrainSettings.enabled {
+            let result = AutoConstraintEngine.infer(
+                tool: .line, anchor: anchor, current: end,
+                existing: sketch.entities, settings: autoConstrainSettings
+            )
+            end = result.snappedPoint
+            pendingInferredConstraints = result.constraints
+        } else {
+            pendingInferredConstraints = []
+        }
+        defer {
+            pendingInferredConstraints = []
+            activeGuides = []
+        }
+        guard let entity = makeEntity(tool: .line, from: anchor, to: end) else { return }
+        commitDrawnEntity(entity, sketchID: sketchID, in: sketch)
+        if closing {
+            clearChain()
+        } else {
+            chainStart = chainStart ?? anchor
+            chainAnchor = end
         }
     }
 
