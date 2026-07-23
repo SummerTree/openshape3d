@@ -1255,7 +1255,12 @@ images as Split Body cutters.
 project; reposition with Move/Rotate or Translate afterwards. Non-native
 formats arrive as one "Import" history step (with an editable settings control);
 STEP preserves assembly hierarchy as nested folders.
-**Status:** ❌ not implemented (no import of any kind).
+**Status:** 🟡 partial — importing into the open project ships via the
+toolbar Import menu (STEP, OBJ, STL, DXF, reference images — see §12.1); an
+imported body lands as a normal body and can be repositioned with
+Move/Rotate like any other. Missing: the Insert > File entry point itself,
+the single editable "Import" history step with its settings control, and
+STEP assembly hierarchy as nested folders.
 **Feasibility:** STL/OBJ/3MF [mesh-kernel OK]; STEP/IGES [needs B-rep kernel];
 see §12.
 
@@ -1645,7 +1650,11 @@ mesh bodies; any boolean involving a mesh yields a mesh.
 **Status:** 🟡 partial. **STEP import now ships** (`OCCTKernel.readSTEP`,
 OCCT DataExchange) — each solid in the file becomes a body carrying its
 analytic B-rep, so imported geometry is exact rather than tessellated. Also
-toolbar Import menu: STL (binary or ASCII, parsed
+toolbar Import menu: **OBJ** (`OBJImporter` — the read half of `OBJExporter`,
+so an export/edit-elsewhere/re-import round trip returns the same volume and
+bounds; `o`/`g` groups import as separate bodies, polygon faces fan-
+triangulate, and `v/vt/vn`, `v//vn`, and negative indices all parse, with
+normals recomputed from winding rather than trusted), STL (binary or ASCII, parsed
 and welded into a solid mesh body — `STLImporter` → `EuclidBridge` weld path
 → `AddBodyCommand`; imported bodies boolean like any native body since
 everything is a mesh here), DXF (R12/R2000-common subset — LINE, CIRCLE,
