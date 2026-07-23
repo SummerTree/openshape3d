@@ -67,7 +67,40 @@ final class LiveDimensionTests: XCTestCase {
         XCTAssertEqual(d.offset, .zero, "a diameter is drawn across the shape, not beside it")
         XCTAssertEqual(d.start, SIMD2(10, 5))
         XCTAssertEqual(d.end, SIMD2(10, 15))
-        XCTAssertEqual(d.labelPoint, SIMD2(10, 10), "the label rides the centre")
+        XCTAssertEqual(d.labelPoint.x, 10, accuracy: 1e-9,
+                       "the label stays on the diameter line")
+    }
+
+    func testDiameterIsTickedAtTheCircleEdgesAndNotWitnessed() {
+        let d = dims(.circle(id: UUID(), center: .zero, radius: 4))[0]
+        XCTAssertTrue(d.kind.drawsEdgeTicks,
+                      "a diameter needs a mark where it meets the circle")
+        XCTAssertEqual(d.offset, .zero,
+                       "…and no witness leaders, since it sits on the geometry")
+        // Ticks go at the endpoints, which are ON the circle.
+        XCTAssertEqual(simd_length(d.lineStart), 4, accuracy: 1e-9)
+        XCTAssertEqual(simd_length(d.lineEnd), 4, accuracy: 1e-9)
+    }
+
+    func testAnOffsetDimensionIsWitnessedRatherThanTicked() {
+        let d = dims(.line(id: UUID(), a: .zero, b: SIMD2(30, 40)))[0]
+        XCTAssertFalse(d.kind.drawsEdgeTicks,
+                       "an offset leader already registers via its witness lines")
+    }
+
+    func testTheDiameterLabelSlidesOffTheCentre() {
+        // The circle's centre carries the drag origin and its own marker, so
+        // parking the value there covers them.
+        let d = dims(.circle(id: UUID(), center: .zero, radius: 10),
+                     towards: SIMD2(10, 0))[0]
+        XCTAssertGreaterThan(d.labelPoint.x, 0, "slid toward one end")
+        XCTAssertLessThan(d.labelPoint.x, 10, "…but still on the line")
+        XCTAssertEqual(d.labelPoint.y, 0, accuracy: 1e-9)
+    }
+
+    func testAnOffsetDimensionStillLabelsItsMidpoint() {
+        let d = dims(.line(id: UUID(), a: .zero, b: SIMD2(100, 0)))[0]
+        XCTAssertEqual(d.labelPoint.x, 50, accuracy: 1e-9)
     }
 
     func testWithoutADragHintTheDiameterIsHorizontal() {

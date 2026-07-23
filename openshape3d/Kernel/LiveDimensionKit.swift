@@ -29,6 +29,13 @@ nonisolated enum LiveDimensionKit {
             case .radius: "R"
             }
         }
+
+        /// Whether the dimension is terminated by a short tick ON the measured
+        /// geometry. A diameter is drawn straight ACROSS the shape, so without
+        /// a tick its arrowheads float against the curve with nothing marking
+        /// where the measurement actually meets the circle; an offset
+        /// dimension already registers via its witness lines.
+        var drawsEdgeTicks: Bool { self == .diameter }
     }
 
     /// One measurement to draw: the dimension line runs `start + offset` to
@@ -47,7 +54,19 @@ nonisolated enum LiveDimensionKit {
 
         var lineStart: SIMD2<Double> { start + offset }
         var lineEnd: SIMD2<Double> { end + offset }
-        var labelPoint: SIMD2<Double> { (lineStart + lineEnd) / 2 }
+
+        /// Where the value sits. Offset measurements label their midpoint; a
+        /// diameter is drawn through the centre, where the circle's own centre
+        /// marker and the drag origin already live, so its label slides along
+        /// the line to stay clear of them.
+        var labelPoint: SIMD2<Double> {
+            let mid = (lineStart + lineEnd) / 2
+            guard kind.drawsEdgeTicks else { return mid }
+            return mid + (lineEnd - mid) * Dimension.labelSlide
+        }
+
+        /// Fraction of the half-span the diameter label slides off centre.
+        static let labelSlide: Double = 0.45
     }
 
     /// How far clear of the geometry an offset dimension sits, as a fraction of

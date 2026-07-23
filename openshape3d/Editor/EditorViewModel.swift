@@ -4645,6 +4645,11 @@ final class EditorViewModel {
         let worldWitnessStart: SIMD3<Double>
         let worldWitnessEnd: SIMD3<Double>
         let worldLabel: SIMD3<Double>
+        /// Ticks marking where the measurement meets the geometry (diameters).
+        let drawsEdgeTicks: Bool
+        /// False when the dimension line sits ON the geometry, so the witness
+        /// leaders would be zero-length.
+        let hasWitnessLines: Bool
     }
 
     /// Dimensions for the stroke in flight — width/height while dragging a
@@ -4665,7 +4670,9 @@ final class EditorViewModel {
                     worldLineEnd: sketch.plane.toWorld(d.lineEnd),
                     worldWitnessStart: sketch.plane.toWorld(d.start),
                     worldWitnessEnd: sketch.plane.toWorld(d.end),
-                    worldLabel: sketch.plane.toWorld(d.labelPoint))
+                    worldLabel: sketch.plane.toWorld(d.labelPoint),
+                    drawsEdgeTicks: d.kind.drawsEdgeTicks,
+                    hasWitnessLines: simd_length(d.offset) > 1e-9)
             }
     }
 

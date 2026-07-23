@@ -21,6 +21,8 @@ struct SketchLiveDimensionOverlay: View {
     /// Half-length of an arrow head, in points.
     private static let arrowLength: CGFloat = 9
     private static let arrowHalfWidth: CGFloat = 3.5
+    /// Half-length of the tick that marks where a diameter meets the circle.
+    private static let edgeTickHalfLength: CGFloat = 7
 
     var body: some View {
         // Reproject whenever the camera moves.
@@ -44,21 +46,34 @@ struct SketchLiveDimensionOverlay: View {
            hypot(lineEnd.x - lineStart.x, lineEnd.y - lineStart.y) > 1 {
 
             // Witness lines: thin leaders from the geometry out to the
-            // dimension line. Zero-length when the dimension is drawn straight
-            // across the shape (a diameter), which draws as nothing.
-            Path { path in
-                path.move(to: witnessStart)
-                path.addLine(to: lineStart)
-                path.move(to: witnessEnd)
-                path.addLine(to: lineEnd)
+            // dimension line. Skipped entirely for a dimension drawn straight
+            // across the shape, where they would be zero-length.
+            if label.hasWitnessLines {
+                Path { path in
+                    path.move(to: witnessStart)
+                    path.addLine(to: lineStart)
+                    path.move(to: witnessEnd)
+                    path.addLine(to: lineEnd)
+                }
+                .stroke(Color.primary.opacity(0.45), lineWidth: 0.75)
             }
-            .stroke(Color.primary.opacity(0.45), lineWidth: 0.75)
 
             Path { path in
                 path.move(to: lineStart)
                 path.addLine(to: lineEnd)
             }
             .stroke(Color.primary.opacity(0.85), lineWidth: 1)
+
+            // Ticks ON the circle where the diameter meets it — without them
+            // the arrowheads float against the curve with nothing saying where
+            // the measurement is actually taken.
+            if label.drawsEdgeTicks {
+                Path { path in
+                    appendTick(&path, at: lineStart, along: lineEnd)
+                    appendTick(&path, at: lineEnd, along: lineStart)
+                }
+                .stroke(Color.primary.opacity(0.85), lineWidth: 1.25)
+            }
 
             arrowHead(at: lineStart, pointingFrom: lineEnd)
             arrowHead(at: lineEnd, pointingFrom: lineStart)
@@ -76,6 +91,18 @@ struct SketchLiveDimensionOverlay: View {
                 .position(anchor)
                 .accessibilityIdentifier("LiveDimension")
         }
+    }
+
+    /// Short tick at `point`, perpendicular to the line running to `other`.
+    private func appendTick(_ path: inout Path, at point: CGPoint, along other: CGPoint) {
+        let dx = other.x - point.x, dy = other.y - point.y
+        let length = hypot(dx, dy)
+        guard length > 1 else { return }
+        let nx = -dy / length, ny = dx / length
+        path.move(to: CGPoint(x: point.x - nx * Self.edgeTickHalfLength,
+                              y: point.y - ny * Self.edgeTickHalfLength))
+        path.addLine(to: CGPoint(x: point.x + nx * Self.edgeTickHalfLength,
+                                 y: point.y + ny * Self.edgeTickHalfLength))
     }
 
     /// Solid arrow head at `tip`, aimed away from `origin`.
