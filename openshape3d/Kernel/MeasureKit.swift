@@ -121,7 +121,22 @@ nonisolated enum MeasureKit {
             ellipsePerimeter(radiusX: radiusX, radiusY: radiusY)
         case let .polygon(_, _, radius, sides, _):
             Double(sides) * 2 * radius * sin(.pi / Double(sides))
+        case let .spline(_, points, closed):
+            // Arc length of the tessellated curve — the same polyline the user
+            // sees, so the readout matches the drawing.
+            polylineLength(SketchEntity.splinePoints(points, closed: closed), closed: closed)
         }
+    }
+
+    /// Summed segment length of a polyline; `closed` adds the wrap-around span.
+    static func polylineLength(_ points: [SIMD2<Double>], closed: Bool) -> Double {
+        guard points.count >= 2 else { return 0 }
+        var total = 0.0
+        for i in 1..<points.count { total += simd_length(points[i] - points[i - 1]) }
+        if closed, let first = points.first, let last = points.last {
+            total += simd_length(first - last)
+        }
+        return total
     }
 
     /// Ramanujan's approximation for an ellipse perimeter.

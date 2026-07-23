@@ -134,9 +134,22 @@ collinear control points produce tangency (1 collinear point = G1, 2 = G2).
 Hotkey I. Splines never have midpoints or center points. Segment-insertion
 workflow: make an existing spline point sharp, Disconnect it, drag open a
 gap, draw the new segment into the gap, then re-smooth the junction points.
-**Status:** ❌ not implemented.
-**Feasibility:** drawing/editing [mesh-kernel OK]; green/fully-defined state and
-tangent constraints [needs constraint solver]
+**Status:** 🟡 partial — the **fit spline** ships as a first-class
+`SketchEntity.spline(points:closed:)`, integrated across the whole sketch
+pipeline: centripetal Catmull–Rom tessellation (interpolates every control
+point; will not cusp on unevenly-spaced input), rendering, hit-testing,
+snapping to fit points, translate/rotate/scale, mirror, pattern, symbols,
+length measurement, DXF export (as a POLYLINE — the R12 subset has no SPLINE
+entity), profile chaining through an open spline's ends, and **use as a sweep
+spine** (§4.11). Open splines expose their endpoints to the solver and
+auto-constrainer so they weld to neighbouring geometry. Covered by
+`SplineTests`.
+**Missing:** the DRAWING tool + UI (placing/dragging fit points, the
+Fit/Control mode switch), control-point (non-interpolating) splines, interior
+points as solver variables, tangent constraints at the ends, and spline trim/
+offset (both would have to re-fit the curve).
+**Feasibility:** drawing/editing [mesh-kernel OK]; tangent constraints
+[needs constraint solver]
 
 ### 1.5 Rectangle (Center / Diagonal / Three-point)
 

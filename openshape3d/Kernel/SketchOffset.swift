@@ -68,6 +68,11 @@ nonisolated enum SketchOffset {
                         radiusX: rx, radiusY: ry, rotation: rotation
                     ))
                 }
+            case .spline:
+                // A true offset of a spline is not a spline; skip rather than
+                // emit something geometrically wrong (spec §1.9 lists offset
+                // for lines/arcs/circles/rects/polygons).
+                break
             case let .polygon(_, center, radius, sides, rotation):
                 guard sides >= 3 else { break }
                 // Edges move by `distance`, so the circumradius grows by the

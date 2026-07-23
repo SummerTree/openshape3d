@@ -79,6 +79,11 @@ nonisolated enum SketchTessellator {
                     center: center, radius: radius, sides: sides, rotation: rotation
                 )
                 appendPolyline(points, closed: true, plane, &out)
+            case let .spline(_, points, closed):
+                appendPolyline(
+                    SketchEntity.splinePoints(points, closed: closed),
+                    closed: closed, plane, &out
+                )
             }
         }
         return out

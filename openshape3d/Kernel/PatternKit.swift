@@ -189,6 +189,10 @@ nonisolated enum PatternKit {
                 id: UUID(), center: t.apply(center), radius: radius,
                 sides: sides, rotation: rotation + t.rotation
             )]
+        case let .spline(_, points, closed):
+            // Transforming the fit points transforms the curve exactly, for
+            // rotation as well as translation — no explode needed.
+            return [.spline(id: UUID(), points: points.map(t.apply), closed: closed)]
         }
     }
 

@@ -327,6 +327,12 @@ nonisolated enum AutoConstraintEngine {
             return [(center, id, .center)]
         case let .polygon(id, center, _, _, _):
             return [(center, id, .center)]
+        case let .spline(id, points, closed):
+            // Auto-constrain can weld an open spline's ends to nearby geometry,
+            // matching the endpoints `mutableSlots` exposes.
+            guard !closed, let a = points.first, let b = points.last,
+                  points.count >= 2 else { return [] }
+            return [(a, id, .endpointA), (b, id, .endpointB)]
         case .rect:
             return []
         }

@@ -62,6 +62,11 @@ nonisolated enum SymbolKit {
             case let .circle(_, center, _), let .arc(_, center, _, _, _),
                  let .ellipse(_, center, _, _, _), let .polygon(_, center, _, _, _):
                 sum += center
+            case let .spline(_, points, _):
+                // Mean of the control points — the spline's own centre of mass.
+                sum += points.isEmpty
+                    ? .zero
+                    : points.reduce(SIMD2<Double>.zero, +) / Double(points.count)
             }
         }
         return sum / Double(entities.count)
@@ -104,6 +109,8 @@ nonisolated enum SymbolKit {
             .ellipse(id: UUID(), center: center, radiusX: rx, radiusY: ry, rotation: rotation)
         case let .polygon(_, center, radius, sides, rotation):
             .polygon(id: UUID(), center: center, radius: radius, sides: sides, rotation: rotation)
+        case let .spline(_, points, closed):
+            .spline(id: UUID(), points: points, closed: closed)
         }
     }
 }

@@ -64,6 +64,10 @@ nonisolated enum SnapEngine {
                 points.append(contentsOf: SketchEntity.polygonPoints(
                     center: center, radius: radius, sides: sides, rotation: rotation
                 ))
+            case let .spline(_, splinePoints, _):
+                // Snap to the FIT points the user placed, not the tessellation —
+                // those are the notable points of a spline (spec §2.7).
+                points.append(contentsOf: splinePoints)
             }
         }
         return points

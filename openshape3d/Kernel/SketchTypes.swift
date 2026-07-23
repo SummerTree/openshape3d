@@ -50,12 +50,16 @@ nonisolated enum SketchEntity: Identifiable, Codable, Equatable, Sendable {
     /// Regular n-gon: `sides` vertices on the circumscribed circle of `radius`,
     /// first vertex at angle `rotation`.
     case polygon(id: UUID, center: SIMD2<Double>, radius: Double, sides: Int, rotation: Double)
+    /// Fit spline (spec §1.4): a smooth curve INTERPOLATING `points` in order.
+    /// `closed` joins the last point back to the first. Two points degenerate to
+    /// a straight line, which is what the Shapr3D fit spline does too.
+    case spline(id: UUID, points: [SIMD2<Double>], closed: Bool)
 
     var id: UUID {
         switch self {
         case let .line(id, _, _), let .rect(id, _, _), let .circle(id, _, _),
              let .arc(id, _, _, _, _), let .ellipse(id, _, _, _, _),
-             let .polygon(id, _, _, _, _):
+             let .polygon(id, _, _, _, _), let .spline(id, _, _):
             id
         }
     }
@@ -103,6 +107,63 @@ nonisolated extension SketchEntity {
             let local = SIMD2(cos(t) * radiusX, sin(t) * radiusY)
             return center + SIMD2(local.x * cosR - local.y * sinR, local.x * sinR + local.y * cosR)
         }
+    }
+
+    /// Polyline along a FIT spline through `points` (spec §1.4).
+    ///
+    /// Uses centripetal Catmull–Rom: it interpolates every control point (what
+    /// "fit" means to the user) and, unlike the uniform variant, will not form
+    /// cusps or self-intersections when points are unevenly spaced — the exact
+    /// failure a hand-drawn sketch produces.
+    ///
+    /// Returns the control points unchanged when there are fewer than three, so
+    /// a 2-point spline is simply a line. For `closed`, the first point is NOT
+    /// repeated at the end (same convention as `ellipsePoints`).
+    static func splinePoints(
+        _ points: [SIMD2<Double>], closed: Bool, segmentsPerSpan: Int = 16
+    ) -> [SIMD2<Double>] {
+        guard points.count >= 3 else { return points }
+        let n = points.count
+        let spans = closed ? n : n - 1
+        let steps = max(2, segmentsPerSpan)
+        var out = [SIMD2<Double>]()
+        out.reserveCapacity(spans * steps + 1)
+
+        func control(_ i: Int) -> SIMD2<Double> {
+            if closed { return points[((i % n) + n) % n] }
+            return points[min(max(i, 0), n - 1)]
+        }
+
+        for span in 0..<spans {
+            let p0 = control(span - 1), p1 = control(span)
+            let p2 = control(span + 1), p3 = control(span + 2)
+
+            // Centripetal parameterisation (alpha = 0.5).
+            func knot(_ t: Double, _ a: SIMD2<Double>, _ b: SIMD2<Double>) -> Double {
+                t + sqrt(simd_length(b - a))
+            }
+            let t0 = 0.0
+            let t1 = knot(t0, p0, p1)
+            let t2 = knot(t1, p1, p2)
+            let t3 = knot(t2, p2, p3)
+            // Degenerate (duplicate points) → fall back to the straight span.
+            guard t1 > t0, t2 > t1, t3 > t2 else {
+                out.append(p1)
+                continue
+            }
+
+            for step in 0..<steps {
+                let t = t1 + (t2 - t1) * Double(step) / Double(steps)
+                let a1 = p0 * ((t1 - t) / (t1 - t0)) + p1 * ((t - t0) / (t1 - t0))
+                let a2 = p1 * ((t2 - t) / (t2 - t1)) + p2 * ((t - t1) / (t2 - t1))
+                let a3 = p2 * ((t3 - t) / (t3 - t2)) + p3 * ((t - t2) / (t3 - t2))
+                let b1 = a1 * ((t2 - t) / (t2 - t0)) + a2 * ((t - t0) / (t2 - t0))
+                let b2 = a2 * ((t3 - t) / (t3 - t1)) + a3 * ((t - t1) / (t3 - t1))
+                out.append(b1 * ((t2 - t) / (t2 - t1)) + b2 * ((t - t1) / (t2 - t1)))
+            }
+        }
+        if !closed, let last = points.last { out.append(last) }
+        return out
     }
 
     /// Vertices of the regular n-gon, CCW (first point not repeated).
