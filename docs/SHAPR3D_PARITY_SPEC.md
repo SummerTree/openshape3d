@@ -944,10 +944,21 @@ Alignment toggle extends to the other side. Works on complex non-planar faces
 **Spec:** From a 3D body: choose Single | Chain, select edge(s), gizmo sets
 offset direction and distance; output is sketch geometry in an auto-created
 sketch on the relevant plane/face. History param: Plane.
-**Status:** ❌ not implemented.
-**Feasibility:** [mesh-kernel OK] for planar-face edges (feature edges are
-already extracted in `FeatureEdges`); curved-surface edge offsets
-[needs B-rep kernel]
+**Status:** 🟡 partial — `EdgeOffsetKit` implements the geometry for
+planar-face edges, both selection modes: **Chain** offsets the face's whole
+outer boundary as a closed, mitred loop; **Single** offsets just the tapped
+segments as open polylines (a pick snaps to the nearest boundary segment, and
+picks are emitted in outline order so adjacent ones stay connected). Sign
+follows the sketch tool — positive grows outward on a CCW outline, negative
+inward — and an offset that consumes the face reports failure instead of
+emitting a flipped loop. The output is hosted on the face's OWN plane
+(`EdgeOffsetKit.plane(of:)`), so it lands back on the face it came from.
+Covered by `EdgeOffsetTests`.
+**Missing:** the tool entry point and drag gizmo, auto-creating the sketch to
+receive the output, the history node with its Plane param, and offsets of
+edges on curved surfaces.
+**Feasibility:** [mesh-kernel OK] for planar-face edges — confirmed;
+curved-surface edge offsets [needs B-rep kernel]
 
 ### 4.14 Project (Tools)
 
