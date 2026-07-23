@@ -991,7 +991,13 @@ curved-surface edge offsets [needs B-rep kernel]
 body → 2D outline symbol; face → engraving; edges → reference distances; merge
 same-plane sketches into one; project onto non-planar faces (edges only);
 edge projections split the target surface (per-region materials, embossing).
-**Status:** ❌ not implemented.
+**Status:** 🟡 partial — this IS §1.13's tool, and its 3D entry point is
+exactly what ships there: tap a visible BODY and its feature edges flatten
+onto the active sketch plane as editable line entities in one undo step
+(`ProjectionKit.project`, `projectTappedBody`). That covers the body → 2D
+outline and edges → reference-geometry uses. Missing (as §1.13): face →
+engraving, non-planar targets, same-plane sketch merging, and edge projections
+splitting the target surface into regions.
 **Feasibility:** as 1.13
 
 ### 4.15 Wrap & Emboss
@@ -2024,7 +2030,14 @@ Navigation: presets, 2-Finger Rotation, zoom direction, start screen
 mode (show touches/keys); Sync status + manual sync; About (version, terms,
 usage-data opt-out); Account deletion. Units: mm/cm/m/in/ft; angle decimal or
 fractional.
-**Status:** ❌ not implemented — no settings surface at all.
+**Status:** 🟡 partial — a Settings surface ships (`AppSettings`, Phase F
+tranche 1): display Units (mm/cm/m/in/ft), Theme System/Light/Dark, Interface
+Left/Right, and Anti-Aliasing (Disabled | 2x | 4x MSAA), persisted across
+launches. Missing: everything else — language, accent colour, Single Key
+Action (the model for it exists in `CommandRegistry`, §8.4, but no UI),
+shortcut customization, spline point type, Pencil pressure, import
+preferences, tessellation quality, navigation presets, tutorial mode, and the
+account/sync/about sections.
 **Feasibility:** app-local settings [mesh-kernel OK]; account/sync sections
 [platform/service]
 
