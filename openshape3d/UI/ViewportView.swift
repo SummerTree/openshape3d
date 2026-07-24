@@ -175,13 +175,16 @@ final class ViewportCoordinator: NSObject, ViewportGestureDelegate, ViewportCame
     /// they grab (the old 3D-mesh capsule test no longer matched the visual).
     private func gizmoPart(at point: CGPoint) -> GizmoPart? {
         guard let project = gizmoProjector() else { return nil }
+        // Rotate-a-face shows ONLY the rings: hit-test rings alone, so an
+        // (invisible) axis/plane target near the centre can't win and suppress
+        // the ring grab (which would drop the drag to a camera orbit).
+        if viewModel.faceRotateActive {
+            return GizmoScreenLayout.hitTest(at: point, project: project, ringsOnly: true)
+        }
         let part = GizmoScreenLayout.hitTest(at: point, project: project)
         // A face translates, it doesn't rotate — ignore ring hits there so a
         // grab near the (hidden) arcs doesn't try to fold the solid.
         if let part, part.isRing, !viewModel.gizmoAllowsRotation { return nil }
-        // Rotate tool on a face shows ONLY the rings — ignore arrow/plane hits so
-        // a stray grab can't translate or scale the face instead of rotating it.
-        if let part, viewModel.faceRotateActive, !part.isRing { return nil }
         return part
     }
 

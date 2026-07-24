@@ -239,6 +239,39 @@ final class MoveFaceKernelTests: XCTestCase {
         }
     }
 
+    /// A modest twist's ruled side walls must shade SMOOTHLY, not as two flat
+    /// half-triangle "facets". Smoothing welds the diagonal vertices to a single
+    /// averaged normal, so a twisted box renders with fewer unique (position,
+    /// normal) render vertices than the same box flat-shaded per triangle.
+    func testTwistSmoothsRuledWallsInsteadOfFacetingThem() throws {
+        let box = makeBox()
+        let top = try topFace(of: box)
+        let twisted = KernelOps.rotateFace(mesh: box, face: top, angle: 20.0 * .pi / 180,
+                                           axis: SIMD3(0, 1, 0))
+        let render = EuclidBridge.renderMesh(from: twisted)
+        XCTAssertTrue(twisted.isWatertight)
+
+        // A shared diagonal vertex carries ONE smoothed normal (welds to a single
+        // render vertex) rather than two flat ones. Count render vertices whose
+        // stored normal disagrees with any incident triangle's flat winding-normal
+        // by a hard-edge amount: on a smoothed wall there should be very few, and
+        // the smoothed normals must still all point outward (no holes).
+        XCTAssertEqual(wrongNormalTriangleCount(twisted), 0, "no mis-lit walls")
+
+        // Smoothing must actually have run: at least some wall vertex normal is a
+        // blend (differs from its triangle's flat normal) rather than pure-flat.
+        var blended = 0
+        for t in 0..<render.triangleCount {
+            let ia = Int(render.indices[t * 3]), ib = Int(render.indices[t * 3 + 1]), ic = Int(render.indices[t * 3 + 2])
+            let a = render.positions[ia], b = render.positions[ib], c = render.positions[ic]
+            let flat = simd_normalize(simd_cross(b - a, c - a))
+            for i in [ia, ib, ic] where simd_dot(simd_normalize(render.normals[i]), flat) < 0.9995 {
+                blended += 1
+            }
+        }
+        XCTAssertGreaterThan(blended, 0, "the ruled walls were smoothed, not left faceted")
+    }
+
     func testRotateZeroAngleIsNoOp() throws {
         let box = makeBox()
         let top = try topFace(of: box)

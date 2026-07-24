@@ -1010,7 +1010,13 @@ nonisolated extension KernelOps {
             if let np = Euclid.Polygon(vertices) { polygons.append(np) }
         }
         guard !polygons.isEmpty else { return mesh }
+        // Smooth the ruled side walls a twist/tilt creates: each wall becomes a
+        // non-planar quad split into two triangles, which flat-shaded reads as an
+        // extra diagonal "facet". Averaging normals across folds gentler than the
+        // box's real edges (~44°, matching FaceTopology's edge threshold) makes a
+        // twist shade as one smooth surface while the 90° box edges stay crisp.
         return Euclid.Mesh(polygons).makeWatertight()
+            .smoothingNormals(forAnglesGreaterThan: .degrees(44))
     }
 
     /// Robust polygon normal via Newell's method — consistent with the vertex

@@ -82,12 +82,24 @@ nonisolated enum GizmoScreenLayout {
     /// tested before rings, so where an arc passes behind an arrow the arrow
     /// wins — translation stays the easy default.
     static func hitTest(at point: CGPoint,
-                        project: (SIMD3<Float>) -> CGPoint?) -> GizmoPart? {
+                        project: (SIMD3<Float>) -> CGPoint?,
+                        ringsOnly: Bool = false) -> GizmoPart? {
         var best: (part: GizmoPart, score: CGFloat)?
         func consider(_ part: GizmoPart, _ distance: CGFloat, _ tol: CGFloat) {
             guard distance <= tol else { return }
             let score = distance / tol
             if best == nil || score < best!.score { best = (part, score) }
+        }
+
+        // Rotate-a-face shows ONLY the rings; test them alone so the (invisible)
+        // axis/plane targets can't win the hit near the centre and then get
+        // filtered out, leaving the drag to fall through to a camera orbit.
+        if ringsOnly {
+            for part in rings {
+                let poly = ringPolyline(part, project: project)
+                if let d = distance(from: point, toPolyline: poly) { consider(part, d, ringHitRadius) }
+            }
+            return best?.part
         }
 
         // An axis is grabbable along its whole projected LINE — from the pivot
