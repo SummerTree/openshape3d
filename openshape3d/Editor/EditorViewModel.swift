@@ -919,6 +919,70 @@ final class EditorViewModel {
         )
     }
 
+    /// Build the face-selection `ToolContext` (pull-arrow + gizmo anchor) for a
+    /// planar face of `body`, mapping its local basis/outline into world space
+    /// (uniform scale + rotation + translation). Shared by the tap-to-select
+    /// path and the post-deform re-selection so the two never diverge.
+    private func faceContext(body: Body, face: FaceTopology.PlanarFace) -> ToolContext {
+        let transform = body.transform
+        let originWorld = transform.applying(to: face.origin)
+        let xWorld = transform.rotation.act(face.basisX)
+        let yWorld = transform.rotation.act(face.basisY)
+        let plane = SketchPlane(origin: originWorld, xAxis: xWorld, yAxis: yWorld)
+        let scale = transform.scale
+        let profile = Profile(
+            loop: face.outline.map { $0 * scale }, kind: .polygonal, sourceEntityIDs: [])
+        let holes = face.holes.map {
+            Profile(loop: $0.map { $0 * scale }, kind: .polygonal, sourceEntityIDs: [])
+        }
+        return ToolContext(
+            profile: profile, holes: holes, plane: plane, sketchID: nil,
+            sourceBody: body.id, faceTriangles: face.triangles, kind: .extrude(distance: 0))
+    }
+
+    /// After a face move/scale reshapes the body, re-select the SAME face on the
+    /// rebuilt mesh so the active tool stays on the face (Shapr3D keeps the
+    /// transform live for repeated drags) instead of falling back to the whole
+    /// body. Finds the planar face whose world normal matches `worldNormal` and
+    /// whose centroid is nearest `worldCentroid` (a move shifts the centroid by
+    /// the drag; a scale about the centroid leaves it put). Returns false when
+    /// no matching planar face survives — the caller then settles on the body.
+    private func reselectDeformedFace(
+        bodyID: BodyID, worldNormal: SIMD3<Double>, worldCentroid: SIMD3<Double>
+    ) -> Bool {
+        guard let body = session.document.body(with: bodyID) else { return false }
+        let mesh = body.render
+        let transform = body.transform
+        let targetN = simd_normalize(worldNormal)
+
+        // Nearest triangle (by world centroid) whose world normal aligns with the
+        // face we just edited; its index seeds the coplanar flood-fill.
+        var bestSeed = -1
+        var bestDist = Double.greatestFiniteMagnitude
+        for t in 0..<mesh.triangleCount {
+            let i0 = Int(mesh.indices[t * 3]), i1 = Int(mesh.indices[t * 3 + 1]), i2 = Int(mesh.indices[t * 3 + 2])
+            let a = mesh.positions[i0], b = mesh.positions[i1], c = mesh.positions[i2]
+            let cross = simd_cross(b - a, c - a)
+            let len = simd_length(cross)
+            guard len > 1e-12 else { continue }
+            let localN = SIMD3<Double>(cross / len)
+            let worldN = simd_normalize(transform.rotation.act(localN))
+            guard simd_dot(worldN, targetN) > 0.999 else { continue }
+            let localCentroid = SIMD3<Double>((a + b + c) / 3)
+            let worldC = transform.applying(to: localCentroid)
+            let d = simd_length_squared(worldC - worldCentroid)
+            if d < bestDist { bestDist = d; bestSeed = t }
+        }
+        guard bestSeed >= 0,
+              let face = FaceTopology.planarFace(in: mesh, seedTriangle: bestSeed)
+        else { return false }
+
+        selection = [bodyID]
+        toolContext = faceContext(body: body, face: face)
+        mode = .faceSelected(bodyID)
+        return true
+    }
+
     /// Begin a face move: snapshot the source body in world space so the drag
     /// deforms the same immutable geometry every frame. Returns false (and
     /// leaves `faceMoveSession` nil) when the selection isn't a movable face.
@@ -983,12 +1047,21 @@ final class EditorViewModel {
         } else {
             session.perform(replace)
         }
-        // The old face context is stale against the reshaped mesh; settle on the
-        // whole body (its gizmo), and the user re-taps + Move to shear again.
-        toolContext = nil
-        faceMoveActive = false
-        selection = [s.bodyID]
-        mode = .selected(s.bodyID)
+        // Keep the Move tool live on the SAME face (Shapr3D leaves it active for
+        // repeated shears): re-resolve the face — shifted by the drag — against
+        // the reshaped mesh. If it can't be found, fall back to the whole body.
+        let oldCentroid = s.context.plane.toWorld(s.context.profile.centroid)
+        let newCentroid = oldCentroid + SIMD3<Double>(worldDelta)
+        if reselectDeformedFace(bodyID: s.bodyID,
+                                worldNormal: s.context.plane.normal,
+                                worldCentroid: newCentroid) {
+            faceMoveActive = true
+        } else {
+            toolContext = nil
+            faceMoveActive = false
+            selection = [s.bodyID]
+            mode = .selected(s.bodyID)
+        }
         session.save()
     }
 
@@ -1139,10 +1212,19 @@ final class EditorViewModel {
         } else {
             session.perform(replace)
         }
-        toolContext = nil
-        faceScaleActive = false
-        selection = [s.bodyID]
-        mode = .selected(s.bodyID)
+        // Keep the Scale tool live on the SAME face (repeated tapers): scaling
+        // about the face centroid leaves that centroid put, so re-resolve there.
+        let centroid = s.context.plane.toWorld(s.context.profile.centroid)
+        if reselectDeformedFace(bodyID: s.bodyID,
+                                worldNormal: s.context.plane.normal,
+                                worldCentroid: centroid) {
+            faceScaleActive = true
+        } else {
+            toolContext = nil
+            faceScaleActive = false
+            selection = [s.bodyID]
+            mode = .selected(s.bodyID)
+        }
         session.save()
     }
 
@@ -3306,30 +3388,7 @@ final class EditorViewModel {
                 return
             }
 
-            // Face basis → world space (uniform scale + rotation + translation).
-            let transform = body.transform
-            let originWorld = transform.applying(to: face.origin)
-            let xWorld = transform.rotation.act(face.basisX)
-            let yWorld = transform.rotation.act(face.basisY)
-            let plane = SketchPlane(origin: originWorld, xAxis: xWorld, yAxis: yWorld)
-            let scale = transform.scale
-            let profile = Profile(
-                loop: face.outline.map { $0 * scale },
-                kind: .polygonal,
-                sourceEntityIDs: []
-            )
-            let holes = face.holes.map {
-                Profile(loop: $0.map { $0 * scale }, kind: .polygonal, sourceEntityIDs: [])
-            }
-            toolContext = ToolContext(
-                profile: profile,
-                holes: holes,
-                plane: plane,
-                sketchID: nil,
-                sourceBody: body.id,
-                faceTriangles: face.triangles,
-                kind: .extrude(distance: 0)
-            )
+            toolContext = faceContext(body: body, face: face)
             faceMoveActive = false // a fresh face selection shows extrude only
             faceScaleActive = false
             mode = .faceSelected(body.id)
