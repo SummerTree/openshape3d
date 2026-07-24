@@ -266,6 +266,10 @@ nonisolated enum ProjectMergeKit {
             case let .pushPull(face, distance, mode):
                 return .pushPull(face: remap(face, translation: t),
                                  distance: distance, mode: mode)
+            case let .moveFace(face, delta):
+                // The delta is intrinsic to the face's basis, so a translation
+                // only remaps the face reference.
+                return .moveFace(face: remap(face, translation: t), delta: delta)
             case let .chamfer(body, edges, setback):
                 return .chamfer(body: remap(body),
                                 edges: edges.map { remap($0, translation: t) },

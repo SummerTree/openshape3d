@@ -858,6 +858,8 @@ final class EditorViewModel {
     /// source — the gizmo delta is world-space too.
     private struct FaceMoveSession {
         let bodyID: BodyID
+        let source: Body
+        let context: ToolContext
         let sourceLocalMesh: Euclid.Mesh
         let pivot: SIMD3<Double>
         let worldMesh: Euclid.Mesh
@@ -895,6 +897,8 @@ final class EditorViewModel {
         faceMoveLastDelta = .zero
         faceMoveSession = FaceMoveSession(
             bodyID: bodyID,
+            source: source,
+            context: context,
             sourceLocalMesh: local,
             pivot: source.transform.translation,
             worldMesh: local.transformed(by: source.transform.euclid),
@@ -939,8 +943,7 @@ final class EditorViewModel {
         )
         let replace = ReplaceBodyCommand(title: "Move Face", before: before, after: after)
 
-        if let node = moveFaceFeatureNode(bodyID: s.bodyID, worldFace: s.worldFace,
-                                          worldDelta: worldDelta) {
+        if let node = moveFaceFeatureNode(session: s, worldDelta: worldDelta) {
             session.perform(CompositeCommand(
                 title: "Move Face", commands: [replace, AppendFeatureCommand(node: node)]))
         } else {
@@ -957,11 +960,30 @@ final class EditorViewModel {
     /// A `.moveFace` feature node for a face move on a feature-produced body, or
     /// nil when the body isn't parametric (import/seed/copy) or the face can't be
     /// pinned — in which case the move commits as a plain mesh replacement.
-    /// (Filled in with the topological FaceRef in the parametric-replay tranche.)
+    ///
+    /// The world drag is stored as (u, v, n) in the face's own basis (divided by
+    /// the body's scale to land in local units), so the replay reconstructs the
+    /// same intrinsic move against the re-resolved face after an upstream edit —
+    /// exactly how `pushPull` pins its distance to the face normal.
     private func moveFaceFeatureNode(
-        bodyID: BodyID, worldFace: FaceTopology.PlanarFace, worldDelta: SIMD3<Float>
+        session s: FaceMoveSession, worldDelta: SIMD3<Float>
     ) -> FeatureNode? {
-        nil
+        guard let owner = featureNode(owning: s.bodyID),
+              let faceRef = pushPullFaceRef(
+                  context: s.context, source: s.source, creator: owner.id)
+        else { return nil }
+        let world = SIMD3<Double>(Double(worldDelta.x), Double(worldDelta.y), Double(worldDelta.z))
+        let scale = max(s.source.transform.scale, 1e-9)
+        let n = simd_normalize(s.context.plane.normal)
+        let components = SIMD3<Double>(
+            simd_dot(world, s.context.plane.xAxis) / scale,
+            simd_dot(world, s.context.plane.yAxis) / scale,
+            simd_dot(world, n) / scale
+        )
+        return FeatureNode(
+            name: "Move Face",
+            kind: .moveFace(face: faceRef, delta: PointWrapper(components)),
+            outputBodyIDs: [s.bodyID])
     }
 
     /// Deform the source by moving the selected face by `worldDelta`, returning
@@ -8491,6 +8513,8 @@ final class EditorViewModel {
             return op.rawValue.capitalized
         case let .pushPull(_, distance, _):
             return "Push/Pull \(fmt(distance.value)) mm"
+        case let .moveFace(_, delta):
+            return "Move Face \(fmt(simd_length(delta.point))) mm"
         case let .revolve(_, _, _, angle, _):
             return "Revolve \(fmt(angle.value))°"
         case .sweep: return "Sweep"

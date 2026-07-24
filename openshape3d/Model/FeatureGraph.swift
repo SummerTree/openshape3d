@@ -88,6 +88,11 @@ nonisolated enum FeatureKind: Codable, Sendable {
     case mirror(body: BodyRef, plane: PlaneRef, keepOriginal: Bool)
     case pattern(body: BodyRef, spec: PatternSpec)
     case pushPull(face: FaceRef, distance: Expr, mode: PushPullMode)
+    /// Spec §5 (face move): translate the referenced planar face by `delta`,
+    /// deforming the solid (a lateral move shears it). `delta` is stored in the
+    /// face's own basis — (u, v, n) along basisX / basisY / normal — so it is
+    /// intrinsic to the face and replays correctly after an upstream edit.
+    case moveFace(face: FaceRef, delta: PointWrapper)
     /// Phase E: bevel the referenced convex edges of `body` by a flat `setback`.
     case chamfer(body: BodyRef, edges: [EdgeRef], setback: Expr)
     /// Phase E: round the referenced convex edges of `body` to `radius`.
@@ -154,7 +159,7 @@ nonisolated extension FeatureNode {
             for ref in sections { ids.insert(ref.sketchID) }
         case let .mirror(_, plane, _):
             addPlane(plane)
-        case .primitive, .boolean, .transform, .pattern, .pushPull,
+        case .primitive, .boolean, .transform, .pattern, .pushPull, .moveFace,
              .chamfer, .fillet, .shell, .deleteFace:
             break
         }
@@ -273,6 +278,8 @@ nonisolated extension FeatureGraph {
             evalBoolean(node, kind: kind, target: target, tools: tools, into: &state, next: nextRevision)
         case let .pushPull(face, distance, mode):
             evalPushPull(node, face: face, distance: distance, mode: mode, into: &state, next: nextRevision)
+        case let .moveFace(face, delta):
+            evalMoveFace(node, face: face, delta: delta.point, into: &state, next: nextRevision)
         case let .revolve(profile, plane, axis, angle, boolean):
             evalRevolve(
                 node, profileRef: profile, planeRef: plane, axisRef: axis,
@@ -578,6 +585,54 @@ nonisolated extension FeatureGraph {
             id: body.id, name: body.name, transform: .identity, primitive: nil,
             euclidMesh: mesh, revision: nextRevision())
         // Carry the old labels forward through the push/pull.
+        let newTable: FaceTable
+        if let table {
+            newTable = state.naming.propagate(inputs: [table], output: result, op: .pushPull)
+        } else {
+            newTable = state.naming.faceTable(for: result, createdBy: node.id, scheme: .generic)
+        }
+        state.put(result, table: newTable)
+    }
+
+    // MARK: Move face
+
+    /// Replay a face move: re-resolve the persisted `FaceRef` against the
+    /// rebuilt body (topological naming), reconstruct the world/local delta from
+    /// the stored face-basis components, and deform via `KernelOps.moveFace`.
+    private func evalMoveFace(
+        _ node: FeatureNode,
+        face: FaceRef,
+        delta components: SIMD3<Double>,
+        into state: inout EvalState,
+        next nextRevision: () -> UInt64
+    ) {
+        guard let body = state.bodies[face.body.bodyID] else {
+            state.errors[node.id] = .brokenRef("moveFace body unresolved")
+            return
+        }
+        let table = state.faceTables[body.id]
+        guard let resolved = state.naming.resolve(face, in: body, table: table),
+              let planar = resolved.planar else {
+            state.errors[node.id] = .brokenRef("moveFace face did not resolve")
+            return
+        }
+        // (u, v, n) in the resolved face's own basis → a local-space delta, so
+        // the move is intrinsic to the face even after the geometry shifted.
+        let bx = simd_normalize(planar.basisX)
+        let by = simd_normalize(planar.basisY)
+        let n = simd_normalize(SIMD3<Double>(
+            Double(planar.normal.x), Double(planar.normal.y), Double(planar.normal.z)))
+        let localDelta = bx * components.x + by * components.y + n * components.z
+
+        let mesh = KernelOps.moveFace(
+            mesh: body.euclidMesh(), face: planar, delta: localDelta)
+        guard !mesh.polygons.isEmpty else {
+            state.errors[node.id] = .emptyGeometry
+            return
+        }
+        let result = Body(
+            id: body.id, name: body.name, transform: .identity, primitive: nil,
+            euclidMesh: mesh, revision: nextRevision())
         let newTable: FaceTable
         if let table {
             newTable = state.naming.propagate(inputs: [table], output: result, op: .pushPull)
