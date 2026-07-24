@@ -951,7 +951,7 @@ final class EditorViewModel {
         // Negligible drag (a tap, or a wobble): restore the source and do
         // nothing undoable.
         guard simd_length(worldDelta) > 1e-4,
-              let moved = faceMovedLocalMesh(worldDelta: worldDelta) else {
+              let moved = faceMovedLocalMesh(s, worldDelta: worldDelta) else {
             session.preview { document in
                 if let index = document.bodyIndex(of: s.bodyID) {
                     document.bodies[index] = before
@@ -1011,9 +1011,11 @@ final class EditorViewModel {
     }
 
     /// Deform the source by moving the selected face by `worldDelta`, returning
-    /// the body-local mesh (pivot re-centred, like `commitFaceOperation`).
-    private func faceMovedLocalMesh(worldDelta: SIMD3<Float>) -> Euclid.Mesh? {
-        guard let s = faceMoveSession else { return nil }
+    /// the body-local mesh (pivot re-centred, like `commitFaceOperation`). Takes
+    /// the session explicitly so `commitFaceMove` can call it AFTER it has
+    /// cleared `faceMoveSession` (else the commit would recompute against a nil
+    /// session, fall into the "negligible drag" branch, and revert the shear).
+    private func faceMovedLocalMesh(_ s: FaceMoveSession, worldDelta: SIMD3<Float>) -> Euclid.Mesh? {
         let delta = SIMD3<Double>(Double(worldDelta.x), Double(worldDelta.y), Double(worldDelta.z))
         let movedWorld = KernelOps.moveFace(mesh: s.worldMesh, face: s.worldFace, delta: delta)
         guard !movedWorld.polygons.isEmpty else { return nil }
@@ -1091,7 +1093,7 @@ final class EditorViewModel {
         // Face move: deform the source and preview the reshaped body.
         if let s = faceMoveSession {
             faceMoveLastDelta = delta
-            guard let moved = faceMovedLocalMesh(worldDelta: delta) else { return }
+            guard let moved = faceMovedLocalMesh(s, worldDelta: delta) else { return }
             var transform = Transform3D.identity
             transform.translation = s.pivot
             session.preview { document in

@@ -75,6 +75,32 @@ final class MoveFaceKernelTests: XCTestCase {
         XCTAssertEqual(after.max.y, before.max.y, accuracy: 0.02, "Height unchanged")
     }
 
+    /// A user-DRAWN box (sketch rect → extrude) has different mesh topology than
+    /// a primitive box — the top cap and side walls come from separate kernel
+    /// steps. The lateral face move must still shear it (walls follow, volume
+    /// preserved), or a drawn box would "move the face without shearing".
+    func testLateralMoveShearsAnExtrudedBox() throws {
+        let rect = Profile(
+            loop: [SIMD2(-2, -2), SIMD2(2, -2), SIMD2(2, 2), SIMD2(-2, 2)],
+            kind: .polygonal, sourceEntityIDs: [])
+        // Extrude on the ground plane (+Y normal): a 4×4×4 box, y∈[0,4].
+        let box = KernelOps.extrude(
+            profile: rect, holes: [], in: .ground, distance: 4, symmetric: false)
+        XCTAssertFalse(box.polygons.isEmpty, "extrude produced a solid")
+        let top = try topFace(of: box)
+        let beforeVolume = volume(box)
+        let beforeMaxX = aabb(box).max.x
+
+        let result = KernelOps.moveFace(mesh: box, face: top, delta: SIMD3(2, 0, 0))
+
+        XCTAssertTrue(result.isWatertight, "A sheared drawn box must stay watertight")
+        XCTAssertEqual(volume(result), beforeVolume, accuracy: beforeVolume * 0.02,
+                       "A lateral face move shears the drawn box — volume unchanged")
+        XCTAssertEqual(aabb(result).max.x, beforeMaxX + 2, accuracy: 0.1,
+                       "The top face slid +2 in X (the walls followed — it sheared)")
+        XCTAssertEqual(aabb(result).min.y, aabb(box).min.y, accuracy: 0.05, "base held")
+    }
+
     /// Moving the top face along its own normal thickens the box, exactly like a
     /// positive push/pull: volume grows by faceArea · distance.
     func testNormalMoveThickensLikePushPull() throws {
