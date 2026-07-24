@@ -42,8 +42,8 @@ typedef struct {
                                        // fragments with dot(p, xyz) + w < 0 are discarded
     float edgeDepthBiasNDC;
     float clipEnabled;                 // 0 = section view off (default)
-    float _pad1;
-    float _pad2;
+    float viewportWidth;               // drawable pixels — thick lines expand in
+    float viewportHeight;              // screen space, so they need the size
 } FrameUniforms;
 
 typedef struct {
@@ -52,7 +52,7 @@ typedef struct {
     unsigned int selectionState;       // SelectionState
     float metallic;                    // 0 (default) = dielectric, white highlight
     float roughness;                   // 0 (default) = legacy fixed highlight; >0 mapped
-    unsigned int _pad0;
+    float lineHalfWidthPx;             // thick-line pipeline: half stroke width
 } BodyUniforms;
 
 #endif /* ShaderTypes_h */

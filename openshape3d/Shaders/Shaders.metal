@@ -180,6 +180,64 @@ vertex UnlitOut vertex_edge(
     return out;
 }
 
+// MARK: - Thick lines (sketch strokes)
+
+/// Metal's `.line` primitive is always ONE pixel wide, which reads as a hairline
+/// on a Retina display. This expands each segment into a screen-space quad so
+/// sketch strokes have a real, Shapr3D-like weight.
+///
+/// The vertex buffer is the SAME endpoint-pair list the line pipeline uses — the
+/// draw just asks for 6 vertices per segment and this derives which endpoint and
+/// which side from `vertex_id`, so nothing has to be re-packed on the CPU.
+///
+/// It also applies a much larger depth bias than `vertex_edge`: a sketch drawn on
+/// a solid's FACE is exactly coplanar with it, so the small bias tuned for a
+/// body's own feature edges loses the depth fight at many angles and the stroke
+/// vanishes into the face.
+vertex UnlitOut vertex_thickLine(
+    uint vid [[vertex_id]],
+    const device float3 *positions [[buffer(BufferIndexPositions)]],
+    constant FrameUniforms &frame [[buffer(BufferIndexFrameUniforms)]],
+    constant BodyUniforms &body [[buffer(BufferIndexBodyUniforms)]]
+) {
+    uint segment = vid / 6u;
+    uint corner = vid % 6u;
+    // Quad as two triangles: (a,-1) (b,-1) (b,+1) / (a,-1) (b,+1) (a,+1)
+    const float2 layout[6] = {
+        float2(0.0, -1.0), float2(1.0, -1.0), float2(1.0, 1.0),
+        float2(0.0, -1.0), float2(1.0, 1.0), float2(0.0, 1.0)
+    };
+    float2 pick = layout[corner];
+
+    float4 worldA = body.modelMatrix * float4(positions[segment * 2u], 1.0);
+    float4 worldB = body.modelMatrix * float4(positions[segment * 2u + 1u], 1.0);
+    float4 clipA = frame.viewProjectionMatrix * worldA;
+    float4 clipB = frame.viewProjectionMatrix * worldB;
+
+    float2 viewport = max(float2(frame.viewportWidth, frame.viewportHeight), float2(1.0));
+    // Screen-space direction of the segment (guard the degenerate case).
+    float2 screenA = clipA.xy / max(abs(clipA.w), 1e-6) * viewport;
+    float2 screenB = clipB.xy / max(abs(clipB.w), 1e-6) * viewport;
+    float2 delta = screenB - screenA;
+    float len = length(delta);
+    float2 dir = len > 1e-6 ? delta / len : float2(1.0, 0.0);
+    float2 normal = float2(-dir.y, dir.x);
+
+    bool useB = pick.x > 0.5;
+    float4 clip = useB ? clipB : clipA;
+    float3 world = useB ? worldB.xyz : worldA.xyz;
+
+    // Offset by half the stroke width, converted from pixels to clip units.
+    float2 offset = normal * pick.y * max(body.lineHalfWidthPx, 0.5);
+    clip.xy += offset / viewport * clip.w;
+    clip.z -= frame.edgeDepthBiasNDC * 12.0 * clip.w;
+
+    UnlitOut out;
+    out.position = clip;
+    out.worldPosition = world;
+    return out;
+}
+
 // MARK: - Ground grid (procedural, anti-aliased)
 
 struct GridOut {

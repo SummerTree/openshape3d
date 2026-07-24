@@ -18,6 +18,8 @@ final class PipelineStore {
     let depthOnly: MTLRenderPipelineState    // wireframe hidden-line prepass (no color writes)
     let unlitColor: MTLRenderPipelineState
     let edge: MTLRenderPipelineState
+    /// Sketch strokes expanded to screen-space quads (Metal lines are 1px).
+    let thickLine: MTLRenderPipelineState
     let grid: MTLRenderPipelineState
     let texturedQuad: MTLRenderPipelineState // Insert Image reference quads
     let blobShadow: MTLRenderPipelineState   // cheap planar ground shadows
@@ -77,6 +79,9 @@ final class PipelineStore {
             let edge = makePipeline(
                 vertex: "vertex_edge", fragment: "fragment_flatColorClipped", blended: true
             ),
+            let thickLine = makePipeline(
+                vertex: "vertex_thickLine", fragment: "fragment_flatColorClipped", blended: true
+            ),
             let grid = makePipeline(vertex: "vertex_grid", fragment: "fragment_grid", blended: true),
             let texturedQuad = makePipeline(
                 vertex: "vertex_texturedQuad", fragment: "fragment_texturedQuad", blended: true
@@ -86,6 +91,7 @@ final class PipelineStore {
             )
         else { return nil }
 
+        self.thickLine = thickLine
         self.background = background
         self.lit = lit
         self.litBlended = litBlended

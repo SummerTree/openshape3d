@@ -25,6 +25,11 @@ final class Renderer: NSObject, MTKViewDelegate {
     private let orientationCubeRenderer = OrientationCubeRenderer()
     private var viewportSize = CGSize(width: 1, height: 1)
 
+    /// Sketch stroke weight, in DRAWABLE PIXELS (`viewportSize` is the drawable,
+    /// so this is already device pixels — ~3pt on a 2× display). Metal lines are
+    /// 1px, which reads as a hairline; Shapr3D's sketch strokes are chunky.
+    static let sketchStrokeWidthPixels: Float = 6
+
     /// World-units-per-gizmo-unit for constant ~screen size, shared by
     /// rendering and hit-testing.
     func gizmoScale(origin: SIMD3<Float>) -> Float {
@@ -241,14 +246,18 @@ final class Renderer: NSObject, MTKViewDelegate {
             }
         }
 
-        // 5. Sketch overlay lines (edge pipeline: depth-biased line list)
+        // 5. Sketch overlay strokes. Drawn with the THICK-line pipeline: Metal's
+        // line primitive is 1px (a hairline on Retina), and a sketch on a solid's
+        // face is coplanar with it, so the hairline also lost the depth fight and
+        // the stroke would vanish. The quad expansion carries a bigger bias.
         if !scene.sketchLines.isEmpty {
-            encoder.setRenderPipelineState(pipelines.edge)
+            encoder.setRenderPipelineState(pipelines.thickLine)
             encoder.setDepthStencilState(pipelines.depthReadOnly)
             for batch in scene.sketchLines where !batch.segments.isEmpty {
                 var body = BodyUniforms()
                 body.modelMatrix = matrix_identity_float4x4
                 body.baseColor = batch.color
+                body.lineHalfWidthPx = Self.sketchStrokeWidthPixels / 2
                 let length = batch.segments.count * MemoryLayout<SIMD3<Float>>.stride
                 guard let buffer = batch.segments.withUnsafeBytes({ raw in
                     context.device.makeBuffer(bytes: raw.baseAddress!, length: length,
@@ -259,7 +268,9 @@ final class Renderer: NSObject, MTKViewDelegate {
                                        index: Int(BufferIndexBodyUniforms.rawValue))
                 encoder.setFragmentBytes(&body, length: MemoryLayout<BodyUniforms>.stride,
                                          index: Int(BufferIndexBodyUniforms.rawValue))
-                encoder.drawPrimitives(type: .line, vertexStart: 0, vertexCount: batch.segments.count)
+                // 2 endpoints per segment → 6 quad vertices per segment.
+                encoder.drawPrimitives(type: .triangle, vertexStart: 0,
+                                       vertexCount: batch.segments.count / 2 * 6)
             }
         }
 
@@ -567,6 +578,8 @@ final class Renderer: NSObject, MTKViewDelegate {
         frame.gridParams = SIMD4(1, 10, 120, 0)
         frame.gridCenter = SIMD4(camera.target.x, 0, camera.target.z, 0)
         frame.edgeDepthBiasNDC = 1e-4
+        frame.viewportWidth = Float(max(viewportSize.width, 1))
+        frame.viewportHeight = Float(max(viewportSize.height, 1))
 
         // Section view: fragments beyond the plane are discarded (spec §16.1).
         if let section = scene.sectionPlane, section.enabled {
