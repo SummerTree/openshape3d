@@ -272,6 +272,68 @@ final class MoveFaceKernelTests: XCTestCase {
         XCTAssertGreaterThan(blended, 0, "the ruled walls were smoothed, not left faceted")
     }
 
+    /// Rotating the top face about its OWN NORMAL must produce a real screw
+    /// TWIST, not two big triangular facets per wall. In a true twist every
+    /// cross-section is the original rectangle rotated by its share of the angle,
+    /// so the area is constant at every height → the VOLUME is exactly preserved
+    /// and the height is unchanged. (The old ruled 2-triangle wall lost volume:
+    /// its cross-sections were pinched quads, not rotated rectangles.)
+    func testTwistAboutNormalIsAScrewThatPreservesVolume() throws {
+        let box = makeBox()                 // 4(X) × 6(Z) × 4(Y), volume 96
+        let top = try topFace(of: box)
+        let before = volume(box)
+
+        let twisted = KernelOps.rotateFace(mesh: box, face: top, angle: .pi / 4,
+                                           axis: SIMD3(0, 1, 0))
+
+        XCTAssertTrue(twisted.isWatertight, "a twisted prism stays watertight")
+        // An ideal screw preserves volume exactly; the tessellated one loses a
+        // little because the band chords cut inside the true surface, so allow a
+        // small margin rather than claiming it is exact.
+        XCTAssertEqual(volume(twisted), before, accuracy: before * 0.02,
+                       "a screw twist keeps every cross-section congruent — volume preserved")
+        XCTAssertEqual(aabb(twisted).min.y, 0, accuracy: 0.02, "base held")
+        XCTAssertEqual(aabb(twisted).max.y, 4, accuracy: 0.02, "height unchanged")
+        XCTAssertEqual(wrongNormalTriangleCount(twisted), 0, "no mis-lit walls")
+
+        // The walls must actually be subdivided — a 45° twist as 2 triangles per
+        // wall is exactly the "extra facets" bug. Expect many more than the box's
+        // 12 triangles.
+        let tris = EuclidBridge.renderMesh(from: twisted).triangleCount
+        XCTAssertGreaterThan(tris, 100, "walls subdivided into a smooth screw (got \(tris))")
+    }
+
+    /// A TILT (in-plane axis) must stay a clean planar wedge — it must NOT get the
+    /// twist's subdivision, or a simple slant would balloon into a curved bend.
+    func testTiltStaysPlanarAndUnsubdivided() throws {
+        let box = makeBox()
+        let top = try topFace(of: box)
+        let tilted = KernelOps.rotateFace(mesh: box, face: top, angle: .pi / 6,
+                                          axis: SIMD3(0, 0, 1))
+        let tris = EuclidBridge.renderMesh(from: tilted).triangleCount
+        XCTAssertLessThan(tris, 40, "a tilt stays a simple wedge (got \(tris) triangles)")
+    }
+
+    /// The Rotate tool stays live, so a user twists the SAME face repeatedly.
+    /// Subdivision must not compound: a triangle lying wholly on the face rotates
+    /// rigidly and is never re-subdivided, so the count settles instead of
+    /// exploding (it used to square each pass — 256 → 65 536 triangles).
+    func testRepeatedTwistsDoNotExplodeTriangleCount() throws {
+        var mesh = makeBox()
+        var counts: [Int] = []
+        for _ in 0..<4 {
+            let top = try topFace(of: mesh)
+            mesh = KernelOps.rotateFace(mesh: mesh, face: top, angle: .pi / 6,
+                                        axis: SIMD3(0, 1, 0))
+            XCTAssertTrue(mesh.isWatertight, "each successive twist stays watertight")
+            counts.append(EuclidBridge.renderMesh(from: mesh).triangleCount)
+        }
+        XCTAssertLessThan(counts.last!, 4000,
+                          "repeated twists stay bounded, got \(counts)")
+        XCTAssertLessThan(counts.last!, counts[1] * 4,
+                          "growth flattens out rather than compounding, got \(counts)")
+    }
+
     func testRotateZeroAngleIsNoOp() throws {
         let box = makeBox()
         let top = try topFace(of: box)

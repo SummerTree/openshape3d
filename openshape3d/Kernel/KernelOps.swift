@@ -941,12 +941,19 @@ nonisolated extension KernelOps {
     /// Rotate a planar face about an axis line through its own centre, deforming
     /// the solid — the Shapr3D "Rotate" on a face. Every mesh vertex ON the face
     /// is rotated by `angle` (radians) about the world line through the face
-    /// centroid along unit `axis`; the side walls that share those vertices skew
-    /// to follow. Rotating a box top about an in-plane axis TILTS it (a slanted
-    /// solid); about the face normal it TWISTS it (an antiprism). Unlike move /
-    /// scale the walls become non-planar, so the mesh is triangulated first —
-    /// every triangle then stays planar under an arbitrary per-vertex rotation,
-    /// keeping the result watertight. Topology-preserving; adds no faces.
+    /// centroid along unit `axis`; the side walls that share those vertices follow.
+    ///
+    /// Two behaviours, picked from the axis:
+    ///  • an IN-PLANE axis TILTS the solid — the walls stay planar, giving a clean
+    ///    wedge, so the face's vertices simply rotate and nothing is subdivided;
+    ///  • the face's own NORMAL axis TWISTS it — the face's plane maps to itself,
+    ///    so the walls MUST become ruled screw surfaces. The walls are subdivided
+    ///    and each sub-vertex rotates proportionally to how far it lies onto the
+    ///    face, making every cross-section the original rotated by its share of
+    ///    the angle: a real twisted prism rather than two big triangular facets.
+    ///
+    /// The mesh is triangulated first so every polygon stays planar under an
+    /// arbitrary per-vertex rotation, keeping the result watertight.
     static func rotateFace(
         mesh: Euclid.Mesh,
         face: FaceTopology.PlanarFace,
@@ -968,13 +975,12 @@ nonisolated extension KernelOps {
         let cw = plane.toWorld(c2)
         let center = Vector(cw.x, cw.y, cw.z)
 
-        let cosT = cos(angle), sinT = sin(angle)
         let av = Vector(a.x, a.y, a.z)
-        // Rodrigues rotation of `v` about unit `av` by the fixed angle.
-        func rotate(_ v: Vector) -> Vector {
-            let dot = v.dot(av)
-            let cross = av.cross(v)
-            return v * cosT + cross * sinT + av * (dot * (1 - cosT))
+        // Rodrigues rotation of `v` about unit `av` by an arbitrary angle — the
+        // angle varies per vertex so a twist can screw progressively (below).
+        func rotate(_ v: Vector, by ang: Double) -> Vector {
+            let c = cos(ang), s = sin(ang)
+            return v * c + av.cross(v) * s + av * (v.dot(av) * (1 - c))
         }
 
         func onFace(_ position: Vector) -> Bool {
@@ -989,32 +995,90 @@ nonisolated extension KernelOps {
             return true
         }
 
+        // Rotating a face about its OWN NORMAL is a TWIST: the face's plane maps to
+        // itself, so the side walls have to become ruled (screw) surfaces. Left as
+        // one quad per wall that reads as two huge triangular facets, not a twist —
+        // so subdivide the deformed triangles and rotate each sub-vertex by
+        // angle × t, where t is how far it sits ONTO the face (0 at the far end,
+        // 1 on the face). Every cross-section is then the original rotated
+        // proportionally: a real twisted prism.
+        //
+        // A rotation about an IN-PLANE axis is a TILT, where the walls stay planar
+        // and a clean wedge is correct — that path uses n = 1 (no subdivision),
+        // which reduces exactly to "rotate the on-face vertices, leave the rest".
+        let isTwist = abs(simd_dot(a, normal)) > 0.98
+        let degrees = abs(angle) * 180 / .pi
+        let n = isTwist ? min(max(Int((degrees / 3).rounded(.up)), 4), 30) : 1
+
         var polygons = [Euclid.Polygon]()
         for polygon in mesh.triangulate().polygons {
+            let verts = polygon.vertices
             // Untouched triangles keep their original (possibly smooth) normals so
             // curved faces elsewhere on the body aren't flattened.
-            guard polygon.vertices.contains(where: { onFace($0.position) }) else {
+            guard verts.count == 3, verts.contains(where: { onFace($0.position) }) else {
                 polygons.append(polygon)
                 continue
             }
-            // A deformed triangle: rotate its on-face vertices, then give ALL its
-            // vertices ONE flat normal recomputed from the moved geometry. Carrying
-            // the old per-vertex normals here mis-lights the walls — a wall's rim
-            // vertex would wear the tilted FACE normal instead of the wall's — and
-            // reads as a dark "hole"; a flat normal always matches the winding.
-            let moved = polygon.vertices.map { vertex -> Vector in
-                onFace(vertex.position) ? center + rotate(vertex.position - center) : vertex.position
+            let p = verts.map(\.position)
+            let f = verts.map { onFace($0.position) ? 1.0 : 0.0 }
+
+            // Each emitted triangle gets ONE flat normal recomputed from its moved
+            // geometry. Carrying the old per-vertex normals here mis-lights the
+            // walls — a wall's rim vertex would wear the rotated FACE normal
+            // instead of the wall's — and reads as a dark "hole"; a flat normal
+            // always matches the winding. `smoothingNormals` below then blends
+            // them back across the fine wall so it shades as one smooth surface.
+            func emit(_ x: Vector, _ y: Vector, _ z: Vector) {
+                let nrm = Self.newellNormal([x, y, z])
+                if let tri = Euclid.Polygon(
+                    [Euclid.Vertex(x, nrm), Euclid.Vertex(y, nrm), Euclid.Vertex(z, nrm)]) {
+                    polygons.append(tri)
+                }
             }
-            let faceNormal = Self.newellNormal(moved)
-            let vertices = moved.map { Euclid.Vertex($0, faceNormal) }
-            if let np = Euclid.Polygon(vertices) { polygons.append(np) }
+
+            // Wholly ON the face: the rotation is rigid, so there is no twist
+            // gradient to resolve and subdividing would only multiply triangles —
+            // which is what made repeated twists compound (n² → n⁴ → …).
+            if f[0] == f[1], f[1] == f[2] {
+                emit(center + rotate(p[0] - center, by: angle),
+                     center + rotate(p[1] - center, by: angle),
+                     center + rotate(p[2] - center, by: angle))
+                continue
+            }
+
+            // Mixed triangle. `t` is constant along the edge joining the two
+            // vertices that share an on-face state and varies only toward the odd
+            // one out, so ONLY the two varying edges are subdivided. The count for
+            // an edge depends solely on its two (shared) endpoints, so both
+            // triangles meeting on it agree — the seam stays sealed with no
+            // T-junctions — while flat regions are left alone. (Two of three
+            // binary flags always match, so `odd` is well defined; the A,B,C
+            // cycle below is a rotation of v0,v1,v2 and preserves the winding.)
+            let odd = f[0] == f[1] ? 2 : (f[0] == f[2] ? 1 : 0)
+            let pA = p[(odd + 1) % 3], pB = p[(odd + 2) % 3], pC = p[odd]
+            let tA = f[(odd + 1) % 3], tC = f[odd]
+
+            // Point a fraction `s` of the way from `base` toward the odd vertex,
+            // rotated by its share of the angle — this is what screws the wall.
+            func at(_ base: Vector, _ s: Double) -> Vector {
+                let pos = base + (pC - base) * s
+                let t = tA + (tC - tA) * s
+                return t > 1e-9 ? center + rotate(pos - center, by: angle * t) : pos
+            }
+            var prevA = at(pA, 0), prevB = at(pB, 0)
+            for i in 1...n {
+                let s = Double(i) / Double(n)
+                let curA = at(pA, s), curB = at(pB, s)
+                emit(prevA, prevB, curB)
+                // At s == 1 both rails meet at the odd vertex — no closing quad.
+                if i < n { emit(prevA, curB, curA) }
+                prevA = curA; prevB = curB
+            }
         }
         guard !polygons.isEmpty else { return mesh }
-        // Smooth the ruled side walls a twist/tilt creates: each wall becomes a
-        // non-planar quad split into two triangles, which flat-shaded reads as an
-        // extra diagonal "facet". Averaging normals across folds gentler than the
-        // box's real edges (~44°, matching FaceTopology's edge threshold) makes a
-        // twist shade as one smooth surface while the 90° box edges stay crisp.
+        // Blend normals across folds gentler than the box's real edges (~44°,
+        // matching FaceTopology's edge threshold) so the subdivided walls shade as
+        // one smooth surface while the true 90° box edges stay crisp.
         return Euclid.Mesh(polygons).makeWatertight()
             .smoothingNormals(forAnglesGreaterThan: .degrees(44))
     }
