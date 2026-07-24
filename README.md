@@ -10,6 +10,23 @@ See [Geometry kernels](#geometry-kernels-occt--euclid).
 ![Platform](https://img.shields.io/badge/platform-iPadOS%20%7C%20iOS-blue)
 ![Swift](https://img.shields.io/badge/Swift-5-orange)
 
+## Getting started
+
+**Install [Git LFS](https://git-lfs.com) before cloning.** The prebuilt
+`ThirdParty/OCCT.xcframework` (the OCCT static libs, ~280 MB) is stored via Git
+LFS, so the app builds straight after a clone — no local OCCT build needed.
+
+```sh
+brew install git-lfs      # once per machine
+git lfs install
+git clone git@github.com:laanlabs/openshape3d.git
+```
+
+If you cloned *without* LFS and the build fails with *"There is no XCFramework
+found at …/ThirdParty/OCCT.xcframework"* (or the `.a` files are tiny pointer
+text), run `git lfs install && git lfs pull` to fetch the real libraries. To
+rebuild the framework from OCCT source instead, see `scripts/build_occt_ios.sh`.
+
 ## Features (v0.5)
 
 - **Sketch planes** — pick a world plane (XY/YZ/ZX tiles at the origin), tap

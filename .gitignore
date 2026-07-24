@@ -13,6 +13,8 @@ DerivedData/
 
 .claude/
 
-# OCCT B-rep port: large build artifacts (regenerate via scripts/build_occt_ios.sh)
-ThirdParty/OCCT.xcframework/
+# OCCT B-rep port: the prebuilt OCCT.xcframework is committed via Git LFS (its
+# two static libs are tracked by .gitattributes) so a fresh checkout builds
+# without running scripts/build_occt_ios.sh. Only the local build scratch dir
+# is ignored.
 .occt-build/
