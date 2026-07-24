@@ -489,7 +489,8 @@ final class EditorViewModel {
         //
         // Suppressed while a face Move/Scale tool is armed: then only that gizmo
         // shows, and drags reach it (shear/taper) instead of the extrude arrow.
-        if let context = toolContext, !faceMoveActive, !faceScaleActive, !faceRotateActive {
+        if let context = toolContext, !context.curvedRegion,
+           !faceMoveActive, !faceScaleActive, !faceRotateActive {
             let centroid = context.plane.toWorld(context.profile.centroid)
             switch context.kind {
             case .extrude(let distance):
@@ -944,6 +945,35 @@ final class EditorViewModel {
         return ToolContext(
             profile: profile, holes: holes, plane: plane, sketchID: nil,
             sourceBody: body.id, faceTriangles: face.triangles, kind: .extrude(distance: 0))
+    }
+
+    /// Tool context for a CURVED smooth face picked whole (twisted wall, blend).
+    /// There is no meaningful profile/plane for it — the plane is a nominal frame
+    /// at the tapped triangle, used only so the selection has somewhere to anchor
+    /// — so `curvedRegion` marks it and the planar-only affordances stay off.
+    private func curvedFaceContext(
+        body: Body, triangles: [Int], seedTriangle: Int
+    ) -> ToolContext {
+        let render = body.render
+        let i0 = Int(render.indices[seedTriangle * 3])
+        let i1 = Int(render.indices[seedTriangle * 3 + 1])
+        let i2 = Int(render.indices[seedTriangle * 3 + 2])
+        let a = SIMD3<Double>(render.positions[i0])
+        let b = SIMD3<Double>(render.positions[i1])
+        let c = SIMD3<Double>(render.positions[i2])
+        let transform = body.transform
+        let originWorld = transform.applying(to: (a + b + c) / 3)
+        var xAxis = simd_normalize(b - a)
+        let n = simd_normalize(simd_cross(b - a, c - a))
+        if !xAxis.x.isFinite { xAxis = SIMD3(1, 0, 0) }
+        let yAxis = simd_normalize(simd_cross(n, xAxis))
+        let plane = SketchPlane(origin: originWorld,
+                                xAxis: transform.rotation.act(xAxis),
+                                yAxis: transform.rotation.act(yAxis))
+        return ToolContext(
+            profile: Profile(loop: [], kind: .polygonal, sourceEntityIDs: []),
+            holes: [], plane: plane, sketchID: nil, sourceBody: body.id,
+            faceTriangles: triangles, curvedRegion: true, kind: .extrude(distance: 0))
     }
 
     /// After a face move/scale reshapes the body, re-select the SAME face on the
@@ -1893,7 +1923,9 @@ final class EditorViewModel {
     /// only the extrude arrow until Move is chosen). On any other selection it
     /// falls back to the point-to-point Translate.
     func beginMoveTool() {
-        if case .faceSelected = mode {
+        // A curved face has no plane to shear along — fall through to the
+        // whole-body tool rather than arming a gizmo that can't work.
+        if case .faceSelected = mode, toolContext?.curvedRegion != true {
             axisEntryPart = nil
             scaleEntryActive = false
             faceScaleActive = false
@@ -1923,7 +1955,7 @@ final class EditorViewModel {
     /// tapers the solid (scaling the face about its centre); on any other
     /// selection it falls back to the numeric scale-factor entry.
     func beginScaleTool() {
-        if case .faceSelected = mode {
+        if case .faceSelected = mode, toolContext?.curvedRegion != true {
             axisEntryPart = nil
             scaleEntryActive = false
             faceMoveActive = false
@@ -1949,7 +1981,7 @@ final class EditorViewModel {
     /// so a ring drag rotates the face about its centre (tilt/twist the solid);
     /// on any other selection it falls back to the axis-pick body rotate.
     func beginRotateTool() {
-        if case .faceSelected = mode {
+        if case .faceSelected = mode, toolContext?.curvedRegion != true {
             axisEntryPart = nil
             scaleEntryActive = false
             faceMoveActive = false
@@ -3577,8 +3609,26 @@ final class EditorViewModel {
             }
 
             let face = FaceTopology.planarFace(in: body.render, seedTriangle: hit.triangleIndex)
+            let smooth = FaceTopology.smoothRegion(in: body.render, seedTriangle: hit.triangleIndex)
+
+            // A CURVED smooth face (a twisted wall, a blend): `planarFace` only
+            // ever returns the coplanar sliver under the finger there, because no
+            // two facets of a curved surface are coplanar. Select the whole
+            // smooth region instead — tapping a twisted wall should grab the
+            // wall, not one of its polygons.
+            if let smooth, smooth.isCurved,
+               face.map({ $0.triangles.count < smooth.triangles.count }) ?? true {
+                toolContext = curvedFaceContext(body: body, triangles: smooth.triangles,
+                                                seedTriangle: hit.triangleIndex)
+                faceMoveActive = false
+                faceScaleActive = false
+                faceRotateActive = false
+                mode = .faceSelected(body.id)
+                return
+            }
+
             guard let face else {
-                // Curved or unrecognized region → whole body.
+                // Unrecognized region → whole body.
                 mode = .selected(hit.bodyID)
                 return
             }
@@ -4019,6 +4069,11 @@ final class EditorViewModel {
         /// Set when pushing/pulling a body's cylindrical side: distance is a
         /// RADIAL delta (grows/shrinks the radius), not an axial extrusion.
         var cylinderFace: FaceTopology.CylindricalFace?
+        /// True when the selection is a CURVED smooth face (a twisted wall, a
+        /// blend, …) picked whole rather than a planar patch. It highlights and
+        /// can be measured or deleted, but push/pull and the face transforms all
+        /// assume a plane, so they stay off for it.
+        var curvedRegion = false
         var kind: Kind
         /// Extra fills added while extruding (multi-profile: union of prisms).
         var extraProfiles: [(profile: Profile, holes: [Profile])] = []

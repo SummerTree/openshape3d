@@ -385,6 +385,54 @@ final class MoveFaceKernelTests: XCTestCase {
                           "the vast majority of seams must be smooth, got \(drawn)/\(edgeNormals.count)")
     }
 
+    /// Tapping a twisted wall must grab the WHOLE wall, not one polygon of it.
+    /// A curved surface has no two coplanar facets, so `planarFace` returns only
+    /// the sliver under the finger — `smoothRegion` is what picks the real face.
+    func testTwistedWallIsPickedAsOneSmoothFaceNotASliver() throws {
+        let box = makeBox()
+        let top = try topFace(of: box)
+        let twisted = KernelOps.rotateFace(mesh: box, face: top, angle: .pi / 3,
+                                           axis: SIMD3(0, 1, 0))
+        let render = EuclidBridge.renderMesh(from: twisted)
+
+        // A triangle on a side wall (normal mostly horizontal, i.e. not a cap).
+        var seed = -1
+        for t in 0..<render.triangleCount {
+            let p = (0..<3).map { render.positions[Int(render.indices[t * 3 + $0])] }
+            let n = simd_normalize(simd_cross(p[1] - p[0], p[2] - p[0]))
+            if abs(n.y) < 0.2 { seed = t; break }
+        }
+        let wallSeed = try XCTUnwrap(seed >= 0 ? seed : nil, "twisted body has a side wall")
+
+        let sliver = FaceTopology.planarFace(in: render, seedTriangle: wallSeed)?.triangles.count ?? 0
+        let region = try XCTUnwrap(FaceTopology.smoothRegion(in: render, seedTriangle: wallSeed))
+
+        XCTAssertTrue(region.isCurved, "a twisted wall is a curved face")
+        XCTAssertGreaterThan(region.triangles.count, sliver * 4,
+                             "the smooth region is the whole wall, not the coplanar sliver "
+                             + "(region \(region.triangles.count) vs planar \(sliver))")
+        // Four walls: the region should be a sizeable share of the body, but must
+        // NOT bleed across the 90° corners into the neighbouring walls or caps.
+        XCTAssertLessThan(region.triangles.count, render.triangleCount / 2,
+                          "the region stopped at the real corners")
+    }
+
+    /// The curved-face path must not disturb ordinary FLAT faces: a plain box
+    /// wall is a coplanar patch, so `smoothRegion` reports it as not curved and
+    /// selection keeps taking the normal planar route.
+    func testFlatBoxWallIsNotReportedAsCurved() throws {
+        let render = EuclidBridge.renderMesh(from: makeBox())
+        var seed = -1
+        for t in 0..<render.triangleCount {
+            let p = (0..<3).map { render.positions[Int(render.indices[t * 3 + $0])] }
+            let n = simd_normalize(simd_cross(p[1] - p[0], p[2] - p[0]))
+            if abs(n.y) < 0.2 { seed = t; break }
+        }
+        let region = try XCTUnwrap(
+            FaceTopology.smoothRegion(in: render, seedTriangle: try XCTUnwrap(seed >= 0 ? seed : nil)))
+        XCTAssertFalse(region.isCurved, "a flat box wall is planar, not curved")
+    }
+
     func testRotateZeroAngleIsNoOp() throws {
         let box = makeBox()
         let top = try topFace(of: box)

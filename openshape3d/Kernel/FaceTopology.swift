@@ -308,6 +308,60 @@ nonisolated enum FaceTopology {
     private static let smoothDihedralCos: Float = 0.72 // ~44°: joins tessellated
                                                        // wall facets, stops at rims
 
+    /// The connected SMOOTH surface containing `seedTriangle`: triangles joined
+    /// across soft edges (dihedral under ~44°), stopping at real rims. This is
+    /// the whole curved face a user means when they tap a twisted or otherwise
+    /// non-planar wall — `planarFace` would return only the coplanar sliver
+    /// under the finger, because a curved surface has no two coplanar facets.
+    ///
+    /// Returns the triangle indices, plus whether the region is genuinely curved
+    /// (some facet tilts away from the seed by more than the coplanar tolerance).
+    static func smoothRegion(
+        in mesh: RenderMesh, seedTriangle: Int
+    ) -> (triangles: [Int], isCurved: Bool)? {
+        guard seedTriangle >= 0, seedTriangle < mesh.triangleCount else { return nil }
+
+        func tri(_ t: Int) -> (SIMD3<Float>, SIMD3<Float>, SIMD3<Float>) {
+            (mesh.positions[Int(mesh.indices[t * 3])],
+             mesh.positions[Int(mesh.indices[t * 3 + 1])],
+             mesh.positions[Int(mesh.indices[t * 3 + 2])])
+        }
+        func normal(_ t: Int) -> SIMD3<Float>? {
+            let (a, b, c) = tri(t)
+            let x = simd_cross(b - a, c - a)
+            let len = simd_length(x)
+            return len > 1e-12 ? x / len : nil
+        }
+        guard let seedN = normal(seedTriangle) else { return nil }
+
+        var edgeTriangles = [EdgeKey: [Int]]()
+        for t in 0..<mesh.triangleCount {
+            let (a, b, c) = tri(t)
+            edgeTriangles[EdgeKey(a, b), default: []].append(t)
+            edgeTriangles[EdgeKey(b, c), default: []].append(t)
+            edgeTriangles[EdgeKey(c, a), default: []].append(t)
+        }
+
+        var surface = Set<Int>()
+        var queue = [seedTriangle]
+        var maxDot: Float = 1
+        while let t = queue.popLast() {
+            guard !surface.contains(t), let nt = normal(t) else { continue }
+            surface.insert(t)
+            maxDot = min(maxDot, simd_dot(nt, seedN))
+            let (a, b, c) = tri(t)
+            for edge in [EdgeKey(a, b), EdgeKey(b, c), EdgeKey(c, a)] {
+                for nb in edgeTriangles[edge] ?? [] where !surface.contains(nb) {
+                    if let nn = normal(nb), simd_dot(nn, nt) > smoothDihedralCos {
+                        queue.append(nb)
+                    }
+                }
+            }
+        }
+        guard !surface.isEmpty else { return nil }
+        return (surface.sorted(), maxDot < normalTolerance)
+    }
+
     /// Recognize the curved cylindrical surface under `seedTriangle`, or nil if
     /// the region is planar or not a clean cylinder.
     static func cylindricalFace(in mesh: RenderMesh, seedTriangle: Int) -> CylindricalFace? {

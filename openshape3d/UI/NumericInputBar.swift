@@ -29,6 +29,7 @@ struct NumericInputBar: View {
         } else if let image = viewModel.selectedImage {
             imageBar(image)
         } else if let context = viewModel.toolContext, viewModel.mode != .pickingRevolveAxis,
+                  !context.curvedRegion,
                   !viewModel.faceMoveActive, !viewModel.faceScaleActive, !viewModel.faceRotateActive {
             // While a face Move/Scale/Rotate tool is armed, the extrude bar is
             // hidden — only that gizmo (which deforms the solid) is shown.

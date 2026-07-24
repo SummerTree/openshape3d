@@ -1030,7 +1030,9 @@ struct EditorView: View {
                                 ? "Scale face — drag to taper the solid"
                                 : viewModel.faceRotateActive
                                     ? "Rotate face — drag a ring to tilt the solid"
-                                    : "Face selected — drag it to push or pull"
+                                    : viewModel.toolContext?.curvedRegion == true
+                                        ? "Curved face selected"
+                                        : "Face selected — drag it to push or pull"
                     ) {
                         Button("Done") {
                             viewModel.commitTool()
