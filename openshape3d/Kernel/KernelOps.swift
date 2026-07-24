@@ -887,6 +887,57 @@ nonisolated extension KernelOps {
         return Euclid.Mesh(polygons).makeWatertight()
     }
 
+    /// Uniformly scale a planar face about its own centre, deforming the solid —
+    /// the Shapr3D "Scale" on a face. Every mesh vertex ON the face is scaled by
+    /// `factor` about the face centroid; because the centroid and those vertices
+    /// all lie in the face plane, the scaled vertices stay in-plane, so the face
+    /// grows/shrinks in place and the side walls taper to follow (a box top
+    /// scaled < 1 becomes a frustum, > 1 a flared shape). Topology-preserving,
+    /// like `moveFace`.
+    static func scaleFace(
+        mesh: Euclid.Mesh,
+        face: FaceTopology.PlanarFace,
+        factor: Double
+    ) -> Euclid.Mesh {
+        guard factor > 1e-6, abs(factor - 1) > 1e-9 else { return mesh }
+        let plane = SketchPlane(
+            origin: face.origin, xAxis: face.basisX, yAxis: face.basisY
+        )
+        let normal = simd_normalize(plane.normal)
+
+        // Scale about the face's centroid (average of its outline), in world.
+        var c2 = SIMD2<Double>.zero
+        for p in face.outline { c2 += p }
+        c2 /= Double(max(face.outline.count, 1))
+        let cw = plane.toWorld(c2)
+        let center = Vector(cw.x, cw.y, cw.z)
+
+        func onFace(_ position: Vector) -> Bool {
+            let w = SIMD3<Double>(position.x, position.y, position.z)
+            guard abs(simd_dot(w - face.origin, normal)) <= Self.moveFacePlaneTolerance
+            else { return false }
+            let local = plane.toLocal(w)
+            guard Self.pointInLoopInclusive(local, face.outline) else { return false }
+            for hole in face.holes where Self.pointStrictlyInLoop(local, hole) {
+                return false
+            }
+            return true
+        }
+
+        var polygons = [Euclid.Polygon]()
+        polygons.reserveCapacity(mesh.polygons.count)
+        for polygon in mesh.polygons {
+            let vertices = polygon.vertices.map { vertex -> Euclid.Vertex in
+                guard onFace(vertex.position) else { return vertex }
+                let scaled = center + (vertex.position - center) * factor
+                return Euclid.Vertex(scaled, vertex.normal)
+            }
+            if let np = Euclid.Polygon(vertices) { polygons.append(np) }
+        }
+        guard !polygons.isEmpty else { return mesh }
+        return Euclid.Mesh(polygons).makeWatertight()
+    }
+
     /// On-plane tolerance for `moveFace`. Generous enough to catch float noise
     /// on a face's own vertices, far tighter than any real face-to-face gap.
     static let moveFacePlaneTolerance: Double = 1e-3

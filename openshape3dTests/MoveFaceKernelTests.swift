@@ -122,4 +122,42 @@ final class MoveFaceKernelTests: XCTestCase {
         let result = KernelOps.moveFace(mesh: box, face: top, delta: .zero)
         XCTAssertEqual(volume(result), volume(box), accuracy: 1e-9)
     }
+
+    // MARK: - Scale face (taper)
+
+    /// Scaling the top face DOWN about its centre tapers the box into a frustum:
+    /// the top shrinks, the walls slope in, the base holds, the height is kept.
+    func testUniformScaleDownTapersBoxIntoFrustum() throws {
+        let box = makeBox()                 // 4(X) × 6(Z) × 4(Y), top area 24
+        let top = try topFace(of: box)
+
+        let result = KernelOps.scaleFace(mesh: box, face: top, factor: 0.5)
+
+        XCTAssertTrue(result.isWatertight, "A tapered box (frustum) stays watertight")
+        // Frustum: V = (h/3)(A_b + A_t + √(A_b·A_t)) = (4/3)(24 + 6 + 12) = 56.
+        XCTAssertEqual(volume(result), 56, accuracy: 56 * 0.03,
+                       "top face scaled ×0.5 → frustum volume 56")
+        XCTAssertEqual(aabb(result).min.y, aabb(box).min.y, accuracy: 0.02, "base held")
+        XCTAssertEqual(aabb(result).max.y, aabb(box).max.y, accuracy: 0.02, "height unchanged")
+    }
+
+    /// Scaling the top face UP flares it out past the base (top wider than base).
+    func testUniformScaleUpFlaresTopBeyondBase() throws {
+        let box = makeBox()
+        let top = try topFace(of: box)
+
+        let result = KernelOps.scaleFace(mesh: box, face: top, factor: 1.5)
+
+        XCTAssertTrue(result.isWatertight)
+        // Top X half-extent 2 × 1.5 = 3, so the flared top reaches x = 3 (> base 2).
+        XCTAssertEqual(aabb(result).max.x, 3, accuracy: 0.1, "flared top reaches past the base")
+        XCTAssertGreaterThan(volume(result), volume(box), "a flared frustum has more volume")
+    }
+
+    func testScaleFactorOneIsNoOp() throws {
+        let box = makeBox()
+        let top = try topFace(of: box)
+        XCTAssertEqual(volume(KernelOps.scaleFace(mesh: box, face: top, factor: 1)),
+                       volume(box), accuracy: 1e-9)
+    }
 }
