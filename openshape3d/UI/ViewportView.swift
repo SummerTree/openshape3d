@@ -125,6 +125,11 @@ final class ViewportCoordinator: NSObject, ViewportGestureDelegate, ViewportCame
     private var sectionDragActive = false
     /// A drag scrubbing the chamfer/fillet size on the edge arrow (spec §4.3).
     private var blendDragActive = false
+    /// A drag uniformly scaling a selected face (Scale tool). The factor is the
+    /// grab's distance from the gizmo centre over its distance at drag start.
+    private var faceScaleDragActive = false
+    private var faceScaleCenter: CGPoint = .zero
+    private var faceScaleInitialDist: CGFloat = 1
     /// A drag on the orientation cube orbiting the camera (spec §7.2): the
     /// universal orbit control, live in every mode.
     private var cubeOrbitActive = false
@@ -331,9 +336,9 @@ final class ViewportCoordinator: NSObject, ViewportGestureDelegate, ViewportCame
         }
 
         // Face selected: the normal-direction pull-arrow push/pulls the face
-        // (checked first, unchanged). Grabbing a move-gizmo handle MOVES the
-        // face in any direction, deforming the solid (Shapr3D face-move). A drag
-        // anywhere else orbits, so the face never moves by accident.
+        // (checked first, unchanged). With Move armed, grabbing a gizmo handle
+        // MOVES the face (shear); with Scale armed, grabbing a handle SCALES the
+        // face about its centre (taper). A drag anywhere else orbits.
         if case .faceSelected = viewModel.mode {
             if let arrow = viewModel.scene.pullArrow,
                hitsPullArrowScreen(point: point, arrow: arrow),
@@ -343,6 +348,20 @@ final class ViewportCoordinator: NSObject, ViewportGestureDelegate, ViewportCame
             }
             if let renderer, let origin = viewModel.gizmoOrigin,
                let part = gizmoPart(at: point) {
+                // Scale: any handle grab starts a uniform scale keyed to the
+                // grab's distance from the gizmo centre.
+                if viewModel.gizmoIsScale {
+                    if let center = worldToScreenPoint(
+                        SIMD3(Double(origin.x), Double(origin.y), Double(origin.z))),
+                       viewModel.beginFaceScale() {
+                        faceScaleCenter = center
+                        faceScaleInitialDist = max(
+                            hypot(point.x - center.x, point.y - center.y), 12)
+                        faceScaleDragActive = true
+                        return true
+                    }
+                    return false
+                }
                 let gizmo = GizmoState(
                     origin: origin,
                     scale: renderer.gizmoScale(origin: origin),
@@ -382,6 +401,13 @@ final class ViewportCoordinator: NSObject, ViewportGestureDelegate, ViewportCame
     }
 
     func gestureDragChanged(at point: CGPoint) {
+        if faceScaleDragActive {
+            let d = max(hypot(point.x - faceScaleCenter.x, point.y - faceScaleCenter.y), 1)
+            let factor = min(max(Double(d / faceScaleInitialDist), 0.05), 20)
+            viewModel.updateFaceScale(factor: factor)
+            sceneDidChange()
+            return
+        }
         if cubeOrbitActive {
             guard let renderer, let view else { return }
             let delta = CGSize(
@@ -442,6 +468,12 @@ final class ViewportCoordinator: NSObject, ViewportGestureDelegate, ViewportCame
     }
 
     func gestureDragEnded(at point: CGPoint) {
+        if faceScaleDragActive {
+            faceScaleDragActive = false
+            viewModel.endFaceScale()
+            sceneDidChange()
+            return
+        }
         if cubeOrbitActive {
             cubeOrbitActive = false
             return

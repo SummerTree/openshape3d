@@ -145,9 +145,10 @@ struct ToolPaletteView: View {
 
     private var transformGroup: ToolGroup {
         ToolGroup(id: "Transform", label: "Transform", icon: "move.3d", items: [
-            ToolItem(id: "Scale", label: "Scale", icon: "arrow.down.left.and.arrow.up.right",
-                     enabled: !viewModel.selection.isEmpty, active: viewModel.scaleEntryActive,
-                     run: { viewModel.beginScaleEntry() }),
+            toggleItem("Scale", "arrow.down.left.and.arrow.up.right", "ScaleButton",
+                       active: viewModel.isScaleToolActive,
+                       enabled: !viewModel.selection.isEmpty, tint: .purple,
+                       begin: { viewModel.beginScaleTool() }, cancel: { viewModel.cancelScaleTool() }),
             ToolItem(id: "Mirror", label: "Mirror", icon: "rectangle.on.rectangle",
                      enabled: viewModel.selection.count == 1, menu: .mirror),
             toggleItem("Move", "arrow.up.and.down.and.arrow.left.and.right", "TranslateButton",

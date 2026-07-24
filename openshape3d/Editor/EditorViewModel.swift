@@ -91,9 +91,17 @@ final class EditorViewModel {
     /// on its own shows only the extrude arrow; picking Move flips this on.
     private(set) var faceMoveActive = false
 
+    /// True while the Scale tool is armed on a SELECTED FACE: the gizmo is shown
+    /// as scale grips and dragging it scales the face about its centre, tapering
+    /// the solid. Mutually exclusive with `faceMoveActive`.
+    private(set) var faceScaleActive = false
+
+    /// The face gizmo is in SCALE mode (grips) rather than move (arrows).
+    var gizmoIsScale: Bool { faceScaleActive }
+
     /// Whether the move gizmo offers its rotation rings. A body/image rotates,
-    /// but a selected FACE only translates (a rotate would fold the solid), so
-    /// the overlay hides the rings and the viewport ignores ring hits there.
+    /// but a selected FACE only translates/scales (a rotate would fold the
+    /// solid), so the overlay hides the rings and the viewport ignores ring hits.
     var gizmoAllowsRotation: Bool {
         if case .faceSelected = mode { return false }
         return true
@@ -473,9 +481,9 @@ final class EditorViewModel {
         // extrude" (Shapr3D tutorial). Sits at the moving cap of the pull;
         // for revolve it lies along the plane tangent at the centroid.
         //
-        // Suppressed while the face Move tool is armed: then only the move gizmo
-        // shows, and drags reach the gizmo (shear) instead of the extrude arrow.
-        if let context = toolContext, !faceMoveActive {
+        // Suppressed while a face Move/Scale tool is armed: then only that gizmo
+        // shows, and drags reach it (shear/taper) instead of the extrude arrow.
+        if let context = toolContext, !faceMoveActive, !faceScaleActive {
             let centroid = context.plane.toWorld(context.profile.centroid)
             switch context.kind {
             case .extrude(let distance):
@@ -841,11 +849,12 @@ final class EditorViewModel {
             let center = image.plane.origin
             return SIMD3(Float(center.x), Float(center.y), Float(center.z))
         }
-        // A selected face shows only the extrude pull-arrow by DEFAULT. The move
-        // gizmo (which shears the solid by moving the face) appears only after
-        // the user picks Move from the Transform menu — the Shapr3D flow, where
-        // Move is an explicit tool, not something a face selection auto-shows.
-        if case .faceSelected = mode, faceMoveActive, let context = toolContext {
+        // A selected face shows only the extrude pull-arrow by DEFAULT. The
+        // move/scale gizmo appears only after the user picks Move or Scale from
+        // the Transform menu — the Shapr3D flow, where those are explicit tools,
+        // not something a face selection auto-shows.
+        if case .faceSelected = mode, faceMoveActive || faceScaleActive,
+           let context = toolContext {
             let c = context.plane.toWorld(context.profile.centroid)
             return SIMD3(Float(c.x), Float(c.y), Float(c.z))
         }
@@ -1022,6 +1031,134 @@ final class EditorViewModel {
         let movedWorld = KernelOps.moveFace(mesh: s.worldMesh, face: s.worldFace, delta: delta)
         guard !movedWorld.polygons.isEmpty else { return nil }
         return movedWorld.translated(by: Vector(-s.pivot.x, -s.pivot.y, -s.pivot.z))
+    }
+
+    // MARK: - Face scale (Scale tool on a selected face → taper the solid)
+
+    /// Live state for a gizmo drag that SCALES a selected face. Mirrors
+    /// `FaceMoveSession`; captured in world space at drag start.
+    private struct FaceScaleSession {
+        let bodyID: BodyID
+        let source: Body
+        let context: ToolContext
+        let sourceLocalMesh: Euclid.Mesh
+        let pivot: SIMD3<Double>
+        let worldMesh: Euclid.Mesh
+        let worldFace: FaceTopology.PlanarFace
+    }
+    private var faceScaleSession: FaceScaleSession?
+    private var faceScaleLastFactor: Double = 1
+    /// Bumped every preview frame so the GPU re-uploads the deforming mesh.
+    private var faceScalePreviewRevision: UInt64 = 0
+
+    /// Begin a face scale: snapshot the source body so the drag re-scales the
+    /// same immutable geometry every frame. Returns false when the selection
+    /// isn't a scalable face.
+    func beginFaceScale() -> Bool {
+        guard case .faceSelected(let bodyID) = mode,
+              let context = toolContext, context.cylinderFace == nil,
+              let source = session.document.body(with: bodyID)
+        else { return false }
+        let local = source.euclidMesh()
+        faceScaleLastFactor = 1
+        faceScaleSession = FaceScaleSession(
+            bodyID: bodyID,
+            source: source,
+            context: context,
+            sourceLocalMesh: local,
+            pivot: source.transform.translation,
+            worldMesh: local.transformed(by: source.transform.euclid),
+            worldFace: selectedFaceWorld(context)
+        )
+        return true
+    }
+
+    /// Deform the source by scaling the selected face by `factor` (pivot
+    /// re-centred). Session passed explicitly so the commit can recompute after
+    /// clearing `faceScaleSession`.
+    private func faceScaledLocalMesh(_ s: FaceScaleSession, factor: Double) -> Euclid.Mesh? {
+        let scaledWorld = KernelOps.scaleFace(mesh: s.worldMesh, face: s.worldFace, factor: factor)
+        guard !scaledWorld.polygons.isEmpty else { return nil }
+        return scaledWorld.translated(by: Vector(-s.pivot.x, -s.pivot.y, -s.pivot.z))
+    }
+
+    /// Live preview of the face scale (bumping revision so the GPU re-uploads).
+    func updateFaceScale(factor: Double) {
+        guard let s = faceScaleSession else { return }
+        faceScaleLastFactor = factor
+        guard let scaled = faceScaledLocalMesh(s, factor: factor) else { return }
+        faceScalePreviewRevision &+= 1
+        let revision = (UInt64(1) << 59) | faceScalePreviewRevision
+        var transform = Transform3D.identity
+        transform.translation = s.pivot
+        session.preview { document in
+            guard let index = document.bodyIndex(of: s.bodyID) else { return }
+            document.bodies[index] = Body(
+                id: s.bodyID, name: document.bodies[index].name,
+                transform: transform, primitive: nil,
+                euclidMesh: scaled, revision: revision)
+        }
+    }
+
+    /// Commit the face scale (uses the last previewed factor).
+    func endFaceScale() {
+        guard faceScaleSession != nil else { return }
+        commitFaceScale(factor: faceScaleLastFactor)
+    }
+
+    private func commitFaceScale(factor: Double) {
+        guard let s = faceScaleSession else { return }
+        faceScaleSession = nil
+        faceScaleLastFactor = 1
+
+        var beforeTransform = Transform3D.identity
+        beforeTransform.translation = s.pivot
+        let before = Body(
+            id: s.bodyID, name: session.document.body(with: s.bodyID)?.name ?? "Body",
+            transform: beforeTransform, primitive: nil,
+            euclidMesh: s.sourceLocalMesh, revision: 0)
+
+        guard abs(factor - 1) > 1e-4,
+              let scaled = faceScaledLocalMesh(s, factor: factor) else {
+            session.preview { document in
+                if let index = document.bodyIndex(of: s.bodyID) {
+                    document.bodies[index] = before
+                }
+            }
+            return
+        }
+
+        let after = Body(
+            id: s.bodyID, name: before.name, transform: beforeTransform,
+            primitive: nil, euclidMesh: scaled, revision: 0)
+        let replace = ReplaceBodyCommand(title: "Scale Face", before: before, after: after)
+
+        if let node = scaleFaceFeatureNode(session: s, factor: factor) {
+            session.perform(CompositeCommand(
+                title: "Scale Face", commands: [replace, AppendFeatureCommand(node: node)]))
+        } else {
+            session.perform(replace)
+        }
+        toolContext = nil
+        faceScaleActive = false
+        selection = [s.bodyID]
+        mode = .selected(s.bodyID)
+        session.save()
+    }
+
+    /// A `.scaleFace` feature node for a scale on a feature-produced body, or nil
+    /// when the body isn't parametric — then it commits as a plain mesh replace.
+    private func scaleFaceFeatureNode(
+        session s: FaceScaleSession, factor: Double
+    ) -> FeatureNode? {
+        guard let owner = featureNode(owning: s.bodyID),
+              let faceRef = pushPullFaceRef(
+                  context: s.context, source: s.source, creator: owner.id)
+        else { return nil }
+        return FeatureNode(
+            name: "Scale Face",
+            kind: .scaleFace(face: faceRef, factor: Expr(value: factor)),
+            outputBodyIDs: [s.bodyID])
     }
 
     func beginMove() {
@@ -1514,6 +1651,7 @@ final class EditorViewModel {
         if case .faceSelected = mode {
             axisEntryPart = nil
             scaleEntryActive = false
+            faceScaleActive = false
             faceMoveActive = true
             return
         }
@@ -1534,6 +1672,31 @@ final class EditorViewModel {
         if case .translating = mode { return true }
         return false
     }
+
+    /// Transform-menu **Scale**. On a selected FACE it arms the scale gizmo that
+    /// tapers the solid (scaling the face about its centre); on any other
+    /// selection it falls back to the numeric scale-factor entry.
+    func beginScaleTool() {
+        if case .faceSelected = mode {
+            axisEntryPart = nil
+            scaleEntryActive = false
+            faceMoveActive = false
+            faceScaleActive = true
+            return
+        }
+        beginScaleEntry()
+    }
+
+    func cancelScaleTool() {
+        if faceScaleActive {
+            faceScaleActive = false
+            return
+        }
+        cancelScaleEntry()
+    }
+
+    /// True while the Scale tool is armed (face-taper gizmo or body scale entry).
+    var isScaleToolActive: Bool { faceScaleActive || scaleEntryActive }
 
     func beginAlignPick() {
         guard session.document.bodies.count >= 2 else { return }
@@ -3168,6 +3331,7 @@ final class EditorViewModel {
                 kind: .extrude(distance: 0)
             )
             faceMoveActive = false // a fresh face selection shows extrude only
+            faceScaleActive = false
             mode = .faceSelected(body.id)
             return
         }
@@ -4556,6 +4720,7 @@ final class EditorViewModel {
         extrudeDragAnchor = nil
         cachedPullWorldBody = nil
         faceMoveActive = false
+        faceScaleActive = false
         switch mode {
         case .extruding, .faceSelected, .pickingRevolveAxis,
              .pickingSweepPath, .pickingLoftProfiles:
@@ -8662,6 +8827,8 @@ final class EditorViewModel {
             return "Push/Pull \(fmt(distance.value)) mm"
         case let .moveFace(_, delta):
             return "Move Face \(fmt(simd_length(delta.point))) mm"
+        case let .scaleFace(_, factor):
+            return "Scale Face ×\(fmt(factor.value))"
         case let .revolve(_, _, _, angle, _):
             return "Revolve \(fmt(angle.value))°"
         case .sweep: return "Sweep"

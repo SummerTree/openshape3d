@@ -42,15 +42,37 @@ struct MoveGizmoOverlay: View {
 
             ZStack(alignment: .topLeading) {
                 ForEach(planes, id: \.self) { planeHandle($0, ctx) }
-                // A selected face translates only — hide the rotation rings.
+                // A selected face translates/scales only — hide the rotation rings.
                 if viewModel.gizmoAllowsRotation {
                     ForEach(rings, id: \.self) { rotationArc($0, ctx) }
                 }
-                ForEach(axes, id: \.self) { axisArrow($0, ctx) }
+                // Scale mode shows square grips at the axis ends (drag any to
+                // scale about the centre); move mode shows the directional arrows.
+                if viewModel.gizmoIsScale {
+                    ForEach(axes, id: \.self) { scaleHandle($0, ctx) }
+                } else {
+                    ForEach(axes, id: \.self) { axisArrow($0, ctx) }
+                }
                 pivotDot(at: center)
             }
             .allowsHitTesting(false)   // drags are hit-tested in 3D by the viewport
             .ignoresSafeArea()         // full-bleed Metal viewport, inset SwiftUI
+        }
+    }
+
+    // MARK: - Axis scale grip (square handle at the axis end)
+
+    @ViewBuilder
+    private func scaleHandle(_ part: GizmoPart, _ ctx: ProjectionContext) -> some View {
+        if let tip = GizmoScreenLayout.axisAnchor(part, project: ctx.project) {
+            let colored = viewModel.gizmoHighlight == part ? Self.highlight : Self.fill
+            RoundedRectangle(cornerRadius: 4, style: .continuous)
+                .fill(colored)
+                .overlay(RoundedRectangle(cornerRadius: 4, style: .continuous)
+                    .stroke(Self.outline, lineWidth: 2))
+                .frame(width: 22, height: 22)
+                .position(tip)
+                .accessibilityIdentifier("GizmoScale-\(part.axisName)")
         }
     }
 

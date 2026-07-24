@@ -88,4 +88,43 @@ final class MoveFaceEvalTests: XCTestCase {
                              "the downstream move rebuilt onto the larger upstream box")
         XCTAssertEqual(b1.id, b2.id, "the body keeps its identity across the parametric rebuild")
     }
+
+    func testScaleFaceTapersBoxAndReplaysAfterUpstreamResize() throws {
+        let boxFeature = FeatureID(), scaleFeature = FeatureID()
+        let boxID = BodyID()
+
+        func graph(height: Double, face: FaceRef) -> FeatureGraph {
+            FeatureGraph(nodes: [
+                FeatureNode(id: boxFeature, name: "Box",
+                            kind: .primitive(spec: .box(width: 10, depth: 10, height: height),
+                                             placement: .identity),
+                            outputBodyIDs: [boxID]),
+                FeatureNode(id: scaleFeature, name: "Scale Face",
+                            kind: .scaleFace(face: face, factor: Expr(value: 0.5)),
+                            outputBodyIDs: []),
+            ])
+        }
+
+        // The +Z face is the taper target (a side face of a height-10 box).
+        let faceRef = try boxSeedFaceRef(boxFeature: boxFeature, boxID: boxID, depth: 10)
+
+        let r1 = graph(height: 10, face: faceRef).evaluate(
+            sketches: [], planes: [], naming: SignatureNaming(), nextRevision: RevisionSource().next)
+        XCTAssertNil(r1.errors[scaleFeature], "scale-face must resolve and run: \(r1.errors)")
+        let b1 = try XCTUnwrap(r1.bodies.first { $0.id == boxID })
+        XCTAssertTrue(b1.euclidMesh().isWatertight, "a tapered box stays watertight")
+        XCTAssertLessThan(volume(b1), 1000,
+                          "scaling the face ×0.5 tapers the solid — less volume than the box")
+
+        // EDIT upstream: grow the box height. The FaceRef must still resolve and
+        // re-apply the taper to the taller box.
+        let r2 = graph(height: 20, face: faceRef).evaluate(
+            sketches: [], planes: [], naming: SignatureNaming(), nextRevision: RevisionSource().next)
+        XCTAssertNil(r2.errors[scaleFeature], "the FaceRef must resolve on the taller box")
+        let b2 = try XCTUnwrap(r2.bodies.first { $0.id == boxID })
+        XCTAssertTrue(b2.euclidMesh().isWatertight)
+        XCTAssertGreaterThan(volume(b2), volume(b1),
+                             "the taper replayed onto the taller upstream box")
+        XCTAssertEqual(b1.id, b2.id, "the body keeps its identity across the rebuild")
+    }
 }

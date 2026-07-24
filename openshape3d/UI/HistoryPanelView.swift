@@ -133,6 +133,7 @@ struct HistoryPanelView: View {
         case .boolean: return "circle.lefthalf.filled"
         case .pushPull: return "hand.draw"
         case .moveFace: return "arrow.up.and.down.and.arrow.left.and.right"
+        case .scaleFace: return "arrow.down.left.and.arrow.up.right"
         case .revolve: return "arrow.triangle.2.circlepath"
         case .sweep: return "scribble.variable"
         case .loft: return "square.on.square.dashed"

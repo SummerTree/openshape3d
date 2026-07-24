@@ -393,6 +393,9 @@ final class DocumentSession {
         case let .pushPull(face, distance, mode):
             guard let d = updated(distance) else { return nil }
             return .pushPull(face: face, distance: d, mode: mode)
+        case let .scaleFace(face, factor):
+            guard let f = updated(factor) else { return nil }
+            return .scaleFace(face: face, factor: f)
         default:
             return nil
         }

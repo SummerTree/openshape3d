@@ -93,6 +93,10 @@ nonisolated enum FeatureKind: Codable, Sendable {
     /// face's own basis — (u, v, n) along basisX / basisY / normal — so it is
     /// intrinsic to the face and replays correctly after an upstream edit.
     case moveFace(face: FaceRef, delta: PointWrapper)
+    /// Spec §5 (face scale): uniformly scale the referenced planar face about its
+    /// centre by `factor`, tapering the solid. Intrinsic (a pure ratio), so it
+    /// replays against the re-resolved face after an upstream edit.
+    case scaleFace(face: FaceRef, factor: Expr)
     /// Phase E: bevel the referenced convex edges of `body` by a flat `setback`.
     case chamfer(body: BodyRef, edges: [EdgeRef], setback: Expr)
     /// Phase E: round the referenced convex edges of `body` to `radius`.
@@ -160,7 +164,7 @@ nonisolated extension FeatureNode {
         case let .mirror(_, plane, _):
             addPlane(plane)
         case .primitive, .boolean, .transform, .pattern, .pushPull, .moveFace,
-             .chamfer, .fillet, .shell, .deleteFace:
+             .scaleFace, .chamfer, .fillet, .shell, .deleteFace:
             break
         }
         return ids
@@ -280,6 +284,8 @@ nonisolated extension FeatureGraph {
             evalPushPull(node, face: face, distance: distance, mode: mode, into: &state, next: nextRevision)
         case let .moveFace(face, delta):
             evalMoveFace(node, face: face, delta: delta.point, into: &state, next: nextRevision)
+        case let .scaleFace(face, factor):
+            evalScaleFace(node, face: face, factor: factor.value, into: &state, next: nextRevision)
         case let .revolve(profile, plane, axis, angle, boolean):
             evalRevolve(
                 node, profileRef: profile, planeRef: plane, axisRef: axis,
@@ -626,6 +632,46 @@ nonisolated extension FeatureGraph {
 
         let mesh = KernelOps.moveFace(
             mesh: body.euclidMesh(), face: planar, delta: localDelta)
+        guard !mesh.polygons.isEmpty else {
+            state.errors[node.id] = .emptyGeometry
+            return
+        }
+        let result = Body(
+            id: body.id, name: body.name, transform: .identity, primitive: nil,
+            euclidMesh: mesh, revision: nextRevision())
+        let newTable: FaceTable
+        if let table {
+            newTable = state.naming.propagate(inputs: [table], output: result, op: .pushPull)
+        } else {
+            newTable = state.naming.faceTable(for: result, createdBy: node.id, scheme: .generic)
+        }
+        state.put(result, table: newTable)
+    }
+
+    // MARK: Scale face
+
+    /// Replay a face scale: re-resolve the persisted `FaceRef` and taper the
+    /// solid via `KernelOps.scaleFace`. The factor is intrinsic (a ratio), so no
+    /// basis reconstruction is needed.
+    private func evalScaleFace(
+        _ node: FeatureNode,
+        face: FaceRef,
+        factor: Double,
+        into state: inout EvalState,
+        next nextRevision: () -> UInt64
+    ) {
+        guard let body = state.bodies[face.body.bodyID] else {
+            state.errors[node.id] = .brokenRef("scaleFace body unresolved")
+            return
+        }
+        let table = state.faceTables[body.id]
+        guard let resolved = state.naming.resolve(face, in: body, table: table),
+              let planar = resolved.planar else {
+            state.errors[node.id] = .brokenRef("scaleFace face did not resolve")
+            return
+        }
+        let mesh = KernelOps.scaleFace(
+            mesh: body.euclidMesh(), face: planar, factor: factor)
         guard !mesh.polygons.isEmpty else {
             state.errors[node.id] = .emptyGeometry
             return

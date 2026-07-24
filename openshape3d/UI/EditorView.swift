@@ -1026,7 +1026,9 @@ struct EditorView: View {
                         icon: "square.3.layers.3d.top.filled",
                         text: viewModel.faceMoveActive
                             ? "Move face — drag to shear the solid"
-                            : "Face selected — drag it to push or pull"
+                            : viewModel.faceScaleActive
+                                ? "Scale face — drag to taper the solid"
+                                : "Face selected — drag it to push or pull"
                     ) {
                         Button("Done") {
                             viewModel.commitTool()
