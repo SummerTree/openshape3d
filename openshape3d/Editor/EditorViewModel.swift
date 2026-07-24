@@ -472,7 +472,10 @@ final class EditorViewModel {
         // Pull arrow — "these arrows are the interface for creating an
         // extrude" (Shapr3D tutorial). Sits at the moving cap of the pull;
         // for revolve it lies along the plane tangent at the centroid.
-        if let context = toolContext {
+        //
+        // Suppressed while the face Move tool is armed: then only the move gizmo
+        // shows, and drags reach the gizmo (shear) instead of the extrude arrow.
+        if let context = toolContext, !faceMoveActive {
             let centroid = context.plane.toWorld(context.profile.centroid)
             switch context.kind {
             case .extrude(let distance):

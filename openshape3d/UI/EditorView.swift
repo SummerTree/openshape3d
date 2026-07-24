@@ -1024,7 +1024,9 @@ struct EditorView: View {
                 } else if case .faceSelected = viewModel.mode {
                     statusPill(
                         icon: "square.3.layers.3d.top.filled",
-                        text: "Face selected — drag it to push or pull"
+                        text: viewModel.faceMoveActive
+                            ? "Move face — drag to shear the solid"
+                            : "Face selected — drag it to push or pull"
                     ) {
                         Button("Done") {
                             viewModel.commitTool()

@@ -28,7 +28,10 @@ struct NumericInputBar: View {
             patternBar(state)
         } else if let image = viewModel.selectedImage {
             imageBar(image)
-        } else if let context = viewModel.toolContext, viewModel.mode != .pickingRevolveAxis {
+        } else if let context = viewModel.toolContext, viewModel.mode != .pickingRevolveAxis,
+                  !viewModel.faceMoveActive {
+            // While the face Move tool is armed, the extrude bar is hidden — only
+            // the move gizmo (which shears the solid) is shown.
             switch context.kind {
             case .extrude:
                 // While the sweep path pick is armed but empty, the sweep bar
