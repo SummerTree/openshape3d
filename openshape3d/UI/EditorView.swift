@@ -1023,16 +1023,20 @@ struct EditorView: View {
                     measurePill(viewModel)
                 } else if case .faceSelected = viewModel.mode {
                     statusPill(
-                        icon: "square.3.layers.3d.top.filled",
-                        text: viewModel.faceMoveActive
+                        icon: viewModel.notice != nil
+                            ? "exclamationmark.circle.fill"
+                            : "square.3.layers.3d.top.filled",
+                        // A refusal (e.g. Move on a curved face) takes over the
+                        // pill so the reason lands where the user is looking.
+                        text: viewModel.notice ?? (viewModel.faceMoveActive
                             ? "Move face — drag to shear the solid"
                             : viewModel.faceScaleActive
                                 ? "Scale face — drag to taper the solid"
                                 : viewModel.faceRotateActive
                                     ? "Rotate face — drag a ring to tilt the solid"
                                     : viewModel.toolContext?.curvedRegion == true
-                                        ? "Curved face selected"
-                                        : "Face selected — drag it to push or pull"
+                                        ? "Curved face — no push/pull or transform"
+                                        : "Face selected — drag it to push or pull")
                     ) {
                         Button("Done") {
                             viewModel.commitTool()
@@ -1041,6 +1045,23 @@ struct EditorView: View {
                     }
                 }
             }
+            // Transient explanation (e.g. a tool refusing a curved face). Its OWN
+            // overlay, pushed below the status pill — sharing the pill's overlay
+            // would stack the two at the same .top alignment, hiding this one.
+            .overlay(alignment: .top) {
+                if let notice = viewModel.notice {
+                    Label(notice, systemImage: "exclamationmark.circle.fill")
+                        .font(.subheadline)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 9)
+                        .background(.regularMaterial, in: Capsule())
+                        .shadow(color: .black.opacity(0.18), radius: 8, y: 2)
+                        .padding(.top, 68)
+                        .transition(.opacity)
+                        .accessibilityIdentifier("EditorNotice")
+                }
+            }
+            .animation(.easeInOut(duration: 0.2), value: viewModel.notice)
             .overlay {
                 if viewModel.isComputingBoolean {
                     VStack(spacing: 12) {

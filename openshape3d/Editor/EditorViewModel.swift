@@ -116,6 +116,30 @@ final class EditorViewModel {
     /// User-facing error surfaced as an alert.
     var errorMessage: String?
 
+    /// Short, non-blocking explanation shown as a pill — e.g. why a tool is
+    /// unavailable for the current selection. An alert would be too heavy for
+    /// something the user can simply retry differently. Clears itself.
+    private(set) var notice: String?
+    private var noticeToken = 0
+
+    func showNotice(_ text: String) {
+        notice = text
+        noticeToken &+= 1
+        let token = noticeToken
+        Task { [weak self] in
+            try? await Task.sleep(for: .seconds(3))
+            guard let self, self.noticeToken == token else { return }
+            self.notice = nil
+        }
+    }
+
+    /// The selection is a curved face, so the planar-only tools (push/pull, and
+    /// the Move/Scale/Rotate face transforms) can't act on it.
+    var selectionIsCurvedFace: Bool {
+        if case .faceSelected = mode { return toolContext?.curvedRegion == true }
+        return false
+    }
+
     /// Set by the viewport coordinator: renders the current scene offscreen.
     var thumbnailProvider: (() -> Data?)?
 
@@ -1923,9 +1947,14 @@ final class EditorViewModel {
     /// only the extrude arrow until Move is chosen). On any other selection it
     /// falls back to the point-to-point Translate.
     func beginMoveTool() {
-        // A curved face has no plane to shear along — fall through to the
-        // whole-body tool rather than arming a gizmo that can't work.
-        if case .faceSelected = mode, toolContext?.curvedRegion != true {
+        // A curved face has no plane to shear along. Say so rather than silently
+        // falling through to the whole-BODY translate, which is a different edit
+        // than the one the user asked for.
+        if selectionIsCurvedFace {
+            showNotice("Move needs a flat face — this one is curved")
+            return
+        }
+        if case .faceSelected = mode {
             axisEntryPart = nil
             scaleEntryActive = false
             faceScaleActive = false
@@ -1955,7 +1984,11 @@ final class EditorViewModel {
     /// tapers the solid (scaling the face about its centre); on any other
     /// selection it falls back to the numeric scale-factor entry.
     func beginScaleTool() {
-        if case .faceSelected = mode, toolContext?.curvedRegion != true {
+        if selectionIsCurvedFace {
+            showNotice("Scale needs a flat face — this one is curved")
+            return
+        }
+        if case .faceSelected = mode {
             axisEntryPart = nil
             scaleEntryActive = false
             faceMoveActive = false
@@ -1981,7 +2014,11 @@ final class EditorViewModel {
     /// so a ring drag rotates the face about its centre (tilt/twist the solid);
     /// on any other selection it falls back to the axis-pick body rotate.
     func beginRotateTool() {
-        if case .faceSelected = mode, toolContext?.curvedRegion != true {
+        if selectionIsCurvedFace {
+            showNotice("Rotate needs a flat face — this one is curved")
+            return
+        }
+        if case .faceSelected = mode {
             axisEntryPart = nil
             scaleEntryActive = false
             faceMoveActive = false
