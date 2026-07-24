@@ -42,7 +42,10 @@ struct MoveGizmoOverlay: View {
 
             ZStack(alignment: .topLeading) {
                 ForEach(planes, id: \.self) { planeHandle($0, ctx) }
-                ForEach(rings, id: \.self) { rotationArc($0, ctx) }
+                // A selected face translates only — hide the rotation rings.
+                if viewModel.gizmoAllowsRotation {
+                    ForEach(rings, id: \.self) { rotationArc($0, ctx) }
+                }
                 ForEach(axes, id: \.self) { axisArrow($0, ctx) }
                 pivotDot(at: center)
             }

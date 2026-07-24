@@ -828,4 +828,104 @@ nonisolated extension KernelOps {
             return mesh.union(prism).makeWatertight()
         }
     }
+
+    /// Move a planar face by an arbitrary world-space `delta`, deforming the
+    /// solid — the general Shapr3D "Move" on a face. Every mesh vertex that
+    /// lies ON the face (on its plane and inside its outline, holes excluded)
+    /// is translated by `delta`; the side walls that share those vertices skew
+    /// to follow, so moving a box's top face laterally turns it into a
+    /// parallelepiped, while moving it along the normal thickens it (matching
+    /// `pushPullPlanarFace`'s positive branch on its own axis).
+    ///
+    /// This is a topology-preserving vertex edit: it works for prismatic solids
+    /// where the moved face's boundary vertices are shared with the adjacent
+    /// walls (the common case). It does not add or remove faces.
+    static func moveFace(
+        mesh: Euclid.Mesh,
+        face: FaceTopology.PlanarFace,
+        delta: SIMD3<Double>
+    ) -> Euclid.Mesh {
+        guard simd_length(delta) > 1e-9 else { return mesh }
+        let plane = SketchPlane(
+            origin: face.origin, xAxis: face.basisX, yAxis: face.basisY
+        )
+        let normal = simd_normalize(plane.normal)
+        let d = Vector(delta.x, delta.y, delta.z)
+
+        // A vertex belongs to the face if it sits on the face's plane and its
+        // projection lies within the outline (and outside every hole). The
+        // boundary is inclusive — the face's own corner vertices lie exactly on
+        // the outline, and so do the top rim vertices of the adjoining walls, so
+        // all copies of a shared corner move together and the mesh stays welded.
+        func onFace(_ position: Vector) -> Bool {
+            let w = SIMD3<Double>(position.x, position.y, position.z)
+            guard abs(simd_dot(w - face.origin, normal)) <= Self.moveFacePlaneTolerance
+            else { return false }
+            let local = plane.toLocal(w)
+            guard Self.pointInLoopInclusive(local, face.outline) else { return false }
+            for hole in face.holes where Self.pointStrictlyInLoop(local, hole) {
+                return false
+            }
+            return true
+        }
+
+        var polygons = [Euclid.Polygon]()
+        polygons.reserveCapacity(mesh.polygons.count)
+        for polygon in mesh.polygons {
+            let vertices = polygon.vertices.map { vertex -> Euclid.Vertex in
+                onFace(vertex.position)
+                    ? Euclid.Vertex(vertex.position + d, vertex.normal)
+                    : vertex
+            }
+            // A lateral move keeps each face planar (rigid translate of its
+            // moved vertices); still guard degenerate polygons defensively.
+            if let moved = Euclid.Polygon(vertices) {
+                polygons.append(moved)
+            }
+        }
+        guard !polygons.isEmpty else { return mesh }
+        return Euclid.Mesh(polygons).makeWatertight()
+    }
+
+    /// On-plane tolerance for `moveFace`. Generous enough to catch float noise
+    /// on a face's own vertices, far tighter than any real face-to-face gap.
+    static let moveFacePlaneTolerance: Double = 1e-3
+
+    /// Point-in-polygon (ray cast) that also returns true on the boundary, so a
+    /// vertex sitting exactly on an outline edge or corner counts as "on the
+    /// face". `loop` is a closed CCW polygon in the face's 2D basis.
+    static func pointInLoopInclusive(_ p: SIMD2<Double>, _ loop: [SIMD2<Double>]) -> Bool {
+        guard loop.count >= 3 else { return false }
+        for i in 0..<loop.count {
+            let a = loop[i], b = loop[(i + 1) % loop.count]
+            if distanceToSegment(p, a, b) <= moveFacePlaneTolerance { return true }
+        }
+        return pointStrictlyInLoop(p, loop)
+    }
+
+    /// Strict ray-cast point-in-polygon (boundary excluded, used for holes).
+    static func pointStrictlyInLoop(_ p: SIMD2<Double>, _ loop: [SIMD2<Double>]) -> Bool {
+        guard loop.count >= 3 else { return false }
+        var inside = false
+        var j = loop.count - 1
+        for i in 0..<loop.count {
+            let a = loop[i], b = loop[j]
+            if (a.y > p.y) != (b.y > p.y) {
+                let t = (p.y - a.y) / (b.y - a.y)
+                if p.x < a.x + t * (b.x - a.x) { inside.toggle() }
+            }
+            j = i
+        }
+        return inside
+    }
+
+    private static func distanceToSegment(
+        _ p: SIMD2<Double>, _ a: SIMD2<Double>, _ b: SIMD2<Double>
+    ) -> Double {
+        let ab = b - a
+        let len2 = simd_length_squared(ab)
+        guard len2 > 1e-18 else { return simd_length(p - a) }
+        let t = max(0, min(1, simd_dot(p - a, ab) / len2))
+        return simd_length(p - (a + ab * t))
+    }
 }

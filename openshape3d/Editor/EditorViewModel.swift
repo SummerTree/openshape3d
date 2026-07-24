@@ -80,6 +80,14 @@ final class EditorViewModel {
     /// Highlighted gizmo part during hover/drag (set by the coordinator).
     var gizmoHighlight: GizmoPart?
 
+    /// Whether the move gizmo offers its rotation rings. A body/image rotates,
+    /// but a selected FACE only translates (a rotate would fold the solid), so
+    /// the overlay hides the rings and the viewport ignores ring hits there.
+    var gizmoAllowsRotation: Bool {
+        if case .faceSelected = mode { return false }
+        return true
+    }
+
     /// User-facing error surfaced as an alert.
     var errorMessage: String?
 
@@ -811,6 +819,13 @@ final class EditorViewModel {
             let center = image.plane.origin
             return SIMD3(Float(center.x), Float(center.y), Float(center.z))
         }
+        // A selected face carries the move gizmo at its centre, so dragging it
+        // MOVES the face (deforming the solid) — the Shapr3D face-move. The
+        // normal-direction pull-arrow stays available for push/pull.
+        if case .faceSelected = mode, let context = toolContext {
+            let c = context.plane.toWorld(context.profile.centroid)
+            return SIMD3(Float(c.x), Float(c.y), Float(c.z))
+        }
         switch mode {
         case .selected, .editingPrimitive:
             break
@@ -837,6 +852,128 @@ final class EditorViewModel {
     /// selection and moves the copy. Resets after each drag.
     var copyOnDrag = false
 
+    /// Live state for a gizmo drag that MOVES a selected face (deforming the
+    /// solid), as opposed to translating a whole body. Everything is captured
+    /// in WORLD space at drag start so each frame recomputes from the immutable
+    /// source — the gizmo delta is world-space too.
+    private struct FaceMoveSession {
+        let bodyID: BodyID
+        let sourceLocalMesh: Euclid.Mesh
+        let pivot: SIMD3<Double>
+        let worldMesh: Euclid.Mesh
+        let worldFace: FaceTopology.PlanarFace
+    }
+    private var faceMoveSession: FaceMoveSession?
+    /// The world delta the face-move drag last applied (drives the commit).
+    private var faceMoveLastDelta: SIMD3<Float> = .zero
+
+    /// Build the world-space `PlanarFace` for the currently selected face from
+    /// its tool context (plane basis + profile loops are already world/scaled).
+    private func selectedFaceWorld(_ context: ToolContext) -> FaceTopology.PlanarFace {
+        FaceTopology.PlanarFace(
+            triangles: [],
+            normal: SIMD3<Float>(Float(context.plane.normal.x),
+                                 Float(context.plane.normal.y),
+                                 Float(context.plane.normal.z)),
+            origin: context.plane.origin,
+            basisX: context.plane.xAxis,
+            basisY: context.plane.yAxis,
+            outline: context.profile.loop,
+            holes: context.holes.map(\.loop)
+        )
+    }
+
+    /// Begin a face move: snapshot the source body in world space so the drag
+    /// deforms the same immutable geometry every frame. Returns false (and
+    /// leaves `faceMoveSession` nil) when the selection isn't a movable face.
+    private func beginFaceMove() -> Bool {
+        guard case .faceSelected(let bodyID) = mode,
+              let context = toolContext, context.cylinderFace == nil,
+              let source = session.document.body(with: bodyID)
+        else { return false }
+        let local = source.euclidMesh()
+        faceMoveLastDelta = .zero
+        faceMoveSession = FaceMoveSession(
+            bodyID: bodyID,
+            sourceLocalMesh: local,
+            pivot: source.transform.translation,
+            worldMesh: local.transformed(by: source.transform.euclid),
+            worldFace: selectedFaceWorld(context)
+        )
+        return true
+    }
+
+    /// Commit a face move as one undoable step. A negligible drag reverts the
+    /// live preview and pushes nothing. The reshaped body replaces the source
+    /// (mesh baked, pivot preserved) exactly like `commitFaceOperation`; a
+    /// `.moveFace` feature node is recorded when the body is feature-produced so
+    /// the move replays after upstream edits (parametric, like push/pull).
+    private func commitFaceMove(worldDelta: SIMD3<Float>) {
+        guard let s = faceMoveSession else { return }
+        faceMoveSession = nil
+        faceMoveLastDelta = .zero
+
+        var beforeTransform = Transform3D.identity
+        beforeTransform.translation = s.pivot
+        let before = Body(
+            id: s.bodyID, name: session.document.body(with: s.bodyID)?.name ?? "Body",
+            transform: beforeTransform, primitive: nil,
+            euclidMesh: s.sourceLocalMesh, revision: 0
+        )
+
+        // Negligible drag (a tap, or a wobble): restore the source and do
+        // nothing undoable.
+        guard simd_length(worldDelta) > 1e-4,
+              let moved = faceMovedLocalMesh(worldDelta: worldDelta) else {
+            session.preview { document in
+                if let index = document.bodyIndex(of: s.bodyID) {
+                    document.bodies[index] = before
+                }
+            }
+            return
+        }
+
+        let after = Body(
+            id: s.bodyID, name: before.name, transform: beforeTransform,
+            primitive: nil, euclidMesh: moved, revision: 0
+        )
+        let replace = ReplaceBodyCommand(title: "Move Face", before: before, after: after)
+
+        if let node = moveFaceFeatureNode(bodyID: s.bodyID, worldFace: s.worldFace,
+                                          worldDelta: worldDelta) {
+            session.perform(CompositeCommand(
+                title: "Move Face", commands: [replace, AppendFeatureCommand(node: node)]))
+        } else {
+            session.perform(replace)
+        }
+        // The old face context is stale against the reshaped mesh; settle on the
+        // whole body (its gizmo), and the user re-taps to move another face.
+        toolContext = nil
+        selection = [s.bodyID]
+        mode = .selected(s.bodyID)
+        session.save()
+    }
+
+    /// A `.moveFace` feature node for a face move on a feature-produced body, or
+    /// nil when the body isn't parametric (import/seed/copy) or the face can't be
+    /// pinned — in which case the move commits as a plain mesh replacement.
+    /// (Filled in with the topological FaceRef in the parametric-replay tranche.)
+    private func moveFaceFeatureNode(
+        bodyID: BodyID, worldFace: FaceTopology.PlanarFace, worldDelta: SIMD3<Float>
+    ) -> FeatureNode? {
+        nil
+    }
+
+    /// Deform the source by moving the selected face by `worldDelta`, returning
+    /// the body-local mesh (pivot re-centred, like `commitFaceOperation`).
+    private func faceMovedLocalMesh(worldDelta: SIMD3<Float>) -> Euclid.Mesh? {
+        guard let s = faceMoveSession else { return nil }
+        let delta = SIMD3<Double>(Double(worldDelta.x), Double(worldDelta.y), Double(worldDelta.z))
+        let movedWorld = KernelOps.moveFace(mesh: s.worldMesh, face: s.worldFace, delta: delta)
+        guard !movedWorld.polygons.isEmpty else { return nil }
+        return movedWorld.translated(by: Vector(-s.pivot.x, -s.pivot.y, -s.pivot.z))
+    }
+
     func beginMove() {
         // Selected inserted image (plan §B10): the gizmo drags it in-plane.
         if selectedImage != nil {
@@ -847,6 +984,14 @@ final class EditorViewModel {
                 duplicateSelectedImageForDrag()
             }
             beginImageInteraction()
+            return
+        }
+        // Selected face: the gizmo deforms the solid by moving the face.
+        if case .faceSelected = mode {
+            axisEntryPart = nil
+            scaleEntryActive = false
+            copyOnDrag = false // Copy-on-drag is a whole-body affordance.
+            _ = beginFaceMove()
             return
         }
         guard !selection.isEmpty else { return }
@@ -897,6 +1042,25 @@ final class EditorViewModel {
             updateImageMove(delta: delta)
             return
         }
+        // Face move: deform the source and preview the reshaped body.
+        if let s = faceMoveSession {
+            faceMoveLastDelta = delta
+            guard let moved = faceMovedLocalMesh(worldDelta: delta) else { return }
+            var transform = Transform3D.identity
+            transform.translation = s.pivot
+            session.preview { document in
+                guard let index = document.bodyIndex(of: s.bodyID) else { return }
+                document.bodies[index] = Body(
+                    id: s.bodyID,
+                    name: document.bodies[index].name,
+                    transform: transform,
+                    primitive: nil,
+                    euclidMesh: moved,
+                    revision: 0
+                )
+            }
+            return
+        }
         guard let moveBefore else { return }
         let worldDelta = SIMD3<Double>(Double(delta.x), Double(delta.y), Double(delta.z))
         session.preview { document in
@@ -935,6 +1099,10 @@ final class EditorViewModel {
     func endMove() {
         if imageInteractionBaseline != nil {
             endImageInteraction()
+            return
+        }
+        if faceMoveSession != nil {
+            commitFaceMove(worldDelta: faceMoveLastDelta)
             return
         }
         guard let before = moveBefore else { return }
@@ -983,6 +1151,15 @@ final class EditorViewModel {
                 + plane.xAxis * simd_dot(delta, plane.xAxis)
                 + plane.yAxis * simd_dot(delta, plane.yAxis)
             commitImageEdit(after, title: "Move Image")
+            return
+        }
+        // Selected face: move the face by exactly `distance` along the axis,
+        // deforming the solid (the typed-distance twin of the gizmo drag).
+        if case .faceSelected = mode {
+            guard beginFaceMove() else { return }
+            let delta = SIMD3<Float>(
+                Float(axis.x * distance), Float(axis.y * distance), Float(axis.z * distance))
+            commitFaceMove(worldDelta: delta)
             return
         }
         var before = [BodyID: Transform3D]()

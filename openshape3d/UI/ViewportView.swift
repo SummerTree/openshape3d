@@ -166,7 +166,11 @@ final class ViewportCoordinator: NSObject, ViewportGestureDelegate, ViewportCame
     /// they grab (the old 3D-mesh capsule test no longer matched the visual).
     private func gizmoPart(at point: CGPoint) -> GizmoPart? {
         guard let project = gizmoProjector() else { return nil }
-        return GizmoScreenLayout.hitTest(at: point, project: project)
+        let part = GizmoScreenLayout.hitTest(at: point, project: project)
+        // A face translates, it doesn't rotate — ignore ring hits there so a
+        // grab near the (hidden) arcs doesn't try to fold the solid.
+        if let part, part.isRing, !viewModel.gizmoAllowsRotation { return nil }
+        return part
     }
 
     func gestureDoubleTapped(at point: CGPoint) {
@@ -319,9 +323,10 @@ final class ViewportCoordinator: NSObject, ViewportGestureDelegate, ViewportCame
             return false
         }
 
-        // Face selected: ONLY grabbing the pull-arrow handle pushes/pulls the
-        // face (Shapr3D). A drag anywhere else — including on the face itself —
-        // orbits, so the face never moves by accident.
+        // Face selected: the normal-direction pull-arrow push/pulls the face
+        // (checked first, unchanged). Grabbing a move-gizmo handle MOVES the
+        // face in any direction, deforming the solid (Shapr3D face-move). A drag
+        // anywhere else orbits, so the face never moves by accident.
         if case .faceSelected = viewModel.mode {
             if let arrow = viewModel.scene.pullArrow,
                hitsPullArrowScreen(point: point, arrow: arrow),
@@ -329,7 +334,21 @@ final class ViewportCoordinator: NSObject, ViewportGestureDelegate, ViewportCame
                 pullActive = true
                 return true
             }
-            return false   // drags off the arrow orbit; the face stays put
+            if let renderer, let origin = viewModel.gizmoOrigin,
+               let part = gizmoPart(at: point) {
+                let gizmo = GizmoState(
+                    origin: origin,
+                    scale: renderer.gizmoScale(origin: origin),
+                    highlighted: nil
+                )
+                if let session = GizmoDragSession(part: part, gizmo: gizmo, ray: ray) {
+                    gizmoDrag = session
+                    viewModel.gizmoHighlight = part
+                    viewModel.beginMove()
+                    return true
+                }
+            }
+            return false   // drags off the handles orbit; the face stays put
         }
 
         // Offer the drag to the gizmo when a body is selected. The part is
