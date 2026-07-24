@@ -80,6 +80,12 @@ final class EditorViewModel {
     /// Highlighted gizmo part during hover/drag (set by the coordinator).
     var gizmoHighlight: GizmoPart?
 
+    /// Set once an Apple Pencil has drawn this session. After that, a FINGER
+    /// drag in sketch mode navigates (orbits) instead of drawing — the Shapr3D
+    /// split where the Pencil creates and the finger manipulates the view. It
+    /// stays false for finger-only users, who keep drawing with a finger.
+    var sawApplePencil = false
+
     /// Whether the move gizmo offers its rotation rings. A body/image rotates,
     /// but a selected FACE only translates (a rotate would fold the solid), so
     /// the overlay hides the rings and the viewport ignores ring hits there.

@@ -20,8 +20,10 @@ protocol ViewportGestureDelegate: AnyObject {
     func gestureTapped(at point: CGPoint)
     func gestureDoubleTapped(at point: CGPoint)
     /// Offered the one-finger drag at `.began`. Return true to claim it
-    /// (gizmo drag, sketch stroke); false lets the camera orbit.
-    func gestureDragBegan(at point: CGPoint) -> Bool
+    /// (gizmo drag, sketch stroke); false lets the camera orbit. `isPencil`
+    /// distinguishes an Apple Pencil stroke from a finger so sketch mode can
+    /// route drawing to the Pencil and navigation to the finger (Shapr3D).
+    func gestureDragBegan(at point: CGPoint, isPencil: Bool) -> Bool
     func gestureDragChanged(at point: CGPoint)
     func gestureDragEnded(at point: CGPoint)
     /// Long-press (plan §B13, spec §8.3): Select Through popup listing every
@@ -30,6 +32,8 @@ protocol ViewportGestureDelegate: AnyObject {
     /// Pointer / Apple-Pencil hover moved to `point` (no touch down). Drives the
     /// line tool's rubber-band preview between taps. `nil` point = hover ended.
     func gestureHovered(at point: CGPoint?)
+    /// The Apple Pencil's double-tap (or squeeze) gesture fired.
+    func gesturePencilDoubleTapped()
 }
 
 final class ViewportGestureController: NSObject {
@@ -91,6 +95,12 @@ final class ViewportGestureController: NSObject {
         // never fire it — tap-to-place still works without a preview.
         let hover = UIHoverGestureRecognizer(target: self, action: #selector(handleHover(_:)))
         view.addGestureRecognizer(hover)
+
+        // Apple Pencil double-tap / squeeze (Pencil 2 / Pro): a quick undo, the
+        // Shapr3D-style "fix that" shortcut without reaching for the toolbar.
+        let pencil = UIPencilInteraction()
+        pencil.delegate = self
+        view.addInteraction(pencil)
     }
 
     private func redraw() {
@@ -128,7 +138,7 @@ final class ViewportGestureController: NSObject {
         case .began:
             beginInteractive()
             lastPanLocation = location
-            dragClaimed = delegate?.gestureDragBegan(at: location) ?? false
+            dragClaimed = delegate?.gestureDragBegan(at: location, isPencil: orbitTouchIsPencil) ?? false
         case .changed:
             if dragClaimed {
                 delegate?.gestureDragChanged(at: location)
@@ -245,5 +255,11 @@ extension ViewportGestureController: UIGestureRecognizerDelegate {
             orbitTouchIsPencil = touch.type == .pencil
         }
         return true
+    }
+}
+
+extension ViewportGestureController: UIPencilInteractionDelegate {
+    func pencilInteractionDidTap(_ interaction: UIPencilInteraction) {
+        delegate?.gesturePencilDoubleTapped()
     }
 }

@@ -229,9 +229,10 @@ final class ViewportCoordinator: NSObject, ViewportGestureDelegate, ViewportCame
         return Double(dx * ux + dy * uy) * worldPerPoint
     }
 
-    func gestureDragBegan(at point: CGPoint) -> Bool {
+    func gestureDragBegan(at point: CGPoint, isPencil: Bool) -> Bool {
         dragStartPoint = point
         pullActive = false
+        if isPencil { viewModel.sawApplePencil = true }
 
         // Orientation cube = universal orbit control (spec §7.2): a drag that
         // STARTS on the cube orbits the camera in EVERY mode, so the user can
@@ -252,8 +253,14 @@ final class ViewportCoordinator: NSObject, ViewportGestureDelegate, ViewportCame
             return true
         }
 
-        // Sketch mode: one-finger drags draw.
+        // Sketch mode: the Pencil draws, the finger navigates (Shapr3D). Once a
+        // Pencil has been used this session, a FINGER drag orbits instead of
+        // drawing — so you can reframe the sketch mid-stroke without switching
+        // tools. Finger-only users (no Pencil seen) keep drawing with a finger.
         if viewModel.mode.isSketching {
+            if !isPencil && viewModel.sawApplePencil {
+                return false // let the finger orbit the camera
+            }
             return viewModel.beginSketchStroke(ray: ray)
         }
 
@@ -487,6 +494,15 @@ final class ViewportCoordinator: NSObject, ViewportGestureDelegate, ViewportCame
     func gestureLongPressed(at point: CGPoint) {
         guard let ray = ray(at: point) else { return }
         viewModel.presentSelectThrough(ray: ray)
+    }
+
+    /// Apple Pencil double-tap → undo the last action (a Shapr3D-style shortcut).
+    func gesturePencilDoubleTapped() {
+        viewModel.sawApplePencil = true
+        if viewModel.session.undoStack.canUndo {
+            viewModel.session.undo()
+            sceneDidChange()
+        }
     }
 
     /// Pointer / Pencil hover → line-tool rubber-band preview between taps.
