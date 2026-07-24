@@ -86,6 +86,11 @@ final class EditorViewModel {
     /// stays false for finger-only users, who keep drawing with a finger.
     var sawApplePencil = false
 
+    /// True while the Move tool is armed on a SELECTED FACE: the move gizmo is
+    /// shown and dragging it shears the solid (moves the face). A face selection
+    /// on its own shows only the extrude arrow; picking Move flips this on.
+    private(set) var faceMoveActive = false
+
     /// Whether the move gizmo offers its rotation rings. A body/image rotates,
     /// but a selected FACE only translates (a rotate would fold the solid), so
     /// the overlay hides the rings and the viewport ignores ring hits there.
@@ -833,10 +838,11 @@ final class EditorViewModel {
             let center = image.plane.origin
             return SIMD3(Float(center.x), Float(center.y), Float(center.z))
         }
-        // A selected face carries the move gizmo at its centre, so dragging it
-        // MOVES the face (deforming the solid) — the Shapr3D face-move. The
-        // normal-direction pull-arrow stays available for push/pull.
-        if case .faceSelected = mode, let context = toolContext {
+        // A selected face shows only the extrude pull-arrow by DEFAULT. The move
+        // gizmo (which shears the solid by moving the face) appears only after
+        // the user picks Move from the Transform menu — the Shapr3D flow, where
+        // Move is an explicit tool, not something a face selection auto-shows.
+        if case .faceSelected = mode, faceMoveActive, let context = toolContext {
             let c = context.plane.toWorld(context.profile.centroid)
             return SIMD3(Float(c.x), Float(c.y), Float(c.z))
         }
@@ -964,8 +970,9 @@ final class EditorViewModel {
             session.perform(replace)
         }
         // The old face context is stale against the reshaped mesh; settle on the
-        // whole body (its gizmo), and the user re-taps to move another face.
+        // whole body (its gizmo), and the user re-taps + Move to shear again.
         toolContext = nil
+        faceMoveActive = false
         selection = [s.bodyID]
         mode = .selected(s.bodyID)
         session.save()
@@ -1484,6 +1491,35 @@ final class EditorViewModel {
         if case .translating = mode {
             mode = .idle
         }
+    }
+
+    /// Transform-menu **Move**. On a selected FACE it arms the move gizmo that
+    /// shears the solid (keeping the face context — a plain face selection shows
+    /// only the extrude arrow until Move is chosen). On any other selection it
+    /// falls back to the point-to-point Translate.
+    func beginMoveTool() {
+        if case .faceSelected = mode {
+            axisEntryPart = nil
+            scaleEntryActive = false
+            faceMoveActive = true
+            return
+        }
+        beginTranslatePick()
+    }
+
+    func cancelMoveTool() {
+        if faceMoveActive {
+            faceMoveActive = false
+            return
+        }
+        cancelTranslate()
+    }
+
+    /// True while the Move tool is armed (face-shear gizmo or body translate).
+    var isMoveToolActive: Bool {
+        if faceMoveActive { return true }
+        if case .translating = mode { return true }
+        return false
     }
 
     func beginAlignPick() {
@@ -3118,6 +3154,7 @@ final class EditorViewModel {
                 faceTriangles: face.triangles,
                 kind: .extrude(distance: 0)
             )
+            faceMoveActive = false // a fresh face selection shows extrude only
             mode = .faceSelected(body.id)
             return
         }
@@ -4505,6 +4542,7 @@ final class EditorViewModel {
         toolContext = nil
         extrudeDragAnchor = nil
         cachedPullWorldBody = nil
+        faceMoveActive = false
         switch mode {
         case .extruding, .faceSelected, .pickingRevolveAxis,
              .pickingSweepPath, .pickingLoftProfiles:
