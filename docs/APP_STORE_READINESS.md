@@ -66,6 +66,47 @@ and `OS3D_FRESH` only creates a new empty project (it does not delete data). Thi
 is hygiene, not a security issue. Worth wrapping in `#if DEBUG` so the paths and
 their seed assets don't ship.
 
+## 1b. iPhone layout is broken — decide iPhone vs iPad-only
+
+The app declares iPhone support (`UIDeviceFamily = [1, 2]`) but the bottom bars
+are unusable at iPhone width. On an iPhone 17 Pro Max:
+
+- **Primitive-dimension bar**: labels truncate to single characters ("E", "c",
+  "x"), the bar clips vertically, and the Copy button overlaps it.
+  → `marketing/bugs/iphone-primitive-bar-truncated.png`
+- **Extrude bar** (much worse): "Extrude", "Offset Plane" and "Cancel" each wrap
+  **vertically, one letter per line**; the Extrude button renders as an
+  unlabeled blue pill; the bar eats ~40% of the screen; and the tool palette is
+  cut off so Material / Select / Delete are unreachable.
+  → `marketing/bugs/iphone-extrude-bar-broken.png`
+
+Likely cause: the bars lay out as a single fixed `HStack` sized for iPad width,
+so at iPhone width SwiftUI compresses each label to its minimum and wraps
+per-character.
+
+Two paths — this is a product decision:
+
+- **(A) Make the bars adaptive** — compact size class gets a scrollable/2-row
+  layout, icons instead of words, `lineLimit(1)` + `minimumScaleFactor`, and a
+  scrollable tool palette.
+- **(B) Ship iPad-only for 1.0** — `TARGETED_DEVICE_FAMILY = 2`. Common for CAD
+  apps, removes the entire problem class, and means only iPad screenshots are
+  needed.
+
+Reviewers do exercise iPhone layout when an app declares iPhone support, so
+shipping as-is on both families invites a rejection.
+
+## 2b. Fillet tears curved solids
+
+Filleting edges of a **twisted** solid produces torn, self-intersecting geometry
+rather than a blend or a clean refusal.
+→ `marketing/bugs/fillet-on-twisted-solid-broken.png`
+
+Fillet is correct on prismatic edges (verified on a plain box — clean rounded
+corner). A twisted solid's corner rails are helical, outside the documented
+mesh-fillet v1 envelope; the problem is that it fails **destructively** instead
+of detecting the unsupported input and refusing.
+
 ## Verified good
 
 - **Release build for device (arm64) succeeds.** Only warning is `sprintf`
@@ -81,3 +122,24 @@ their seed assets don't ship.
   `NSPhotoLibraryUsageDescription` nor `NSCameraUsageDescription`.
 - **Orientations**: all four on iPad, three on iPhone.
 - **746 unit tests pass.**
+
+## Feature walkthrough on iPad — all worked
+
+Driven by hand on an iPad Air 13". Everything below produced correct geometry
+and correct measurements:
+
+| Flow | Result |
+| --- | --- |
+| Sketch on the ground plane (Rect) | ✓ |
+| Extrude to a solid, live preview + numeric distance | ✓ Volume 0.93 mm³ |
+| Face select → Transform ▸ Rotate → **twist** | ✓ smooth screw walls, top face area preserved |
+| Modify ▸ Fillet on a plain box | ✓ clean rounded edge |
+| **Sketch on a face** of a filleted solid | ✓ strokes clearly visible, stayed on the face |
+| **Pass-through cut** (sketch on face → extrude −5.5 mm, Auto → subtract) | ✓ real opening, interior walls visible |
+| X-Ray display mode | ✓ shows the cut passing clean through |
+| Display modes menu (Shaded / No Edges / Wireframe / X-Ray / Hidden Edges) | ✓ |
+| Parametric History panel | ✓ Extrude node with editable value |
+
+Note: the History panel is **empty for debug-seeded bodies** — the seed adds a
+body directly and bypasses the feature graph. That is expected, not a bug; a
+real sketch→extrude records a feature node as it should.
