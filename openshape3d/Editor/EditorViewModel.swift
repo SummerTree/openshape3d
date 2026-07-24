@@ -891,6 +891,8 @@ final class EditorViewModel {
     private var faceMoveSession: FaceMoveSession?
     /// The world delta the face-move drag last applied (drives the commit).
     private var faceMoveLastDelta: SIMD3<Float> = .zero
+    /// Bumped every preview frame so the GPU re-uploads the deforming mesh.
+    private var faceMovePreviewRevision: UInt64 = 0
 
     /// Build the world-space `PlanarFace` for the currently selected face from
     /// its tool context (plane basis + profile loops are already world/scaled).
@@ -1090,10 +1092,16 @@ final class EditorViewModel {
             updateImageMove(delta: delta)
             return
         }
-        // Face move: deform the source and preview the reshaped body.
+        // Face move: deform the source and preview the reshaped body. The
+        // revision must CHANGE every frame — the GPU cache re-uploads a mesh only
+        // when meshRevision differs (GPUResourceCache), so a constant revision
+        // would freeze the preview on the first frame. A high tag bit keeps these
+        // transient revisions from colliding with real ones (like blend/shell).
         if let s = faceMoveSession {
             faceMoveLastDelta = delta
             guard let moved = faceMovedLocalMesh(s, worldDelta: delta) else { return }
+            faceMovePreviewRevision &+= 1
+            let revision = (UInt64(1) << 60) | faceMovePreviewRevision
             var transform = Transform3D.identity
             transform.translation = s.pivot
             session.preview { document in
@@ -1104,7 +1112,7 @@ final class EditorViewModel {
                     transform: transform,
                     primitive: nil,
                     euclidMesh: moved,
-                    revision: 0
+                    revision: revision
                 )
             }
             return
