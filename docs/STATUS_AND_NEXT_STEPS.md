@@ -161,6 +161,39 @@ multi-edge additivity, error surfacing),
    toolchain (Xcode 26.2 / Swift 6.2) — deterministic malloc crash whenever a
    test lets such an instance go out of scope (bit `AppSettings`). Fix: give
    the class an explicit `nonisolated deinit {}` (no teardown work to isolate).
+9. **Bottom bars are size-class adaptive**: every contextual bar goes through
+   `AdaptiveBar` (`UI/AdaptiveBar.swift`) — one row at regular width; stacked
+   scrollable rows (controls / actions / optional footer) at compact width;
+   and back to a *single* scrolling row when the height is also compact
+   (landscape phone), where three stacked rows cost over half the screen and
+   scroll most of the tool palette out of reach.
+   Build new bars with it rather than a bare `HStack`: at iPhone width a fixed
+   HStack compresses each label to its minimum and wraps it one character per
+   line. Keep button titles as words — the UI suite matches several by title
+   (`buttons["Extrude"]`, `["Cancel"]`, `["Revolve"]`, `["Done"]`), so
+   icon-only compact labels would break those tests.
+10. **Hierarchical `.secondary` disappears inside a `ScrollView` over a
+   material.** `.foregroundStyle(.secondary)` is a *hierarchical* style, drawn
+   with vibrancy against `.regularMaterial`; vibrancy does not composite inside
+   a ScrollView, so the text renders fully transparent while still taking its
+   layout width (the bars read "Box [4] [4] [4]" with no W/D/H). `Color
+   .secondary` is hierarchical too and is NOT an escape hatch. Use the concrete
+   `.barLabel` (`Color(uiColor: .secondaryLabel)`) for bar captions and for
+   `.tint` on off-state bar buttons. This is invisible to XCUITest — a
+   transparent label still `exists` and is `isHittable` — so it needs a visual
+   check, not a test.
+11. **Advisory copy in a bar goes through `BarHint`**, which renders nothing at
+   compact width. A hint is the least important thing in the row and the most
+   expensive: "Drag the arrow, or type a distance" pushed Offset Plane's own
+   Distance field off the right edge. Controls too wide to share a compact row
+   (the Pattern pickers, the image Opacity slider) move to the footer instead —
+   pass `showsFooter: isCompact`, because an `if` inside the footer builder
+   yields `_ConditionalContent`, not `EmptyView`, and would still claim the
+   row's stack spacing at regular width.
+12. **Bottom-edge insets must be measured, not hardcoded.** The palette and the
+   bottom corner chips inset above the bars via `bottomBarInset`, fed by
+   `BottomBarHeightKey`. The old fixed 96pt assumed an iPad-height bar and let
+   the Copy badge sit on top of a taller compact bar.
 
 ---
 

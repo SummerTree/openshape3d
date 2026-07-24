@@ -173,9 +173,18 @@ struct EditorView: View {
     @State private var exportDocument: ExportDocument?
     @State private var showItemsPanel = false
     @State private var showSettings = false
+    /// Measured height of the bottom bar stack, fed by `BottomBarHeightKey`.
+    /// The palette and the corner chips inset above it — see `bottomBarInset`.
+    @State private var bottomBarHeight: CGFloat = 0
     /// App-wide preferences; reads in body are Observation-tracked so unit /
     /// palette-side changes re-render live.
     private var settings: AppSettings { AppSettings.shared }
+
+    /// How far the tool palette and the bottom corner chips must sit above the
+    /// bottom edge to clear the bars. 96pt is the historical iPad value and
+    /// stays the floor so nothing moves on iPad; a taller compact bar pushes
+    /// them further up instead of being overlapped by them.
+    private var bottomBarInset: CGFloat { max(96, bottomBarHeight + 16) }
     @State private var showImporter = false
     @State private var showScreenshotOptions = false
     /// Insert Image (plan §B10): Photos picker + image file importer.
@@ -328,14 +337,15 @@ struct EditorView: View {
         let value = settings.unit.binding(Binding(
             get: { viewModel.blendValue },
             set: { viewModel.blendValue = max(0, $0) }))
-        return HStack(spacing: 12) {
+        return AdaptiveBar(style: .capsule, spacing: 12) {
             Image(systemName: kind == .chamfer ? "square.on.circle" : "circle.circle")
             Text(viewModel.blendSelectedEdges.isEmpty
                  ? "Tap edges to \(kind.title.lowercased())"
                  : "\(viewModel.blendSelectedEdges.count) edge\(viewModel.blendSelectedEdges.count == 1 ? "" : "s") selected")
                 .font(.subheadline)
+                .fixedSize()
             Divider().frame(height: 20)
-            Text(kind.valueLabel).font(.caption).foregroundStyle(.secondary)
+            Text(kind.valueLabel).font(.caption).foregroundStyle(.barLabel).fixedSize()
             TextField(settings.unit.symbol, value: value,
                       format: .number.precision(.fractionLength(0...3)))
                 .textFieldStyle(.roundedBorder)
@@ -343,7 +353,8 @@ struct EditorView: View {
                 .multilineTextAlignment(.trailing)
                 .keyboardType(.decimalPad)
                 .accessibilityIdentifier("BlendValueField")
-            Text(settings.unit.symbol).font(.caption).foregroundStyle(.secondary)
+            Text(settings.unit.symbol).font(.caption).foregroundStyle(.barLabel).fixedSize()
+        } actions: {
             Button("Cancel") { viewModel.cancelBlend() }
                 .buttonStyle(.bordered)
                 .controlSize(.small)
@@ -355,10 +366,6 @@ struct EditorView: View {
                 .disabled(!viewModel.canCommitBlend)
                 .accessibilityIdentifier("BlendApply")
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 10)
-        .background(.regularMaterial, in: Capsule())
-        .shadow(color: .black.opacity(0.15), radius: 8, y: 2)
     }
 
     /// Shell bar (Phase E, spec §4.4): pick prompt, wall-thickness field,
@@ -367,7 +374,7 @@ struct EditorView: View {
         let value = settings.unit.binding(Binding(
             get: { viewModel.shellThickness },
             set: { viewModel.shellThickness = max(0, $0) }))
-        return HStack(spacing: 12) {
+        return AdaptiveBar(style: .capsule, spacing: 12) {
             Image(systemName: "cube.transparent")
             Text(viewModel.shellBodyID == nil
                  ? "Tap a body to shell"
@@ -375,8 +382,9 @@ struct EditorView: View {
                     ? "Tap faces to open (or Apply for a closed hollow)"
                     : "\(viewModel.shellSelectedFaces.count) face\(viewModel.shellSelectedFaces.count == 1 ? "" : "s") open")
                 .font(.subheadline)
+                .fixedSize()
             Divider().frame(height: 20)
-            Text("Thickness").font(.caption).foregroundStyle(.secondary)
+            Text("Thickness").font(.caption).foregroundStyle(.barLabel).fixedSize()
             TextField(settings.unit.symbol, value: value,
                       format: .number.precision(.fractionLength(0...3)))
                 .textFieldStyle(.roundedBorder)
@@ -384,7 +392,8 @@ struct EditorView: View {
                 .multilineTextAlignment(.trailing)
                 .keyboardType(.decimalPad)
                 .accessibilityIdentifier("ShellThicknessField")
-            Text(settings.unit.symbol).font(.caption).foregroundStyle(.secondary)
+            Text(settings.unit.symbol).font(.caption).foregroundStyle(.barLabel).fixedSize()
+        } actions: {
             Button("Cancel") { viewModel.cancelShell() }
                 .buttonStyle(.bordered)
                 .controlSize(.small)
@@ -396,10 +405,6 @@ struct EditorView: View {
                 .disabled(!viewModel.canCommitShell)
                 .accessibilityIdentifier("ShellApply")
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 10)
-        .background(.regularMaterial, in: Capsule())
-        .shadow(color: .black.opacity(0.15), radius: 8, y: 2)
     }
 
     /// Marquee rectangle over the viewport (plan §B13, spec §8.2). Standard
@@ -711,7 +716,7 @@ struct EditorView: View {
                     // without the inset the last tools (Delete) can sit under
                     // the numeric bar and become untappable in portrait.
                     .padding(.top, 8)
-                    .padding(.bottom, 96)
+                    .padding(.bottom, bottomBarInset)
             }
             .overlay(alignment: .bottom) {
                 VStack(spacing: 10) {
@@ -730,6 +735,10 @@ struct EditorView: View {
                 }
                 .padding(.horizontal, 20)
                 .padding(.bottom, 12)
+                .measuringBottomBarHeight()
+            }
+            .onPreferenceChange(BottomBarHeightKey.self) { height in
+                bottomBarHeight = height
             }
             .overlay(alignment: .topTrailing) {
                 // Items Manager sidebar (spec §11).
@@ -772,7 +781,7 @@ struct EditorView: View {
                     .background(.regularMaterial, in: Capsule())
                     .accessibilityIdentifier("CopyBadge")
                     .padding(.trailing, 16)
-                    .padding(.bottom, 96)
+                    .padding(.bottom, bottomBarInset)
                 } else if viewModel.mode.isSketching,
                           !viewModel.selectedSketchEntityIDs.isEmpty {
                     // Sketch Copy chip (spec §1.10): the next selection-gizmo
@@ -788,7 +797,7 @@ struct EditorView: View {
                     .background(.regularMaterial, in: Capsule())
                     .accessibilityIdentifier("SketchCopyBadge")
                     .padding(.trailing, 16)
-                    .padding(.bottom, 96)
+                    .padding(.bottom, bottomBarInset)
                 } else if viewModel.sectionState != nil {
                     // Section badges (spec §16.1): Flip switches the visible
                     // side; Off restores the full model.
@@ -812,7 +821,7 @@ struct EditorView: View {
                     .tint(Color.secondary)
                     .background(.regularMaterial, in: Capsule())
                     .padding(.trailing, 16)
-                    .padding(.bottom, 96)
+                    .padding(.bottom, bottomBarInset)
                 }
             }
             .overlay(alignment: .top) {

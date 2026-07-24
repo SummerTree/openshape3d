@@ -16,6 +16,12 @@ struct NumericInputBar: View {
     @State private var axisDistance: Double = 0
     @FocusState private var focusedField: Int?
 
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+
+    /// A couple of bars carry controls too wide to share one row at iPhone
+    /// width and move them to the bar's own row instead.
+    private var isCompact: Bool { horizontalSizeClass == .compact }
+
     var body: some View {
         if let part = viewModel.axisEntryPart {
             axisMoveBar(part)
@@ -54,15 +60,17 @@ struct NumericInputBar: View {
         } else if case .sketching(_, .some(.polygon)) = viewModel.mode {
             polygonBar
         } else if let body = viewModel.editingPrimitiveBody, let spec = body.primitive {
-            HStack(spacing: 16) {
+            AdaptiveBar {
                 Text(spec.displayName)
                     .font(.headline)
+                    .fixedSize()
 
                 ForEach(Array(fieldLabels(for: spec).enumerated()), id: \.offset) { index, label in
                     HStack(spacing: 6) {
                         Text(label)
                             .font(.caption)
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(.barLabel)
+                            .fixedSize()
                         TextField(label, value: AppSettings.shared.unit.binding(binding(at: index)),
                                   format: .number.precision(.fractionLength(0...3)))
                             .keyboardType(.decimalPad)
@@ -74,17 +82,13 @@ struct NumericInputBar: View {
                 }
 
                 Spacer()
-
+            } actions: {
                 Button("Done") {
                     commit()
                     viewModel.finishEditing()
                 }
                 .buttonStyle(.borderedProminent)
             }
-            .padding(.horizontal, 20)
-            .padding(.vertical, 12)
-            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16))
-            .shadow(color: .black.opacity(0.15), radius: 10, y: 3)
             .onAppear { values = fieldValues(for: spec) }
             .onChange(of: body.id) {
                 if let spec = viewModel.editingPrimitiveBody?.primitive {
@@ -100,14 +104,15 @@ struct NumericInputBar: View {
 
     /// Exact-distance move along a tapped gizmo arrow (spec §5.1).
     private func axisMoveBar(_ part: GizmoPart) -> some View {
-        HStack(spacing: 16) {
+        AdaptiveBar {
             Text("Move \(part.axisName)")
                 .font(.headline)
+                .fixedSize()
 
             HStack(spacing: 6) {
                 Text("Distance")
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(.barLabel)
                     .fixedSize()
                 TextField("Distance", value: AppSettings.shared.unit.binding($axisDistance),
                           format: .number.precision(.fractionLength(0...3)))
@@ -118,7 +123,7 @@ struct NumericInputBar: View {
             }
 
             Spacer()
-
+        } actions: {
             Button("Cancel") {
                 viewModel.cancelAxisDistanceEntry()
             }
@@ -127,27 +132,22 @@ struct NumericInputBar: View {
             }
             .buttonStyle(.borderedProminent)
         }
-        .padding(.horizontal, 20)
-        .padding(.vertical, 12)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16))
-        .shadow(color: .black.opacity(0.15), radius: 10, y: 3)
         .onAppear { axisDistance = 0 }
     }
 
     /// Uniform scale about the body pivot (spec §5.4): factor field, Copy
     /// badge (scales a duplicate), commit via Apply or an empty-grid tap.
     private var scaleBar: some View {
-        HStack(spacing: 16) {
+        AdaptiveBar {
             Text("Scale")
                 .font(.headline)
-            Text("Uniform, about the body pivot")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+                .fixedSize()
+            BarHint("Uniform, about the body pivot")
 
             HStack(spacing: 6) {
                 Text("Factor")
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(.barLabel)
                     .fixedSize()
                 TextField(
                     "Factor",
@@ -168,11 +168,11 @@ struct NumericInputBar: View {
                 viewModel.scaleCopyOnCommit.toggle()
             }
             .buttonStyle(.bordered)
-            .tint(viewModel.scaleCopyOnCommit ? Color.blue : Color.secondary)
+            .tint(viewModel.scaleCopyOnCommit ? Color.blue : .barLabel)
             .accessibilityIdentifier("ScaleCopyBadge")
 
             Spacer()
-
+        } actions: {
             Button("Cancel") {
                 viewModel.cancelScaleEntry()
             }
@@ -182,26 +182,21 @@ struct NumericInputBar: View {
             .buttonStyle(.borderedProminent)
             .accessibilityIdentifier("ScaleApply")
         }
-        .padding(.horizontal, 20)
-        .padding(.vertical, 12)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16))
-        .shadow(color: .black.opacity(0.15), radius: 10, y: 3)
     }
 
     /// Rotate Around Axis (spec §5.3): angle entry once the axis is set;
     /// drags scrub in 5° steps, typed values are exact.
     private var rotateAxisBar: some View {
-        HStack(spacing: 16) {
+        AdaptiveBar {
             Text("Rotate")
                 .font(.headline)
-            Text("Drag to rotate (5° steps), or type an angle")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+                .fixedSize()
+            BarHint("Drag to rotate (5° steps), or type an angle")
 
             HStack(spacing: 6) {
                 Text("Angle")
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(.barLabel)
                     .fixedSize()
                 TextField(
                     "Angle",
@@ -219,7 +214,7 @@ struct NumericInputBar: View {
             }
 
             Spacer()
-
+        } actions: {
             Button("Cancel") {
                 viewModel.cancelRotateAxis()
             }
@@ -229,10 +224,6 @@ struct NumericInputBar: View {
             .buttonStyle(.borderedProminent)
             .accessibilityIdentifier("RotateAxisApply")
         }
-        .padding(.horizontal, 20)
-        .padding(.vertical, 12)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16))
-        .shadow(color: .black.opacity(0.15), radius: 10, y: 3)
     }
 
     /// Pattern bar (plan §B5): Linear/Circular, axis, count, spacing/angle;
@@ -243,38 +234,21 @@ struct NumericInputBar: View {
             // Sketch patterns are in-plane: X/Y only; circular needs no axis.
             return state.kind == .linear ? [.x, .y] : []
         }()
-        return HStack(spacing: 16) {
+        // The two segmented pickers are ~220pt wide together — at iPhone width
+        // they pushed Count and Spacing off the right edge, so the bar opened
+        // with neither of its numbers visible. Compact width gives them their
+        // own row instead; regular width keeps the original single row.
+        return AdaptiveBar(showsFooter: isCompact) {
             Text("Pattern")
                 .font(.headline)
-
-            Picker("Type", selection: Binding(
-                get: { viewModel.patternState?.kind ?? .linear },
-                set: { viewModel.patternState?.kind = $0 }
-            )) {
-                ForEach(EditorViewModel.PatternState.Kind.allCases, id: \.self) { kind in
-                    Text(kind.rawValue).tag(kind)
-                }
-            }
-            .pickerStyle(.segmented)
-            .fixedSize()
-
-            if !axisChoices.isEmpty {
-                Picker("Axis", selection: Binding(
-                    get: { viewModel.patternState?.axis ?? .x },
-                    set: { viewModel.patternState?.axis = $0 }
-                )) {
-                    ForEach(axisChoices, id: \.self) { axis in
-                        Text(axis.rawValue).tag(axis)
-                    }
-                }
-                .pickerStyle(.segmented)
                 .fixedSize()
-            }
+
+            if !isCompact { patternPickers(axisChoices) }
 
             HStack(spacing: 6) {
                 Text("Count")
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(.barLabel)
                     .fixedSize()
                 TextField(
                     "Count",
@@ -294,7 +268,7 @@ struct NumericInputBar: View {
                 HStack(spacing: 6) {
                     Text("Spacing")
                         .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(.barLabel)
                         .fixedSize()
                     TextField(
                         "Spacing",
@@ -313,7 +287,7 @@ struct NumericInputBar: View {
                 HStack(spacing: 6) {
                     Text("Angle")
                         .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(.barLabel)
                         .fixedSize()
                     TextField(
                         "Angle",
@@ -331,7 +305,7 @@ struct NumericInputBar: View {
             }
 
             Spacer()
-
+        } actions: {
             Button("Cancel") {
                 viewModel.cancelPattern()
             }
@@ -340,25 +314,83 @@ struct NumericInputBar: View {
             }
             .buttonStyle(.borderedProminent)
             .accessibilityIdentifier("PatternApply")
+        } footer: {
+            patternPickers(axisChoices)
         }
-        .padding(.horizontal, 20)
-        .padding(.vertical, 12)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16))
-        .shadow(color: .black.opacity(0.15), radius: 10, y: 3)
+    }
+
+    /// Linear/Circular and the axis choice — one row at regular width, moved to
+    /// the bar's own row at compact width.
+    @ViewBuilder
+    private func patternPickers(_ axisChoices: [EditorViewModel.PatternState.Axis]) -> some View {
+        Picker("Type", selection: Binding(
+            get: { viewModel.patternState?.kind ?? .linear },
+            set: { viewModel.patternState?.kind = $0 }
+        )) {
+            ForEach(EditorViewModel.PatternState.Kind.allCases, id: \.self) { kind in
+                Text(kind.rawValue).tag(kind)
+            }
+        }
+        .pickerStyle(.segmented)
+        .fixedSize()
+
+        if !axisChoices.isEmpty {
+            Picker("Axis", selection: Binding(
+                get: { viewModel.patternState?.axis ?? .x },
+                set: { viewModel.patternState?.axis = $0 }
+            )) {
+                ForEach(axisChoices, id: \.self) { axis in
+                    Text(axis.rawValue).tag(axis)
+                }
+            }
+            .pickerStyle(.segmented)
+            .fixedSize()
+        }
+    }
+
+    /// Opacity label + slider, sized for whichever row it lands on.
+    private func opacityControl(_ image: InsertedImage, width: CGFloat) -> some View {
+        HStack(spacing: 6) {
+            Text("Opacity")
+                .font(.caption)
+                .foregroundStyle(.barLabel)
+                .fixedSize()
+            Slider(
+                value: Binding(
+                    get: { viewModel.selectedImage?.opacity ?? image.opacity },
+                    set: { viewModel.setImageOpacity($0) }
+                ),
+                in: 0...1,
+                onEditingChanged: { editing in
+                    if editing {
+                        viewModel.beginImageInteraction()
+                    } else {
+                        viewModel.endImageInteraction()
+                    }
+                }
+            )
+            .frame(width: width)
+            .accessibilityIdentifier("ImageOpacitySlider")
+        }
     }
 
     /// Selected inserted image (plan §B10): size field (max dimension, aspect
     /// preserved), opacity slider, and delete — all through UpdateImageCommand.
     private func imageBar(_ image: InsertedImage) -> some View {
-        HStack(spacing: 16) {
+        // At iPhone width the opacity slider ran off the right edge, and a
+        // slider sharing a row with a horizontal ScrollView competes with it
+        // for the drag. Giving it the bar's own row solves both: alone it fits,
+        // so the scroll view never engages and the slider owns the gesture.
+        AdaptiveBar(showsFooter: isCompact) {
             Text(image.name)
                 .font(.headline)
                 .lineLimit(1)
+                .fixedSize()
 
             HStack(spacing: 6) {
                 Text("Size")
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(.barLabel)
                     .fixedSize()
                 TextField(
                     "Size",
@@ -377,31 +409,10 @@ struct NumericInputBar: View {
                 .accessibilityIdentifier("ImageSizeField")
             }
 
-            HStack(spacing: 6) {
-                Text("Opacity")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize()
-                Slider(
-                    value: Binding(
-                        get: { viewModel.selectedImage?.opacity ?? image.opacity },
-                        set: { viewModel.setImageOpacity($0) }
-                    ),
-                    in: 0...1,
-                    onEditingChanged: { editing in
-                        if editing {
-                            viewModel.beginImageInteraction()
-                        } else {
-                            viewModel.endImageInteraction()
-                        }
-                    }
-                )
-                .frame(width: 140)
-                .accessibilityIdentifier("ImageOpacitySlider")
-            }
+            if !isCompact { opacityControl(image, width: 140) }
 
             Spacer()
-
+        } actions: {
             Button("Delete", role: .destructive) {
                 viewModel.deleteImage(image.id)
             }
@@ -411,25 +422,22 @@ struct NumericInputBar: View {
             }
             .buttonStyle(.borderedProminent)
             .accessibilityIdentifier("ImageDone")
+        } footer: {
+            opacityControl(image, width: 220)
         }
-        .padding(.horizontal, 20)
-        .padding(.vertical, 12)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16))
-        .shadow(color: .black.opacity(0.15), radius: 10, y: 3)
     }
 
     private var polygonBar: some View {
-        HStack(spacing: 16) {
+        AdaptiveBar {
             Text("Polygon")
                 .font(.headline)
-            Text("Drag from center to a vertex")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+                .fixedSize()
+            BarHint("Drag from center to a vertex")
 
             HStack(spacing: 6) {
                 Text("Sides")
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(.barLabel)
                     .fixedSize()
                 TextField(
                     "Sides",
@@ -455,21 +463,18 @@ struct NumericInputBar: View {
 
             Spacer()
         }
-        .padding(.horizontal, 20)
-        .padding(.vertical, 12)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16))
-        .shadow(color: .black.opacity(0.15), radius: 10, y: 3)
     }
 
     /// Radial push/pull on a cylinder edits the diameter (Shapr3D Offset Face).
     private func diameterBar(_ context: EditorViewModel.ToolContext, radius: Double) -> some View {
-        HStack(spacing: 16) {
+        AdaptiveBar {
             Text("Diameter")
                 .font(.headline)
+                .fixedSize()
             HStack(spacing: 6) {
                 Text("⌀")
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(.barLabel)
                     .fixedSize()
                 TextField(
                     "Diameter",
@@ -485,14 +490,11 @@ struct NumericInputBar: View {
                 .onSubmit { viewModel.commitTool() }
             }
             Spacer()
+        } actions: {
             Button("Cancel") { viewModel.cancelTool() }
             Button("Apply") { viewModel.commitTool() }
                 .buttonStyle(.borderedProminent)
         }
-        .padding(.horizontal, 20)
-        .padding(.vertical, 12)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16))
-        .shadow(color: .black.opacity(0.15), radius: 10, y: 3)
     }
 
     private func extrudeBar(_ context: EditorViewModel.ToolContext) -> some View {
@@ -503,75 +505,76 @@ struct NumericInputBar: View {
     }
 
     private func extrudeBarBody(_ context: EditorViewModel.ToolContext) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 16) {
-                Text("Extrude")
-                    .font(.headline)
+        AdaptiveBar {
+            Text("Extrude")
+                .font(.headline)
+                .fixedSize()
 
-                HStack(spacing: 6) {
-                    Text("Distance")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .fixedSize()
-                    TextField(
-                        "Distance",
-                        value: AppSettings.shared.unit.binding(Binding(
-                            get: { viewModel.toolContext?.distance ?? 0 },
-                            set: { viewModel.setExtrudeDistance($0) }
-                        )),
-                        format: .number.precision(.fractionLength(0...2))
-                    )
-                    .keyboardType(.numbersAndPunctuation)
-                    .textFieldStyle(.roundedBorder)
-                    .frame(width: 90)
-                    .onSubmit { viewModel.commitTool() }
-                }
-
-                // Symmetric sides: distance is per-side, total depth 2×.
-                Button("Symmetric") {
-                    viewModel.setExtrudeSymmetric(!context.symmetric)
-                }
-                .buttonStyle(.bordered)
-                .tint(context.symmetric ? Color.accentColor : Color.secondary)
-
-                Spacer()
-
-                // Sketch profiles can revolve about one of their lines, sweep
-                // along a path, loft to more profiles, or coil into a helix.
-                if context.sketchID != nil {
-                    Button("Revolve") {
-                        viewModel.beginRevolveAxisPick()
-                    }
-                    Button("Sweep") {
-                        viewModel.beginSweepPathPick()
-                    }
-                    Button("Loft") {
-                        viewModel.beginLoftProfilePick()
-                    }
-                    Button("Helix") {
-                        viewModel.showHelixOptions = true
-                    }
-                }
-                // Face pulls can become an offset construction plane instead.
-                if context.sourceBody != nil {
-                    Button("Offset Plane") {
-                        viewModel.beginOffsetPlane()
-                    }
-                }
-                Button("Cancel") {
-                    viewModel.cancelTool()
-                }
-                Button("Extrude") {
-                    viewModel.commitTool()
-                }
-                .buttonStyle(.borderedProminent)
+            HStack(spacing: 6) {
+                Text("Distance")
+                    .font(.caption)
+                    .foregroundStyle(.barLabel)
+                    .fixedSize()
+                TextField(
+                    "Distance",
+                    value: AppSettings.shared.unit.binding(Binding(
+                        get: { viewModel.toolContext?.distance ?? 0 },
+                        set: { viewModel.setExtrudeDistance($0) }
+                    )),
+                    format: .number.precision(.fractionLength(0...2))
+                )
+                .keyboardType(.numbersAndPunctuation)
+                .textFieldStyle(.roundedBorder)
+                .frame(width: 90)
+                .onSubmit { viewModel.commitTool() }
             }
 
+            // Symmetric sides: distance is per-side, total depth 2×.
+            Button("Symmetric") {
+                viewModel.setExtrudeSymmetric(!context.symmetric)
+            }
+            .buttonStyle(.bordered)
+            // Concrete grey, not hierarchical `.secondary` — see `.barLabel`.
+            .tint(context.symmetric ? Color.accentColor : .barLabel)
+
+            Spacer()
+        } actions: {
+            // Sketch profiles can revolve about one of their lines, sweep
+            // along a path, loft to more profiles, or coil into a helix.
+            if context.sketchID != nil {
+                Button("Revolve") {
+                    viewModel.beginRevolveAxisPick()
+                }
+                Button("Sweep") {
+                    viewModel.beginSweepPathPick()
+                }
+                Button("Loft") {
+                    viewModel.beginLoftProfilePick()
+                }
+                Button("Helix") {
+                    viewModel.showHelixOptions = true
+                }
+            }
+            // Face pulls can become an offset construction plane instead.
+            if context.sourceBody != nil {
+                Button("Offset Plane") {
+                    viewModel.beginOffsetPlane()
+                }
+            }
+            Button("Cancel") {
+                viewModel.cancelTool()
+            }
+            Button("Extrude") {
+                viewModel.commitTool()
+            }
+            .buttonStyle(.borderedProminent)
+        } footer: {
             // Boolean badge: manual result override (spec §4.1).
             HStack(spacing: 8) {
                 Text("Result")
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(.barLabel)
+                    .fixedSize()
                 Picker("Result", selection: Binding(
                     get: { viewModel.toolContext?.booleanOverride ?? .auto },
                     set: { viewModel.setBooleanOverride($0) }
@@ -584,10 +587,6 @@ struct NumericInputBar: View {
                 .fixedSize()
             }
         }
-        .padding(.horizontal, 20)
-        .padding(.vertical, 12)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16))
-        .shadow(color: .black.opacity(0.15), radius: 10, y: 3)
         .sheet(isPresented: $viewModel.showHelixOptions) {
             HelixOptionsSheet { radius, pitch, turns in
                 viewModel.commitHelixSweep(radius: radius, pitch: pitch, turns: turns)
@@ -599,17 +598,19 @@ struct NumericInputBar: View {
     /// spine; commit sweeps the armed profile along it.
     private func sweepBar(_ context: EditorViewModel.ToolContext) -> some View {
         let count = context.sweepPathEntityIDs.count
-        return HStack(spacing: 16) {
+        return AdaptiveBar {
             Text("Sweep")
                 .font(.headline)
+                .fixedSize()
             Text(count == 0
                 ? "Tap sketch lines or arcs to build the path"
                 : "\(count) path segment\(count == 1 ? "" : "s")")
                 .font(.caption)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(.barLabel)
+                .fixedSize()
 
             Spacer()
-
+        } actions: {
             Button("Cancel") {
                 viewModel.cancelSweepPathPick()
             }
@@ -620,25 +621,23 @@ struct NumericInputBar: View {
             .disabled(count == 0)
             .accessibilityIdentifier("SweepCommit")
         }
-        .padding(.horizontal, 20)
-        .padding(.vertical, 12)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16))
-        .shadow(color: .black.opacity(0.15), radius: 10, y: 3)
     }
 
     /// Loft section collector (plan §B2): taps append profile fills in order;
     /// commit lofts through them.
     private func loftBar(_ context: EditorViewModel.ToolContext) -> some View {
         let count = context.loftProfiles.count
-        return HStack(spacing: 16) {
+        return AdaptiveBar {
             Text("Loft")
                 .font(.headline)
+                .fixedSize()
             Text("\(count) section\(count == 1 ? "" : "s") — tap more profile fills")
                 .font(.caption)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(.barLabel)
+                .fixedSize()
 
             Spacer()
-
+        } actions: {
             Button("Cancel") {
                 viewModel.cancelLoftProfilePick()
             }
@@ -649,24 +648,19 @@ struct NumericInputBar: View {
             .disabled(count < 2)
             .accessibilityIdentifier("LoftCommit")
         }
-        .padding(.horizontal, 20)
-        .padding(.vertical, 12)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16))
-        .shadow(color: .black.opacity(0.15), radius: 10, y: 3)
     }
 
     private func offsetPlaneBar(_ context: EditorViewModel.ToolContext) -> some View {
-        HStack(spacing: 16) {
+        AdaptiveBar {
             Text("Offset Plane")
                 .font(.headline)
-            Text("Drag the arrow, or type a distance")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+                .fixedSize()
+            BarHint("Drag the arrow, or type a distance")
 
             HStack(spacing: 6) {
                 Text("Distance")
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(.barLabel)
                     .fixedSize()
                 TextField(
                     "Distance",
@@ -683,7 +677,7 @@ struct NumericInputBar: View {
             }
 
             Spacer()
-
+        } actions: {
             Button("Cancel") {
                 viewModel.cancelTool()
             }
@@ -692,24 +686,19 @@ struct NumericInputBar: View {
             }
             .buttonStyle(.borderedProminent)
         }
-        .padding(.horizontal, 20)
-        .padding(.vertical, 12)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16))
-        .shadow(color: .black.opacity(0.15), radius: 10, y: 3)
     }
 
     private func revolveBar(_ context: EditorViewModel.ToolContext) -> some View {
-        HStack(spacing: 16) {
+        AdaptiveBar {
             Text("Revolve")
                 .font(.headline)
-            Text("Drag to sweep, or type an angle")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+                .fixedSize()
+            BarHint("Drag to sweep, or type an angle")
 
             HStack(spacing: 6) {
                 Text("Angle")
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(.barLabel)
                     .fixedSize()
                 TextField(
                     "Angle",
@@ -726,7 +715,7 @@ struct NumericInputBar: View {
             }
 
             Spacer()
-
+        } actions: {
             Button("Cancel") {
                 viewModel.cancelTool()
             }
@@ -735,10 +724,6 @@ struct NumericInputBar: View {
             }
             .buttonStyle(.borderedProminent)
         }
-        .padding(.horizontal, 20)
-        .padding(.vertical, 12)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16))
-        .shadow(color: .black.opacity(0.15), radius: 10, y: 3)
     }
 
     private func binding(at index: Int) -> Binding<Double> {
