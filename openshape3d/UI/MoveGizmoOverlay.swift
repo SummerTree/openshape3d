@@ -41,17 +41,25 @@ struct MoveGizmoOverlay: View {
             let ctx = ProjectionContext(origin: origin, scale: scale, control: control)
 
             ZStack(alignment: .topLeading) {
-                ForEach(planes, id: \.self) { planeHandle($0, ctx) }
-                // A selected face translates/scales only — hide the rotation rings.
+                // Face-rotate shows ONLY the rings (+ pivot) so the control reads
+                // as a pure rotate; body/move/scale keep their plane handles.
+                if !viewModel.faceRotateActive {
+                    ForEach(planes, id: \.self) { planeHandle($0, ctx) }
+                }
+                // A selected face translates/scales only — hide the rotation rings
+                // unless the Rotate tool armed them.
                 if viewModel.gizmoAllowsRotation {
                     ForEach(rings, id: \.self) { rotationArc($0, ctx) }
                 }
                 // Scale mode shows square grips at the axis ends (drag any to
-                // scale about the centre); move mode shows the directional arrows.
-                if viewModel.gizmoIsScale {
-                    ForEach(axes, id: \.self) { scaleHandle($0, ctx, center: center) }
-                } else {
-                    ForEach(axes, id: \.self) { axisArrow($0, ctx) }
+                // scale about the centre); move mode shows the directional arrows;
+                // rotate mode shows neither (rings only).
+                if !viewModel.faceRotateActive {
+                    if viewModel.gizmoIsScale {
+                        ForEach(axes, id: \.self) { scaleHandle($0, ctx, center: center) }
+                    } else {
+                        ForEach(axes, id: \.self) { axisArrow($0, ctx) }
+                    }
                 }
                 pivotDot(at: center)
             }

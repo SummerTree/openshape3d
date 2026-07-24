@@ -396,6 +396,9 @@ final class DocumentSession {
         case let .scaleFace(face, factor):
             guard let f = updated(factor) else { return nil }
             return .scaleFace(face: face, factor: f)
+        case let .rotateFace(face, angle, axis):
+            guard let a = updated(angle) else { return nil }
+            return .rotateFace(face: face, angle: a, axis: axis)
         default:
             return nil
         }

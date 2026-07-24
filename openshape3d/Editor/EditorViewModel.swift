@@ -96,14 +96,20 @@ final class EditorViewModel {
     /// the solid. Mutually exclusive with `faceMoveActive`.
     private(set) var faceScaleActive = false
 
+    /// True while the Rotate tool is armed on a SELECTED FACE: the gizmo shows its
+    /// rotation rings and dragging one rotates the face about that axis through
+    /// its centre (an in-plane ring tilts the solid, the normal ring twists it).
+    /// Mutually exclusive with `faceMoveActive` / `faceScaleActive`.
+    private(set) var faceRotateActive = false
+
     /// The face gizmo is in SCALE mode (grips) rather than move (arrows).
     var gizmoIsScale: Bool { faceScaleActive }
 
-    /// Whether the move gizmo offers its rotation rings. A body/image rotates,
-    /// but a selected FACE only translates/scales (a rotate would fold the
-    /// solid), so the overlay hides the rings and the viewport ignores ring hits.
+    /// Whether the move gizmo offers its rotation rings. A body/image rotates; a
+    /// selected FACE normally only translates/scales, but the Rotate tool arms
+    /// the rings so a ring drag rotates the face (tilt/twist the solid).
     var gizmoAllowsRotation: Bool {
-        if case .faceSelected = mode { return false }
+        if case .faceSelected = mode { return faceRotateActive }
         return true
     }
 
@@ -483,7 +489,7 @@ final class EditorViewModel {
         //
         // Suppressed while a face Move/Scale tool is armed: then only that gizmo
         // shows, and drags reach it (shear/taper) instead of the extrude arrow.
-        if let context = toolContext, !faceMoveActive, !faceScaleActive {
+        if let context = toolContext, !faceMoveActive, !faceScaleActive, !faceRotateActive {
             let centroid = context.plane.toWorld(context.profile.centroid)
             switch context.kind {
             case .extrude(let distance):
@@ -853,7 +859,7 @@ final class EditorViewModel {
         // move/scale gizmo appears only after the user picks Move or Scale from
         // the Transform menu — the Shapr3D flow, where those are explicit tools,
         // not something a face selection auto-shows.
-        if case .faceSelected = mode, faceMoveActive || faceScaleActive,
+        if case .faceSelected = mode, faceMoveActive || faceScaleActive || faceRotateActive,
            let context = toolContext {
             let c = context.plane.toWorld(context.profile.centroid)
             return SIMD3(Float(c.x), Float(c.y), Float(c.z))
@@ -1240,6 +1246,163 @@ final class EditorViewModel {
         return FeatureNode(
             name: "Scale Face",
             kind: .scaleFace(face: faceRef, factor: Expr(value: factor)),
+            outputBodyIDs: [s.bodyID])
+    }
+
+    // MARK: - Face rotate (Rotate tool on a selected face → tilt/twist the solid)
+
+    /// Live state for a gizmo ring drag that ROTATES a selected face. Mirrors
+    /// `FaceScaleSession`; captured in world space at drag start.
+    private struct FaceRotateSession {
+        let bodyID: BodyID
+        let source: Body
+        let context: ToolContext
+        let sourceLocalMesh: Euclid.Mesh
+        let pivot: SIMD3<Double>
+        let worldMesh: Euclid.Mesh
+        let worldFace: FaceTopology.PlanarFace
+    }
+    private var faceRotateSession: FaceRotateSession?
+    private var faceRotateLastAngle: Double = 0
+    private var faceRotateLastAxis = SIMD3<Double>(0, 0, 1)
+    private var faceRotatePreviewRevision: UInt64 = 0
+
+    /// Rodrigues rotation of world unit vector `n` about unit `axis` by `angle`.
+    private func rotateVector(_ n: SIMD3<Double>, about axis: SIMD3<Double>, by angle: Double) -> SIMD3<Double> {
+        let a = simd_normalize(axis)
+        return n * cos(angle) + simd_cross(a, n) * sin(angle) + a * simd_dot(a, n) * (1 - cos(angle))
+    }
+
+    /// Begin a face rotate: snapshot the source body so each drag frame rotates
+    /// the same immutable geometry. Returns false when the selection isn't a
+    /// rotatable planar face.
+    func beginFaceRotate() -> Bool {
+        guard case .faceSelected(let bodyID) = mode,
+              let context = toolContext, context.cylinderFace == nil,
+              let source = session.document.body(with: bodyID)
+        else { return false }
+        let local = source.euclidMesh()
+        faceRotateLastAngle = 0
+        faceRotateSession = FaceRotateSession(
+            bodyID: bodyID,
+            source: source,
+            context: context,
+            sourceLocalMesh: local,
+            pivot: source.transform.translation,
+            worldMesh: local.transformed(by: source.transform.euclid),
+            worldFace: selectedFaceWorld(context))
+        return true
+    }
+
+    /// Deform the source by rotating the selected face by `angle` about world
+    /// `axis` (through the centroid), pivot re-centred. Session passed explicitly
+    /// so the commit can recompute after clearing `faceRotateSession`.
+    private func faceRotatedLocalMesh(
+        _ s: FaceRotateSession, angle: Double, axis: SIMD3<Double>
+    ) -> Euclid.Mesh? {
+        let rotatedWorld = KernelOps.rotateFace(
+            mesh: s.worldMesh, face: s.worldFace, angle: angle, axis: axis)
+        guard !rotatedWorld.polygons.isEmpty else { return nil }
+        return rotatedWorld.translated(by: Vector(-s.pivot.x, -s.pivot.y, -s.pivot.z))
+    }
+
+    /// Live preview of the face rotation (bumping revision so the GPU re-uploads).
+    func updateFaceRotate(angle: Double, axis: SIMD3<Double>) {
+        guard let s = faceRotateSession else { return }
+        faceRotateLastAngle = angle
+        faceRotateLastAxis = axis
+        guard let rotated = faceRotatedLocalMesh(s, angle: angle, axis: axis) else { return }
+        faceRotatePreviewRevision &+= 1
+        let revision = (UInt64(1) << 58) | faceRotatePreviewRevision
+        var transform = Transform3D.identity
+        transform.translation = s.pivot
+        session.preview { document in
+            guard let index = document.bodyIndex(of: s.bodyID) else { return }
+            document.bodies[index] = Body(
+                id: s.bodyID, name: document.bodies[index].name,
+                transform: transform, primitive: nil,
+                euclidMesh: rotated, revision: revision)
+        }
+    }
+
+    /// Commit the face rotation (uses the last previewed angle/axis).
+    func endFaceRotate() {
+        guard faceRotateSession != nil else { return }
+        commitFaceRotate(angle: faceRotateLastAngle, axis: faceRotateLastAxis)
+    }
+
+    private func commitFaceRotate(angle: Double, axis: SIMD3<Double>) {
+        guard let s = faceRotateSession else { return }
+        faceRotateSession = nil
+        faceRotateLastAngle = 0
+
+        var beforeTransform = Transform3D.identity
+        beforeTransform.translation = s.pivot
+        let before = Body(
+            id: s.bodyID, name: session.document.body(with: s.bodyID)?.name ?? "Body",
+            transform: beforeTransform, primitive: nil,
+            euclidMesh: s.sourceLocalMesh, revision: 0)
+
+        guard abs(angle) > 1e-4,
+              let rotated = faceRotatedLocalMesh(s, angle: angle, axis: axis) else {
+            session.preview { document in
+                if let index = document.bodyIndex(of: s.bodyID) {
+                    document.bodies[index] = before
+                }
+            }
+            return
+        }
+
+        let after = Body(
+            id: s.bodyID, name: before.name, transform: beforeTransform,
+            primitive: nil, euclidMesh: rotated, revision: 0)
+        let replace = ReplaceBodyCommand(title: "Rotate Face", before: before, after: after)
+
+        if let node = rotateFaceFeatureNode(session: s, angle: angle, axis: axis) {
+            session.perform(CompositeCommand(
+                title: "Rotate Face", commands: [replace, AppendFeatureCommand(node: node)]))
+        } else {
+            session.perform(replace)
+        }
+        // Keep the Rotate tool live on the SAME face (repeated tilts): rotating
+        // about the centroid leaves it put, but the face NORMAL rotates with it —
+        // re-resolve against the tilted normal.
+        let centroid = s.context.plane.toWorld(s.context.profile.centroid)
+        let newNormal = rotateVector(s.context.plane.normal, about: axis, by: angle)
+        if reselectDeformedFace(bodyID: s.bodyID,
+                                worldNormal: newNormal,
+                                worldCentroid: centroid) {
+            faceRotateActive = true
+        } else {
+            toolContext = nil
+            faceRotateActive = false
+            selection = [s.bodyID]
+            mode = .selected(s.bodyID)
+        }
+        session.save()
+    }
+
+    /// A `.rotateFace` feature node for a rotate on a feature-produced body, or
+    /// nil when the body isn't parametric — then it commits as a plain mesh
+    /// replace. The axis is stored in the face's own (u, v, n) basis so the tilt /
+    /// twist replays intrinsically after an upstream edit.
+    private func rotateFaceFeatureNode(
+        session s: FaceRotateSession, angle: Double, axis: SIMD3<Double>
+    ) -> FeatureNode? {
+        guard let owner = featureNode(owning: s.bodyID),
+              let faceRef = pushPullFaceRef(
+                  context: s.context, source: s.source, creator: owner.id)
+        else { return nil }
+        let a = simd_normalize(axis)
+        let n = simd_normalize(s.context.plane.normal)
+        let components = SIMD3<Double>(
+            simd_dot(a, s.context.plane.xAxis),
+            simd_dot(a, s.context.plane.yAxis),
+            simd_dot(a, n))
+        return FeatureNode(
+            name: "Rotate Face",
+            kind: .rotateFace(face: faceRef, angle: Expr(value: angle),
+                              axis: PointWrapper(components)),
             outputBodyIDs: [s.bodyID])
     }
 
@@ -1734,6 +1897,7 @@ final class EditorViewModel {
             axisEntryPart = nil
             scaleEntryActive = false
             faceScaleActive = false
+            faceRotateActive = false
             faceMoveActive = true
             return
         }
@@ -1763,6 +1927,7 @@ final class EditorViewModel {
             axisEntryPart = nil
             scaleEntryActive = false
             faceMoveActive = false
+            faceRotateActive = false
             faceScaleActive = true
             return
         }
@@ -1779,6 +1944,36 @@ final class EditorViewModel {
 
     /// True while the Scale tool is armed (face-taper gizmo or body scale entry).
     var isScaleToolActive: Bool { faceScaleActive || scaleEntryActive }
+
+    /// Transform-menu **Rotate**. On a selected FACE it arms the rotation rings
+    /// so a ring drag rotates the face about its centre (tilt/twist the solid);
+    /// on any other selection it falls back to the axis-pick body rotate.
+    func beginRotateTool() {
+        if case .faceSelected = mode {
+            axisEntryPart = nil
+            scaleEntryActive = false
+            faceMoveActive = false
+            faceScaleActive = false
+            faceRotateActive = true
+            return
+        }
+        beginRotateAxisPick()
+    }
+
+    func cancelRotateTool() {
+        if faceRotateActive {
+            faceRotateActive = false
+            return
+        }
+        cancelRotateAxis()
+    }
+
+    /// True while the Rotate tool is armed (face-rotate rings or body axis rotate).
+    var isRotateToolActive: Bool {
+        if faceRotateActive { return true }
+        if case .rotatingAroundAxis = mode { return true }
+        return false
+    }
 
     func beginAlignPick() {
         guard session.document.bodies.count >= 2 else { return }
@@ -3391,6 +3586,7 @@ final class EditorViewModel {
             toolContext = faceContext(body: body, face: face)
             faceMoveActive = false // a fresh face selection shows extrude only
             faceScaleActive = false
+            faceRotateActive = false
             mode = .faceSelected(body.id)
             return
         }
@@ -4780,6 +4976,7 @@ final class EditorViewModel {
         cachedPullWorldBody = nil
         faceMoveActive = false
         faceScaleActive = false
+        faceRotateActive = false
         switch mode {
         case .extruding, .faceSelected, .pickingRevolveAxis,
              .pickingSweepPath, .pickingLoftProfiles:
@@ -8888,6 +9085,8 @@ final class EditorViewModel {
             return "Move Face \(fmt(simd_length(delta.point))) mm"
         case let .scaleFace(_, factor):
             return "Scale Face ×\(fmt(factor.value))"
+        case let .rotateFace(_, angle, _):
+            return "Rotate Face \(fmt(angle.value * 180 / .pi))°"
         case let .revolve(_, _, _, angle, _):
             return "Revolve \(fmt(angle.value))°"
         case .sweep: return "Sweep"

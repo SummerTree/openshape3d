@@ -938,6 +938,99 @@ nonisolated extension KernelOps {
         return Euclid.Mesh(polygons).makeWatertight()
     }
 
+    /// Rotate a planar face about an axis line through its own centre, deforming
+    /// the solid — the Shapr3D "Rotate" on a face. Every mesh vertex ON the face
+    /// is rotated by `angle` (radians) about the world line through the face
+    /// centroid along unit `axis`; the side walls that share those vertices skew
+    /// to follow. Rotating a box top about an in-plane axis TILTS it (a slanted
+    /// solid); about the face normal it TWISTS it (an antiprism). Unlike move /
+    /// scale the walls become non-planar, so the mesh is triangulated first —
+    /// every triangle then stays planar under an arbitrary per-vertex rotation,
+    /// keeping the result watertight. Topology-preserving; adds no faces.
+    static func rotateFace(
+        mesh: Euclid.Mesh,
+        face: FaceTopology.PlanarFace,
+        angle: Double,
+        axis: SIMD3<Double>
+    ) -> Euclid.Mesh {
+        let axisLen = simd_length(axis)
+        guard abs(angle) > 1e-9, axisLen > 1e-9 else { return mesh }
+        let a = axis / axisLen
+        let plane = SketchPlane(
+            origin: face.origin, xAxis: face.basisX, yAxis: face.basisY
+        )
+        let normal = simd_normalize(plane.normal)
+
+        // Rotate about the face centroid (average of its outline), in world.
+        var c2 = SIMD2<Double>.zero
+        for p in face.outline { c2 += p }
+        c2 /= Double(max(face.outline.count, 1))
+        let cw = plane.toWorld(c2)
+        let center = Vector(cw.x, cw.y, cw.z)
+
+        let cosT = cos(angle), sinT = sin(angle)
+        let av = Vector(a.x, a.y, a.z)
+        // Rodrigues rotation of `v` about unit `av` by the fixed angle.
+        func rotate(_ v: Vector) -> Vector {
+            let dot = v.dot(av)
+            let cross = av.cross(v)
+            return v * cosT + cross * sinT + av * (dot * (1 - cosT))
+        }
+
+        func onFace(_ position: Vector) -> Bool {
+            let w = SIMD3<Double>(position.x, position.y, position.z)
+            guard abs(simd_dot(w - face.origin, normal)) <= Self.moveFacePlaneTolerance
+            else { return false }
+            let local = plane.toLocal(w)
+            guard Self.pointInLoopInclusive(local, face.outline) else { return false }
+            for hole in face.holes where Self.pointStrictlyInLoop(local, hole) {
+                return false
+            }
+            return true
+        }
+
+        var polygons = [Euclid.Polygon]()
+        for polygon in mesh.triangulate().polygons {
+            // Untouched triangles keep their original (possibly smooth) normals so
+            // curved faces elsewhere on the body aren't flattened.
+            guard polygon.vertices.contains(where: { onFace($0.position) }) else {
+                polygons.append(polygon)
+                continue
+            }
+            // A deformed triangle: rotate its on-face vertices, then give ALL its
+            // vertices ONE flat normal recomputed from the moved geometry. Carrying
+            // the old per-vertex normals here mis-lights the walls — a wall's rim
+            // vertex would wear the tilted FACE normal instead of the wall's — and
+            // reads as a dark "hole"; a flat normal always matches the winding.
+            let moved = polygon.vertices.map { vertex -> Vector in
+                onFace(vertex.position) ? center + rotate(vertex.position - center) : vertex.position
+            }
+            let faceNormal = Self.newellNormal(moved)
+            let vertices = moved.map { Euclid.Vertex($0, faceNormal) }
+            if let np = Euclid.Polygon(vertices) { polygons.append(np) }
+        }
+        guard !polygons.isEmpty else { return mesh }
+        return Euclid.Mesh(polygons).makeWatertight()
+    }
+
+    /// Robust polygon normal via Newell's method — consistent with the vertex
+    /// winding and stable for near-degenerate triangles (unlike a single cross
+    /// product). Used to re-normal deformed faces so shading matches the winding.
+    static func newellNormal(_ vertices: [Vector]) -> Vector {
+        var n = Vector.zero
+        let count = vertices.count
+        guard count >= 3 else { return Vector(0, 0, 1) }
+        for i in 0..<count {
+            let cur = vertices[i], nxt = vertices[(i + 1) % count]
+            n = Vector(
+                n.x + (cur.y - nxt.y) * (cur.z + nxt.z),
+                n.y + (cur.z - nxt.z) * (cur.x + nxt.x),
+                n.z + (cur.x - nxt.x) * (cur.y + nxt.y))
+        }
+        let len = n.length
+        return len > 1e-12 ? n / len : Vector(0, 0, 1)
+    }
+
     /// On-plane tolerance for `moveFace`. Generous enough to catch float noise
     /// on a face's own vertices, far tighter than any real face-to-face gap.
     static let moveFacePlaneTolerance: Double = 1e-3

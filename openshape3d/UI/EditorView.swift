@@ -1028,7 +1028,9 @@ struct EditorView: View {
                             ? "Move face — drag to shear the solid"
                             : viewModel.faceScaleActive
                                 ? "Scale face — drag to taper the solid"
-                                : "Face selected — drag it to push or pull"
+                                : viewModel.faceRotateActive
+                                    ? "Rotate face — drag a ring to tilt the solid"
+                                    : "Face selected — drag it to push or pull"
                     ) {
                         Button("Done") {
                             viewModel.commitTool()

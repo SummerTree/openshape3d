@@ -97,6 +97,12 @@ nonisolated enum FeatureKind: Codable, Sendable {
     /// centre by `factor`, tapering the solid. Intrinsic (a pure ratio), so it
     /// replays against the re-resolved face after an upstream edit.
     case scaleFace(face: FaceRef, factor: Expr)
+    /// Spec §5 (face rotate): rotate the referenced planar face by `angle`
+    /// (radians) about a line through its centre. `axis` is stored in the face's
+    /// own basis — (u, v, n) along basisX / basisY / normal — so it is intrinsic
+    /// to the face and replays correctly after an upstream edit (an in-plane axis
+    /// tilts the solid, the normal axis twists it).
+    case rotateFace(face: FaceRef, angle: Expr, axis: PointWrapper)
     /// Phase E: bevel the referenced convex edges of `body` by a flat `setback`.
     case chamfer(body: BodyRef, edges: [EdgeRef], setback: Expr)
     /// Phase E: round the referenced convex edges of `body` to `radius`.
@@ -164,7 +170,7 @@ nonisolated extension FeatureNode {
         case let .mirror(_, plane, _):
             addPlane(plane)
         case .primitive, .boolean, .transform, .pattern, .pushPull, .moveFace,
-             .scaleFace, .chamfer, .fillet, .shell, .deleteFace:
+             .scaleFace, .rotateFace, .chamfer, .fillet, .shell, .deleteFace:
             break
         }
         return ids
@@ -286,6 +292,9 @@ nonisolated extension FeatureGraph {
             evalMoveFace(node, face: face, delta: delta.point, into: &state, next: nextRevision)
         case let .scaleFace(face, factor):
             evalScaleFace(node, face: face, factor: factor.value, into: &state, next: nextRevision)
+        case let .rotateFace(face, angle, axis):
+            evalRotateFace(node, face: face, angle: angle.value, axis: axis.point,
+                           into: &state, next: nextRevision)
         case let .revolve(profile, plane, axis, angle, boolean):
             evalRevolve(
                 node, profileRef: profile, planeRef: plane, axisRef: axis,
@@ -672,6 +681,55 @@ nonisolated extension FeatureGraph {
         }
         let mesh = KernelOps.scaleFace(
             mesh: body.euclidMesh(), face: planar, factor: factor)
+        guard !mesh.polygons.isEmpty else {
+            state.errors[node.id] = .emptyGeometry
+            return
+        }
+        let result = Body(
+            id: body.id, name: body.name, transform: .identity, primitive: nil,
+            euclidMesh: mesh, revision: nextRevision())
+        let newTable: FaceTable
+        if let table {
+            newTable = state.naming.propagate(inputs: [table], output: result, op: .pushPull)
+        } else {
+            newTable = state.naming.faceTable(for: result, createdBy: node.id, scheme: .generic)
+        }
+        state.put(result, table: newTable)
+    }
+
+    // MARK: Rotate face
+
+    /// Replay a face rotation: re-resolve the persisted `FaceRef` and reconstruct
+    /// the rotation axis from its stored face-basis components (so an in-plane
+    /// tilt / normal twist stays intrinsic to the face after an upstream edit),
+    /// then deform via `KernelOps.rotateFace`.
+    private func evalRotateFace(
+        _ node: FeatureNode,
+        face: FaceRef,
+        angle: Double,
+        axis components: SIMD3<Double>,
+        into state: inout EvalState,
+        next nextRevision: () -> UInt64
+    ) {
+        guard let body = state.bodies[face.body.bodyID] else {
+            state.errors[node.id] = .brokenRef("rotateFace body unresolved")
+            return
+        }
+        let table = state.faceTables[body.id]
+        guard let resolved = state.naming.resolve(face, in: body, table: table),
+              let planar = resolved.planar else {
+            state.errors[node.id] = .brokenRef("rotateFace face did not resolve")
+            return
+        }
+        // (u, v, n) in the resolved face's own basis → a world-space axis.
+        let bx = simd_normalize(planar.basisX)
+        let by = simd_normalize(planar.basisY)
+        let n = simd_normalize(SIMD3<Double>(
+            Double(planar.normal.x), Double(planar.normal.y), Double(planar.normal.z)))
+        let axis = bx * components.x + by * components.y + n * components.z
+
+        let mesh = KernelOps.rotateFace(
+            mesh: body.euclidMesh(), face: planar, angle: angle, axis: axis)
         guard !mesh.polygons.isEmpty else {
             state.errors[node.id] = .emptyGeometry
             return

@@ -130,6 +130,10 @@ final class ViewportCoordinator: NSObject, ViewportGestureDelegate, ViewportCame
     private var faceScaleDragActive = false
     private var faceScaleCenter: CGPoint = .zero
     private var faceScaleInitialDist: CGFloat = 1
+    /// A ring drag rotating a selected face (Rotate tool). The gizmo session
+    /// yields the signed angle; `faceRotateAxis` is the grabbed ring's world axis.
+    private var faceRotateDragActive = false
+    private var faceRotateAxis = SIMD3<Double>(0, 0, 1)
     /// A drag on the orientation cube orbiting the camera (spec §7.2): the
     /// universal orbit control, live in every mode.
     private var cubeOrbitActive = false
@@ -175,6 +179,9 @@ final class ViewportCoordinator: NSObject, ViewportGestureDelegate, ViewportCame
         // A face translates, it doesn't rotate — ignore ring hits there so a
         // grab near the (hidden) arcs doesn't try to fold the solid.
         if let part, part.isRing, !viewModel.gizmoAllowsRotation { return nil }
+        // Rotate tool on a face shows ONLY the rings — ignore arrow/plane hits so
+        // a stray grab can't translate or scale the face instead of rotating it.
+        if let part, viewModel.faceRotateActive, !part.isRing { return nil }
         return part
     }
 
@@ -348,6 +355,22 @@ final class ViewportCoordinator: NSObject, ViewportGestureDelegate, ViewportCame
             }
             if let renderer, let origin = viewModel.gizmoOrigin,
                let part = gizmoPart(at: point) {
+                // Rotate: grabbing a ring rotates the face about that world axis
+                // through the centre (an in-plane ring tilts, the normal twists).
+                if viewModel.faceRotateActive, part.isRing {
+                    let gizmo = GizmoState(
+                        origin: origin, scale: renderer.gizmoScale(origin: origin),
+                        highlighted: nil)
+                    if let session = GizmoDragSession(part: part, gizmo: gizmo, ray: ray),
+                       viewModel.beginFaceRotate() {
+                        gizmoDrag = session
+                        faceRotateAxis = SIMD3<Double>(part.axisDirection)
+                        faceRotateDragActive = true
+                        viewModel.gizmoHighlight = part
+                        return true
+                    }
+                    return false
+                }
                 // Scale: any handle grab starts a uniform scale keyed to the
                 // grab's distance from the gizmo centre.
                 if viewModel.gizmoIsScale {
@@ -402,6 +425,14 @@ final class ViewportCoordinator: NSObject, ViewportGestureDelegate, ViewportCame
     }
 
     func gestureDragChanged(at point: CGPoint) {
+        if faceRotateDragActive {
+            if let ray = ray(at: point), let session = gizmoDrag,
+               let angle = session.rotationDelta(for: ray) {
+                viewModel.updateFaceRotate(angle: Double(angle), axis: faceRotateAxis)
+                sceneDidChange()
+            }
+            return
+        }
         if faceScaleDragActive {
             let d = max(hypot(point.x - faceScaleCenter.x, point.y - faceScaleCenter.y), 1)
             let factor = min(max(Double(d / faceScaleInitialDist), 0.05), 20)
@@ -469,6 +500,14 @@ final class ViewportCoordinator: NSObject, ViewportGestureDelegate, ViewportCame
     }
 
     func gestureDragEnded(at point: CGPoint) {
+        if faceRotateDragActive {
+            faceRotateDragActive = false
+            gizmoDrag = nil
+            viewModel.gizmoHighlight = nil
+            viewModel.endFaceRotate()
+            sceneDidChange()
+            return
+        }
         if faceScaleDragActive {
             faceScaleDragActive = false
             viewModel.gizmoHighlight = nil

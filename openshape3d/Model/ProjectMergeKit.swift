@@ -272,6 +272,10 @@ nonisolated enum ProjectMergeKit {
                 return .moveFace(face: remap(face, translation: t), delta: delta)
             case let .scaleFace(face, factor):
                 return .scaleFace(face: remap(face, translation: t), factor: factor)
+            case let .rotateFace(face, angle, axis):
+                // Angle + axis are intrinsic to the face's basis, so a translation
+                // only remaps the face reference.
+                return .rotateFace(face: remap(face, translation: t), angle: angle, axis: axis)
             case let .chamfer(body, edges, setback):
                 return .chamfer(body: remap(body),
                                 edges: edges.map { remap($0, translation: t) },

@@ -127,4 +127,44 @@ final class MoveFaceEvalTests: XCTestCase {
                              "the taper replayed onto the taller upstream box")
         XCTAssertEqual(b1.id, b2.id, "the body keeps its identity across the rebuild")
     }
+
+    func testRotateFaceTiltsBoxAndReplaysAfterUpstreamResize() throws {
+        let boxFeature = FeatureID(), rotateFeature = FeatureID()
+        let boxID = BodyID()
+
+        // Axis (1,0,0) is stored in the face's own basis — basisX, an IN-PLANE
+        // direction of the +Z face — so the rotation tilts the face (and the
+        // solid) rather than spinning it in place.
+        func graph(depth: Double, face: FaceRef) -> FeatureGraph {
+            FeatureGraph(nodes: [
+                FeatureNode(id: boxFeature, name: "Box",
+                            kind: .primitive(spec: .box(width: 10, depth: depth, height: 10),
+                                             placement: .identity),
+                            outputBodyIDs: [boxID]),
+                FeatureNode(id: rotateFeature, name: "Rotate Face",
+                            kind: .rotateFace(face: face, angle: Expr(value: .pi / 12),
+                                              axis: PointWrapper(SIMD3(1, 0, 0))),
+                            outputBodyIDs: []),
+            ])
+        }
+
+        let faceRef = try boxSeedFaceRef(boxFeature: boxFeature, boxID: boxID, depth: 10)
+
+        let r1 = graph(depth: 10, face: faceRef).evaluate(
+            sketches: [], planes: [], naming: SignatureNaming(), nextRevision: RevisionSource().next)
+        XCTAssertNil(r1.errors[rotateFeature], "rotate-face must resolve and run: \(r1.errors)")
+        let b1 = try XCTUnwrap(r1.bodies.first { $0.id == boxID })
+        XCTAssertTrue(b1.euclidMesh().isWatertight, "a tilted box stays watertight")
+
+        // EDIT upstream: grow the box depth. The +Z FaceRef must still resolve and
+        // re-apply the tilt to the bigger box.
+        let r2 = graph(depth: 16, face: faceRef).evaluate(
+            sketches: [], planes: [], naming: SignatureNaming(), nextRevision: RevisionSource().next)
+        XCTAssertNil(r2.errors[rotateFeature], "the +Z FaceRef must resolve on the bigger box")
+        let b2 = try XCTUnwrap(r2.bodies.first { $0.id == boxID })
+        XCTAssertTrue(b2.euclidMesh().isWatertight)
+        XCTAssertGreaterThan(volume(b2), volume(b1),
+                             "the tilt replayed onto the deeper upstream box")
+        XCTAssertEqual(b1.id, b2.id, "the body keeps its identity across the rebuild")
+    }
 }

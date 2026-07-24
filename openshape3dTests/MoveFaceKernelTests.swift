@@ -160,4 +160,90 @@ final class MoveFaceKernelTests: XCTestCase {
         XCTAssertEqual(volume(KernelOps.scaleFace(mesh: box, face: top, factor: 1)),
                        volume(box), accuracy: 1e-9)
     }
+
+    // MARK: - Rotate face (tilt / twist)
+
+    /// Tilting the top face about an IN-PLANE axis (world Z, ⟂ the +Y normal)
+    /// through its centre turns the box into a slanted solid: one side of the top
+    /// rises, the other drops by the same amount, the base holds. (Volume dips a
+    /// little — the tilted face foreshortens, so its footprint shrinks and the
+    /// walls slope inward — so we bound it rather than claim it's preserved.)
+    func testTiltTopFaceAboutInPlaneAxisSlantsTheSolid() throws {
+        let box = makeBox()                 // 4(X) × 6(Z) × 4(Y), volume 96
+        let top = try topFace(of: box)
+        let beforeVolume = volume(box)
+
+        // +30° about world Z through the top centroid (0,4,0): the x=+2 rim rises
+        // to y = 4 + 2·sin30° = 5, the x=−2 rim drops to y = 3.
+        let result = KernelOps.rotateFace(
+            mesh: box, face: top, angle: .pi / 6, axis: SIMD3(0, 0, 1))
+
+        XCTAssertFalse(result.polygons.isEmpty)
+        XCTAssertTrue(result.isWatertight, "A tilted solid must stay watertight")
+        XCTAssertEqual(aabb(result).max.y, 5, accuracy: 0.05,
+                       "the +2 rim rose to y = 4 + 2·sin30° = 5")
+        XCTAssertEqual(aabb(result).min.y, 0, accuracy: 0.02, "the base held at y=0")
+        XCTAssertLessThan(volume(result), beforeVolume,
+                          "the tilted top foreshortens, so the solid loses a little volume")
+        XCTAssertGreaterThan(volume(result), beforeVolume * 0.85,
+                             "but only a little — it's a tilt, not a collapse")
+    }
+
+    /// Twisting the top face about its own normal (+Y) leaves it planar but
+    /// rotates it relative to the base — the walls become ruled. It must stay a
+    /// watertight solid (the mesh is triangulated so no wall quad goes non-planar).
+    func testTwistTopFaceAboutNormalStaysWatertight() throws {
+        let box = makeBox()
+        let top = try topFace(of: box)
+
+        let result = KernelOps.rotateFace(
+            mesh: box, face: top, angle: .pi / 6, axis: SIMD3(0, 1, 0))
+
+        XCTAssertFalse(result.polygons.isEmpty)
+        XCTAssertTrue(result.isWatertight, "A twisted solid stays watertight")
+        XCTAssertEqual(aabb(result).max.y, aabb(box).max.y, accuracy: 0.02,
+                       "twisting in-plane keeps the top height")
+    }
+
+    /// Count rendered triangles whose stored shading normal disagrees with their
+    /// geometric winding — these mis-light and read as dark "holes" in the walls.
+    private func wrongNormalTriangleCount(_ mesh: Euclid.Mesh) -> Int {
+        let render = EuclidBridge.renderMesh(from: mesh)
+        var wrong = 0
+        for t in 0..<render.triangleCount {
+            let ia = Int(render.indices[t * 3]), ib = Int(render.indices[t * 3 + 1]), ic = Int(render.indices[t * 3 + 2])
+            let a = render.positions[ia], b = render.positions[ib], c = render.positions[ic]
+            let wind = simd_cross(b - a, c - a)
+            guard simd_length(wind) > 1e-9 else { continue }
+            let vn = render.normals[ia] + render.normals[ib] + render.normals[ic]
+            if simd_dot(simd_normalize(wind), simd_normalize(vn)) < 0 { wrong += 1 }
+        }
+        return wrong
+    }
+
+    /// Regression for the reported "holes in the walls": a face rotation must
+    /// leave EVERY rendered triangle's shading normal agreeing with its winding,
+    /// across tilt AND twist and a wide angle range. Before the flat-normal fix,
+    /// deformed wall triangles wore the tilted face normal and mis-lit as holes.
+    func testRotateFaceNeverProducesWrongNormalTriangles() throws {
+        for degrees in stride(from: -80.0, through: 80.0, by: 20.0) where abs(degrees) > 1 {
+            let angle = degrees * Double.pi / 180
+            for axis in [SIMD3<Double>(0, 0, 1), SIMD3(1, 0, 0), SIMD3(0, 1, 0)] {
+                let box = makeBox()
+                let top = try topFace(of: box)
+                let result = KernelOps.rotateFace(mesh: box, face: top, angle: angle, axis: axis)
+                XCTAssertTrue(result.isWatertight, "watertight at \(degrees)° about \(axis)")
+                XCTAssertEqual(wrongNormalTriangleCount(result), 0,
+                               "mis-lit (hole) triangles at \(degrees)° about \(axis)")
+            }
+        }
+    }
+
+    func testRotateZeroAngleIsNoOp() throws {
+        let box = makeBox()
+        let top = try topFace(of: box)
+        XCTAssertEqual(volume(KernelOps.rotateFace(mesh: box, face: top, angle: 0,
+                                                   axis: SIMD3(0, 0, 1))),
+                       volume(box), accuracy: 1e-9)
+    }
 }
