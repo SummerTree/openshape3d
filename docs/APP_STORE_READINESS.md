@@ -1,5 +1,47 @@
 # App Store readiness audit
 
+## 0. BLOCKER — no privacy manifest (`PrivacyInfo.xcprivacy`)
+
+The app has **no privacy manifest**, but it uses `UserDefaults` (2 files) — a
+"required reason" API. Since spring 2024 Apple requires apps using such APIs to
+ship a `PrivacyInfo.xcprivacy` declaring them; uploads without one are flagged or
+rejected at App Store Connect.
+
+Minimal manifest to add to the app target:
+
+```xml
+<key>NSPrivacyAccessedAPITypes</key>
+<array>
+  <dict>
+    <key>NSPrivacyAccessedAPIType</key>
+    <string>NSPrivacyAccessedAPICategoryUserDefaults</string>
+    <key>NSPrivacyAccessedAPITypeReasons</key>
+    <array><string>CA92.1</string></array>   <!-- app's own use -->
+  </dict>
+</array>
+```
+
+Also set `NSPrivacyTracking` = false, and empty `NSPrivacyCollectedDataTypes` /
+`NSPrivacyTrackingDomains` (the app collects nothing). Checked and NOT needed:
+file timestamps, system uptime, and free-disk-space APIs are unused.
+
+## What has NOT been tested — read before submitting
+
+Everything verified so far was on the **Simulator**. That leaves real gaps:
+
+| Untested | Why it matters |
+| --- | --- |
+| **Any real device** | The app is a custom **Metal** renderer. Simulator Metal is a different implementation — shader behaviour, precision and performance differ. This is the single biggest untested risk. |
+| **`xcodebuild archive` + export** | Archiving is a different path from `build`; it can fail (symbols, entitlements, bitcode settings) where a build succeeds. All builds here used `CODE_SIGNING_ALLOWED=NO`. |
+| **Code signing / provisioning** | Never exercised with a distribution cert or profile. |
+| **Import / Export** | Headline feature, real file I/O — a prime crash area. Only the menu was opened; no STEP/STL/OBJ/DXF was ever imported or exported. |
+| **Apple Pencil** | Implemented but the Simulator cannot test it. |
+| **AR Quick Look** | Needs a device. |
+| **iOS 17 at runtime** | 17.0 is compile-verified only. An API that compiles but is unavailable at runtime would crash on a real 17.x device. |
+| **Performance / memory on a heavy model** | Never profiled. A twist alone can reach ~11k triangles; real models go far beyond. |
+| **Persistence across cold launch** | Testing mostly used `OS3D_FRESH`, which starts empty and bypasses existing stored projects and any SwiftData migration path. |
+
+
 Findings from the pre-submission pass. Ordered by how much they matter for a
 1.0 launch. Nothing here blocks the build — the Release/device build succeeds —
 these are shipping-configuration issues.
