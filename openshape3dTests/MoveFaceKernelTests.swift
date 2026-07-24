@@ -328,10 +328,61 @@ final class MoveFaceKernelTests: XCTestCase {
             XCTAssertTrue(mesh.isWatertight, "each successive twist stays watertight")
             counts.append(EuclidBridge.renderMesh(from: mesh).triangleCount)
         }
-        XCTAssertLessThan(counts.last!, 4000,
+        // The subdivision budget trades resolution for a bound: once the mesh is
+        // dense the grid coarsens (eventually to n = 1), so the count PLATEAUS
+        // instead of compounding. Without it this reached 37 708 and climbing.
+        XCTAssertLessThan(counts.last!, 20_000,
                           "repeated twists stay bounded, got \(counts)")
-        XCTAssertLessThan(counts.last!, counts[1] * 4,
-                          "growth flattens out rather than compounding, got \(counts)")
+        XCTAssertEqual(Double(counts[3]), Double(counts[2]), accuracy: Double(counts[2]) * 0.1,
+                       "growth has plateaued rather than compounding, got \(counts)")
+    }
+
+    /// The reported "the twist is not smooth": the subdivision rows were being
+    /// DRAWN as feature edges, banding the wall. The overlay draws an edge where
+    /// two triangles meet above ~20°, so a smooth screw must keep essentially all
+    /// its interior seams below that — only the box's own 12 corners (subdivided
+    /// into segments, now helical) may show.
+    ///
+    /// This is what caught the fan tessellation: converging strips on one corner
+    /// folded against each other at up to 140°, so 69% of all edges were drawn.
+    func testTwistDrawsOnlyTheBoxesRealEdgesNotEveryBand() throws {
+        let box = makeBox()
+        let top = try topFace(of: box)
+        let twisted = KernelOps.rotateFace(mesh: box, face: top, angle: .pi / 2,
+                                           axis: SIMD3(0, 1, 0))
+        let render = EuclidBridge.renderMesh(from: twisted)
+        XCTAssertTrue(twisted.isWatertight)
+
+        var edgeNormals = [String: [SIMD3<Float>]]()
+        func key(_ p: SIMD3<Float>) -> String {
+            let inv: Float = 1e5
+            return "\(Int32((p.x * inv).rounded())),\(Int32((p.y * inv).rounded())),\(Int32((p.z * inv).rounded()))"
+        }
+        for t in 0..<render.triangleCount {
+            let pts = (0..<3).map { render.positions[Int(render.indices[t * 3 + $0])] }
+            let cr = simd_cross(pts[1] - pts[0], pts[2] - pts[0])
+            guard simd_length(cr) > 1e-12 else { continue }
+            let nrm = simd_normalize(cr)
+            for e in 0..<3 {
+                let k1 = key(pts[e]), k2 = key(pts[(e + 1) % 3])
+                edgeNormals[k1 < k2 ? k1 + "|" + k2 : k2 + "|" + k1, default: []].append(nrm)
+            }
+        }
+        var unpaired = 0, drawn = 0
+        for (_, ns) in edgeNormals {
+            if ns.count == 1 { unpaired += 1; continue }
+            guard ns.count == 2 else { continue }
+            let d = Double(simd_dot(ns[0], ns[1]))
+            if acos(min(max(d, -1), 1)) * 180 / .pi > 20 { drawn += 1 }
+        }
+        XCTAssertEqual(unpaired, 0, "no unpaired edges — a seam gap draws as a boundary line")
+        // The box's 12 edges, each subdivided into at most n segments, is the
+        // legitimate budget; anything beyond that is banding.
+        let n = 12
+        XCTAssertLessThanOrEqual(drawn, 12 * n,
+                                 "only the box's own corners may draw, got \(drawn) of \(edgeNormals.count)")
+        XCTAssertLessThan(Double(drawn) / Double(edgeNormals.count), 0.1,
+                          "the vast majority of seams must be smooth, got \(drawn)/\(edgeNormals.count)")
     }
 
     func testRotateZeroAngleIsNoOp() throws {

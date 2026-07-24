@@ -1008,7 +1008,14 @@ nonisolated extension KernelOps {
         // which reduces exactly to "rotate the on-face vertices, leave the rest".
         let isTwist = abs(simd_dot(a, normal)) > 0.98
         let degrees = abs(angle) * 180 / .pi
-        let n = isTwist ? min(max(Int((degrees / 3).rounded(.up)), 4), 30) : 1
+        var n = isTwist ? min(max(Int((degrees / 8).rounded(.up)), 3), 12) : 1
+        // The grid costs n² per deformed triangle, and the Rotate tool stays live
+        // so the same face gets twisted again and again on an ever-denser mesh.
+        // Trade resolution for a bounded result rather than letting it compound:
+        // the first twist of a simple body gets the full grid, a repeat twist of
+        // an already-dense one gets a coarser (eventually n = 1) rotation.
+        let budget = 40_000
+        while n > 1, mesh.polygons.count * n * n > budget { n -= 1 }
 
         var polygons = [Euclid.Polygon]()
         for polygon in mesh.triangulate().polygons {
@@ -1036,43 +1043,35 @@ nonisolated extension KernelOps {
                 }
             }
 
-            // Wholly ON the face: the rotation is rigid, so there is no twist
-            // gradient to resolve and subdividing would only multiply triangles —
-            // which is what made repeated twists compound (n² → n⁴ → …).
-            if f[0] == f[1], f[1] == f[2] {
-                emit(center + rotate(p[0] - center, by: angle),
-                     center + rotate(p[1] - center, by: angle),
-                     center + rotate(p[2] - center, by: angle))
-                continue
-            }
-
-            // Mixed triangle. `t` is constant along the edge joining the two
-            // vertices that share an on-face state and varies only toward the odd
-            // one out, so ONLY the two varying edges are subdivided. The count for
-            // an edge depends solely on its two (shared) endpoints, so both
-            // triangles meeting on it agree — the seam stays sealed with no
-            // T-junctions — while flat regions are left alone. (Two of three
-            // binary flags always match, so `odd` is well defined; the A,B,C
-            // cycle below is a rotation of v0,v1,v2 and preserves the winding.)
-            let odd = f[0] == f[1] ? 2 : (f[0] == f[2] ? 1 : 0)
-            let pA = p[(odd + 1) % 3], pB = p[(odd + 2) % 3], pC = p[odd]
-            let tA = f[(odd + 1) % 3], tC = f[odd]
-
-            // Point a fraction `s` of the way from `base` toward the odd vertex,
-            // rotated by its share of the angle — this is what screws the wall.
-            func at(_ base: Vector, _ s: Double) -> Vector {
-                let pos = base + (pC - base) * s
-                let t = tA + (tC - tA) * s
+            // Barycentric grid over the whole triangle, EVERY deformed triangle
+            // subdivided the same way. Two properties matter and both come from
+            // that uniformity:
+            //  • a sub-vertex depends only on the shared corner positions/flags,
+            //    so two triangles meeting on an edge generate identical points
+            //    along it and the result stays sealed;
+            //  • the grid refines in both directions, so it tracks the screw
+            //    surface. (A cheaper fan converging on one corner runs its strips
+            //    corner-ward instead of along the ruling; consecutive strips then
+            //    fold against each other — measured up to a 140° dihedral, which
+            //    is exactly the banding it was meant to remove.)
+            func point(_ i: Int, _ j: Int) -> Vector {
+                let w1 = Double(i) / Double(n), w2 = Double(j) / Double(n)
+                let w0 = 1 - w1 - w2
+                let pos = p[0] * w0 + p[1] * w1 + p[2] * w2
+                let t = f[0] * w0 + f[1] * w1 + f[2] * w2
                 return t > 1e-9 ? center + rotate(pos - center, by: angle * t) : pos
             }
-            var prevA = at(pA, 0), prevB = at(pB, 0)
-            for i in 1...n {
-                let s = Double(i) / Double(n)
-                let curA = at(pA, s), curB = at(pB, s)
-                emit(prevA, prevB, curB)
-                // At s == 1 both rails meet at the odd vertex — no closing quad.
-                if i < n { emit(prevA, curB, curA) }
-                prevA = curA; prevB = curB
+            var grid = [[Vector]]()
+            for i in 0...n {
+                grid.append((0...(n - i)).map { point(i, $0) })
+            }
+            for i in 0..<n {
+                for j in 0..<(n - i) {
+                    emit(grid[i][j], grid[i + 1][j], grid[i][j + 1])
+                    if i + j < n - 1 {
+                        emit(grid[i + 1][j], grid[i + 1][j + 1], grid[i][j + 1])
+                    }
+                }
             }
         }
         guard !polygons.isEmpty else { return mesh }
