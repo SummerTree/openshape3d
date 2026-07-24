@@ -6216,7 +6216,7 @@ final class EditorViewModel {
               let ray, let sketch = activeSketch, let raw = rawSketchPoint(from: ray)
         else { return clearLinePreviewIfNeeded() }
 
-        let snap = SnapEngine.snap(raw, in: sketch)
+        let snap = SnapEngine.snap(raw, in: sketch, faceLoops: activeFaceSnapLoops())
         var end = snap.point
         var willClose = false
         if let start = chainStart,
@@ -6472,9 +6472,61 @@ final class EditorViewModel {
     /// Ray → snapped plane-local point, while sketching.
     private func sketchPoint(from ray: Ray) -> SIMD2<Double>? {
         guard let raw = rawSketchPoint(from: ray) else { return nil }
-        let result = SnapEngine.snap(raw, in: activeSketch)
+        let result = SnapEngine.snap(raw, in: activeSketch, faceLoops: activeFaceSnapLoops())
         activeSnap = (result.kind, result.point)
         return result.point
+    }
+
+    /// Boundary loops of any solid face lying IN the active sketch plane, in
+    /// sketch 2D coordinates. Sketching on a bare face has no sketch geometry to
+    /// snap to, so without these a rectangle lands wherever the finger was —
+    /// straddling an edge, off centre. Cached per (plane, document revision)
+    /// because this runs on every drag frame.
+    private func activeFaceSnapLoops() -> [[SIMD2<Double>]] {
+        guard case .sketching = mode, let plane = activeSketch?.plane else { return [] }
+        var meshRevision: UInt64 = 0
+        for body in session.document.bodies { meshRevision &+= body.meshRevision }
+        let key = FaceSnapCacheKey(plane: plane, revision: session.document.bodies.count,
+                                   meshRevision: meshRevision)
+        if let cached = faceSnapCache, cached.key == key { return cached.loops }
+        let loops = faceLoops(in: plane)
+        faceSnapCache = (key, loops)
+        return loops
+    }
+
+    private struct FaceSnapCacheKey: Equatable {
+        let plane: SketchPlane
+        let revision: Int
+        let meshRevision: UInt64
+    }
+    private var faceSnapCache: (key: FaceSnapCacheKey, loops: [[SIMD2<Double>]])?
+
+    /// Every planar solid face coincident with `plane`, as 2D loops in it.
+    private func faceLoops(in plane: SketchPlane) -> [[SIMD2<Double>]] {
+        var loops: [[SIMD2<Double>]] = []
+        let n = simd_normalize(plane.normal)
+        for body in session.document.bodies {
+            let transform = body.transform
+            let scale = transform.scale
+            for face in FaceTopology.enumerateFaces(in: body.render).planar {
+                let originWorld = transform.applying(to: face.origin)
+                let faceNormal = SIMD3<Double>(Double(face.normal.x), Double(face.normal.y),
+                                               Double(face.normal.z))
+                let normalWorld = simd_normalize(transform.rotation.act(faceNormal))
+                // Same plane? (either facing — a face's normal may point away.)
+                guard abs(abs(simd_dot(normalWorld, n)) - 1) < 1e-3,
+                      abs(simd_dot(originWorld - plane.origin, n)) < 1e-3
+                else { continue }
+                let xWorld = transform.rotation.act(face.basisX)
+                let yWorld = transform.rotation.act(face.basisY)
+                func toPlane(_ p: SIMD2<Double>) -> SIMD2<Double> {
+                    plane.toLocal(originWorld + xWorld * (p.x * scale) + yWorld * (p.y * scale))
+                }
+                loops.append(face.outline.map(toPlane))
+                for hole in face.holes { loops.append(hole.map(toPlane)) }
+            }
+        }
+        return loops
     }
 
     func beginSketchStroke(ray: Ray) -> Bool {
@@ -6521,7 +6573,7 @@ final class EditorViewModel {
         // sketch can be viewed from an angle (Shapr3D).
         guard tool != nil else { return false }
 
-        var point = SnapEngine.snap(raw, in: activeSketch).point
+        var point = SnapEngine.snap(raw, in: activeSketch, faceLoops: activeFaceSnapLoops()).point
         if tool == .line, let anchor = chainAnchor {
             if simd_length(raw - anchor) <= SnapEngine.pointTolerance {
                 point = anchor // continue the chain exactly at the last endpoint
@@ -6672,7 +6724,7 @@ final class EditorViewModel {
         else { return }
         _ = clearLinePreviewIfNeeded() // the tap supersedes any hover preview
 
-        let target = SnapEngine.snap(raw, in: sketch).point
+        let target = SnapEngine.snap(raw, in: sketch, faceLoops: activeFaceSnapLoops()).point
 
         guard tapChainActive, let anchor = chainAnchor, let start = chainStart else {
             // Not chaining: a tap on geometry selects it (dimension/constraint

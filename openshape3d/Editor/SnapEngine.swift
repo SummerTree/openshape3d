@@ -12,7 +12,7 @@ import simd
 /// ("Endpoint", "Midpoint", …), which is how you know the point you are about
 /// to commit is the one you meant rather than a near miss.
 nonisolated enum SnapKind: String, Sendable, Equatable, CaseIterable {
-    case endpoint, midpoint, center, grid, free
+    case endpoint, midpoint, center, edge, grid, free
 
     /// User-facing name, or nil for snaps not worth announcing — the grid is
     /// always on, so labelling it would just add noise to every stroke.
@@ -21,6 +21,7 @@ nonisolated enum SnapKind: String, Sendable, Equatable, CaseIterable {
         case .endpoint: "Endpoint"
         case .midpoint: "Midpoint"
         case .center: "Center"
+        case .edge: "Edge"
         case .grid, .free: nil
         }
     }
@@ -33,7 +34,7 @@ nonisolated struct SnapResult {
     /// True when the point came from existing geometry rather than the grid.
     var snappedToPoint: Bool {
         switch kind {
-        case .endpoint, .midpoint, .center: true
+        case .endpoint, .midpoint, .center, .edge: true
         case .grid, .free: false
         }
     }
@@ -54,38 +55,94 @@ nonisolated enum SnapEngine {
     /// corner resolves the way the user expects instead of by float noise.
     private static func priority(_ kind: SnapKind) -> Int {
         switch kind {
-        case .endpoint: 3
-        case .midpoint: 2
-        case .center: 1
+        case .endpoint: 4
+        case .midpoint: 3
+        case .center: 2
+        // Sliding along an edge is the weakest commitment — any named point on
+        // that edge should win a tie, or you could never land exactly on a
+        // corner while tracing the boundary.
+        case .edge: 1
         case .grid, .free: 0
         }
     }
 
-    static func snap(_ p: SIMD2<Double>, in sketch: Sketch?) -> SnapResult {
-        // 1. Existing sketch points win.
-        if let sketch {
-            var best: (candidate: SnapCandidate, distance: Double)?
-            for candidate in snapCandidates(of: sketch) {
-                let d = simd_length(candidate.point - p)
-                guard d <= pointTolerance else { continue }
-                if let current = best {
-                    let better = priority(candidate.kind) > priority(current.candidate.kind)
-                        || (priority(candidate.kind) == priority(current.candidate.kind)
-                            && d < current.distance)
-                    if !better { continue }
-                }
-                best = (candidate, d)
+    /// `faceLoops` are the boundary loops (outer + holes) of the solid face the
+    /// sketch plane lies on, in sketch 2D coordinates. Sketching on a blank face
+    /// otherwise has NOTHING to snap to but the grid, which is why a rectangle
+    /// drawn on a face lands wherever the finger happened to be — off the edge,
+    /// off centre. These give the face's own corners, edge midpoints, centre and
+    /// edges the same status as existing sketch geometry.
+    static func snap(
+        _ p: SIMD2<Double>, in sketch: Sketch?, faceLoops: [[SIMD2<Double>]] = []
+    ) -> SnapResult {
+        var best: (candidate: SnapCandidate, distance: Double)?
+        func consider(_ candidate: SnapCandidate) {
+            let d = simd_length(candidate.point - p)
+            guard d <= pointTolerance else { return }
+            if let current = best {
+                let better = priority(candidate.kind) > priority(current.candidate.kind)
+                    || (priority(candidate.kind) == priority(current.candidate.kind)
+                        && d < current.distance)
+                if !better { return }
             }
-            if let best {
-                return SnapResult(point: best.candidate.point, kind: best.candidate.kind)
-            }
+            best = (candidate, d)
         }
+
+        // 1. Existing sketch points and the underlying face compete together, so
+        //    a face corner isn't shadowed by a farther sketch endpoint.
+        if let sketch {
+            for candidate in snapCandidates(of: sketch) { consider(candidate) }
+        }
+        for candidate in faceSnapCandidates(loops: faceLoops, near: p) { consider(candidate) }
+        if let best {
+            return SnapResult(point: best.candidate.point, kind: best.candidate.kind)
+        }
+
         // 2. Grid.
         let snapped = SIMD2(
             (p.x / gridSpacing).rounded() * gridSpacing,
             (p.y / gridSpacing).rounded() * gridSpacing
         )
         return SnapResult(point: snapped, kind: .grid)
+    }
+
+    /// Snappable points from the face's boundary: every corner, every edge
+    /// midpoint, the centre of each loop, plus the closest point ON each edge
+    /// (so you can slide along a boundary and stay exactly on it).
+    static func faceSnapCandidates(
+        loops: [[SIMD2<Double>]], near p: SIMD2<Double>
+    ) -> [SnapCandidate] {
+        var out: [SnapCandidate] = []
+        for loop in loops where loop.count >= 2 {
+            var sum = SIMD2<Double>.zero
+            for corner in loop {
+                out.append(SnapCandidate(point: corner, kind: .endpoint))
+                sum += corner
+            }
+            // Loop centre — the point you want when centring a cut on a face.
+            if loop.count >= 3 {
+                out.append(SnapCandidate(point: sum / Double(loop.count), kind: .center))
+            }
+            for i in 0..<loop.count {
+                let a = loop[i], b = loop[(i + 1) % loop.count]
+                out.append(SnapCandidate(point: (a + b) / 2, kind: .midpoint))
+                if let onEdge = closestPointOnSegment(p, a, b) {
+                    out.append(SnapCandidate(point: onEdge, kind: .edge))
+                }
+            }
+        }
+        return out
+    }
+
+    /// Closest point to `p` on segment a→b, or nil if the segment is degenerate.
+    private static func closestPointOnSegment(
+        _ p: SIMD2<Double>, _ a: SIMD2<Double>, _ b: SIMD2<Double>
+    ) -> SIMD2<Double>? {
+        let ab = b - a
+        let len2 = simd_dot(ab, ab)
+        guard len2 > 1e-12 else { return nil }
+        let t = min(max(simd_dot(p - a, ab) / len2, 0), 1)
+        return a + ab * t
     }
 
     /// Every snappable point, untyped — kept for callers that only need
