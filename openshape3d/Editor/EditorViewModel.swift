@@ -578,6 +578,14 @@ final class EditorViewModel {
                     segments: Self.chainAnchorMarkerSegments(at: anchor, on: sketch.plane),
                     color: pendingColor
                 ))
+                // Closing highlight: when the hover preview is snapped onto the
+                // start point, ring it so the user sees the loop will close.
+                if lineWillClose, let start = chainStart {
+                    scene.sketchLines.append(SketchLineBatch(
+                        segments: Self.closeLoopMarkerSegments(at: start, on: sketch.plane),
+                        color: selectedColor
+                    ))
+                }
             }
             // Selection gizmo (plan §B6, spec §1.10): move handle at the
             // selection centroid plus a rotate ring around it.
@@ -5610,10 +5618,69 @@ final class EditorViewModel {
     /// the line (to dimension it) instead of extending a chain.
     private(set) var tapChainActive = false
 
+    /// True while a hover is previewing the next line segment (pointer/Pencil),
+    /// so the preview can be torn down without disturbing a real drag.
+    private var lineHoverPreviewActive = false
+    /// The hovered next-segment endpoint sits on the chain's start, so the next
+    /// tap will CLOSE the loop — the overlay highlights the start to signal it.
+    private(set) var lineWillClose = false
+    /// Stable id for the hover preview entity (keeps render diffing cheap).
+    private let linePreviewID = UUID()
+
     private func clearChain() {
         chainAnchor = nil
         chainStart = nil
         tapChainActive = false
+        _ = clearLinePreviewIfNeeded()
+    }
+
+    /// Rubber-band preview for the line tool: while a tap-chain is open, show the
+    /// segment from the current anchor to the hovered point (pointer/Pencil),
+    /// snapped, and flag when the hover sits on the chain's start so the next tap
+    /// closes the loop. A nil ray (hover left) or a non-line-chain state clears
+    /// it. Returns true when the visible state changed so the viewport redraws.
+    @discardableResult
+    func updateLinePreview(ray: Ray?) -> Bool {
+        guard case .sketching(_, .some(.line)) = mode,
+              tapChainActive, let anchor = chainAnchor,
+              let ray, let sketch = activeSketch, let raw = rawSketchPoint(from: ray)
+        else { return clearLinePreviewIfNeeded() }
+
+        let snap = SnapEngine.snap(raw, in: sketch)
+        var end = snap.point
+        var willClose = false
+        if let start = chainStart,
+           simd_length(start - anchor) > SnapEngine.pointTolerance,
+           simd_length(raw - start) <= Self.lineCloseTolerance {
+            end = start
+            willClose = true
+        }
+        let entity = SketchEntity.line(id: linePreviewID, a: anchor, b: end)
+        let changed = pendingEntity != entity || lineWillClose != willClose
+                || !lineHoverPreviewActive
+        pendingEntity = entity
+        sketchStrokeStart = anchor
+        sketchStrokeCurrent = end
+        if willClose {
+            activeSnap = (kind: .endpoint, point: end)
+        } else {
+            activeSnap = snap.snappedToPoint ? (kind: snap.kind, point: end) : nil
+        }
+        lineWillClose = willClose
+        lineHoverPreviewActive = true
+        return changed
+    }
+
+    @discardableResult
+    private func clearLinePreviewIfNeeded() -> Bool {
+        guard lineHoverPreviewActive else { return false }
+        lineHoverPreviewActive = false
+        lineWillClose = false
+        pendingEntity = nil
+        sketchStrokeStart = nil
+        sketchStrokeCurrent = nil
+        activeSnap = nil
+        return true
     }
 
     /// A small "+" marker (world-space segment pairs) at the line chain's
@@ -5631,6 +5698,28 @@ final class EditorViewModel {
             let w = plane.toWorld($0)
             return SIMD3(Float(w.x), Float(w.y), Float(w.z))
         }
+    }
+
+    /// A small ring (world-space segment pairs) at the chain's start, drawn when
+    /// a hover is about to close the loop — the Shapr3D "you're closing" cue.
+    nonisolated static func closeLoopMarkerSegments(
+        at start: SIMD2<Double>, on plane: SketchPlane
+    ) -> [SIMD3<Float>] {
+        let radius = 0.5
+        let steps = 16
+        var out: [SIMD3<Float>] = []
+        func world(_ a: Double) -> SIMD3<Float> {
+            let p = start + SIMD2(cos(a), sin(a)) * radius
+            let w = plane.toWorld(p)
+            return SIMD3(Float(w.x), Float(w.y), Float(w.z))
+        }
+        for i in 0..<steps {
+            let a0 = Double(i) / Double(steps) * 2 * .pi
+            let a1 = Double(i + 1) / Double(steps) * 2 * .pi
+            out.append(world(a0))
+            out.append(world(a1))
+        }
+        return out
     }
 
     /// The active sketch while in sketching mode.
@@ -6011,6 +6100,7 @@ final class EditorViewModel {
               let sketch = activeSketch,
               let raw = rawSketchPoint(from: ray)
         else { return }
+        _ = clearLinePreviewIfNeeded() // the tap supersedes any hover preview
 
         let target = SnapEngine.snap(raw, in: sketch).point
 

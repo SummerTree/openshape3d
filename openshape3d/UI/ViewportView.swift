@@ -489,6 +489,15 @@ final class ViewportCoordinator: NSObject, ViewportGestureDelegate, ViewportCame
         viewModel.presentSelectThrough(ray: ray)
     }
 
+    /// Pointer / Pencil hover → line-tool rubber-band preview between taps.
+    func gestureHovered(at point: CGPoint?) {
+        var hoverRay: Ray?
+        if let point { hoverRay = ray(at: point) }
+        if viewModel.updateLinePreview(ray: hoverRay) {
+            sceneDidChange()
+        }
+    }
+
     /// World→screen projection for AreaSelect membership tests; nil for
     /// points behind the camera. Matches the renderer camera exactly (same
     /// view/projection matrices, ortho included — clip.w stays 1 there).

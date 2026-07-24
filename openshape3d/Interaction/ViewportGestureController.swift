@@ -27,6 +27,9 @@ protocol ViewportGestureDelegate: AnyObject {
     /// Long-press (plan §B13, spec §8.3): Select Through popup listing every
     /// body under the point through depth.
     func gestureLongPressed(at point: CGPoint)
+    /// Pointer / Apple-Pencil hover moved to `point` (no touch down). Drives the
+    /// line tool's rubber-band preview between taps. `nil` point = hover ended.
+    func gestureHovered(at point: CGPoint?)
 }
 
 final class ViewportGestureController: NSObject {
@@ -82,6 +85,12 @@ final class ViewportGestureController: NSObject {
             target: self, action: #selector(handleLongPress(_:))
         )
         view.addGestureRecognizer(longPress)
+
+        // Pointer / Pencil hover: rubber-band preview for the line tool between
+        // taps (trackpad, mouse, or M2+ Pencil hover). Touch-only devices simply
+        // never fire it — tap-to-place still works without a preview.
+        let hover = UIHoverGestureRecognizer(target: self, action: #selector(handleHover(_:)))
+        view.addGestureRecognizer(hover)
     }
 
     private func redraw() {
@@ -202,6 +211,18 @@ final class ViewportGestureController: NSObject {
     @objc private func handleLongPress(_ gesture: UILongPressGestureRecognizer) {
         guard let view, gesture.state == .began else { return }
         delegate?.gestureLongPressed(at: gesture.location(in: view))
+    }
+
+    @objc private func handleHover(_ gesture: UIHoverGestureRecognizer) {
+        guard let view else { return }
+        switch gesture.state {
+        case .began, .changed:
+            delegate?.gestureHovered(at: gesture.location(in: view))
+        case .ended, .cancelled, .failed:
+            delegate?.gestureHovered(at: nil)
+        default:
+            break
+        }
     }
 }
 
