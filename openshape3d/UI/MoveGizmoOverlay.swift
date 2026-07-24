@@ -49,7 +49,7 @@ struct MoveGizmoOverlay: View {
                 // Scale mode shows square grips at the axis ends (drag any to
                 // scale about the centre); move mode shows the directional arrows.
                 if viewModel.gizmoIsScale {
-                    ForEach(axes, id: \.self) { scaleHandle($0, ctx) }
+                    ForEach(axes, id: \.self) { scaleHandle($0, ctx, center: center) }
                 } else {
                     ForEach(axes, id: \.self) { axisArrow($0, ctx) }
                 }
@@ -60,20 +60,43 @@ struct MoveGizmoOverlay: View {
         }
     }
 
-    // MARK: - Axis scale grip (square handle at the axis end)
+    // MARK: - Axis scale grip (square head with a stem trailing to the pivot)
 
+    /// A Shapr3D-style scale grip: a rounded-square head at the axis end with a
+    /// thin rectangular stem trailing back toward the centre pivot, so it reads
+    /// as "drag me outward/inward to scale". Drawn outline-behind-fill (like the
+    /// arrows) so the whole key shape carries one continuous dark outline.
     @ViewBuilder
-    private func scaleHandle(_ part: GizmoPart, _ ctx: ProjectionContext) -> some View {
+    private func scaleHandle(_ part: GizmoPart, _ ctx: ProjectionContext, center: CGPoint) -> some View {
         if let tip = GizmoScreenLayout.axisAnchor(part, project: ctx.project) {
             let colored = viewModel.gizmoHighlight == part ? Self.highlight : Self.fill
-            RoundedRectangle(cornerRadius: 4, style: .continuous)
-                .fill(colored)
-                .overlay(RoundedRectangle(cornerRadius: 4, style: .continuous)
-                    .stroke(Self.outline, lineWidth: 2))
-                .frame(width: 22, height: 22)
-                .position(tip)
-                .accessibilityIdentifier("GizmoScale-\(part.axisName)")
+            // Direction from the head back toward the pivot; fall back to a fixed
+            // heading if the head sits on top of the pivot (degenerate).
+            let dx = center.x - tip.x, dy = center.y - tip.y
+            let len = hypot(dx, dy)
+            let ux = len > 0.5 ? dx / len : 0, uy = len > 0.5 ? dy / len : 1
+            let head: CGFloat = 20, stem: CGFloat = 15, stemW: CGFloat = 8
+            // Stem runs from just inside the head toward the pivot.
+            let s0 = CGPoint(x: tip.x + ux * (head / 2 - 3), y: tip.y + uy * (head / 2 - 3))
+            let s1 = CGPoint(x: tip.x + ux * (head / 2 + stem), y: tip.y + uy * (head / 2 + stem))
+            ZStack {
+                // Outline pass (behind, fatter).
+                stemPath(s0, s1).stroke(Self.outline,
+                    style: StrokeStyle(lineWidth: stemW + 4, lineCap: .round))
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(Self.outline).frame(width: head + 4, height: head + 4).position(tip)
+                // Fill pass (front).
+                stemPath(s0, s1).stroke(colored,
+                    style: StrokeStyle(lineWidth: stemW, lineCap: .round))
+                RoundedRectangle(cornerRadius: 5, style: .continuous)
+                    .fill(colored).frame(width: head, height: head).position(tip)
+            }
+            .accessibilityIdentifier("GizmoScale-\(part.axisName)")
         }
+    }
+
+    private func stemPath(_ a: CGPoint, _ b: CGPoint) -> Path {
+        Path { p in p.move(to: a); p.addLine(to: b) }
     }
 
     // MARK: - Axis translate arrow (flat, outlined — like the extrude handle)
