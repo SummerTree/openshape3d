@@ -121,7 +121,34 @@ of detecting the unsupported input and refusing.
   (AR Quick Look) both run out-of-process, so neither requires
   `NSPhotoLibraryUsageDescription` nor `NSCameraUsageDescription`.
 - **Orientations**: all four on iPad, three on iPhone.
-- **746 unit tests pass.**
+- **746 unit tests pass** (0 failures).
+
+## Automated suite results
+
+| Suite | Result |
+| --- | --- |
+| `openshape3dTests` (unit) | **746 passed, 0 failed** |
+| `openshape3dUITests` | **85 tests / 43 suites, 3 failed** (39 min) |
+
+The three UI failures, each re-run in isolation:
+
+| Test | Isolation | Verdict |
+| --- | --- | --- |
+| `ItemsUITests.testItemsPanelVisibilityRenameAndDelete` | **passes** | long-run flake |
+| `SymbolUITests.testMakeSymbolInsertTwiceAndRenameInItems` | **passes** | long-run flake |
+| `FaceFlowUITests.testTypeNegativeIntoArrowPill` | **still fails** | real — see below |
+
+The two flakes share a signature — both assert *"Submitting the field should
+rename…"* and both drive a rename text field. That points at keyboard/focus
+state leaking between tests in a long run rather than an app defect, but it is
+worth stabilising so the suite is trustworthy as a release gate.
+
+`testTypeNegativeIntoArrowPill` is **not** a flake: it fails in the full run AND
+in isolation on **iPad Air 13-inch (M3)**, while passing repeatedly on **iPad Pro
+13-inch (M5)**. Device-dependent, so either the test hardcodes coordinates that
+don't map on the Air, or typing a negative into the pill genuinely fails to
+commit an inward push at that geometry. Needs a look before relying on the
+suite as a gate — and if it is the latter, it is a user-facing bug.
 
 ## Feature walkthrough on iPad — all worked
 
