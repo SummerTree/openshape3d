@@ -17,13 +17,18 @@ import CoreGraphics
 nonisolated enum GizmoScreenLayout {
     /// Gizmo-local anchor distances (match GizmoGeometry).
     static let armLocal: Float = 0.82    // axis arrow
-    static let ringLocal: Float = 0.62   // rotation ring radius
+    /// Rotation arcs sit OUTSIDE the move arrows (armLocal) so the two don't
+    /// share space — a grab meant for a move handle no longer catches a rotate
+    /// arc. (They used to be at 0.62, tucked among the move controls.)
+    static let ringLocal: Float = 0.98
     static let planeLocal: Float = 0.235 // plane-tile centre
 
     /// Screen grab tolerances (points). Generous — these are touch targets.
     static let arrowHitRadius: CGFloat = 44
     static let planeHitRadius: CGFloat = 20
-    static let ringHitRadius: CGFloat = 40
+    /// Rotation arcs get a big touch band — they are now off on their own
+    /// (outside the move arrows), so a generous target is safe and grabbable.
+    static let ringHitRadius: CGFloat = 50
     /// Dead zone around the pivot (the free-move dot). A tap here grabs nothing
     /// rather than a random nearby handle, and it keeps the generous arrow band
     /// from claiming a dead-centre tap.
@@ -49,9 +54,9 @@ nonisolated enum GizmoScreenLayout {
     static func ringPolyline(_ part: GizmoPart,
                              project: (SIMD3<Float>) -> CGPoint?) -> [CGPoint] {
         let (u, v) = GizmoGeometry.ringBasis(for: part)
-        let a0 = Float.pi / 4 - 22 * .pi / 180
-        let a1 = Float.pi / 4 + 22 * .pi / 180
-        let steps = 14
+        let a0 = Float.pi / 4 - 15 * .pi / 180
+        let a1 = Float.pi / 4 + 15 * .pi / 180
+        let steps = 12
         var pts: [CGPoint] = []
         for i in 0...steps {
             let a = a0 + (a1 - a0) * Float(i) / Float(steps)
