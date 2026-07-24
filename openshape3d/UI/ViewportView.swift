@@ -358,6 +358,7 @@ final class ViewportCoordinator: NSObject, ViewportGestureDelegate, ViewportCame
                         faceScaleInitialDist = max(
                             hypot(point.x - center.x, point.y - center.y), 12)
                         faceScaleDragActive = true
+                        viewModel.gizmoHighlight = part   // light up the grabbed grip
                         return true
                     }
                     return false
@@ -470,6 +471,7 @@ final class ViewportCoordinator: NSObject, ViewportGestureDelegate, ViewportCame
     func gestureDragEnded(at point: CGPoint) {
         if faceScaleDragActive {
             faceScaleDragActive = false
+            viewModel.gizmoHighlight = nil
             viewModel.endFaceScale()
             sceneDidChange()
             return
