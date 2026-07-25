@@ -10,6 +10,21 @@ See [Geometry kernels](#geometry-kernels-occt--euclid).
 ![Platform](https://img.shields.io/badge/platform-iPadOS%20%7C%20iOS-blue)
 ![Swift](https://img.shields.io/badge/Swift-5-orange)
 
+## Screenshots
+
+Sketch on a plane or a body face, pull the profile into a solid, then blend the
+edges — every step recorded as an editable feature.
+
+| Pick a sketch plane | Push/pull to a solid | Fillet the edges |
+| :---: | :---: | :---: |
+| <img src="docs/screenshots/ipad-sketch-plane.jpg" width="270" alt="Sketch plane tiles at the origin"> | <img src="docs/screenshots/ipad-push-pull.jpg" width="270" alt="Extrude bar armed on a face"> | <img src="docs/screenshots/ipad-fillet.jpg" width="270" alt="Fillet edge picking"> |
+
+The same tools on iPhone — the contextual bars adapt to compact width.
+
+| | | |
+| :---: | :---: | :---: |
+| <img src="docs/screenshots/iphone-hero.jpg" width="200" alt="Solid in the viewport on iPhone"> | <img src="docs/screenshots/iphone-push-pull.jpg" width="200" alt="Extrude bar on iPhone"> | <img src="docs/screenshots/iphone-gallery.jpg" width="200" alt="Project gallery on iPhone"> |
+
 ## Getting started
 
 **Install [Git LFS](https://git-lfs.com) before cloning.** The prebuilt
