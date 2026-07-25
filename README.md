@@ -13,7 +13,7 @@ See [Geometry kernels](#geometry-kernels-occt--euclid).
 ## Screenshots
 
 Sketch on a plane or a body face, pull the profile into a solid, then blend the
-edges — every step recorded as an editable feature.
+edges — every operation undoable.
 
 | Pick a sketch plane | Push/pull to a solid | Fillet the edges |
 | :---: | :---: | :---: |
