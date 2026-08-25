@@ -425,11 +425,31 @@ static TopoDS_Wire PolyWire(NSData *loop, double z) {
                                     op:(NSInteger)op {
     if (a == nil || b == nil) return nil;
     try {
+        // BRepAlgoAPI_Algo::Shape() is documented as "does NOT check if the
+        // shape is built" — reading it without IsDone()/HasErrors() can hand
+        // back a partial or invalid solid, which then becomes a body's source
+        // of truth and gets persisted (2026-08-25 review round 4). This was
+        // the only op in the file reading a builder result unchecked.
         TopoDS_Shape result;
         switch (op) {
-            case 0: result = BRepAlgoAPI_Fuse(a->_shape, b->_shape).Shape(); break;
-            case 1: result = BRepAlgoAPI_Cut(a->_shape, b->_shape).Shape(); break;
-            default: result = BRepAlgoAPI_Common(a->_shape, b->_shape).Shape(); break;
+            case 0: {
+                BRepAlgoAPI_Fuse builder(a->_shape, b->_shape);
+                if (!builder.IsDone() || builder.HasErrors()) return nil;
+                result = builder.Shape();
+                break;
+            }
+            case 1: {
+                BRepAlgoAPI_Cut builder(a->_shape, b->_shape);
+                if (!builder.IsDone() || builder.HasErrors()) return nil;
+                result = builder.Shape();
+                break;
+            }
+            default: {
+                BRepAlgoAPI_Common builder(a->_shape, b->_shape);
+                if (!builder.IsDone() || builder.HasErrors()) return nil;
+                result = builder.Shape();
+                break;
+            }
         }
         if (result.IsNull()) return nil;
         OCCTShape *out = [OCCTShape new];
@@ -647,6 +667,12 @@ static TopoDS_Wire PolyWire(NSData *loop, double z) {
                 }
                 if (hit) openFaces.Append(face);
             }
+            // The caller ASKED for openings but nothing matched. Falling
+            // through to the fully-enclosed branch silently sealed the body:
+            // IsDone() passes, a valid closed hollow comes back, and the user
+            // gets a shell with no opening and no diagnostic (2026-08-25
+            // review round 4). Refuse instead, so the error surfaces.
+            if (openFaces.IsEmpty()) return nil;
         }
 
         BRepOffsetAPI_MakeThickSolid mk;

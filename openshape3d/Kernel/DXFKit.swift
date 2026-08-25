@@ -34,6 +34,14 @@ nonisolated enum DXFKit {
         $ACADVER
         1
         AC1009
+        9
+        $INSUNITS
+        70
+        4
+        9
+        $MEASUREMENT
+        70
+        1
         0
         ENDSEC
         0

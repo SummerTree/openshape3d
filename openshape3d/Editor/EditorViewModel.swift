@@ -9158,6 +9158,16 @@ final class EditorViewModel {
             errorMessage = "\"\(name)\" isn't a valid variable name."
             return
         }
+        // Uniqueness was unchecked: renaming `b` onto an existing `a` was
+        // accepted, `b` then resolved to 0 as a duplicate, and every formula
+        // that said `b` silently started reading `a`'s value instead
+        // (2026-08-25 review round 4).
+        guard !session.document.variables.contains(where: {
+            $0.id != id && $0.name.caseInsensitiveCompare(trimmedName) == .orderedSame
+        }) else {
+            errorMessage = "A variable named \"\(trimmedName)\" already exists."
+            return
+        }
         guard before.name != trimmedName || before.expression != expression else { return }
         var after = before
         after.name = trimmedName

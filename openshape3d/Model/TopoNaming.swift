@@ -152,7 +152,19 @@ nonisolated struct SignatureNaming: TopoNaming {
         for face in faces {
             var s = score(face.signature, against: ref.signature, bboxDiag: diag)
             // Boost candidates whose recorded role (from the table) matches the ref.
-            if let table, let role = roleFromTable(for: face, table: table, bboxDiag: diag),
+            //
+            // ONLY when the candidate actually points the right way. The base
+            // weights are chosen so an orthogonal-or-worse face caps at 0.5 <
+            // resolveThreshold (see the comment above), but adding the boost
+            // AFTER that cap defeated it: a face pointing the opposite way
+            // reached 0.5 + 0.2 = 0.7 and resolved. On a plate whose +Y face
+            // an upstream edit removed, the ref then silently bound to the −Y
+            // face and the push/pull deformed the wrong side, with no broken-
+            // ref badge (2026-08-25 review round 4). Gating on the alignment
+            // term itself — not on the composite score — keeps the legitimate
+            // "moved and resized but same orientation" case resolving.
+            if Self.normalAlignment(face.signature, ref.signature) > 0,
+               let table, let role = roleFromTable(for: face, table: table, bboxDiag: diag),
                role == ref.role {
                 s += Self.roleBoost
             }
@@ -173,7 +185,7 @@ nonisolated struct SignatureNaming: TopoNaming {
     private func score(
         _ candidate: FaceSignature, against ref: FaceSignature, bboxDiag diag: Double
     ) -> Double {
-        let nAlign = max(0, simd_dot(Self.unit(candidate.normal), Self.unit(ref.normal)))
+        let nAlign = Self.normalAlignment(candidate, ref)
         let dist = simd_length(candidate.centroid - ref.centroid)
         let cProx = 1 - min(1, dist / max(diag, 1e-9))
         let aSim: Double
@@ -183,6 +195,13 @@ nonisolated struct SignatureNaming: TopoNaming {
             aSim = candidate.area < 1e-12 ? 1 : 0
         }
         return Self.wNormal * nAlign + Self.wCentroid * cProx + Self.wArea * aSim
+    }
+
+    /// How well a candidate's normal agrees with the reference's, clamped to
+    /// [0, 1]. Zero means orthogonal or pointing away — the case the weights
+    /// are designed to make unresolvable.
+    static func normalAlignment(_ candidate: FaceSignature, _ ref: FaceSignature) -> Double {
+        max(0, simd_dot(unit(candidate.normal), unit(ref.normal)))
     }
 
     /// The role the `table` would assign to `face` (its closest entry by signature).

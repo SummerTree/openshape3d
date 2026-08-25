@@ -142,6 +142,45 @@ final class SignatureNamingTests: XCTestCase {
                      "the referenced +Z face does not exist here → nil")
     }
 
+    /// The role boost must never let a face pointing the WRONG WAY resolve.
+    ///
+    /// The base weights cap an orthogonal-or-worse candidate at 0.5, below the
+    /// 0.6 threshold — but the boost used to be added after that cap, so an
+    /// opposite-facing face reached 0.7 and won. On a plate whose referenced
+    /// face an upstream edit removed, the ref then bound to the far side and
+    /// the push/pull deformed the wrong face, silently (review round 4).
+    /// `testRemovedFaceResolvesToNil` cannot catch this: it passes
+    /// `table: nil`, so the boost never applies there.
+    func testRoleBoostCannotResolveAnOppositeFacingFace() {
+        // Slab 8×8×2: capture the +Y (top) face…
+        let spec = PrimitiveSpec.box(width: 8, depth: 8, height: 2)
+        let slab = Body(name: "Slab", euclidMesh: .primitive(spec), revision: 0)
+        let table = naming.faceTable(
+            for: slab, createdBy: FeatureID(), scheme: .primitive(spec))
+        let top = try! XCTUnwrap(signature(table, role: .boxFace(.py)))
+        let ref = faceRef(.boxFace(.py), top, on: slab)
+
+        // …then resolve against a body that has ONLY a −Y-facing face at that
+        // role. Flipping the slab upside down puts an identical-area face in
+        // the same place, pointing the opposite way.
+        var flipped = slab
+        flipped.transform.rotation = simd_quatd(angle: .pi, axis: SIMD3(1, 0, 0))
+        let flippedTable = naming.faceTable(
+            for: flipped, createdBy: FeatureID(), scheme: .primitive(spec))
+
+        // Whatever it picks, it must not be a face pointing away from the ref.
+        if let resolved = naming.resolve(ref, in: flipped, table: flippedTable),
+           let planar = resolved.planar {
+            let alignment = simd_dot(
+                simd_normalize(SIMD3<Double>(Double(planar.normal.x),
+                                             Double(planar.normal.y),
+                                             Double(planar.normal.z))),
+                simd_normalize(top.normal))
+            XCTAssertGreaterThan(alignment, 0,
+                                 "resolved to a face pointing the wrong way")
+        }
+    }
+
     // MARK: - Bonus: resolve is robust to a hole punched in the face
 
     func testResolveSurvivesHolePunchedInFace() {

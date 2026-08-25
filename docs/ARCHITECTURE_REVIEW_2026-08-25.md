@@ -230,6 +230,80 @@ implementation); `MeshQuantize.key` is trap-free for every Float input;
 degenerate-safe; `KernelShellTests`, `KernelBlendTests`, `SolverCoreTests`
 and `FilletFallbackTests` are genuinely strong tests.
 
+---
+
+# Round 4 — the last unreviewed files
+
+## R4 fixed
+- **A variable rename onto an existing name was accepted**, after which the
+  renamed variable resolved to 0 as a duplicate and every formula that
+  referenced it silently started reading the OTHER variable's value. Now
+  refused with a message. ✅
+- **DXF export declared its units only in a human-readable comment.** With
+  `$INSUNITS` absent, DXF's defined meaning is *unitless*, so an
+  inch-configured reader opened our files at 25.4×. Now emits
+  `$INSUNITS = 4` (mm) and `$MEASUREMENT = 1`. ✅
+
+## R4 open — note the WIRING status first
+
+**Two whole subsystems the status doc lists as shipped are not wired up:**
+`ProjectMergeKit` ("6.5 Insert Project WITH editable history") is **test-only**
+— no view-model method, no command, no UI; and `CommandRegistry`
+("8.4 Hotkeys + fuzzy Command Search") is **dead code** — nothing references
+it anywhere outside its own tests, and no key handler exists. `SketchPatternKit`
+is likewise unreachable (its `SketchPatternLink` values are persisted and
+remapped, but nothing ever regenerates a link). Their defects below are
+therefore LATENT, not live — but the status doc needs correcting.
+
+**R4-1 (CRITICAL, latent): Insert Project never remaps
+`BooleanIntent.resolvedTargets`.** That ref carries both a `FeatureID` and a
+`BodyID` and is populated for every extrude-into-a-body. After an insert the
+guest's target ID is stale, so the guest's cut either silently disappears or
+— in the same-template collision case the file's own header says it exists to
+prevent — resolves to the HOST's body and cuts that instead. Its tests only
+build `.boolean` nodes, which *are* remapped.
+
+**R4-2 (CRITICAL, latent): inserted images and symbols keep their identities
+and are never translated** — a collided ID makes hide/move/delete hit the
+host's image, and an inserted project's tracing images stay behind while its
+geometry moves. Zero test coverage.
+
+**R4-3 (SIGNIFICANT, latent): the insert rollback arithmetic is backwards** —
+it *un*-rolls-back the steps the user deliberately rolled back; the guarding
+test is degenerate (rollback index 1 on a 1-node host).
+
+**R4-4 (SIGNIFICANT, LIVE): deleting a variable silently zeroes its
+dependents** with no reference check and no warning. The code argues a 0
+"surfaces the breakage" — true for an extrude distance, but a 0 rotate angle
+is an invisible no-op and a 0 scale factor is a silent collapse. It is also
+not atomically undoable: one Cmd-Z restores either the variable or the
+collapsed sketch, never both.
+
+**R4-5 (SIGNIFICANT, LIVE): DXF export writes structurally incomplete
+POLYLINE records** (missing the required vertex-location record on the
+header) and has no `TABLES`/`BLOCKS` section, so a strict R12 reader drops
+every entity that isn't a LINE, CIRCLE or ARC — which is everything except
+those three (rects, ellipses, polygons and splines all export as POLYLINE).
+Export also discards construction-geometry status, so reference lines come
+back as profile-forming model lines, and angles aren't normalised to DXF's
+0–360 range. Import applies no unit conversion either (it never reads
+`$INSUNITS`), so inch-unit files still land 25.4× too small.
+
+**R4-6 (MINOR, dead code): CommandRegistry's fuzzy search is a strict
+subsequence test over the title only** — `cut` returns "Make Construction"
+and not "Subtract"; `hole`, `pocket` and `boolean` return nothing. Its
+Single-Key-Action logic also suppresses the launcher's own hotkey, and there
+is no mode gating at all (nothing structurally prevents Extrude firing
+mid-sketch).
+
+**Also open:** pattern specs aren't translation-equivariant on insert (a
+circular pattern re-evaluates about the world origin); `PatternKit`'s
+pure-translation test rejects 180°, exploding an axis-aligned rect into loose
+lines; degenerate pattern inputs (zero direction/spacing/axis) silently emit
+N coincident bodies with no error; DXF export has no non-finite guard while
+import drops them; `SnapEngine`'s tolerances are fixed model-space values
+that don't scale with zoom.
+
 ## R2 open — highest value first
 
 **R2-1 (CRITICAL, unfixed): a radial cylinder drag silently deletes
