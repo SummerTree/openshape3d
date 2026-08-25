@@ -232,6 +232,62 @@ and `FilletFallbackTests` are genuinely strong tests.
 
 ---
 
+# Fuzzing the BREP reader — a remote-crash surface (round 3, reported late)
+
+**294 hostile blobs fed to `OCCTKernel.deserialize`; 99 of them (33.7%) KILLED
+OR FROZE the process — 53 SIGSEGV, 46 infinite hangs.** This is the one
+finding in the whole review established empirically rather than by reading:
+the evidence is crash reports, `sample(1)` stacks of the spinning process,
+and an fsync'd journal that survives the segfault. Harness preserved at
+`docs/occt-fuzz-harness.swift.txt` (do NOT add it to the default suite — it
+deliberately crashes the runner and needs a restart-driver loop).
+
+Attack path: `.os3d` is a **shareable document type** → `brepData` →
+`DocumentSession.load` (MainActor) → `BRepTools::Read`. Import itself
+succeeds (it only copies bytes); the kill happens when the design is opened,
+so the poisoned project sits in the gallery re-killing the app on every tap.
+On device a MainActor hang is also a watchdog kill. The bridge's
+`catch (...)` is irrelevant — none of these are C++ exceptions.
+
+What held cleanly: empty/NUL/whitespace input, 64 KB of random bytes, 4 MB
+of garbage (no unbounded allocation), and all version-header tampering.
+What killed it: truncation inside the `TShapes` region (15/15 fatal),
+**single-byte flips** in a valid blob (20 cases), and inflating one declared
+count in the header — a ~12-byte edit — which hangs the reader forever in a
+non-advancing `std::istream` loop.
+
+### Mitigations shipped ✅
+1. **Archive-sourced brep is no longer imported.** `ProjectArchive.insert`
+   drops `brepData`; `load()` already falls back to the archived render mesh.
+   This removes the entire remote-crash surface at the cost of analytic
+   fidelity on imported bodies (they stay Euclid-only until re-evaluated).
+   The field is still WRITTEN, so the format is unchanged and the import can
+   be re-enabled once the reader is hardened.
+2. **Non-finite geometry is refused before tessellation.** Four inputs parsed
+   perfectly (correct face counts!) and then hung forever inside
+   `BRepMesh_IncrementalMesh` on NaN coordinates — an infinite loop, which no
+   `catch` can catch, on the path `adoptBRep` runs for EVERY OCCT result. A
+   finite-bounds check now rejects them, which also protects the internal
+   path when a degenerate op emits a NaN.
+
+### Still open
+- A **size cap is not a fix** and shouldn't be sold as one: every fatal input
+  was ≤3 KB of well-formed-looking text, while the 4 MB garbage was rejected
+  cleanly.
+- `BRepCheck_Analyzer` after read does **not** help the segfaults — they
+  happen *inside* `BRepTools::Read`, before a shape exists.
+- Parsing untrusted brep on the MainActor at all: moving it to a detached
+  thread with a deadline converts a hang into a degraded load, but does not
+  fix the segfaults and leaves a core spinning.
+- The durable fix is patching the vendored OCCT reader (bail on
+  `IS.fail() || IS.eof()`; clamp declared section counts against remaining
+  stream length). Upstream OCCT treats BREP files as trusted by design — this
+  is a posture mismatch, not a single bug.
+- **Silent corruption, no crash:** a byte flip inside geometry yields
+  *different geometry with no error* (618 vs 634 verts in one case), and
+  trailing garbage is accepted, so a blob can smuggle arbitrary bytes past
+  the reader.
+
 # Round 4 — the last unreviewed files
 
 ## R4 fixed

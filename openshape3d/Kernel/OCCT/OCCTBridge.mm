@@ -13,6 +13,9 @@
 #include <algorithm>
 #include <limits>
 #include <set>
+#include <cmath>
+#include <Bnd_Box.hxx>
+#include <BRepBndLib.hxx>
 #include <cstdint>
 #include <sstream>
 #include <string>
@@ -135,6 +138,22 @@ static OCCTRenderMesh *TessellateShape(const TopoDS_Shape &solid,
                                        double linearDeflection,
                                        double angularDeflection) {
   try {
+    // Refuse non-finite geometry BEFORE meshing. A shape carrying NaN/inf
+    // coordinates can parse cleanly (correct face counts and all) and then
+    // spin forever inside BRepMesh_IncrementalMesh — an INFINITE LOOP, which
+    // the catch(...) below cannot catch, on the MainActor, i.e. an
+    // unrecoverable freeze on document open. Verified by fuzzing the BREP
+    // reader (2026-08-25 review round 3). Also protects the internal path
+    // when a degenerate kernel op emits a NaN.
+    Bnd_Box bounds;
+    BRepBndLib::Add(solid, bounds);
+    if (bounds.IsVoid()) return EmptyRenderMesh();
+    Standard_Real xmin, ymin, zmin, xmax, ymax, zmax;
+    bounds.Get(xmin, ymin, zmin, xmax, ymax, zmax);
+    for (Standard_Real v : {xmin, ymin, zmin, xmax, ymax, zmax}) {
+        if (!std::isfinite(v)) return EmptyRenderMesh();
+    }
+
     BRepMesh_IncrementalMesh mesher(solid, linearDeflection, Standard_False,
                                     angularDeflection, Standard_True);
     mesher.Perform();
