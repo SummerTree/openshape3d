@@ -34,6 +34,42 @@ final class DocumentSession {
     /// the viewport scene.
     private(set) var changeCount = 0
 
+    /// IDs of persisted rows this build could not decode at `load()` — an
+    /// unknown feature kind written by a newer build, a newer `MeshBlob`
+    /// version, or a corrupt blob. They are absent from `document`, but
+    /// `save()` MUST treat them as live: skipping a row is recoverable, while
+    /// letting the save diff delete it is permanent data loss (2026-08-25
+    /// review, finding C1). A preserved feature row's `orderIndex` can drift
+    /// relative to renumbered live rows; a fuzzy position on later recovery
+    /// beats deletion.
+    private var unreadableRows = UnreadableRows()
+
+    private struct UnreadableRows {
+        var bodies: Set<UUID> = []
+        var sketches: Set<UUID> = []
+        var planes: Set<UUID> = []
+        var images: Set<UUID> = []
+        var symbols: Set<UUID> = []
+        var features: Set<UUID> = []
+        var count: Int {
+            bodies.count + sketches.count + planes.count + images.count
+                + symbols.count + features.count
+        }
+    }
+
+    /// True when the store's `formatVersion` is newer than this build writes.
+    /// The document still opens for viewing, but `save()` refuses to run —
+    /// an older app must never rewrite a newer store.
+    private(set) var storeIsNewerThanApp = false
+
+    /// One-shot user-facing warning from `load()` (newer-format store, or
+    /// "N items couldn't be read"); the editor surfaces it once on open.
+    private(set) var loadWarning: String?
+
+    /// Most recent `modelContext.save()` failure, nil after a clean save.
+    /// Swallowing these silently was part of review finding C1.
+    private(set) var lastSaveError: String?
+
     private var saveTask: Task<Void, Never>?
 
     init(project: Project, modelContext: ModelContext) {
@@ -200,9 +236,12 @@ final class DocumentSession {
     /// Because `performRebuild` evaluates against the current (already-mutated)
     /// `document.sketches`, the replay picks up the new geometry with NO graph
     /// edit and `leadingCommands` is empty. Skips entirely when nothing depends on
-    /// the sketch (no undo noise) and when a rebuild is already in flight. This
-    /// lands as its own undo step, SEPARATE from the sketch edit — atomic
-    /// single-step bundling is a later tranche.
+    /// the sketch (no undo noise) and when a rebuild is already in flight.
+    ///
+    /// This DOES land as its own undo step, so it is now only for paths that
+    /// can't compose: live entity drags (the move command was amended per
+    /// tick) and finishSketch's belt-and-suspenders pass. Everything else
+    /// goes through `performWithSketchRebuild` for one atomic step (S6).
     func rebuildForSketchChange(_ sketchID: SketchID) {
         guard !isRebuilding else { return }
         guard document.features.nodes.contains(where: {
@@ -211,13 +250,49 @@ final class DocumentSession {
         performRebuild(document.features, leadingCommands: [], title: "Update Sketch")
     }
 
+    /// Perform a sketch-mutating command AND the downstream feature rebuild as
+    /// ONE undo step (2026-08-25 review, S6 — as separate steps, one undo
+    /// reverted only the rebuild, leaving new sketch geometry with old solids,
+    /// permanently desynced once the redo stack cleared). The command becomes
+    /// the composite's first entry; evaluation runs against a preview copy
+    /// that already has it applied, since the live document is only mutated
+    /// when the composite performs. Falls back to a plain `perform` when no
+    /// feature references any of the touched sketches.
+    ///
+    /// Residual (documented): live entity DRAGS amend their move command per
+    /// tick and rebuild at the drag-end boundary, so that path still lands as
+    /// two steps.
+    func performWithSketchRebuild(_ command: DocumentCommand, sketchIDs: Set<SketchID>) {
+        guard !isRebuilding,
+              document.features.nodes.contains(where: {
+                  !$0.referencedSketchIDs.isDisjoint(with: sketchIDs)
+              })
+        else {
+            perform(command)
+            return
+        }
+        var preview = document
+        command.apply(to: &preview)
+        performRebuild(
+            document.features,
+            leadingCommands: [command],
+            title: command.title,
+            sketches: preview.sketches
+        )
+    }
+
+    func performWithSketchRebuild(_ command: DocumentCommand, sketchID: SketchID) {
+        performWithSketchRebuild(command, sketchIDs: [sketchID])
+    }
+
     /// Core of every graph-driven rebuild: replay `editedGraph`, diff the
     /// produced bodies against the current feature-owned bodies, and commit the
     /// mesh changes plus `leadingCommands` (the graph mutation itself) as ONE
     /// undoable `CompositeCommand`. Shared by `rebuildFrom`, `setSuppressed`, and
     /// `deleteFeature` so all three stay a single undo step.
     private func performRebuild(
-        _ editedGraph: FeatureGraph, leadingCommands: [DocumentCommand], title: String
+        _ editedGraph: FeatureGraph, leadingCommands: [DocumentCommand], title: String,
+        sketches: [Sketch]? = nil
     ) {
         // Re-entrancy guard: this method ends by `perform`ing one internal
         // `CompositeCommand`; if that mutation ever routes back into a rebuild
@@ -233,8 +308,10 @@ final class DocumentSession {
         // Replay. `nextRevision` advances the REAL document counter so every
         // emitted revision is globally unique (added bodies keep theirs; replaced
         // bodies get a fresh one again in ReplaceBodyCommand.apply).
+        // `sketches` override: performWithSketchRebuild evaluates against a
+        // preview that already contains its (not-yet-performed) sketch edit.
         let result = editedGraph.evaluate(
-            sketches: document.sketches,
+            sketches: sketches ?? document.sketches,
             planes: document.planes,
             naming: naming,
             nextRevision: { self.document.nextRevision() }
@@ -497,11 +574,15 @@ final class DocumentSession {
     // MARK: - Persistence
 
     private func load() {
+        storeIsNewerThanApp = project.formatVersion > Project.currentFormatVersion
         var loaded = DesignDocument()
         for persisted in project.bodies {
             guard let render = try? MeshBlob.decode(persisted.meshData),
                   let transform = try? JSONDecoder().decode(Transform3D.self, from: persisted.transformData)
-            else { continue }
+            else {
+                unreadableRows.bodies.insert(persisted.bodyID)
+                continue
+            }
             let primitive = persisted.primitiveData.flatMap {
                 try? JSONDecoder().decode(PrimitiveSpec.self, from: $0)
             }
@@ -526,22 +607,30 @@ final class DocumentSession {
         for persisted in project.sketches {
             if let sketch = try? JSONDecoder().decode(Sketch.self, from: persisted.sketchData) {
                 loaded.sketches.append(sketch)
+            } else {
+                unreadableRows.sketches.insert(persisted.sketchID)
             }
         }
         for persisted in project.planes {
             if let plane = try? JSONDecoder().decode(ConstructionPlane.self, from: persisted.planeData) {
                 loaded.planes.append(plane)
+            } else {
+                unreadableRows.planes.insert(persisted.planeID)
             }
         }
         for persisted in project.images {
             if var image = try? JSONDecoder().decode(InsertedImage.self, from: persisted.infoData) {
                 image.imageData = persisted.imageData
                 loaded.images.append(image)
+            } else {
+                unreadableRows.images.insert(persisted.imageID)
             }
         }
         for persisted in project.symbols {
             if let symbol = try? JSONDecoder().decode(Symbol.self, from: persisted.symbolData) {
                 loaded.symbols.append(symbol)
+            } else {
+                unreadableRows.symbols.insert(persisted.symbolID)
             }
         }
         // Phase D feature graph: replay order is `orderIndex` (SwiftData
@@ -559,8 +648,11 @@ final class DocumentSession {
             .sorted(by: { $0.orderIndex < $1.orderIndex }).enumerated() {
             if let node = decodeFeature(persisted) {
                 loaded.features.nodes.append(node)
-            } else if let marker = savedMarker, position < marker {
-                skippedBeforeMarker += 1
+            } else {
+                unreadableRows.features.insert(persisted.featureID)
+                if let marker = savedMarker, position < marker {
+                    skippedBeforeMarker += 1
+                }
             }
         }
         // Phase D (Tranche 5) rollback marker: a scalar column on Project. Pre-
@@ -577,6 +669,19 @@ final class DocumentSession {
             loaded.variables.append(decodeVariable(persisted))
         }
         document = loaded
+        if storeIsNewerThanApp {
+            loadWarning = """
+            This project was saved by a newer version of the app. It opens \
+            read-only here — changes will not be saved. Update the app to \
+            edit it.
+            """
+        } else if unreadableRows.count > 0 {
+            loadWarning = """
+            \(unreadableRows.count) item(s) in this project couldn't be read \
+            by this version of the app. They stay safely stored and are \
+            hidden from the editor; nothing has been deleted.
+            """
+        }
         changeCount += 1
     }
 
@@ -593,7 +698,17 @@ final class DocumentSession {
         saveTask?.cancel()
         saveTask = nil
 
-        // Diff by ID against the persisted objects.
+        // A store written by a NEWER format must never be rewritten by this
+        // build — the diffs below would delete every row it couldn't decode.
+        // The user was warned at load (`loadWarning`).
+        guard !storeIsNewerThanApp else { return }
+
+        // Diff by ID against the persisted objects. Every deletion loop
+        // excludes `unreadableRows` — rows load() couldn't decode are not in
+        // `document`, but deleting them would turn a recoverable skip into
+        // permanent data loss. Encode failures likewise skip the row update
+        // (keeping the old blob) rather than writing empty Data; the ID is
+        // recorded as live FIRST so the row survives the deletion diff.
         var persistedByID = [UUID: PersistedBody]()
         for persisted in project.bodies {
             persistedByID[persisted.bodyID] = persisted
@@ -602,7 +717,7 @@ final class DocumentSession {
         var liveIDs = Set<UUID>()
         for body in document.bodies {
             liveIDs.insert(body.id.raw)
-            let transformData = (try? JSONEncoder().encode(body.transform)) ?? Data()
+            guard let transformData = try? JSONEncoder().encode(body.transform) else { continue }
             let primitiveData = body.primitive.flatMap { try? JSONEncoder().encode($0) }
             let meshData = MeshBlob.encode(body.render)
             let materialData = body.material.flatMap { try? JSONEncoder().encode($0) }
@@ -633,7 +748,9 @@ final class DocumentSession {
                 modelContext.insert(persisted)
             }
         }
-        for persisted in project.bodies where !liveIDs.contains(persisted.bodyID) {
+        for persisted in project.bodies
+        where !liveIDs.contains(persisted.bodyID)
+            && !unreadableRows.bodies.contains(persisted.bodyID) {
             modelContext.delete(persisted)
         }
 
@@ -644,7 +761,7 @@ final class DocumentSession {
         var liveSketchIDs = Set<UUID>()
         for sketch in document.sketches {
             liveSketchIDs.insert(sketch.id.raw)
-            let data = (try? JSONEncoder().encode(sketch)) ?? Data()
+            guard let data = try? JSONEncoder().encode(sketch) else { continue }
             if let persisted = persistedSketchByID[sketch.id.raw] {
                 persisted.sketchData = data
             } else {
@@ -653,7 +770,9 @@ final class DocumentSession {
                 modelContext.insert(persisted)
             }
         }
-        for persisted in project.sketches where !liveSketchIDs.contains(persisted.sketchID) {
+        for persisted in project.sketches
+        where !liveSketchIDs.contains(persisted.sketchID)
+            && !unreadableRows.sketches.contains(persisted.sketchID) {
             modelContext.delete(persisted)
         }
 
@@ -664,7 +783,7 @@ final class DocumentSession {
         var livePlaneIDs = Set<UUID>()
         for plane in document.planes {
             livePlaneIDs.insert(plane.id.raw)
-            let data = (try? JSONEncoder().encode(plane)) ?? Data()
+            guard let data = try? JSONEncoder().encode(plane) else { continue }
             if let persisted = persistedPlaneByID[plane.id.raw] {
                 persisted.planeData = data
             } else {
@@ -673,7 +792,9 @@ final class DocumentSession {
                 modelContext.insert(persisted)
             }
         }
-        for persisted in project.planes where !livePlaneIDs.contains(persisted.planeID) {
+        for persisted in project.planes
+        where !livePlaneIDs.contains(persisted.planeID)
+            && !unreadableRows.planes.contains(persisted.planeID) {
             modelContext.delete(persisted)
         }
 
@@ -687,7 +808,7 @@ final class DocumentSession {
             // Blob lives in the externalStorage column; strip it from the JSON.
             var info = image
             info.imageData = Data()
-            let infoData = (try? JSONEncoder().encode(info)) ?? Data()
+            guard let infoData = try? JSONEncoder().encode(info) else { continue }
             if let persisted = persistedImageByID[image.id.raw] {
                 persisted.infoData = infoData
                 persisted.imageData = image.imageData
@@ -699,7 +820,9 @@ final class DocumentSession {
                 modelContext.insert(persisted)
             }
         }
-        for persisted in project.images where !liveImageIDs.contains(persisted.imageID) {
+        for persisted in project.images
+        where !liveImageIDs.contains(persisted.imageID)
+            && !unreadableRows.images.contains(persisted.imageID) {
             modelContext.delete(persisted)
         }
 
@@ -710,7 +833,7 @@ final class DocumentSession {
         var liveSymbolIDs = Set<UUID>()
         for symbol in document.symbols {
             liveSymbolIDs.insert(symbol.id.raw)
-            let data = (try? JSONEncoder().encode(symbol)) ?? Data()
+            guard let data = try? JSONEncoder().encode(symbol) else { continue }
             if let persisted = persistedSymbolByID[symbol.id.raw] {
                 persisted.symbolData = data
             } else {
@@ -719,7 +842,9 @@ final class DocumentSession {
                 modelContext.insert(persisted)
             }
         }
-        for persisted in project.symbols where !liveSymbolIDs.contains(persisted.symbolID) {
+        for persisted in project.symbols
+        where !liveSymbolIDs.contains(persisted.symbolID)
+            && !unreadableRows.symbols.contains(persisted.symbolID) {
             modelContext.delete(persisted)
         }
 
@@ -747,7 +872,9 @@ final class DocumentSession {
                 modelContext.insert(persisted)
             }
         }
-        for persisted in project.features where !liveFeatureIDs.contains(persisted.featureID) {
+        for persisted in project.features
+        where !liveFeatureIDs.contains(persisted.featureID)
+            && !unreadableRows.features.contains(persisted.featureID) {
             modelContext.delete(persisted)
         }
         // Phase D (Tranche 5) rollback marker: mirror the in-memory graph's marker
@@ -781,6 +908,14 @@ final class DocumentSession {
         }
 
         project.modifiedAt = Date()
-        try? modelContext.save()
+        project.formatVersion = Project.currentFormatVersion
+        do {
+            try modelContext.save()
+            lastSaveError = nil
+        } catch {
+            // Silent save failures were review finding C1 — record them so
+            // the editor can tell the user their work isn't reaching disk.
+            lastSaveError = error.localizedDescription
+        }
     }
 }

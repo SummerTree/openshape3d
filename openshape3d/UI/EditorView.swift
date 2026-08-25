@@ -1442,5 +1442,13 @@ struct EditorView: View {
             } message: {
                 Text(viewModel.errorMessage ?? "")
             }
+            .onChange(of: viewModel.session.lastSaveError) { _, saveError in
+                // A failed SwiftData save means recent work isn't reaching
+                // disk — the one storage problem worth an alert mid-session.
+                if let saveError {
+                    viewModel.errorMessage =
+                        "Saving failed — recent changes may not be stored. (\(saveError))"
+                }
+            }
     }
 }

@@ -47,6 +47,18 @@ final class Project {
     /// `document.features.rollbackIndex` lives in task B1.
     var rollbackIndex: Int? = nil
 
+    /// Store format version, bumped ONLY on a non-additive change to any
+    /// persisted payload (the JSON kind/sketch blobs, `MeshBlob`, the brep
+    /// blob). Defaulted so every pre-versioning store reads as v1 (repo
+    /// convention). A store whose version is NEWER than this build's
+    /// `Project.currentFormatVersion` opens for viewing but `save()` refuses
+    /// to touch it — an older app must never rewrite (or diff-delete) rows it
+    /// can't fully decode. 2026-08-25 review, finding C2.
+    var formatVersion: Int = 1
+
+    /// The newest store format this build reads AND writes.
+    static let currentFormatVersion = 1
+
     init(name: String) {
         self.name = name
         self.createdAt = Date()
