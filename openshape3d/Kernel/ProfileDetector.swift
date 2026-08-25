@@ -175,67 +175,100 @@ nonisolated enum ProfileDetector {
         }
         guard chains.count >= 2 else { return [] }
 
-        // Node table over chain endpoints only.
-        var adjacency: [NodeKey: [(chain: Int, forward: Bool, other: NodeKey)]] = [:]
-        for (index, chain) in chains.enumerated() {
-            let ka = NodeKey(chain.points.first!)
-            let kb = NodeKey(chain.points.last!)
-            guard ka != kb else { continue }
-            adjacency[ka, default: []].append((index, true, kb))
-            adjacency[kb, default: []].append((index, false, ka))
+        // Planar FACE TRAVERSAL over half-edges.
+        //
+        // The previous walker followed a chain and gave up at any node whose
+        // degree wasn't 2, so a single shared endpoint made every loop through
+        // it undetectable — draw a divider across a rectangle, or mirror one
+        // about a shared edge, and BOTH cells and the outer boundary vanished
+        // at once. That is not merely "no new profile": `resolveProfile`
+        // re-runs detection on every rebuild and treats nil as a hard failure,
+        // so an already-built body disappeared the moment its sketch gained a
+        // junction (2026-08-25 review round 3, finding R3-B).
+        //
+        // Face traversal handles junctions of any degree: at each arrival node
+        // take the outgoing half-edge one step CLOCKWISE from the twin, which
+        // traces every interior face counter-clockwise (positive area) and the
+        // outer face clockwise (negative — discarded by the area test).
+        struct HalfEdge {
+            let chain: Int
+            let forward: Bool
+            let to: NodeKey
+            /// Direction leaving the tail, using the polyline's own first
+            /// segment so an arc sorts by its true tangent, not its chord.
+            let outAngle: Double
         }
 
-        var used = Set<Int>()
+        var halfEdges: [HalfEdge] = []
+        var outgoing: [NodeKey: [Int]] = [:]
+        for (index, chain) in chains.enumerated() {
+            let pts = chain.points
+            let ka = NodeKey(pts.first!)
+            let kb = NodeKey(pts.last!)
+            guard ka != kb else { continue }
+            let n = pts.count
+            let aOut = atan2(pts[1].y - pts[0].y, pts[1].x - pts[0].x)
+            let bOut = atan2(pts[n - 2].y - pts[n - 1].y, pts[n - 2].x - pts[n - 1].x)
+            // Appended in pairs, so a half-edge's twin is always `index ^ 1`.
+            outgoing[ka, default: []].append(halfEdges.count)
+            halfEdges.append(HalfEdge(chain: index, forward: true, to: kb, outAngle: aOut))
+            outgoing[kb, default: []].append(halfEdges.count)
+            halfEdges.append(HalfEdge(chain: index, forward: false, to: ka, outAngle: bOut))
+        }
+        guard !halfEdges.isEmpty else { return [] }
+        for (node, ring) in outgoing {
+            outgoing[node] = ring.sorted { halfEdges[$0].outAngle < halfEdges[$1].outAngle }
+        }
+
+        var visited = Set<Int>()
         var profiles: [Profile] = []
 
-        for startIndex in chains.indices where !used.contains(startIndex) {
-            let startKey = NodeKey(chains[startIndex].points[0])
-            var loopChains: [Int] = []
-            var loopPoints: [SIMD2<Double>] = []
-            var current = startKey
-            var closed = false
-
-            // Follow the chain; abandon at junctions (degree != 2) or dead ends.
-            while true {
-                guard let neighbors = adjacency[current], neighbors.count == 2 || current == startKey else {
-                    break
-                }
-                guard let next = neighbors.first(where: { !used.contains($0.chain) && !loopChains.contains($0.chain) }) else {
-                    break
-                }
-                loopChains.append(next.chain)
-                let points = chains[next.chain].points
-                if next.forward {
-                    loopPoints.append(contentsOf: points.dropLast())
-                } else {
-                    loopPoints.append(contentsOf: points.reversed().dropLast())
-                }
-                current = next.other
-                if current == startKey {
-                    closed = true
-                    break
-                }
-                guard adjacency[current]?.count == 2 else { break }
-                if loopChains.count > chains.count { break }
+        // Start from each half-edge in index order, so output order depends on
+        // entity order alone — never on hash order.
+        for start in halfEdges.indices where !visited.contains(start) {
+            var cycle: [Int] = []
+            var edge = start
+            while !visited.contains(edge) {
+                visited.insert(edge)
+                cycle.append(edge)
+                let twin = edge ^ 1
+                guard let ring = outgoing[halfEdges[edge].to],
+                      let position = ring.firstIndex(of: twin)
+                else { break }
+                // One step clockwise from the twin.
+                edge = ring[(position + ring.count - 1) % ring.count]
+                if cycle.count > halfEdges.count { break }
             }
+            // A clean face returns to the half-edge it started from.
+            guard edge == start, cycle.count >= 2 else { continue }
 
-            // Two chains can close a region (arc + line); pure line pairs are
-            // rejected by the zero-area guard.
-            guard closed, loopChains.count >= 2, loopPoints.count >= 3 else { continue }
-            var loop = loopPoints
-            guard abs(Profile.signedArea(loop)) > 1e-9 else { continue }
-
-            // Orient CCW.
-            if Profile.signedArea(loop) < 0 {
-                loop.reverse()
+            var loop: [SIMD2<Double>] = []
+            var chainIDs: [Int] = []
+            var spur = false
+            for index in cycle {
+                let half = halfEdges[index]
+                if chainIDs.contains(half.chain) { spur = true; break }
+                chainIDs.append(half.chain)
+                let pts = chains[half.chain].points
+                loop.append(contentsOf: half.forward
+                            ? Array(pts.dropLast())
+                            : Array(pts.reversed().dropLast()))
             }
+            // A dangling edge is walked out and back inside the same face,
+            // producing a zero-width slit. Legal as a region, but the mesh
+            // extruder wants simple polygons — skip, as the old walker did.
+            guard !spur, loop.count >= 3 else { continue }
+
+            // Interior faces come out CCW; the single outer face is CW and is
+            // dropped here, which is what keeps a plain rectangle to ONE
+            // profile rather than two.
+            guard Profile.signedArea(loop) > 1e-9 else { continue }
             guard !isSelfIntersecting(loop) else { continue }
 
-            used.formUnion(loopChains)
             profiles.append(Profile(
                 loop: loop,
                 kind: .polygonal,
-                sourceEntityIDs: Set(loopChains.map { chains[$0].entityID })
+                sourceEntityIDs: Set(chainIDs.map { chains[$0].entityID })
             ))
         }
         return profiles

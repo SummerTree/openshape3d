@@ -151,8 +151,26 @@ document with both problems never heard about the second.
 
 ## R3 open — highest value first
 
-**R3-A (CRITICAL): on iPhone landscape, no translate arrow or plane handle
-is grabbable.** The gizmo scales with viewport height but its touch
+### R3-A. iPhone landscape: no arrow or plane handle was grabbable ✅ FIXED
+The gizmo's on-screen size follows the viewport HEIGHT (its world scale
+cancels against the projection's half-height divide), so the 0.82-unit arm
+projects to ~135pt on a portrait iPad but only ~39pt in iPhone landscape —
+while the touch tolerances were fixed points. Two absolute constants were
+doing duty as GEOMETRY thresholds: the foreshortening gate compared the arm
+against the 44pt arrow *touch radius* (so all three axes were skipped
+whenever the whole gizmo was smaller than one touch target), and the 18pt
+pivot dead zone swallowed the plane handles sitting ~11pt out. The overlay
+drew everything at full opacity regardless, so the gizmo looked perfect and
+did nothing — drags fell through to a camera orbit.
+**Fixed**: tolerances now scale with the gizmo's actual projected size
+(1.0 at reference size and above, so iPad is byte-for-byte unchanged), and
+the foreshortening gate is a fraction of the LONGEST arm — a relative test
+that means the same thing at every size. Five regression tests use a
+landscape-scale projector; the existing suite only ever used one large
+projector, which is exactly why this was never caught.
+
+**R3-A (was CRITICAL, now fixed — original text): on iPhone landscape, no
+translate arrow or plane handle is grabbable.** The gizmo scales with viewport height but its touch
 tolerances are fixed points: at 393 pt the arms project to 39 pt against a
 44 pt minimum, so all three arrows are skipped unconditionally, and the
 plane anchors (16 pt) fall inside the 18 pt pivot dead zone. They are still
@@ -161,8 +179,27 @@ drags fall through to a camera orbit. Not landscape-only — any axis within
 ~19° of the view direction on iPad hits the same window. iPhone + landscape
 are both enabled in the project.
 
-**R3-B (CRITICAL): a shared sketch junction silently deletes profiles —
-including ones an existing body depends on.** `ProfileDetector.lineLoops`
+### R3-B. A shared sketch junction silently deleted profiles ✅ FIXED
+`lineLoops` followed a chain and abandoned at any node whose degree wasn't 2,
+so one shared endpoint made every loop through it undetectable — a divider
+across a rectangle, or two rectangles mirrored about a common edge, killed
+BOTH cells and the outer boundary at once. And because `resolveProfile`
+re-runs detection on every rebuild and treats nil as a hard node failure,
+this didn't merely block new extrudes: an already-built body vanished the
+moment its sketch gained a junction. Auto-constrain actively steers users
+into creating those junctions.
+**Fixed** by replacing the greedy walk with planar FACE TRAVERSAL over
+half-edges: at each arrival node, take the outgoing half-edge one step
+clockwise from the twin. That traces every interior face counter-clockwise
+and the outer face clockwise, so junctions of any degree work, and the outer
+face is dropped by the positive-area test (a plain rectangle still yields
+exactly one profile). Loop output order depends on entity order alone, never
+hash order. Dangling spurs are still skipped, as before, so the extruder
+keeps getting simple polygons. All 11 pre-existing profile tests pass
+unchanged, plus 4 new ones (divider, shared edge, plain rectangle, spur).
+
+**R3-B (was CRITICAL, now fixed — original text): a shared sketch junction
+silently deletes profiles — including ones an existing body depends on.** `ProfileDetector.lineLoops`
 can only walk degree-2 nodes, so adding a line that shares an endpoint makes
 every loop through that junction undetectable. Because `resolveProfile`
 re-runs detection on every rebuild and a nil result is a hard node failure,

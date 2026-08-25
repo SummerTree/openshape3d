@@ -34,6 +34,34 @@ nonisolated enum GizmoScreenLayout {
     /// from claiming a dead-centre tap.
     static let pivotDeadZone: CGFloat = 18
 
+    /// The projected arm length these point tolerances were tuned against.
+    ///
+    /// The gizmo's on-screen size follows the VIEWPORT HEIGHT (its world scale
+    /// cancels against the projection's half-height divide), so one gizmo unit
+    /// is ~0.24 × viewportHeight/2 points: ~165pt on a portrait iPad, but only
+    /// ~47pt in iPhone LANDSCAPE, where the 0.82-unit arm projects to ~39pt.
+    /// Fixed point tolerances then stop describing the gizmo at all — see
+    /// `shrinkFactor` (2026-08-25 review round 3, finding R3-A).
+    static let referenceArmPoints: CGFloat = 96
+
+    /// Fraction of the LONGEST arm below which an axis counts as foreshortened
+    /// (pointing into the screen) and is skipped. Relative, so it means the
+    /// same thing at every gizmo size.
+    static let foreshortenedFraction: CGFloat = 0.25
+
+    /// Scales the touch tolerances down when the gizmo itself is small.
+    ///
+    /// 1.0 at reference size and above (iPad and the test projector are
+    /// unaffected); ~0.4 in iPhone landscape. Without it the tolerances were
+    /// LARGER than the gizmo: the arrow gate compared the arm against the 44pt
+    /// touch radius and skipped all three axes, and the 18pt pivot dead zone
+    /// swallowed the plane handles at ~11pt — so a fully-opaque gizmo was
+    /// completely un-grabbable and drags fell through to a camera orbit.
+    static func shrinkFactor(longestArm: CGFloat) -> CGFloat {
+        guard longestArm > 0 else { return 1 }
+        return min(1, longestArm / referenceArmPoints)
+    }
+
     static let axes: [GizmoPart] = [.xAxis, .yAxis, .zAxis]
     static let rings: [GizmoPart] = [.xRing, .yRing, .zRing]
     static let planes: [GizmoPart] = [.xyPlane, .yzPlane, .zxPlane]
@@ -91,13 +119,32 @@ nonisolated enum GizmoScreenLayout {
             if best == nil || score < best!.score { best = (part, score) }
         }
 
+        // How big is the gizmo on screen right now? Every tolerance below is
+        // scaled by this, so the handles stay grabbable — and stay distinct —
+        // at any viewport size.
+        let center = project(.zero)
+        var arms: [(part: GizmoPart, tip: CGPoint, length: CGFloat)] = []
+        var longestArm: CGFloat = 0
+        for part in axes {
+            guard let tip = axisAnchor(part, project: project) else { continue }
+            let length = center.map { hypot(tip.x - $0.x, tip.y - $0.y) } ?? 0
+            arms.append((part, tip, length))
+            longestArm = max(longestArm, length)
+        }
+        let shrink = shrinkFactor(longestArm: longestArm)
+        // Floors keep a very small gizmo from having sub-pixel targets.
+        let arrowTol = max(10, arrowHitRadius * shrink)
+        let planeTol = max(6, planeHitRadius * shrink)
+        let ringTol = max(12, ringHitRadius * shrink)
+        let deadZone = pivotDeadZone * shrink
+
         // Rotate-a-face shows ONLY the rings; test them alone so the (invisible)
         // axis/plane targets can't win the hit near the centre and then get
         // filtered out, leaving the drag to fall through to a camera orbit.
         if ringsOnly {
             for part in rings {
                 let poly = ringPolyline(part, project: project)
-                if let d = distance(from: point, toPolyline: poly) { consider(part, d, ringHitRadius) }
+                if let d = distance(from: point, toPolyline: poly) { consider(part, d, ringTol) }
             }
             return best?.part
         }
@@ -107,28 +154,33 @@ nonisolated enum GizmoScreenLayout {
         // arrow lands. A foreshortened axis (arrow collapsed onto the pivot,
         // pointing into the screen) is skipped: the overlay fades it and
         // grabbing it there would be a surprise.
-        let center = project(.zero)
         // Dead-centre taps are the free-move pivot — grab nothing.
-        if let center, hypot(point.x - center.x, point.y - center.y) < pivotDeadZone {
+        if let center, hypot(point.x - center.x, point.y - center.y) < deadZone {
             return nil
         }
-        for part in axes {
-            guard let tip = axisAnchor(part, project: project) else { continue }
-            if let center {
-                guard hypot(tip.x - center.x, tip.y - center.y) >= arrowHitRadius else { continue }
+        for arm in arms {
+            if center != nil {
+                // Skip an axis that is FORESHORTENED — collapsed toward the
+                // pivot because it points into the screen. Measured against
+                // the longest arm, not against a touch radius: comparing an
+                // arm to `arrowHitRadius` meant that on any viewport where the
+                // whole gizmo was smaller than the touch target, every axis
+                // was skipped.
+                guard arm.length >= longestArm * foreshortenedFraction else { continue }
                 // Start the grabbable segment partway out from the pivot, so a
                 // tap dead-centre (over the free-move dot) does not grab a
                 // random axis, while grabs along the arrow's line still land.
-                let start = CGPoint(x: center.x + (tip.x - center.x) * 0.4,
-                                    y: center.y + (tip.y - center.y) * 0.4)
-                consider(part, distance(from: point, toSegment: start, tip), arrowHitRadius)
+                let c = center!
+                let start = CGPoint(x: c.x + (arm.tip.x - c.x) * 0.4,
+                                    y: c.y + (arm.tip.y - c.y) * 0.4)
+                consider(arm.part, distance(from: point, toSegment: start, arm.tip), arrowTol)
             } else {
-                consider(part, hypot(tip.x - point.x, tip.y - point.y), arrowHitRadius)
+                consider(arm.part, hypot(arm.tip.x - point.x, arm.tip.y - point.y), arrowTol)
             }
         }
         for part in planes {
             if let a = planeAnchor(part, project: project) {
-                consider(part, hypot(a.x - point.x, a.y - point.y), planeHitRadius)
+                consider(part, hypot(a.x - point.x, a.y - point.y), planeTol)
             }
         }
         // Rings only if nothing closer already won on a point target.
@@ -136,7 +188,7 @@ nonisolated enum GizmoScreenLayout {
             for part in rings {
                 let poly = ringPolyline(part, project: project)
                 let d = distance(from: point, toPolyline: poly)
-                if let d { consider(part, d, ringHitRadius) }
+                if let d { consider(part, d, ringTol) }
             }
         }
         return best?.part
