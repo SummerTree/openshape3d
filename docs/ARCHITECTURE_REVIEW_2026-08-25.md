@@ -244,6 +244,104 @@ and `FilletFallbackTests` are genuinely strong tests.
   inch-configured reader opened our files at 25.4×. Now emits
   `$INSUNITS = 4` (mm) and `$MEASUREMENT = 1`. ✅
 
+## R4 open — topological naming (the parametric identity core)
+
+**R4-N1 (CRITICAL): reference identity is NOT stable across app launches.**
+`FaceTopology.planarFace` derives a face's `basisX` by walking boundary loops
+starting from randomised Dictionary/Set iteration order, and `.moveFace` /
+`.rotateFace` store their deltas **in that basis** (documented as "intrinsic
+to the face"). So reopening a document replays a lateral face move, or an
+in-plane rotation axis, rotated by an arbitrary amount. Stable within one
+process, which is why no single-session test sees it.
+Fix direction: sort loops by |area| first (so the OUTER loop defines the
+frame) and pick a canonical start vertex (e.g. lexicographically smallest).
+
+**R4-N2 (CRITICAL): refs minted before the first rebuild live in a different
+space than they resolve in.** Live bodies carry a pivot (`transform
+.translation` = profile centroid, mesh stored pivot-relative), but
+`evaluate()` emits identity-transform WORLD-space bodies. So for a sketch
+drawn away from the origin, the centroid proximity term — the only term that
+distinguishes two parallel same-area faces — silently contributes ZERO, and
+every co-normal face ties; the winner is then whichever enumerates first,
+which reshuffles when the mesh changes. Self-healing after the first rebuild,
+so a document holds a MIXTURE of pivot-relative and world-space refs with no
+way to tell them apart.
+
+**R4-N3 (SIGNIFICANT): every non-box ref is minted `.derived(index: 0)`,
+which `derivedRoles` assigns to the LARGEST face** — so the role boost
+systematically lands on the biggest face of the body regardless of which face
+the ref names. (Combined with R4-N1's fix, the boost gate committed today
+stops this from crossing the threshold on a wrong-facing face, but the
+mis-targeting remains.)
+
+**R4-N4 (SIGNIFICANT): a cylindrical ref can resolve to a planar cap.**
+`FaceSignature.kind` is written but NEVER read by the resolver, and
+`signature(cylinder:)` stores the cylinder's AXIS as its `normal` — which is
+the direction the caps face. Once the side surface is split or removed, the
+cap scores above threshold and wins.
+
+**R4-N5 (SIGNIFICANT): `propagate` ignores its `op` entirely** and flattens
+all inputs into one pool with no uniqueness constraint, so a boolean can
+attach a parent's label to a face that never belonged to it (a pocket floor
+inheriting the top face's role), and a split gives BOTH halves the same
+label. `resolve` also never checks `creator`/`producer`, so there is no way
+to say "this face must have come from feature X" — which is exactly what
+would prevent this.
+
+**R4-N6 (SIGNIFICANT): a document saved with broken refs reopens with NO
+error badges.** `lastEvalErrors` is in-memory only and is set exclusively
+inside `performRebuild`, and `evaluate()` is not run on load. Additionally,
+`confidence` is computed by `resolve` and then never read in production — a
+0.61 match and a 1.0 match are treated identically, though the data needed to
+warn already exists.
+
+## R4 open — OCCT bridge operations
+
+**R4-O1 (CRITICAL): entity targeting accepts EVERY entity within tolerance,
+not the nearest** — in fillet, chamfer, shell and defeature alike — with the
+tolerance set to 1–2% of the body's AABB diagonal. On an ordinary
+100×100×1 mm plate that is 1.4–2.8 mm against a 1 mm thickness, so picking
+the top face also opens or deletes the BOTTOM, and picking one rim rounds
+both. The loose tolerance isn't even needed: the tessellation sagitta it
+exists to cover is ~40× smaller. Fix: nearest-wins via
+`BRepExtrema_DistShapeShape`.
+
+**R4-O2 (SIGNIFICANT): face targeting samples the surface's UV BOUNDING BOX,
+not the trimmed face** — so samples land off the actual face. A right
+triangle's centroid misses by 11.8 mm against a 2.87 mm tolerance (false
+negative), while a large top face's UV box hangs over a pocket floor (false
+positive).
+
+**R4-O3 (SIGNIFICANT): boolean results are compounds and are never
+normalised to solids**, so shell/defeature receive a compound — out of
+contract for `MakeThickSolidByJoin`. Practical shape: shell works on a
+primitive or extrude and stops working once the body has been through a
+boolean.
+
+**R4-O4 (SIGNIFICANT): fillet/chamfer partial results are accepted as full
+successes.** `NbFaultyContours`/`StripeStatus`/`HasResult` are never
+consulted, so picking 6 edges and getting 4 rounded reports success — and
+the "radius too large" message is a guess (it is also emitted when no edge
+matched at all).
+
+**R4-O5 (SIGNIFICANT): every saved document embeds the TRIANGULATION in its
+brep blob** (`BRepTools::Write`'s 2-arg alias writes triangles), so document
+size and save time scale with tessellation density rather than with the
+analytic geometry — and the blob is written at the CURRENT OCCT format
+version, which is the version-coupling the deserialize fallback exists to
+paper over.
+
+**R4-O6 (SIGNIFICANT): smooth normals are double-transformed** by the face
+location — latent for in-process shapes (which have identity locations) but
+live for STEP imports and located BRep blobs, giving wrong shading.
+
+**Verified sound:** coordinate spaces are consistent end-to-end (brep and
+render mesh are both body-local; `composedBoolean` bakes both transforms and
+its consumers use identity); uniform scale is handled correctly by
+`gp_Trsf`; hole winding is right; every nullable bridge return is checked on
+the Swift side; OCCT refcounting is atomic, so releasing a handle from the
+detached boolean task is safe.
+
 ## R4 open — note the WIRING status first
 
 **Two whole subsystems the status doc lists as shipped are not wired up:**
