@@ -143,6 +143,59 @@ multi-edge additivity, error surfacing),
 
 ---
 
+## 2b. Platforms — iPhone, iPad, and desktop (Mac Catalyst)
+
+The app is universal (`TARGETED_DEVICE_FAMILY = "1,2"`) and builds for the Mac
+through **Mac Catalyst** (`SUPPORTS_MACCATALYST = YES`).
+
+**The one prerequisite is an OCCT Catalyst slice**, and it is already in the
+repo: `ThirdParty/OCCT.xcframework` is COMMITTED (the static libs via Git LFS,
+see `.gitattributes`), so a fresh checkout builds for iOS *and* Mac without
+running the build script. Without a `ios-arm64-maccatalyst` slice the Mac build
+fails at link with *"no library for this platform was found"* — that is the
+only thing that was missing; the whole Swift/Obj-C++ tree compiles for Catalyst
+unchanged.
+
+Cost of carrying it: ~140 MB of static lib (LFS) plus the slice's own copy of
+the OCCT headers (an xcframework duplicates headers per slice).
+
+To REBUILD the slice — or add another platform — without rebuilding the iOS
+ones (an xcframework assembly replaces the framework, so a Catalyst-only run
+would otherwise delete them):
+
+```
+OCCT_SRC=/path/to/OCCT-7_8_1 \
+IOS_TOOLCHAIN=/path/to/ios.toolchain.cmake \
+PLATFORMS="MAC_CATALYST_ARM64" REUSE_EXISTING_SLICES=1 \
+scripts/build_occt_ios.sh
+```
+
+`REUSE_EXISTING_SLICES=1` harvests the existing slices' libs and headers first
+and folds them into the new framework. `DEPLOYMENT_TARGET` is an iOS version
+(Catalyst is versioned on the iOS scale) and must stay ≤ the app's
+`IPHONEOS_DEPLOYMENT_TARGET`.
+
+Build/run for the Mac:
+
+```
+xcodebuild build -scheme openshape3d -destination 'platform=macOS,variant=Mac Catalyst'
+```
+
+Notes:
+- **visionOS was removed** from `SUPPORTED_PLATFORMS`/`TARGETED_DEVICE_FAMILY`.
+  It was declared but the platform isn't installed, so it only produced
+  destinations that failed to resolve — which broke plain `-destination`
+  commands. Re-add deliberately if visionOS is ever a target.
+- **"Designed for iPad"** is the zero-work alternative: Apple Silicon Macs run
+  the unmodified iOS build, no Catalyst slice needed
+  (`SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD` is already YES). It ships as a
+  checkbox in App Store Connect, but gives an iPad-shaped window rather than a
+  Mac app.
+- AR Quick Look degrades to a plain 3D preview on Catalyst (AR needs a device);
+  `QLPreviewController` itself is available, so nothing is guarded out.
+- The Catalyst window has a 900×620 floor (`macWindowSizing`) so the layout
+  stays in its regular-width form instead of collapsing to the compact bars.
+
 ## 3. Dev workflow essentials
 
 - Simulator UDID: `69DB84F4-607C-46F2-9089-3E8C0770B4A9` (iPad). Ad-hoc
