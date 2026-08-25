@@ -189,14 +189,30 @@ struct AdaptiveBar<Controls: View, Actions: View, Footer: View>: View {
             }
         } else if hasFooter {
             VStack(alignment: .leading, spacing: 10) {
-                HStack(spacing: spacing) {
-                    controls
-                    actions
-                }
+                regularRow
                 footer
             }
         } else {
+            regularRow
+        }
+    }
+
+    /// The regular-width row: the natural fixed HStack when everything fits
+    /// (Spacers keep the actions pushed to the trailing edge), and the same
+    /// scrolling row as compact when it doesn't. Without the fallback, a bar
+    /// squeezed by a narrow-but-regular width (iPad Split View / Stage
+    /// Manager) compresses its last labels to per-character wrapping — the
+    /// commit button rendered as "Ex-trude" on two lines, the exact failure
+    /// the compact layout already solved. `lineLimit(1)` guards the fitted
+    /// row too, so a measurement edge case truncates instead of wrapping.
+    private var regularRow: some View {
+        ViewThatFits(in: .horizontal) {
             HStack(spacing: spacing) {
+                controls
+                actions
+            }
+            .lineLimit(1)
+            scrollRow {
                 controls
                 actions
             }
