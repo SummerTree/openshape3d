@@ -141,8 +141,8 @@ nonisolated enum ProfileDetector {
     private struct NodeKey: Hashable {
         let x, y: Int64
         init(_ p: SIMD2<Double>) {
-            x = Int64((p.x / ProfileDetector.quantum).rounded())
-            y = Int64((p.y / ProfileDetector.quantum).rounded())
+            x = MeshQuantize.key64(p.x, quantum: ProfileDetector.quantum)
+            y = MeshQuantize.key64(p.y, quantum: ProfileDetector.quantum)
         }
     }
 

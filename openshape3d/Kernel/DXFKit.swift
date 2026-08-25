@@ -172,7 +172,7 @@ nonisolated enum DXFKit {
                     startAngle: start * .pi / 180, endAngle: end * .pi / 180
                 ))
             case "LWPOLYLINE":
-                let closed = (Int(values[70] ?? 0) & 1) != 0
+                let closed = (Int((values[70] ?? 0).clampedToInt) & 1) != 0
                 entities.append(contentsOf: polylineSegments(vertices, closed: closed))
             case "VERTEX":
                 if polylineClosed != nil, let x = values[10], let y = values[20] {
@@ -211,9 +211,15 @@ nonisolated enum DXFKit {
                 continue
             }
             guard currentType != nil else { continue }
-            guard let number = Double(value) else { continue }
+            // `Double("nan")`, `Double("inf")` and `Double("1e999")` all
+            // SUCCEED. Those values then trap in `Int(_: Double)` just below,
+            // and — if they reach the sketch — in the profile/offset welds.
+            // A malformed DXF is user-reachable through the file picker, so
+            // drop non-finite values here (2026-08-25 review round 3).
+            guard let number = Double(value), number.isFinite else { continue }
             if currentType == "POLYLINE", groupCode == 70 {
-                polylineClosed = (Int(number) & 1) != 0
+                // Clamp before Int(): a huge finite value traps too.
+                polylineClosed = (Int(number.clampedToInt) & 1) != 0
                 continue
             }
             if currentType == "LWPOLYLINE" {

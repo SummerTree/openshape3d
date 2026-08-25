@@ -429,8 +429,10 @@ final class ViewportCoordinator: NSObject, ViewportGestureDelegate, ViewportCame
 
     func gestureDragChanged(at point: CGPoint) {
         if faceRotateDragActive {
-            if let ray = ray(at: point), let session = gizmoDrag,
-               let angle = session.rotationDelta(for: ray) {
+            // Mutate the STORED session (not a copy): rotationDelta
+            // accumulates its unwrapped total across frames.
+            if let ray = ray(at: point),
+               let angle = gizmoDrag?.rotationDelta(for: ray) {
                 viewModel.updateFaceRotate(angle: Double(angle), axis: faceRotateAxis)
                 sceneDidChange()
             }
@@ -491,7 +493,9 @@ final class ViewportCoordinator: NSObject, ViewportGestureDelegate, ViewportCame
         }
         guard let session = gizmoDrag else { return }
         if session.part.isRing {
-            if let angle = session.rotationDelta(for: ray) {
+            // Mutate the STORED session (not a copy): rotationDelta
+            // accumulates its unwrapped total across frames.
+            if let angle = gizmoDrag?.rotationDelta(for: ray) {
                 viewModel.updateRotation(part: session.part, deltaRadians: angle)
                 sceneDidChange()
             }

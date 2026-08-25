@@ -24,20 +24,20 @@ nonisolated enum STLImporter {
     private static let weldQuantum: Float = 1e-5
 
     private struct WeldKey: Hashable {
-        let px, py, pz: Int32
-        let nx, ny, nz: Int32
+        let px, py, pz: Int64
+        let nx, ny, nz: Int64
 
         init(position: SIMD3<Float>, normal: SIMD3<Float>, quantum: Float) {
             let inv = 1 / quantum
-            // Clamped: a raw Int32(_: Float) traps past ±21 m or on NaN — and
-            // an imported STL is exactly where oversized/NaN coordinates
-            // arrive (metre- or inch-unit files, malformed exporters).
-            px = MeshQuantize.key(position.x, inverseQuantum: inv)
-            py = MeshQuantize.key(position.y, inverseQuantum: inv)
-            pz = MeshQuantize.key(position.z, inverseQuantum: inv)
-            nx = MeshQuantize.key(normal.x, inverseQuantum: inv)
-            ny = MeshQuantize.key(normal.y, inverseQuantum: inv)
-            nz = MeshQuantize.key(normal.z, inverseQuantum: inv)
+            // key64: a raw Int32/Int64(_: Float) traps on NaN, and an Int32
+            // key at this quantum saturates at ±21 m — which silently WELDED
+            // far-apart vertices together instead. Int64 + NaN guard.
+            px = MeshQuantize.key64(position.x, inverseQuantum: inv)
+            py = MeshQuantize.key64(position.y, inverseQuantum: inv)
+            pz = MeshQuantize.key64(position.z, inverseQuantum: inv)
+            nx = MeshQuantize.key64(normal.x, inverseQuantum: inv)
+            ny = MeshQuantize.key64(normal.y, inverseQuantum: inv)
+            nz = MeshQuantize.key64(normal.z, inverseQuantum: inv)
         }
     }
 

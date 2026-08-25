@@ -143,23 +143,38 @@ final class MeshBlobTests: XCTestCase {
     }
 
     /// A metre-scale import (or a degenerate op emitting NaN) must not crash
-    /// while merely extracting feature edges.
-    func testFeatureEdgeExtractionOnExtremeCoordinatesDoesNotTrap() {
+    /// while merely extracting feature edges — AND must not emit poisoned
+    /// geometry, which would just move the failure into hit-testing.
+    func testFeatureEdgeExtractionOnExtremeCoordinatesStaysFinite() {
         let far: Float = 40_000 // 40 m — past the old Int32 weld limit
         let mesh = RenderMesh(
             positions: [SIMD3(far, 0, 0), SIMD3(far + 1, 0, 0), SIMD3(far, 1, 0)],
             normals: [SIMD3(0, 0, 1), SIMD3(0, 0, 1), SIMD3(0, 0, 1)],
             indices: [0, 1, 2]
         )
-        _ = FeatureEdgeExtractor.edges(from: mesh)
+        let edges = FeatureEdgeExtractor.edges(from: mesh)
+        // A single triangle has 3 boundary edges — the extractor must still
+        // produce real geometry this far out, not silently weld it away.
+        XCTAssertEqual(edges.segmentCount, 3)
+        for point in edges.segments {
+            XCTAssertTrue(point.x.isFinite && point.y.isFinite && point.z.isFinite,
+                          "edge endpoints must stay finite at 40 m")
+        }
     }
 
-    func testFeatureEdgeExtractionOnNaNCoordinatesDoesNotTrap() {
+    func testFeatureEdgeExtractionOnNaNCoordinatesEmitsNoPoisonedEdges() {
         let mesh = RenderMesh(
             positions: [SIMD3(.nan, 0, 0), SIMD3(1, 0, 0), SIMD3(0, 1, 0)],
             normals: [SIMD3(0, 0, 1), SIMD3(0, 0, 1), SIMD3(0, 0, 1)],
             indices: [0, 1, 2]
         )
-        _ = FeatureEdgeExtractor.edges(from: mesh)
+        let edges = FeatureEdgeExtractor.edges(from: mesh)
+        // Whatever it emits, a NaN must not reach the renderer or hit-tester:
+        // a NaN endpoint makes every distance comparison false, so picking
+        // silently stops working near that body.
+        for point in edges.segments {
+            XCTAssertFalse(point.x.isNaN || point.y.isNaN || point.z.isNaN,
+                           "a NaN vertex must not propagate into feature edges")
+        }
     }
 }

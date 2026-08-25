@@ -102,8 +102,8 @@ nonisolated enum SketchOffset {
     private struct NodeKey: Hashable {
         let x, y: Int64
         init(_ p: SIMD2<Double>) {
-            x = Int64((p.x / SketchOffset.quantum).rounded())
-            y = Int64((p.y / SketchOffset.quantum).rounded())
+            x = MeshQuantize.key64(p.x, quantum: SketchOffset.quantum)
+            y = MeshQuantize.key64(p.y, quantum: SketchOffset.quantum)
         }
     }
 

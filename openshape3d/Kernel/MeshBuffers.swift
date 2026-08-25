@@ -52,6 +52,46 @@ nonisolated struct FeatureEdgeSet: Sendable {
 /// well-defined: coordinates past the limit collapse together, which is a
 /// cosmetic weld artifact at 21 m, not a crash.
 nonisolated enum MeshQuantize {
+    /// `Int64` variant for the Double-precision welds (sketch/profile/shell/
+    /// projection/blend-chain). `Int64(Double.nan)` traps exactly like the
+    /// Int32 case, and the round-2 fix that clamped only the Int32 sites
+    /// MOVED the crash rather than removing it: an oversized or NaN-bearing
+    /// import now succeeds, then trapped later in Shell or Blend on the
+    /// resulting body.
+    static func key64(_ value: Double, inverseQuantum: Double) -> Int64 {
+        clamp64((value * inverseQuantum).rounded())
+    }
+
+    /// Same, for call sites that divide by a quantum (kept separate so the
+    /// arithmetic is byte-identical to what those sites did before).
+    static func key64(_ value: Double, quantum: Double) -> Int64 {
+        clamp64((value / quantum).rounded())
+    }
+
+    static func clampedToInt(_ value: Double) -> Double {
+        guard value.isFinite else { return 0 }
+        return min(max(value, -1e15), 1e15)
+    }
+
+    private static func clamp64(_ scaled: Double) -> Int64 {
+        guard scaled.isFinite else { return 0 }
+        // Int64's bounds are NOT exactly representable in Double (2^63), so
+        // clamp to the largest/smallest Double that converts safely.
+        let limit = Double(Int64.max - 1024) // 2^63 - 1024, exact in Double
+        return Int64(min(max(scaled, -limit), limit))
+    }
+
+    /// Float overload for the render/topology welds. Returns Int64: at the
+    /// 1e-5 mm quantum these keys use, Int32 saturates at only ±21.47 m, so
+    /// clamping there did not crash but silently WELDED every far vertex to
+    /// the same key — collapsing whole triangles and deleting geometry (the
+    /// round-2 clamp traded a crash for silent destruction). Int64 covers
+    /// ~9.2e13 mm, past any real model, so the weld keeps its exact
+    /// semantics everywhere.
+    static func key64(_ value: Float, inverseQuantum: Float) -> Int64 {
+        clamp64((Double(value) * Double(inverseQuantum)).rounded())
+    }
+
     static func key(_ value: Float, inverseQuantum: Float) -> Int32 {
         // Clamp in DOUBLE space: Float cannot represent Int32.max (it rounds
         // up to 2^31), so a Float-space clamp still hands Int32() a value one
@@ -156,4 +196,10 @@ nonisolated enum MeshBlob {
         }
         return RenderMesh(positions: positions, normals: normals, indices: indices)
     }
+}
+
+nonisolated extension Double {
+    /// Safe for `Int(_:)`: non-finite becomes 0, huge magnitudes clamp.
+    /// `Int(Double.nan)` and `Int(1e300)` both trap.
+    var clampedToInt: Double { MeshQuantize.clampedToInt(self) }
 }

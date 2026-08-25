@@ -81,6 +81,155 @@ Also fixed: `ResizePrimitiveCommand` silently dropped `isHidden`/`material`;
 the gallery multi-delete's silent `try?` now surfaces failures and resolves
 projects via the live query instead of `model(for:)` (which can trap).
 
+### R2-C5. My own R2 fix could strand a STALE brep ✅ FIXED (round 3)
+Preserving an unreadable brep/primitive blob is only safe while the mesh it
+describes is unchanged. If the blob was merely unreadable by THIS build (a
+newer OCCT wrote it) and the user then reshaped the body, the preserved blob
+would describe geometry that no longer exists — and a newer build would load
+that stale analytic solid alongside the new mesh, the exact divergence the
+B-rep work exists to prevent. Now the geometry-tied columns are preserved
+only while `meshData` is byte-identical (the comparison only faults in the
+stored blob for the rare preserved rows). The same rule covers the inverse
+case: a body that GAINED a brep this session has a changed mesh, so its new
+brep is written rather than discarded by the preservation rule.
+
+### R2-13 gizmo ring rotation ✅ FIXED (round 3)
+`rotationDelta` now accumulates the unwrapped per-frame step instead of
+measuring an absolute angle from the anchor and wrapping it, so a ring drag
+can pass half a turn (and keep going) instead of snapping ~358° backwards.
+The existing `TransformTests` case encoded the old behavior via a 180°
+"teleport" between two samples — something a real drag never produces; it
+now measures the reverse case from a fresh session, and a new test sweeps a
+full turn in quarter steps.
+
+---
+
+# Round 3 — deeper still, plus a second adversarial pass
+
+Five more passes: OCCT deserialize fuzzing, the never-reviewed kits
+(+`Transform3D`), profile detection / offset / expression parser, the
+remaining UI surfaces **and the test suite itself**, and an adversarial pass
+over round 2's commit. The adversarial pass again found real defects in the
+round-2 work — that is now three for three.
+
+## R3 fixed (committed same day)
+
+### R3-1. The weld clamp traded a crash for SILENT GEOMETRY DESTRUCTION ✅ FIXED
+Round 2 stopped the `Int32` weld-key trap by clamping. But at the 1e-5 mm
+quantum, `Int32` saturates at ±21.47 m — so every vertex past that mapped to
+the SAME key and welded together, collapsing triangles and deleting
+geometry with no error. The importers named as the motivating case landed
+exactly there: a crash became a silently corrupt import.
+**Caught empirically** — a strengthened test asserted a 40 m triangle still
+yields 3 edges and got 0. The real fix is that Int32 was simply too narrow:
+all weld keys are now `Int64` (≈9.2e13 mm), so the weld keeps its exact
+semantics at any real scale, with the NaN guard retained.
+
+### R3-2. The same trap in `Int64` form — 17 more sites ✅ FIXED
+Three agents independently flagged it: `Int64(Double.nan)` traps identically,
+and round 2 had fixed only the `Int32` sites. Live paths: the blend/chamfer
+edge-chain weld (`KernelOps`), `ShellKit`'s vertex weld, `ProfileDetector`,
+`SketchOffset`, `SketchConnectivity` (every sketch double-tap),
+`ProjectionKit`. Round 2 therefore MOVED the crash: an oversized/NaN import
+now succeeded, then trapped later in Shell or Blend. All 17 now use the
+clamped helper; zero raw `Int64(...)`/`Int32(...)` quantizations remain.
+
+### R3-3. A malformed DXF crashed on import ✅ FIXED
+`Double("nan")`, `Double("inf")` and `Double("1e999")` all SUCCEED, and the
+values then trapped in `Int(_: Double)` two lines later — reachable from the
+file picker, and contradicting the parser's own "never a crash" docstring.
+Non-finite values are now dropped at the parse boundary and the `Int()`
+conversions clamp.
+
+### R3-4. My preservation rule discarded the user's OWN edits ✅ FIXED
+Keying preservation purely on "load couldn't decode this column" froze that
+column for the entire session: apply a material to such a body and it never
+reached disk. Now a column is preserved only while there is nothing real to
+write in its place (`encoded == nil`), combined with the mesh-unchanged rule
+from R2-C5. Also fixed: the two load warnings were an `else if` chain, so a
+document with both problems never heard about the second.
+
+## R3 open — highest value first
+
+**R3-A (CRITICAL): on iPhone landscape, no translate arrow or plane handle
+is grabbable.** The gizmo scales with viewport height but its touch
+tolerances are fixed points: at 393 pt the arms project to 39 pt against a
+44 pt minimum, so all three arrows are skipped unconditionally, and the
+plane anchors (16 pt) fall inside the 18 pt pivot dead zone. They are still
+drawn at full opacity, so the gizmo looks fine and simply does nothing;
+drags fall through to a camera orbit. Not landscape-only — any axis within
+~19° of the view direction on iPad hits the same window. iPhone + landscape
+are both enabled in the project.
+
+**R3-B (CRITICAL): a shared sketch junction silently deletes profiles —
+including ones an existing body depends on.** `ProfileDetector.lineLoops`
+can only walk degree-2 nodes, so adding a line that shares an endpoint makes
+every loop through that junction undetectable. Because `resolveProfile`
+re-runs detection on every rebuild and a nil result is a hard node failure,
+this doesn't just block new extrudes: **an already-built body vanishes on
+the next rebuild**. Auto-constrain actively steers users into creating these
+junctions. (The header documents "degree-2 only in v1"; the rebuild
+interaction is what makes it critical.)
+
+**R3-C (CRITICAL): nested profiles are punched as holes.** `holes(of:among:)`
+has no nesting parity, so for A ⊃ B ⊃ C both B and C are treated as holes of
+A and the island C is deleted from the solid. Also, `Profile.centroid` is a
+vertex average, not an area centroid — biased by tessellation density and
+outside the polygon entirely for a concave loop, so concave holes are missed.
+
+**R3-D (CRITICAL): 87 UI tests, not one asserts a geometry value.** The
+suite verifies that chrome appears; it cannot distinguish a correct boolean
+from a wrong-but-non-empty one. `SelectionInfoBar` exposes exact
+Volume/Bounds/Area strings and is documented as the verification hook —
+nothing consumes it. One test even collects every measurement and `NSLog`s
+them without asserting. Several "proof of commit" assertions are
+tautological (they pass because an earlier step was undoable). 84% of UI
+tests use hardcoded screen coordinates, 69% use fixed sleeps (257 s total),
+and there is **no CI** — the suite is run by hand against one simulator.
+
+**R3-E (SIGNIFICANT): `ShellKit` clamps its mitre instead of refusing**, so
+any corner sharper than ~14.5° silently produces walls thinner than
+requested, and every downstream validity check still passes.
+
+**R3-F (SIGNIFICANT): the readiness doc's triage of the one device-dependent
+test failure is wrong.** It blames hardcoded coordinates; the test itself
+disproves that (it asserts face selection succeeded first). The real
+mechanism is that the arrow pill's field is centre-aligned and pre-seeded,
+so a centre tap inserts text *inside* the existing value; the resulting
+unparseable string is then **silently discarded** by `commitExtrudeArrowEdit`
+— a real UX defect independent of the test.
+
+**R3-G (SIGNIFICANT): two sketch overlays re-derive O(entities × constraints)
+state on every camera frame** (constraint glyphs and dimension labels), the
+one memoisation pattern used by their sibling never applied to them.
+
+**R3-H (SIGNIFICANT): `ExpressionEvaluator` has no recursion depth limit** —
+a pasted string of deeply nested parens overflows the stack, uncatchable.
+The rest of the parser is sound (division by zero, overflow, NaN and
+variable cycles are all handled).
+
+**R3-I (SIGNIFICANT): rect profiles assume CCW winding but never check it**,
+and the constraint solver can write an inverted rect (min > max) because the
+write-back doesn't renormalise — yielding an empty fill or an inverted solid.
+
+**Also open:** `SketchPlane.isCoincident` ignores its own tolerance parameter
+and uses a value 22× tighter than the face tolerance feeding it, so
+sketching twice on one face can silently create duplicate sketches; mirrored
+splines never emit their symmetric constraint; `SketchPatternLink` is dead
+code the status doc lists as shipped (its one direction mapping is wrong in
+a way its tests can't see); `projectSilhouette` is dead and ~O(E²·T);
+`Transform3D` decoding validates neither quaternion norm nor scale;
+`ProfileDetector.lineLoops` is O(C³) worst case and is called from a SwiftUI
+view body; splines bound no profiles at all despite `SketchConnectivity`
+claiming they do; the Variables panel draws over the bottom bars.
+
+**Verified sound (worth not re-reviewing):** `Transform3D`'s composition
+order is correct in all four representations (checked against Euclid's own
+implementation); `MeshQuantize.key` is trap-free for every Float input;
+`unreadableRows` can never protect an unrelated row; `StrokeClassifier` is
+degenerate-safe; `KernelShellTests`, `KernelBlendTests`, `SolverCoreTests`
+and `FilletFallbackTests` are genuinely strong tests.
+
 ## R2 open — highest value first
 
 **R2-1 (CRITICAL, unfixed): a radial cylinder drag silently deletes
@@ -155,11 +304,17 @@ path ran dozens of CSG subtractions for a rim chain, so it may even be
 faster). Measure before changing; the proper home is the S1 off-main
 preview service.
 
-**R2-13 (SIGNIFICANT): gizmo ring rotation cannot exceed ±180°** — found
-directly, not by an agent. `rotationDelta` wraps to (−π, π] and both
-consumers pass it through as an ABSOLUTE angle from the drag anchor, so
-circling past half a turn snaps the body backwards ~358°. Fix: accumulate
-the unwrapped angle in the drag session.
+**S4 margin check, now specified concretely.** `EdgeTopology.resolve` scores
+`0.5·normalPair + 0.2·direction + 0.2·midpoint + 0.1·length`, threshold
+0.55, best-wins with no runner-up margin. A cube is safe (its 12 edges all
+have distinct normal PAIRS). The failure case is two parallel edges sharing
+the same face-normal pair — two steps or pockets of the same orientation:
+both tie at 0.7 before the positional terms, so the WRONG edge still scores
+≥ 0.8, well above threshold, and wins whenever an upstream edit moves the
+referenced edge further from its old centroid than its sibling. Fix: require
+`best − secondBest ≥ ~0.1`, else `.brokenRef` for a re-pick. NOT done here:
+it can turn currently-resolving references into visible error badges on
+existing documents, which is a product call.
 
 **Also open:** `enumerateFaces` is O(faces × triangles) (rebuilds the whole
 adjacency map per seed; three per body tap); negative face pull runs two full

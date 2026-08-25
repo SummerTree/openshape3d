@@ -65,7 +65,7 @@ final class TransformTests: XCTestCase {
         let anchorRay = Ray(origin: SIMD3(d, d, 10), direction: SIMD3(0, 0, -1))
         XCTAssertEqual(GizmoGeometry.hitTest(ray: anchorRay, gizmo: gizmo), .zRing)
 
-        let session = try XCTUnwrap(
+        var session = try XCTUnwrap(
             GizmoDragSession(part: .zRing, gizmo: gizmo, ray: anchorRay)
         )
         // Ray over the 135° point: a quarter turn about +Z.
@@ -73,13 +73,45 @@ final class TransformTests: XCTestCase {
         let delta = try XCTUnwrap(session.rotationDelta(for: quarterRay))
         XCTAssertEqual(delta, .pi / 2, accuracy: 1e-4)
 
-        // The reverse direction is a negative quarter turn.
+        // The reverse direction is a negative quarter turn. Measured from a
+        // FRESH session: `rotationDelta` accumulates the unwrapped total
+        // across a drag's samples (see the ±180° test below), so re-using the
+        // session here would be asking it to interpret a 180° teleport
+        // between two consecutive frames — which a real drag never produces.
+        var reverse = try XCTUnwrap(
+            GizmoDragSession(part: .zRing, gizmo: gizmo, ray: anchorRay)
+        )
         let backRay = Ray(origin: SIMD3(d, -d, 10), direction: SIMD3(0, 0, -1))
-        let back = try XCTUnwrap(session.rotationDelta(for: backRay))
+        let back = try XCTUnwrap(reverse.rotationDelta(for: backRay))
         XCTAssertEqual(back, -.pi / 2, accuracy: 1e-4)
 
         // Ring drags have no translation component.
         XCTAssertNil(session.translationDelta(for: quarterRay))
+    }
+
+    /// A ring drag must be able to pass half a turn. Measuring the angle from
+    /// the anchor and wrapping it to (-π, π] capped every rotation at ±180°
+    /// and flipped its sign at the boundary, so continuing to circle snapped
+    /// the body ~358° backwards (2026-08-25 review round 2).
+    func testRingDragAccumulatesPastHalfATurn() throws {
+        let gizmo = GizmoState(origin: .zero, scale: 1, highlighted: nil)
+        let d = GizmoGeometry.ringRadius / sqrt(2)
+        func ray(_ x: Float, _ y: Float) -> Ray {
+            Ray(origin: SIMD3(x, y, 10), direction: SIMD3(0, 0, -1))
+        }
+        // Anchor at 45°, then sweep the way a finger does: 135°, 225°, 315°,
+        // back to 45° — one full turn, sampled every quarter.
+        var session = try XCTUnwrap(
+            GizmoDragSession(part: .zRing, gizmo: gizmo, ray: ray(d, d))
+        )
+        XCTAssertEqual(try XCTUnwrap(session.rotationDelta(for: ray(-d, d))),
+                       .pi / 2, accuracy: 1e-4)
+        XCTAssertEqual(try XCTUnwrap(session.rotationDelta(for: ray(-d, -d))),
+                       .pi, accuracy: 1e-4, "must not wrap to -π at the halfway point")
+        XCTAssertEqual(try XCTUnwrap(session.rotationDelta(for: ray(d, -d))),
+                       1.5 * .pi, accuracy: 1e-4, "must keep growing past half a turn")
+        XCTAssertEqual(try XCTUnwrap(session.rotationDelta(for: ray(d, d))),
+                       2 * .pi, accuracy: 1e-4, "a full circle is a full turn")
     }
 
     /// The rotation handle must be a GENEROUS grab target — the reported bug

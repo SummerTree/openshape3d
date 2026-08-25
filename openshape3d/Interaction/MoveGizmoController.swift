@@ -174,6 +174,10 @@ nonisolated struct GizmoDragSession {
     let part: GizmoPart
     let startOrigin: SIMD3<Float>
     private let anchor: SIMD3<Float>
+    /// Ring drags only: running unwrapped total, and the previous sample it
+    /// was accumulated from (see `rotationDelta`).
+    private var accumulatedRotation: Float = 0
+    private var lastAngle: Float?
 
     init?(part: GizmoPart, gizmo: GizmoState, ray: Ray) {
         self.part = part
@@ -193,21 +197,30 @@ nonisolated struct GizmoDragSession {
         return current - anchor
     }
 
-    /// Ring drag: signed rotation (radians, right-handed about the ring axis)
-    /// from the anchor to the ray's current position on the ring plane.
-    /// atan2 on the ring plane; wrapped to (-π, π].
-    func rotationDelta(for ray: Ray) -> Float? {
+    /// Total rotation since the drag began (radians, right-handed about the
+    /// ring axis), UNWRAPPED — it keeps growing past ±π so a user can spin a
+    /// body more than half a turn in one gesture.
+    ///
+    /// Measuring `current - anchor` and wrapping to (-π, π] (as this did)
+    /// caps a drag at ±180° and flips sign at the boundary: passing half a
+    /// turn snapped the body ~358° backwards, because both callers apply the
+    /// result as an ABSOLUTE angle against the pre-drag transform
+    /// (2026-08-25 review round 2). Instead accumulate the per-frame step,
+    /// which is always well under π at gesture sample rates.
+    mutating func rotationDelta(for ray: Ray) -> Float? {
         guard part.isRing,
               let current = Self.constrainedPoint(part: part, origin: startOrigin, ray: ray)
         else {
             return nil
         }
-        let anchorAngle = Self.ringAngle(of: anchor - startOrigin, part: part)
         let currentAngle = Self.ringAngle(of: current - startOrigin, part: part)
-        var delta = currentAngle - anchorAngle
-        if delta > .pi { delta -= 2 * .pi }
-        if delta <= -.pi { delta += 2 * .pi }
-        return delta
+        let previous = lastAngle ?? Self.ringAngle(of: anchor - startOrigin, part: part)
+        var step = currentAngle - previous
+        if step > .pi { step -= 2 * .pi }
+        if step <= -.pi { step += 2 * .pi }
+        accumulatedRotation += step
+        lastAngle = currentAngle
+        return accumulatedRotation
     }
 
     private static func ringAngle(of offset: SIMD3<Float>, part: GizmoPart) -> Float {

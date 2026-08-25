@@ -702,18 +702,25 @@ final class DocumentSession {
             read-only here — changes will not be saved. Update the app to \
             edit it.
             """
-        } else if unreadableRows.rowCount > 0 {
-            loadWarning = """
-            \(unreadableRows.rowCount) item(s) in this project couldn't be read \
-            by this version of the app. They stay safely stored and are \
-            hidden from the editor; nothing has been deleted.
-            """
-        } else if unreadableRows.partialBodyCount > 0 {
-            loadWarning = """
-            \(unreadableRows.partialBodyCount) shape(s) opened without some \
-            detail this version couldn't read. The stored data is kept \
-            untouched, so nothing is lost.
-            """
+        } else {
+            // Both conditions can hold at once — report each, rather than
+            // letting the row message hide which shapes lost detail.
+            var parts: [String] = []
+            if unreadableRows.rowCount > 0 {
+                parts.append("""
+                \(unreadableRows.rowCount) item(s) in this project couldn't be \
+                read by this version of the app. They stay safely stored and \
+                are hidden from the editor; nothing has been deleted.
+                """)
+            }
+            if unreadableRows.partialBodyCount > 0 {
+                parts.append("""
+                \(unreadableRows.partialBodyCount) shape(s) opened without some \
+                detail this version couldn't read. The stored data is kept \
+                untouched, so nothing is lost.
+                """)
+            }
+            loadWarning = parts.isEmpty ? nil : parts.joined(separator: "\n\n")
         }
         changeCount += 1
     }
@@ -760,20 +767,45 @@ final class DocumentSession {
 
             if let persisted = persistedByID[body.id.raw] {
                 let id = body.id.raw
-                persisted.name = body.name
-                persisted.transformData = transformData
                 // Columns load() couldn't decode keep their stored blob: we
                 // decoded them to nil, so writing that nil back would destroy
                 // data this build merely couldn't read.
-                if !unreadableRows.bodyPrimitive.contains(id) {
+                //
+                // But the GEOMETRY-tied columns (primitive spec, brep) may only
+                // be preserved while the mesh they describe is UNCHANGED. If the
+                // user reshaped the body, the preserved blob describes geometry
+                // that no longer exists, and a newer build would load a stale
+                // analytic solid alongside the new mesh — precisely the
+                // mesh/brep divergence the B-rep work exists to prevent. So a
+                // changed mesh drops them. This also covers the inverse case:
+                // a body that GAINED a brep this session (rebuild composed one)
+                // has a changed mesh too, so the new brep is written, not
+                // discarded by the preservation rule.
+                // Preserve a column ONLY while there is nothing real to put in
+                // its place. Keying purely on "load couldn't decode it" would
+                // freeze the column for the whole session and silently discard
+                // the user's own later edits — applying a material to such a
+                // body would never reach disk.
+                func preserve(_ unreadable: Set<UUID>, _ encoded: Data?) -> Bool {
+                    encoded == nil && unreadable.contains(id)
+                }
+                let preservesGeometry = unreadableRows.bodyPrimitive.contains(id)
+                    || unreadableRows.bodyBrep.contains(id)
+                // Only faults in the stored blob for the rare preserved rows.
+                let meshUnchanged = preservesGeometry && persisted.meshData == meshData
+
+                persisted.name = body.name
+                persisted.transformData = transformData
+                if !(preserve(unreadableRows.bodyPrimitive, primitiveData) && meshUnchanged) {
                     persisted.primitiveData = primitiveData
                 }
                 persisted.meshData = meshData
                 persisted.isHidden = body.isHidden
-                if !unreadableRows.bodyMaterial.contains(id) {
+                // Material is independent of geometry — no mesh condition.
+                if !preserve(unreadableRows.bodyMaterial, materialData) {
                     persisted.materialData = materialData
                 }
-                if !unreadableRows.bodyBrep.contains(id) {
+                if !(preserve(unreadableRows.bodyBrep, brepData) && meshUnchanged) {
                     persisted.brepData = brepData
                 }
             } else {

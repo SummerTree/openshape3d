@@ -16,13 +16,15 @@ nonisolated enum FeatureEdgeExtractor {
     private static let quantum: Float = 1e-5
 
     private struct PositionKey: Hashable {
-        let x, y, z: Int32
+        let x, y, z: Int64
         init(_ p: SIMD3<Float>) {
             let inv = 1 / FeatureEdgeExtractor.quantum
-            // Clamped: a raw Int32(_: Float) traps past ±21 m or on NaN.
-            x = MeshQuantize.key(p.x, inverseQuantum: inv)
-            y = MeshQuantize.key(p.y, inverseQuantum: inv)
-            z = MeshQuantize.key(p.z, inverseQuantum: inv)
+            // key64: a raw Int32/Int64(_: Float) traps on NaN, and an Int32
+            // key at this quantum saturates at ±21 m — which silently WELDED
+            // far-apart vertices together instead. Int64 + NaN guard.
+            x = MeshQuantize.key64(p.x, inverseQuantum: inv)
+            y = MeshQuantize.key64(p.y, inverseQuantum: inv)
+            z = MeshQuantize.key64(p.z, inverseQuantum: inv)
         }
     }
 
