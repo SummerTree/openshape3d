@@ -20,7 +20,10 @@ import SwiftData
 // MARK: - Container
 
 nonisolated struct ProjectArchive: Codable, Sendable {
-    static let currentVersion = 1
+    /// v2 (2026-08-25): `BodyRecord.brep` carries the OCCT analytic solid —
+    /// before that, export/import silently degraded smooth geometry to its
+    /// tessellation (review C4). v1 archives load fine (field decodes nil).
+    static let currentVersion = 2
     /// Readers refuse archives NEWER than they understand (best-effort forward
     /// reads risk silent data loss); older versions always load.
     var version: Int = ProjectArchive.currentVersion
@@ -37,6 +40,8 @@ nonisolated struct ProjectArchive: Codable, Sendable {
         var mesh: Data
         var isHidden: Bool
         var material: Data?
+        /// OCCT brep blob (v2+); nil for Euclid-only bodies and v1 archives.
+        var brep: Data?
     }
     /// Sketches / planes / symbols: one JSON blob each.
     struct BlobRecord: Codable, Sendable {
@@ -191,7 +196,8 @@ extension ProjectArchive {
             BodyRecord(
                 id: $0.bodyID, name: $0.name, transform: $0.transformData,
                 primitive: $0.primitiveData, mesh: $0.meshData,
-                isHidden: $0.isHidden, material: $0.materialData)
+                isHidden: $0.isHidden, material: $0.materialData,
+                brep: $0.brepData)
         }
         archive.sketches = project.sketches.map {
             BlobRecord(id: $0.sketchID, data: $0.sketchData)
@@ -237,6 +243,7 @@ extension ProjectArchive {
                 primitiveData: record.primitive, meshData: record.mesh)
             row.isHidden = record.isHidden
             row.materialData = record.material
+            row.brepData = record.brep
             row.project = project
             context.insert(row)
         }

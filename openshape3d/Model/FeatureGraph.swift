@@ -486,24 +486,41 @@ nonisolated extension FeatureGraph {
             state.errors[node.id] = .emptyGeometry
             return
         }
-        let result = Body(
+        var result = Body(
             id: target.id, name: target.name, transform: .identity, primitive: nil,
             euclidMesh: resultMesh, revision: nextRevision())
+        // B-rep source of truth: when the target is analytic and the tool is
+        // a single-profile extrude, compose the boolean in OCCT too, so a cut
+        // into a cylinder stays round. This branch previously rebuilt the
+        // target mesh-only, and the next save silently dropped its brep — a
+        // PERMANENT smooth→faceted degrade (2026-08-25 review, C4). The OCCT
+        // tool is the EXACT prism (no overlap padding — analytic booleans
+        // merge coincident faces robustly without it).
+        if OCCTKernel.useOCCTAsSourceOfTruth, extras.isEmpty,
+           let targetBrep = target.brep,
+           let a = OCCTKernel.transformed(targetBrep, by: target.transform) {
+            var isCircle = false
+            var center = SIMD2<Double>.zero
+            var radius = 0.0
+            if case let .circle(c, r) = outer.kind { isCircle = true; center = c; radius = r }
+            let z = OCCTKernel.extrudeZRange(distance: distance.value, symmetric: symmetric)
+            if let toolBrep = OCCTKernel.extrudeShape(
+                   outerLoop: outer.loop, isCircle: isCircle,
+                   circleCenter: center, circleRadius: radius,
+                   holes: holes.map(\.loop), zMin: z.zMin, zMax: z.zMax,
+                   origin: plane.origin, xAxis: plane.xAxis,
+                   yAxis: plane.yAxis, normal: plane.normal),
+               let resultBrep = OCCTKernel.boolean(
+                   a, toolBrep, op: OCCTKernel.booleanOp(kind)) {
+                result.adoptBRep(resultBrep)
+            }
+        }
         let inputTables = [state.faceTables[target.id], toolTable].compactMap { $0 }
         let table = state.naming.propagate(inputs: inputTables, output: result, op: .boolean(kind))
         state.put(result, table: table)
     }
 
     // MARK: Boolean
-
-    /// Map a `BooleanKind` to `OCCTBridge`'s op code (0 union, 1 subtract, 2 intersect).
-    private static func occtBooleanOp(_ kind: BooleanKind) -> Int? {
-        switch kind {
-        case .union: return 0
-        case .subtract: return 1
-        case .intersect: return 2
-        }
-    }
 
     private func evalBoolean(
         _ node: FeatureNode,
@@ -527,8 +544,9 @@ nonisolated extension FeatureGraph {
                 return
             }
             if let t = state.faceTables[tool.id] { inputTables.append(t) }
-            let priorBrep = acc.brep
-            let priorTransform = acc.transform
+            // Capture the pre-boolean operand for the brep composition below
+            // (acc is replaced by `next` after each tool).
+            let operand = acc
             let mesh = KernelOps.boolean(kind, target: acc, tool: tool)
             guard !mesh.polygons.isEmpty else {
                 state.errors[node.id] = .emptyGeometry
@@ -537,19 +555,12 @@ nonisolated extension FeatureGraph {
             var next = Body(
                 id: target.id, name: target.name, transform: .identity, primitive: nil,
                 euclidMesh: mesh, revision: nextRevision())
-            // B-rep source of truth: when BOTH operands are analytic (OCCT), compose
-            // them with an OCCT boolean and render the result smooth — so a boolean
-            // involving a cylinder stays round. Euclid still owns the CSG `mesh`.
-            // Place BOTH solids into a common space first (each body carries its
-            // own transform — a moved body's brep would otherwise be booleaned at
-            // its pre-move position), mirroring what KernelOps.boolean does for
-            // the Euclid meshes. The result is world-space, and `next` is built
-            // with an identity transform, so the two stay consistent.
-            if let a0 = priorBrep, let b0 = tool.brep,
-               let op = Self.occtBooleanOp(kind),
-               let a = OCCTKernel.transformed(a0, by: priorTransform),
-               let b = OCCTKernel.transformed(b0, by: tool.transform),
-               let resultBrep = OCCTKernel.boolean(a, b, op: op) {
+            // B-rep source of truth: when BOTH operands are analytic (OCCT),
+            // compose them with an OCCT boolean and render the result smooth —
+            // so a boolean involving a cylinder stays round. Euclid still owns
+            // the CSG `mesh`; `composedBoolean` handles the world-space
+            // placement, and `next`'s identity transform keeps them consistent.
+            if let resultBrep = OCCTKernel.composedBoolean(kind, target: operand, tool: tool) {
                 next.adoptBRep(resultBrep)
             }
             acc = next

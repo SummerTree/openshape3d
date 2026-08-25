@@ -6,6 +6,22 @@ finding verified against the code with file:line evidence; the two most
 severe claims were independently re-verified. Ordered by severity.
 Companion to `STATUS_AND_NEXT_STEPS.md`.
 
+## Fix status (same day, 2026-08-25 — see git log for the commits)
+
+| Finding | Status |
+|---|---|
+| C1 data loss (load-skip + save-diff delete) | ✅ fixed — unreadable rows tracked & preserved, encode-failure guards, save errors surfaced |
+| C2 no schema version | ✅ `Project.formatVersion` scalar; newer stores open read-only (save refuses) |
+| C3 undo stomp from armed transform tools | ✅ `prepareForHistoryChange()` before undo/redo/rollback; sanitize case is now state-only |
+| C4 dual-kernel path dependence | ✅ largely: brep carried through copy/resize/merge/archive (v2); extrude-cut + live boolean compose OCCT breps; live blend/shell branch on brep like eval. Remaining: revolve/sweep/loft-into-target stays mesh-only (OCCT has no revolve/sweep yet); `emitFullSolid` merges likewise |
+| S1 main-thread geometry | ◑ prerequisites done (OCCT exception barrier on tessellation; BRepHandle Sendable caveat documented). The off-main eval/preview service itself is NOT done — next big tranche |
+| S2 scene rebuilt per camera frame | ◑ `pullArrowState` extracted — orbiting no longer re-assembles the scene. Full scene caching, GPU buffer pooling, measurement caching still open |
+| S3 lifecycle drift bugs | ✅ the four concrete bugs fixed (stale scaleEntry/axisEntry in `cancelTransientPicks`; unconditional pick-cancel in `deleteItem`; async boolean changeCount revalidation; empty provisional sketches removed on exit). The `ToolLifecycle` refactor itself is still open |
+| S4 silent ref rebinding | ❌ open (margin check, nearest-edge OCCT matching, partial-resolution badges) |
+| S5 numerical scale-dependence | ❌ open |
+| S6 sketch edit + rebuild as separate undo steps | ✅ `performWithSketchRebuild` composes them for delete/trim/plane-change/constraint/dimension; residual: live drags (amended commands) and `lastEvalErrors` not restored on undo |
+| Ship config | ✅ PrivacyInfo.xcprivacy bundled; deployment target 17.0; display name "OpenShape 3D"; ITSAppUsesNonExemptEncryption=NO; OS3D_* hooks behind `#if DEBUG`. Remaining: document types (`.os3d`/STEP in Files), real-device/archive testing |
+
 ---
 
 ## Critical

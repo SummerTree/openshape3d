@@ -1083,6 +1083,19 @@ struct ResizePrimitiveCommand: DocumentCommand {
             revision: document.nextRevision()
         )
         rebuilt.name = old.name
+        // Rebuild the analytic B-rep too, mirroring FeatureGraph.evalPrimitive:
+        // resizing an OCCT-rendered cylinder must not degrade it to the 48-gon
+        // Euclid mesh (2026-08-25 review, C4). Curved primitives take the OCCT
+        // tessellation for render+CSG; a box keeps the Euclid mesh but still
+        // carries the brep so booleans stay analytic.
+        if OCCTKernel.useOCCTAsSourceOfTruth,
+           let handle = OCCTKernel.primitiveShape(spec, placement: .identity) {
+            if OCCTKernel.hasCurvedFaces(spec) {
+                rebuilt.adoptBRep(handle)
+            } else {
+                rebuilt.brep = handle
+            }
+        }
         document.bodies[index] = rebuilt
     }
 

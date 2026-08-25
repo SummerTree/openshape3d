@@ -109,11 +109,30 @@
 }
 @end
 
+static OCCTRenderMesh *EmptyRenderMesh() {
+    OCCTRenderMesh *out = [OCCTRenderMesh new];
+    out->_vertexCount = 0;
+    out->_triangleCount = 0;
+    out->_positions = [NSData data];
+    out->_normals = [NSData data];
+    out->_indices = [NSData data];
+    return out;
+}
+
 // Tessellate a shape and extract SMOOTH per-vertex normals from each face's
 // analytic surface. Shared by the cylinder and general-shape render paths.
+//
+// Exception barrier: BRepMesh_IncrementalMesh and BRepAdaptor_Surface::D1
+// raise Standard_Failure (a C++ exception) on degenerate or corrupt shapes —
+// e.g. a marginal boolean result or a blob from another OCCT version.
+// Letting one unwind through the Obj-C++ frame into Swift is a hard crash,
+// and this runs on the main success path (adoptBRep tessellates every OCCT
+// result). An empty mesh reads as failure upstream: adoptBRep leaves the
+// body on the Euclid path.
 static OCCTRenderMesh *TessellateShape(const TopoDS_Shape &solid,
                                        double linearDeflection,
                                        double angularDeflection) {
+  try {
     BRepMesh_IncrementalMesh mesher(solid, linearDeflection, Standard_False,
                                     angularDeflection, Standard_True);
     mesher.Perform();
@@ -173,6 +192,9 @@ static OCCTRenderMesh *TessellateShape(const TopoDS_Shape &solid,
     out->_normals = [NSData dataWithBytes:normals.data() length:normals.size() * sizeof(float)];
     out->_indices = [NSData dataWithBytes:indices.data() length:indices.size() * sizeof(uint32_t)];
     return out;
+  } catch (...) {
+    return EmptyRenderMesh();
+  }
 }
 
 @implementation OCCTMeshResult {
@@ -468,13 +490,19 @@ static TopoDS_Wire PolyWire(NSData *loop, double z) {
 + (OCCTFaceTypeCounts *)faceTypeCountsOfShape:(OCCTShape *)shape {
     NSInteger planar = 0, cyl = 0, other = 0;
     if (shape != nil) {
-        for (TopExp_Explorer ex(shape->_shape, TopAbs_FACE); ex.More(); ex.Next()) {
-            BRepAdaptor_Surface surf(TopoDS::Face(ex.Current()));
-            switch (surf.GetType()) {
-                case GeomAbs_Plane: planar++; break;
-                case GeomAbs_Cylinder: cyl++; break;
-                default: other++; break;
+        try {
+            for (TopExp_Explorer ex(shape->_shape, TopAbs_FACE); ex.More(); ex.Next()) {
+                BRepAdaptor_Surface surf(TopoDS::Face(ex.Current()));
+                switch (surf.GetType()) {
+                    case GeomAbs_Plane: planar++; break;
+                    case GeomAbs_Cylinder: cyl++; break;
+                    default: other++; break;
+                }
             }
+        } catch (...) {
+            // Same exception barrier as TessellateShape: a corrupt shape
+            // (e.g. deserialized from a newer OCCT) must not crash the app.
+            planar = 0; cyl = 0; other = 0;
         }
     }
     OCCTFaceTypeCounts *counts = [OCCTFaceTypeCounts new];

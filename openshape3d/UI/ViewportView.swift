@@ -227,7 +227,7 @@ final class ViewportCoordinator: NSObject, ViewportGestureDelegate, ViewportCame
     /// World-mm drag component along the blend arrow's on-screen direction —
     /// positive when dragging the way the arrow points (into the body).
     private func blendDragDelta(to point: CGPoint) -> Double {
-        guard let arrow = viewModel.scene.pullArrow else { return 0 }
+        guard let arrow = viewModel.pullArrowState else { return 0 }
         let o = SIMD3<Double>(Double(arrow.origin.x), Double(arrow.origin.y), Double(arrow.origin.z))
         guard let p0 = worldToScreenPoint(o) else { return 0 }
         let d = simd_normalize(SIMD3<Double>(Double(arrow.direction.x),
@@ -331,7 +331,7 @@ final class ViewportCoordinator: NSObject, ViewportGestureDelegate, ViewportCame
         // Chamfer/Fillet pick: grabbing the edge arrow scrubs the blend size
         // (drag into the body = bigger, Shapr3D §4.3); anywhere else orbits.
         if case .pickingBlendEdges = viewModel.mode {
-            if let arrow = viewModel.scene.pullArrow,
+            if let arrow = viewModel.pullArrowState,
                hitsPullArrowScreen(point: point, arrow: arrow),
                viewModel.beginBlendDrag() {
                 blendDragActive = true
@@ -350,7 +350,7 @@ final class ViewportCoordinator: NSObject, ViewportGestureDelegate, ViewportCame
         // MOVES the face (shear); with Scale armed, grabbing a handle SCALES the
         // face about its centre (taper). A drag anywhere else orbits.
         if case .faceSelected = viewModel.mode {
-            if let arrow = viewModel.scene.pullArrow,
+            if let arrow = viewModel.pullArrowState,
                hitsPullArrowScreen(point: point, arrow: arrow),
                viewModel.beginToolDrag(ray: ray) {
                 pullActive = true

@@ -132,8 +132,12 @@ nonisolated struct Body: Identifiable, Sendable {
     /// Nil after loading from disk; use `euclidMesh()` which rebuilds on demand.
     var euclid: Euclid.Mesh?
     /// OCCT B-rep handle when this body was built through the OCCT source-of-truth
-    /// path (extrude/boolean). Transient (not persisted); lets downstream ops
-    /// (boolean composition, smooth re-render) stay analytic. Nil = Euclid-only.
+    /// path (extrude/boolean). Persisted via `PersistedBody.brepData`; lets
+    /// downstream ops (boolean composition, smooth re-render) stay analytic.
+    /// Nil = Euclid-only. Every path that rebuilds or copies a Body must either
+    /// carry this forward or deliberately clear it — silently dropping it
+    /// permanently degrades smooth geometry to its tessellation on the next
+    /// save (2026-08-25 review, C4).
     var brep: BRepHandle?
 
     /// Build from a freshly generated Euclid mesh (primitive, extrude, boolean).

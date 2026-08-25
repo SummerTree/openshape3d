@@ -23,7 +23,9 @@ struct ExtrudeGizmoOverlay: View {
     }
 
     private var arrowAnchor: ArrowAnchor? {
-        guard let arrow = viewModel.scene.pullArrow,
+        // `pullArrowState`, NOT `scene.pullArrow`: reading `scene` here made
+        // every camera tick re-assemble the whole viewport scene (review S2).
+        guard let arrow = viewModel.pullArrowState,
               let cam = viewModel.cameraControl else { return nil }
         let o = SIMD3<Double>(Double(arrow.origin.x), Double(arrow.origin.y), Double(arrow.origin.z))
         let d = simd_normalize(SIMD3<Double>(Double(arrow.direction.x),

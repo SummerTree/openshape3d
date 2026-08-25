@@ -23,6 +23,14 @@ phase plan), `SHAPR3D_PARITY_SPEC.md` (feature spec), `PHASE_D_DESIGN.md`
 four-pass deep review; criticals: silent data loss on save of undecodable
 rows, no schema versioning, undo-stomp from armed transform tools, and the
 path-dependent Euclid-vs-OCCT kernel seam. Read it before the next tranche.
+**Same-day fix pass:** all four criticals fixed (C4 largely — see the fix
+table in the review doc), plus the S3 lifecycle bugs, S6 composite undo,
+the OCCT exception barrier, the `pullArrowState` orbit-perf fix, and every
+ship-config item (privacy manifest, iOS 17.0 target, display name,
+encryption key, `#if DEBUG` hooks). Still open, in rough order: off-main
+eval/preview service (S1), full scene caching + GPU buffer pooling (S2),
+`ToolLifecycle` registry refactor (S3), ref-resolution margin checks (S4),
+relative epsilons (S5).
 
 Also landed recently (all on `main`): context-sensitive Shapr3D-style tool
 palette with flyout groups; extrude gizmo = SF Symbol `arrow.up.and.down` +
