@@ -1083,6 +1083,11 @@ struct ResizePrimitiveCommand: DocumentCommand {
             revision: document.nextRevision()
         )
         rebuilt.name = old.name
+        // Carry the user-owned metadata the rebuild would otherwise reset —
+        // resizing a hidden primitive used to make it visible again and drop
+        // its material (2026-08-25 review round 2).
+        rebuilt.isHidden = old.isHidden
+        rebuilt.material = old.material
         // Rebuild the analytic B-rep too, mirroring FeatureGraph.evalPrimitive:
         // resizing an OCCT-rendered cylinder must not degrade it to the 48-gon
         // Euclid mesh (2026-08-25 review, C4). Curved primitives take the OCCT

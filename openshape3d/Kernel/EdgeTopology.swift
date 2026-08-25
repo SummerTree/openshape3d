@@ -45,9 +45,10 @@ nonisolated enum EdgeTopology {
         let x, y, z: Int32
         init(_ p: SIMD3<Float>) {
             let inv = 1 / EdgeTopology.quantum
-            x = Int32((p.x * inv).rounded())
-            y = Int32((p.y * inv).rounded())
-            z = Int32((p.z * inv).rounded())
+            // Clamped: a raw Int32(_: Float) traps past ±21 m or on NaN.
+            x = MeshQuantize.key(p.x, inverseQuantum: inv)
+            y = MeshQuantize.key(p.y, inverseQuantum: inv)
+            z = MeshQuantize.key(p.z, inverseQuantum: inv)
         }
     }
 
@@ -155,7 +156,7 @@ nonisolated enum EdgeTopology {
                 (l.x, l.y, l.z) < (r.x, r.y, r.z)
             }
         }
-        func q(_ v: Float, _ s: Float) -> Int32 { Int32((v * s).rounded()) }
+        func q(_ v: Float, _ s: Float) -> Int32 { MeshQuantize.key(v, inverseQuantum: s) }
         func qv(_ v: SIMD3<Float>, _ s: Float) -> QVec {
             QVec(x: q(v.x, s), y: q(v.y, s), z: q(v.z, s))
         }

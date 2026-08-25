@@ -146,7 +146,7 @@ struct ProjectGalleryView: View {
                 importArchive(archive, fallbackName: url.deletingPathExtension().lastPathComponent)
             }
             .alert(
-                "Import Failed",
+                "Something Went Wrong",
                 isPresented: Binding(
                     get: { importErrorMessage != nil },
                     set: { if !$0 { importErrorMessage = nil } }
@@ -237,12 +237,18 @@ struct ProjectGalleryView: View {
     }
 
     private func deleteSelected() {
-        for id in selectedProjectIDs {
-            if let project = modelContext.model(for: id) as? Project {
-                modelContext.delete(project)
-            }
+        // Resolve against the live query rather than `model(for:)`: an id whose
+        // row was deleted elsewhere (another window, sync) can trap while
+        // faulting, and `as?` cannot catch a trap.
+        for project in projects where selectedProjectIDs.contains(project.persistentModelID) {
+            modelContext.delete(project)
         }
-        try? modelContext.save()
+        do {
+            try modelContext.save()
+        } catch {
+            // Don't fail silently — the grid would still show the designs.
+            importErrorMessage = "Couldn't delete the selected designs. \(error.localizedDescription)"
+        }
         exitSelectMode()
     }
 

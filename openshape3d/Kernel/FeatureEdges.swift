@@ -19,9 +19,10 @@ nonisolated enum FeatureEdgeExtractor {
         let x, y, z: Int32
         init(_ p: SIMD3<Float>) {
             let inv = 1 / FeatureEdgeExtractor.quantum
-            x = Int32((p.x * inv).rounded())
-            y = Int32((p.y * inv).rounded())
-            z = Int32((p.z * inv).rounded())
+            // Clamped: a raw Int32(_: Float) traps past ±21 m or on NaN.
+            x = MeshQuantize.key(p.x, inverseQuantum: inv)
+            y = MeshQuantize.key(p.y, inverseQuantum: inv)
+            z = MeshQuantize.key(p.z, inverseQuantum: inv)
         }
     }
 

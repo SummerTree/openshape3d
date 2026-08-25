@@ -27,10 +27,23 @@ path-dependent Euclid-vs-OCCT kernel seam. Read it before the next tranche.
 table in the review doc), plus the S3 lifecycle bugs, S6 composite undo,
 the OCCT exception barrier, the `pullArrowState` orbit-perf fix, and every
 ship-config item (privacy manifest, iOS 17.0 target, display name,
-encryption key, `#if DEBUG` hooks). Still open, in rough order: off-main
-eval/preview service (S1), full scene caching + GPU buffer pooling (S2),
-`ToolLifecycle` registry refactor (S3), ref-resolution margin checks (S4),
-relative epsilons (S5).
+encryption key, `#if DEBUG` hooks).
+
+**Round 2 (same day, deeper + adversarial):** fixed two crash-on-input
+classes — an `Int32` weld-key trap at **20 sites in 6 files** (including
+both importers: any model past ±21 m or containing a NaN crashed on
+import/tap) and `MeshBlob.decode` accepting out-of-range indices (a shared
+`.os3d` could crash on open). The adversarial pass over round 1's own fixes
+found and closed three real gaps in them: C1 leaked at column granularity
+(brep/material/primitive blobs were still being nil-ed over), C3's guard
+covered only 3 of 8 history-mutating entry points, and the ghost-preview fix
+missed the History-panel delete. **Read the R2 open list before the next
+tranche** — it includes two criticals (a radial cylinder drag silently
+deleting features; sketch delete/trim orphaning constraints so a driving
+dimension quietly stops driving) and an unvalidated-solver-writeback issue.
+Still open from round 1, in rough order: off-main eval/preview service (S1),
+full scene caching + GPU buffer pooling (S2), `ToolLifecycle` registry
+refactor (S3), ref-resolution margin checks (S4), relative epsilons (S5).
 
 Also landed recently (all on `main`): context-sensitive Shapr3D-style tool
 palette with flyout groups; extrude gizmo = SF Symbol `arrow.up.and.down` +

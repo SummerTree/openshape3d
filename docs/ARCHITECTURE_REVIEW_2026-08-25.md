@@ -24,6 +24,165 @@ Companion to `STATUS_AND_NEXT_STEPS.md`.
 
 ---
 
+---
+
+# Round 2 (same day) — five deeper passes
+
+Round 1 covered the four layers architecturally. Round 2 went into the areas
+it skipped — import/export parsers, the sketch subsystem, the secondary
+geometry kits, rendering internals/UI panels — plus an ADVERSARIAL pass over
+round 1's own fixes. Findings below; the round-1 report follows unchanged.
+
+## R2 fixed immediately (committed same day)
+
+### R2-C1. Any oversized or NaN coordinate crashed the app — 20 sites, 6 files ✅ FIXED
+`Int32((v * 1e5).rounded())` **traps** on a non-finite value or past
+±21.47 m of model space. It appeared in every vertex-weld key in the
+codebase: `EuclidBridge` (render weld), `FeatureEdges`, `FaceTopology`
+(runs for every vertex on every face tap), `EdgeTopology` (×2), and — worst
+— **`STLImporter` and `OBJImporter`**, i.e. exactly where a metre- or
+inch-unit file's coordinates arrive. A degenerate kernel op emitting one
+NaN (the sweep can, see R2-6) did it too. Not a wrong result: a hard,
+non-catchable crash while merely building a mesh.
+**Fixed:** one clamped `MeshQuantize.key` helper, used at all 20 sites.
+Note the first attempt was itself buggy — `Float(Int32.max)` rounds UP to
+2^31, so a Float-space clamp still traps; the new test caught it on the
+first run. Clamping is done in Double space, which represents both bounds
+exactly.
+
+### R2-C2. A shared `.os3d` file could crash on open ✅ FIXED
+`MeshBlob.decode` validated byte LENGTHS but never index VALUES
+(MeshBuffers.swift). Every consumer subscripts `positions[index]` directly
+(`HitTester`, `FaceTopology`, `EdgeTopology`) and Metal reads the buffer
+raw, so one corrupt or hostile index trapped on first touch — and `.os3d`
+is a shareable document type. **Fixed:** decode now rejects a non-multiple
+-of-3 index count and any index ≥ vertexCount.
+(`MeshBuffers` had zero tests; it now has 14, including the malformed-input
+cases and the extreme-coordinate weld.)
+
+### R2-C3. My own C1 fix leaked at COLUMN granularity ✅ FIXED
+The adversarial pass caught this: round 1 protected whole ROWS, but
+`primitiveData`/`materialData`/`brepData` decode with `try?` per column —
+a failure yields nil, the row is fine so it wasn't tracked, and `save()`
+wrote that nil back over the blob. A truncated brep, or one written by a
+newer OCCT, was therefore destroyed by the next autosave: exactly the
+"recoverable skip → permanent loss" C1 set out to stop. **Fixed:** column
+failures are tracked and those columns are left untouched on save, with a
+separate, honest warning ("N shape(s) opened without some detail…").
+
+### R2-C4. C3's undo-stomp fix covered only 3 of 8 entry points ✅ FIXED
+`prepareForHistoryChange()` guarded undo/redo/rollback, but `deleteFeature`,
+`setFeatureSuppressed`, `moveFeature`, `editFeature*`, `editPatternFeature`
+and `variablesDidChange` all reach the same rebuild and stomp the same way.
+**Fixed:** all now guard; the three that remove geometry also sanitize
+(the History-panel twin of the Items ghost-preview bug, likewise fixed).
+
+Also fixed: `ResizePrimitiveCommand` silently dropped `isHidden`/`material`;
+the gallery multi-delete's silent `try?` now surfaces failures and resolves
+projects via the live query instead of `model(for:)` (which can trap).
+
+## R2 open — highest value first
+
+**R2-1 (CRITICAL, unfixed): a radial cylinder drag silently deletes
+features.** `FaceTopology.matchesWholeBody` accepts "this body IS a
+cylinder" on a volume ratio > 0.95 with no upper bound and no shape check,
+so a cylinder with a boss, pocket, hole or chamfer under ~5% of volume
+qualifies; `faceModifiedMesh` then **discards the source mesh** and rebuilds
+a clean cylinder. Dragging a drilled cylinder's wall destroys the drilling,
+under an undo entry labelled "extrude". Fix: require the fit to explain all
+triangles, or edit by boolean rather than whole-body rebuild.
+
+**R2-2 (CRITICAL, unfixed): deleting or trimming a sketch entity orphans
+its constraints and dimensions.** `RemoveSketchEntitiesCommand` and
+`TrimCommand` touch `entities` only — verified. Trim is worse: fragments get
+fresh UUIDs, so a trimmed line's constraints dangle although the geometry is
+still on screen. Dangling refs are then dropped SILENTLY by the solver, so a
+driving dimension quietly stops driving while still displaying its value.
+
+**R2-3 (CRITICAL, unfixed): solver results are written back without ever
+checking convergence.** `SketchSolverBridge.solve` discards
+`SolveResult.converged` (independently flagged in round 1). The drag path has
+no gate at all, so on a conflicting system LM's best-fit compromise is
+amended into the document every frame.
+
+**R2-4 (SIGNIFICANT): `FaceTopology`'s planar basis depends on randomised
+Dictionary order** — `loops3D[0]` may be a hole, and Swift seeds hashing per
+process, so a face's `origin`/`basisX` differ across launches. Those feed
+`TopoNaming.signature` directly, undermining the identity guarantee that is
+the whole point of topological naming.
+
+**R2-5 (SIGNIFICANT): Y-up model written into Z-up STL and 3MF with no axis
+conversion** — parts arrive in slicers lying on their side. GLB/USDZ are
+correct, so the codebase is inconsistent rather than uniformly wrong.
+
+**R2-6 (SIGNIFICANT): sweep emits NaN geometry when the spine reverses** —
+the mitre factor is clamped but the bisector is not; `simd_normalize` of a
+zero vector yields NaN, which propagates into the body mesh (and used to
+crash the weld, R2-C1).
+
+**R2-7 (SIGNIFICANT): loft twists on non-parallel sections** — Euclid's
+alignment pass is skipped for equal-count rings unless the sections are
+parallel; `SweepLoftKit` doesn't compensate, so a CAD loft between tilted
+sketches can twist up to half a turn or bow-tie.
+
+**R2-8 (SIGNIFICANT): Wrap/Emboss drops the profile's end walls** — the cut
+-edge test matches real profile edges at the x-extremes, and the result never
+gets `.makeWatertight()`. The tests miss it because the fixture is centred on
+the origin, where the missing faces contribute exactly zero signed volume.
+(Kit is test-only today — no call sites.)
+
+**R2-9 (SIGNIFICANT): sketch-stroke lines render at HALF their intended
+width** — the NDC↔pixel conversion in the shader uses `viewport` where one
+NDC unit is `viewport/2` px. This is the hairline complaint the thick-line
+pipeline was written to fix.
+
+**R2-10 (SIGNIFICANT): the tool palette moves under in-flight taps** — it is
+vertically centred with a live `bottomBarInset`, so any bottom-bar height
+change shifts every button by half the delta, and the flyout animates
+horizontally for 180 ms. This is the root cause of the UI-test flake class
+fixed today with settle-waits; two one-line hardenings (anchor top-leading,
+use an opacity transition) would remove it at the source.
+
+**R2-11 (SIGNIFICANT): thumbnail capture submits GPU work in `.background`
+and blocks the main thread on `waitUntilCompleted`** — a watchdog shape.
+Good news from the same check: **`scenePhase` DOES force a `save()`**, so the
+2-second autosave debounce is not a data-loss window.
+
+**R2-12 (SIGNIFICANT): my blend/shell OCCT preview may have made drags
+heavier** — the live preview now runs an OCCT fillet + full re-tessellation
+per drag tick. The claim is plausible but UNMEASURED (the previous Euclid
+path ran dozens of CSG subtractions for a rim chain, so it may even be
+faster). Measure before changing; the proper home is the S1 off-main
+preview service.
+
+**R2-13 (SIGNIFICANT): gizmo ring rotation cannot exceed ±180°** — found
+directly, not by an agent. `rotationDelta` wraps to (−π, π] and both
+consumers pass it through as an ABSOLUTE angle from the drag anchor, so
+circling past half a turn snaps the body backwards ~358°. Fix: accumulate
+the unwrapped angle in the drag session.
+
+**Also open:** `enumerateFaces` is O(faces × triangles) (rebuilds the whole
+adjacency map per seed; three per body tap); negative face pull runs two full
+CSG subtractions + two heals per drag frame; `MeasureKit.boundingBox` reports
+an inflated box for rotated bodies while claiming correctness; the
+read-only-store guard is leaky (`saveThumbnail` mutates `project.thumbnail`,
+flushed by SwiftData's own autosave); a brand-new row that fails to encode is
+skipped with no warning; `amendLast` still has no interaction-identity check
+(all four call sites are correctly guarded today, and today's changeCount
+guard closed the known async offender); OBJ import is complete and tested but
+**unreachable from the UI** while the status doc lists it as shipped.
+
+**Test-coverage gaps:** `UndoStack`, `MeshBuffers` (now covered),
+`TopoNaming`, `PersistenceModels` and both gesture controllers have no unit
+tests; and none of today's fixes had a regression test pinning the new
+behavior until the MeshBlob suite landed. The SwiftData-in-XCTest crash makes
+`DocumentSession` untestable in-process — extracting the save-diff deletion
+rule as a pure function would make the most dangerous logic testable.
+
+---
+
+# Round 1
+
 ## Critical
 
 ### C1. Silent permanent data loss: load-skip + save-diff deletes undecodable rows

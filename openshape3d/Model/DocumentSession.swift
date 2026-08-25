@@ -51,10 +51,21 @@ final class DocumentSession {
         var images: Set<UUID> = []
         var symbols: Set<UUID> = []
         var features: Set<UUID> = []
-        var count: Int {
+        /// Bodies whose row decoded but one COLUMN did not — the column's
+        /// blob must not be overwritten by the nil we decoded to.
+        var bodyPrimitive: Set<UUID> = []
+        var bodyMaterial: Set<UUID> = []
+        var bodyBrep: Set<UUID> = []
+        /// Whole rows that could not be decoded (absent from the document).
+        var rowCount: Int {
             bodies.count + sketches.count + planes.count + images.count
                 + symbols.count + features.count
         }
+        /// Bodies present in the document but missing some detail.
+        var partialBodyCount: Int {
+            bodyPrimitive.union(bodyMaterial).union(bodyBrep).count
+        }
+        var count: Int { rowCount + partialBodyCount }
     }
 
     /// True when the store's `formatVersion` is newer than this build writes.
@@ -583,8 +594,16 @@ final class DocumentSession {
                 unreadableRows.bodies.insert(persisted.bodyID)
                 continue
             }
-            let primitive = persisted.primitiveData.flatMap {
-                try? JSONDecoder().decode(PrimitiveSpec.self, from: $0)
+            // Per-COLUMN decode failures need the same protection as whole
+            // rows: the row itself is fine, so it isn't in `unreadableRows`,
+            // and save() would happily write the decoded `nil` back over a
+            // blob it merely failed to read — losing an analytic brep, a
+            // material or a primitive spec permanently (2026-08-25 review
+            // round 2). Record them so save() leaves those columns alone.
+            let primitive = persisted.primitiveData.flatMap { data -> PrimitiveSpec? in
+                let decoded = try? JSONDecoder().decode(PrimitiveSpec.self, from: data)
+                if decoded == nil { unreadableRows.bodyPrimitive.insert(persisted.bodyID) }
+                return decoded
             }
             var body = Body(
                 id: BodyID(raw: persisted.bodyID),
@@ -595,13 +614,21 @@ final class DocumentSession {
                 revision: loaded.nextRevision()
             )
             body.isHidden = persisted.isHidden
-            body.material = persisted.materialData.flatMap {
-                try? JSONDecoder().decode(BodyMaterialSpec.self, from: $0)
+            body.material = persisted.materialData.flatMap { data -> BodyMaterialSpec? in
+                let decoded = try? JSONDecoder().decode(BodyMaterialSpec.self, from: data)
+                if decoded == nil { unreadableRows.bodyMaterial.insert(persisted.bodyID) }
+                return decoded
             }
             // Restore the analytic B-rep so a reloaded cylinder stays round and
-            // can still compose booleans. A nil/unreadable blob just leaves the
-            // body Euclid-only — the persisted render mesh is already correct.
-            body.brep = persisted.brepData.flatMap { OCCTKernel.deserialize($0) }
+            // can still compose booleans. An unreadable blob (truncated, or
+            // written by a newer OCCT) leaves the body Euclid-only for this
+            // session — the persisted render mesh is already correct — but the
+            // stored blob is PRESERVED rather than overwritten with nil.
+            body.brep = persisted.brepData.flatMap { data -> BRepHandle? in
+                let decoded = OCCTKernel.deserialize(data)
+                if decoded == nil { unreadableRows.bodyBrep.insert(persisted.bodyID) }
+                return decoded
+            }
             loaded.bodies.append(body)
         }
         for persisted in project.sketches {
@@ -675,11 +702,17 @@ final class DocumentSession {
             read-only here — changes will not be saved. Update the app to \
             edit it.
             """
-        } else if unreadableRows.count > 0 {
+        } else if unreadableRows.rowCount > 0 {
             loadWarning = """
-            \(unreadableRows.count) item(s) in this project couldn't be read \
+            \(unreadableRows.rowCount) item(s) in this project couldn't be read \
             by this version of the app. They stay safely stored and are \
             hidden from the editor; nothing has been deleted.
+            """
+        } else if unreadableRows.partialBodyCount > 0 {
+            loadWarning = """
+            \(unreadableRows.partialBodyCount) shape(s) opened without some \
+            detail this version couldn't read. The stored data is kept \
+            untouched, so nothing is lost.
             """
         }
         changeCount += 1
@@ -726,13 +759,23 @@ final class DocumentSession {
             let brepData = body.brep.flatMap { OCCTKernel.serialize($0) }
 
             if let persisted = persistedByID[body.id.raw] {
+                let id = body.id.raw
                 persisted.name = body.name
                 persisted.transformData = transformData
-                persisted.primitiveData = primitiveData
+                // Columns load() couldn't decode keep their stored blob: we
+                // decoded them to nil, so writing that nil back would destroy
+                // data this build merely couldn't read.
+                if !unreadableRows.bodyPrimitive.contains(id) {
+                    persisted.primitiveData = primitiveData
+                }
                 persisted.meshData = meshData
                 persisted.isHidden = body.isHidden
-                persisted.materialData = materialData
-                persisted.brepData = brepData
+                if !unreadableRows.bodyMaterial.contains(id) {
+                    persisted.materialData = materialData
+                }
+                if !unreadableRows.bodyBrep.contains(id) {
+                    persisted.brepData = brepData
+                }
             } else {
                 let persisted = PersistedBody(
                     bodyID: body.id.raw,

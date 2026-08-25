@@ -9142,6 +9142,7 @@ final class EditorViewModel {
         }
         let variable = Variable(name: name, expression: "0", value: 0)
         session.perform(AddVariableCommand(variable: variable))
+        prepareForHistoryChange()
         session.variablesDidChange()
         session.save()
     }
@@ -9162,6 +9163,7 @@ final class EditorViewModel {
         after.name = trimmedName
         after.expression = expression
         session.perform(EditVariableCommand(before: before, after: after))
+        prepareForHistoryChange()
         session.variablesDidChange()
         session.save()
     }
@@ -9172,6 +9174,7 @@ final class EditorViewModel {
         guard let index = session.document.variables.firstIndex(where: { $0.id == id }) else { return }
         let variable = session.document.variables[index]
         session.perform(RemoveVariableCommand(index: index, variable: variable))
+        prepareForHistoryChange()
         session.variablesDidChange()
         session.save()
     }
@@ -9258,20 +9261,29 @@ final class EditorViewModel {
 
     /// Delete a history node and rebuild everything downstream in one undo step.
     func deleteFeature(_ id: FeatureID) {
+        prepareForHistoryChange()
         session.deleteFeature(id)
-        selection = selection.filter { session.document.body(with: $0) != nil }
+        // The deleted node's bodies are gone: a blend/shell pick or tool
+        // context still holding one would keep drawing a ghost preview in a
+        // stuck mode — the Items-panel bug, reachable from History too
+        // (2026-08-25 review round 2).
+        sanitizeAfterHistoryChange()
         session.save()
     }
 
     /// Suppress / un-suppress a history node and rebuild downstream.
     func setFeatureSuppressed(_ id: FeatureID, _ value: Bool) {
+        prepareForHistoryChange()
         session.setSuppressed(id, value)
+        sanitizeAfterHistoryChange()
         session.save()
     }
 
     /// Drag-reorder a history node to a new position and rebuild downstream.
     func moveFeature(_ id: FeatureID, to newIndex: Int) {
+        prepareForHistoryChange()
         session.moveFeature(id, to: newIndex)
+        sanitizeAfterHistoryChange()
         session.save()
     }
 
@@ -9298,6 +9310,7 @@ final class EditorViewModel {
         guard let node = session.document.features.node(id),
               let after = Self.kind(node.kind, replacingScalar: value)
         else { return }
+        prepareForHistoryChange()
         session.editFeature(id, to: after)
         session.save()
     }
@@ -9349,6 +9362,7 @@ final class EditorViewModel {
         }
         let formula = ExpressionEvaluator.identifiers(in: text).isEmpty ? nil : text
         guard let after = Self.kind(node.kind, replacingExpr: Expr(value: value, formula: formula)) else { return }
+        prepareForHistoryChange()
         session.editFeature(id, to: after)
         session.save()
     }
@@ -9371,6 +9385,7 @@ final class EditorViewModel {
         let clamped = max(1, count)
         guard clamped != spec.count else { return }
         spec.count = clamped
+        prepareForHistoryChange()
         session.editPatternFeature(id, spec: spec)
         session.save()
     }
@@ -9381,6 +9396,7 @@ final class EditorViewModel {
         guard var spec = patternSpec(of: id) else { return }
         guard v != spec.spacing else { return }
         spec.spacing = v
+        prepareForHistoryChange()
         session.editPatternFeature(id, spec: spec)
         session.save()
     }
@@ -9393,6 +9409,7 @@ final class EditorViewModel {
         let radians: Double = deg * Double.pi / 180
         guard radians != spec.totalAngle else { return }
         spec.totalAngle = radians
+        prepareForHistoryChange()
         session.editPatternFeature(id, spec: spec)
         session.save()
     }

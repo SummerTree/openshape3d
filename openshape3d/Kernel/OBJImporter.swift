@@ -37,12 +37,15 @@ nonisolated enum OBJImporter {
 
         init(position: SIMD3<Float>, normal: SIMD3<Float>, quantum: Float) {
             let inv = 1 / quantum
-            px = Int32((position.x * inv).rounded())
-            py = Int32((position.y * inv).rounded())
-            pz = Int32((position.z * inv).rounded())
-            nx = Int32((normal.x * inv).rounded())
-            ny = Int32((normal.y * inv).rounded())
-            nz = Int32((normal.z * inv).rounded())
+            // Clamped: a raw Int32(_: Float) traps past ±21 m or on NaN — and
+            // an imported OBJ is exactly where oversized/NaN coordinates
+            // arrive (metre- or inch-unit files, malformed exporters).
+            px = MeshQuantize.key(position.x, inverseQuantum: inv)
+            py = MeshQuantize.key(position.y, inverseQuantum: inv)
+            pz = MeshQuantize.key(position.z, inverseQuantum: inv)
+            nx = MeshQuantize.key(normal.x, inverseQuantum: inv)
+            ny = MeshQuantize.key(normal.y, inverseQuantum: inv)
+            nz = MeshQuantize.key(normal.z, inverseQuantum: inv)
         }
     }
 

@@ -41,6 +41,28 @@ nonisolated struct FeatureEdgeSet: Sendable {
     var segmentCount: Int { segments.count / 2 }
 }
 
+/// Quantization for vertex welding, shared by `EuclidBridge` (render weld) and
+/// `FeatureEdgeExtractor` (topology weld).
+///
+/// `Int32(Float)` TRAPS on a non-finite value or one outside Int32's range —
+/// and at the 1e-5 quantum used here, that range is only ±21.47 m of model
+/// space. A metre-unit import, an architectural-scale model, or a single NaN
+/// out of a degenerate kernel op therefore crashed the app while merely
+/// BUILDING a mesh (2026-08-25 review round 2). Clamping keeps the weld
+/// well-defined: coordinates past the limit collapse together, which is a
+/// cosmetic weld artifact at 21 m, not a crash.
+nonisolated enum MeshQuantize {
+    static func key(_ value: Float, inverseQuantum: Float) -> Int32 {
+        // Clamp in DOUBLE space: Float cannot represent Int32.max (it rounds
+        // up to 2^31), so a Float-space clamp still hands Int32() a value one
+        // past the top and traps — the very bug this guards against.
+        // Double represents both bounds exactly.
+        let scaled = (Double(value) * Double(inverseQuantum)).rounded()
+        guard scaled.isFinite else { return 0 }
+        return Int32(min(max(scaled, Double(Int32.min)), Double(Int32.max)))
+    }
+}
+
 /// Compact binary serialization of a RenderMesh.
 /// Layout (little-endian): "OS3D" magic, u32 version, u32 vertexCount,
 /// u32 indexCount, positions (f32×3 × vertexCount), normals (f32×3 × vertexCount),
@@ -53,6 +75,9 @@ nonisolated enum MeshBlob {
         case badMagic
         case unsupportedVersion(UInt32)
         case truncated
+        /// Well-formed lengths, but the triangle list is not usable: an index
+        /// past the vertex array, or a count that isn't whole triangles.
+        case corruptIndices
     }
 
     static func encode(_ mesh: RenderMesh) -> Data {
@@ -98,6 +123,12 @@ nonisolated enum MeshBlob {
 
         let payloadBytes = vertexCount * 24 + indexCount * 4
         guard offset + payloadBytes <= data.count else { throw BlobError.truncated }
+        // Lengths alone are not enough: the INDEX VALUES are unvalidated input
+        // too. Every consumer subscripts `positions[index]` directly
+        // (HitTester, FaceTopology, EdgeTopology) and Metal reads the buffer
+        // raw, so an out-of-range index in a shared/corrupt .os3d file was a
+        // hard trap on first touch (2026-08-25 review round 2).
+        guard indexCount % 3 == 0 else { throw BlobError.corruptIndices }
 
         var positions = [SIMD3<Float>]()
         positions.reserveCapacity(vertexCount)
@@ -117,8 +148,11 @@ nonisolated enum MeshBlob {
         }
         var indices = [UInt32]()
         indices.reserveCapacity(indexCount)
+        let vertexLimit = UInt32(vertexCount)
         for _ in 0..<indexCount {
-            indices.append(try read(UInt32.self))
+            let index = try read(UInt32.self)
+            guard index < vertexLimit else { throw BlobError.corruptIndices }
+            indices.append(index)
         }
         return RenderMesh(positions: positions, normals: normals, indices: indices)
     }
