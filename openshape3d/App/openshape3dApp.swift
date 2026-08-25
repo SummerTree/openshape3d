@@ -8,6 +8,15 @@ import SwiftData
 
 @main
 struct openshape3dApp: App {
+    init() {
+        #if DEBUG
+        // Opt-in control channel for the MCP bridge; no-op unless OS3D_AGENT is
+        // set, so an ordinary debug run is unaffected. Release has neither this
+        // code nor the sandbox entitlement it needs.
+        AgentServer.shared.startIfRequested()
+        #endif
+    }
+
     var sharedModelContainer: ModelContainer = {
         let schema = Schema([
             Project.self,
