@@ -256,6 +256,7 @@ private struct ItemRowView: View {
                 }
                 .buttonStyle(.plain)
                 .accessibilityIdentifier("ItemEye-\(name)")
+                .accessibilityValue(isHidden ? "hidden" : "visible")
             }
         }
         .padding(.vertical, 7)

@@ -19,6 +19,11 @@ phase plan), `SHAPR3D_PARITY_SPEC.md` (feature spec), `PHASE_D_DESIGN.md`
 | **E** — edge blends (mesh-domain): chamfer/fillet, multi-edge, live preview, drag-to-size arrow | ✅ tranches 1–3 done |
 | **E (B-rep)** — OpenCASCADE port for high-quality fillet/shell/offset | ❌ not started |
 
+**Architecture review (2026-08-25): `ARCHITECTURE_REVIEW_2026-08-25.md`** —
+four-pass deep review; criticals: silent data loss on save of undecodable
+rows, no schema versioning, undo-stomp from armed transform tools, and the
+path-dependent Euclid-vs-OCCT kernel seam. Read it before the next tranche.
+
 Also landed recently (all on `main`): context-sensitive Shapr3D-style tool
 palette with flyout groups; extrude gizmo = SF Symbol `arrow.up.and.down` +
 value pill; drag-reorder of History rows; bug-hunt regression tests.
@@ -36,9 +41,11 @@ Sketch/select UX pass (2026-07-21):
 - **Select mode selects sketch entities**: tap fallback
   (`toggleSketchEntityUnderRay`) + marquee candidates now built for the
   Sketches-only filter too (was `filter == .bodiesAndSketchEntities`).
-- **Consumed sketches stay visible after extrude/revolve/…** — the spec §11
-  auto-hide (`consumedSketchHideCommand`) was removed as a UX bug; hide
-  manually from Items when wanted.
+- **Consumed sketches auto-hide again (2026-08-25, reversing 2026-07-21)** —
+  the user ruled the stay-visible behavior a bug vs Shapr3D: a tool that
+  makes a body now hides every sketch that fed it (profile + loft sections +
+  sweep spine) via `consumedSketchHideCommands`, in the same undo step. The
+  Items eye (a11y value "hidden"/"visible") brings a sketch back.
 - **Delete works on Select-mode sketch picks** (`deleteSelection`): selected
   sketch entities delete outside sketch mode too (bodies + entities in one
   undo step); the palette Delete button enables for them; a plain tap

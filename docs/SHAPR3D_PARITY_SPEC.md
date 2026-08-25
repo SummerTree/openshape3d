@@ -1719,10 +1719,11 @@ Visibility. Names are shared with History (rename in one place updates both).
 `ItemsPanelView`) lists bodies, sketches, construction planes, **images**,
 and **symbols** with type icons; per row: visibility eye
 (`SetItemVisibilityCommand`), inline rename (`RenameItemCommand`), delete,
-tap-to-select, and Zoom To (camera fit to the item's AABB). DELIBERATE
-deviation: consumed sketches are NOT auto-hidden on extrude (read as the
-sketch vanishing — hide manually via the eye); re-opening a hidden sketch
-for editing still un-hides it. `isHidden` persists. Missing: folders, filter dropdown,
+tap-to-select, and Zoom To (camera fit to the item's AABB). Shapr3D parity:
+sketches consumed into a body (extrude/revolve/sweep/loft — profile, loft
+sections, sweep spine) auto-hide in the same undo step
+(`consumedSketchHideCommands`); the eye un-hides them, and re-opening a
+hidden sketch for editing still un-hides it. `isHidden` persists. Missing: folders, filter dropdown,
 multi-select, per-row image opacity percentage (opacity edits live in the
 image bar), Reveal in Items, Show Hidden Items / Invert Visibility menu,
 shared names with History (no history engine).

@@ -50,14 +50,18 @@ final class ItemsUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["Sketches"].exists)
         XCTAssertTrue(app.staticTexts["Planes"].exists)
 
-        // The consumed sketch stays VISIBLE after extrude; the eye still
-        // toggles it off and back on.
+        // Shapr3D parity (spec §11): extrude auto-hides the sketch it
+        // consumed, but the row stays listed and the eye toggles it back.
         let sketchEye = app.buttons["ItemEye-Sketch 1"]
         XCTAssertTrue(sketchEye.waitForExistence(timeout: 3),
-                      "The consumed sketch should be listed")
-        sketchEye.tap() // hide
+                      "The consumed sketch should still be listed")
+        XCTAssertEqual(sketchEye.value as? String, "hidden",
+                       "Extrude should auto-hide the sketch it consumed")
         sketchEye.tap() // show again
-        XCTAssertTrue(sketchEye.exists)
+        XCTAssertEqual(sketchEye.value as? String, "visible",
+                       "The eye should un-hide the consumed sketch")
+        sketchEye.tap() // back to hidden
+        XCTAssertEqual(sketchEye.value as? String, "hidden")
 
         // Rename the extruded body.
         let nameField = app.textFields["ItemName-Extrude"]

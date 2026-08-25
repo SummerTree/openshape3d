@@ -4993,9 +4993,9 @@ final class EditorViewModel {
             commands.append(ReplaceBodyCommand(title: title, before: entry.target, after: after))
         }
 
-        // Consumed sketches stay VISIBLE after the tool commits (they can be
-        // hidden manually from Items) — hiding them mid-flow read as the
-        // sketch vanishing whenever a body was made from it.
+        // Shapr3D parity (spec §11): sketches auto-hide once a tool consumes
+        // them into a body, in the same undo step.
+        commands.append(contentsOf: consumedSketchHideCommands(context))
         // Phase D: record the tool's feature node (extrude in tranche 1;
         // revolve / sweep / loft in tranche 2) with the resolved boolean intent,
         // but only for a SINGLE feature-owned target — the evaluators apply one
@@ -5043,6 +5043,7 @@ final class EditorViewModel {
             revision: preview.meshRevision
         )
         var commands: [DocumentCommand] = [AddBodyCommand(body: body, title: title)]
+        commands.append(contentsOf: consumedSketchHideCommands(context))
         // Phase D: a new stand-alone tool body becomes a `.newBody` history node
         // — extrude in tranche 1, or revolve / sweep / loft in tranche 2.
         if let node = toolFeatureNode(
@@ -5060,6 +5061,33 @@ final class EditorViewModel {
         mode = .selected(body.id)
         selection = [body.id]
         session.save()
+    }
+
+    /// Hide-the-consumed-sketch commands for a committing tool (Shapr3D
+    /// parity, spec §11): every sketch that fed the new body — the profile's
+    /// sketch, each loft section's, and any sweep-spine sketch — auto-hides
+    /// in the same undo step. Face pulls have no sketch, and already-hidden
+    /// sketches need no command.
+    private func consumedSketchHideCommands(_ context: ToolContext) -> [DocumentCommand] {
+        var ids: [SketchID] = []
+        if let id = context.sketchID { ids.append(id) }
+        for entry in context.loftProfiles where !ids.contains(entry.sketchID) {
+            ids.append(entry.sketchID)
+        }
+        if !context.sweepPathEntityIDs.isEmpty {
+            for sketch in session.document.sketches
+            where !ids.contains(sketch.id) && sketch.entities.contains(where: {
+                context.sweepPathEntityIDs.contains($0.id)
+            }) {
+                ids.append(sketch.id)
+            }
+        }
+        return ids.compactMap { id in
+            guard let sketch = session.document.sketches.first(where: { $0.id == id }),
+                  !sketch.isHidden
+            else { return nil }
+            return SetItemVisibilityCommand(item: .sketch(id), isHidden: true)
+        }
     }
 
     func cancelTool() {
