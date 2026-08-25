@@ -297,14 +297,19 @@ warn already exists.
 
 ## R4 open — OCCT bridge operations
 
-**R4-O1 (CRITICAL): entity targeting accepts EVERY entity within tolerance,
-not the nearest** — in fillet, chamfer, shell and defeature alike — with the
-tolerance set to 1–2% of the body's AABB diagonal. On an ordinary
-100×100×1 mm plate that is 1.4–2.8 mm against a 1 mm thickness, so picking
-the top face also opens or deletes the BOTTOM, and picking one rim rounds
-both. The loose tolerance isn't even needed: the tessellation sagitta it
-exists to cover is ~40× smaller. Fix: nearest-wins via
-`BRepExtrema_DistShapeShape`.
+### R4-O1. Targeting took EVERY entity within tolerance, not the nearest ✅ FIXED
+In fillet, chamfer, shell and defeature alike, with a tolerance of 1–2% of
+the body's AABB diagonal. On an ordinary 100×100×1 mm plate that is
+1.4–2.8 mm against a 1 mm thickness, so picking the top face also opened or
+deleted the BOTTOM, and picking one rim rounded both.
+**Fixed** with a nearest-wins rule (`OS3DNearestEdges` / `OS3DNearestFaces`):
+for each picked point, the single closest entity within tolerance. A
+tessellated rim still works — its many midpoints all resolve to the same
+OCCT edge. Regression test: a 100×100×1 plate filleted at the app's real
+1%-of-diagonal tolerance must gain exactly ONE cylindrical face.
+Note the test-coverage gap this exposed: every other OCCT test passes an
+exact analytic point with a hand-tuned small tolerance, which is never what
+the app does — so none of these targeting bugs was reachable by the suite.
 
 **R4-O2 (SIGNIFICANT): face targeting samples the surface's UV BOUNDING BOX,
 not the trimmed face** — so samples land off the actual face. A right

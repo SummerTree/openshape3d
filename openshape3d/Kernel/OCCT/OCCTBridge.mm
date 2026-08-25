@@ -11,6 +11,8 @@
 
 #include <vector>
 #include <algorithm>
+#include <limits>
+#include <set>
 #include <cstdint>
 #include <sstream>
 #include <string>
@@ -460,6 +462,50 @@ static TopoDS_Wire PolyWire(NSData *loop, double z) {
     }
 }
 
+/// Faces the user actually picked: for EACH picked point, the single NEAREST
+/// face (when within `tolerance`). Same rationale as `OS3DNearestEdges` — at
+/// 2% of the body diagonal, the old all-within-tolerance rule opened or
+/// deleted the face on the OPPOSITE side of a thin plate.
+///
+/// NOTE: sampling still walks the surface's UV BOUNDING BOX rather than the
+/// trimmed face, so samples can land off a non-rectangular face (review
+/// finding R4-O2, still open). Nearest-wins narrows the damage but does not
+/// fix that.
+static std::set<Standard_Integer> OS3DNearestFaces(
+    const TopTools_IndexedMapOfShape &faceMap,
+    const double *pts, NSUInteger count, double tolerance
+) {
+    std::vector<double> bestDistance(count, std::numeric_limits<double>::max());
+    std::vector<Standard_Integer> bestFace(count, 0);
+
+    for (Standard_Integer i = 1; i <= faceMap.Extent(); ++i) {
+        const TopoDS_Face face = TopoDS::Face(faceMap(i));
+        BRepAdaptor_Surface surf(face);
+        const double u0 = surf.FirstUParameter(), u1 = surf.LastUParameter();
+        const double v0 = surf.FirstVParameter(), v1 = surf.LastVParameter();
+        const int S = 4;
+        for (int a = 0; a <= S; ++a) {
+            for (int b = 0; b <= S; ++b) {
+                const gp_Pnt q = surf.Value(u0 + (u1 - u0) * a / (double)S,
+                                            v0 + (v1 - v0) * b / (double)S);
+                for (NSUInteger k = 0; k < count; ++k) {
+                    const gp_Pnt t(pts[3*k], pts[3*k+1], pts[3*k+2]);
+                    const double d = q.Distance(t);
+                    if (d < bestDistance[k]) { bestDistance[k] = d; bestFace[k] = i; }
+                }
+            }
+        }
+    }
+
+    std::set<Standard_Integer> chosen;
+    for (NSUInteger k = 0; k < count; ++k) {
+        if (bestFace[k] != 0 && bestDistance[k] <= tolerance) {
+            chosen.insert(bestFace[k]);
+        }
+    }
+    return chosen;
+}
+
 + (nullable OCCTShape *)defeaturedShape:(OCCTShape *)shape
                                  atWorldPoints:(NSData *)worldPoints
                                      tolerance:(double)tolerance {
@@ -469,25 +515,11 @@ static TopoDS_Wire PolyWire(NSData *loop, double z) {
     const double *pts = (const double *)worldPoints.bytes;
 
     try {
+        TopTools_IndexedMapOfShape faceMap;
+        TopExp::MapShapes(shape->_shape, TopAbs_FACE, faceMap);
         TopTools_ListOfShape toRemove;
-        for (TopExp_Explorer ex(shape->_shape, TopAbs_FACE); ex.More(); ex.Next()) {
-            const TopoDS_Face face = TopoDS::Face(ex.Current());
-            BRepAdaptor_Surface surf(face);
-            const double u0 = surf.FirstUParameter(), u1 = surf.LastUParameter();
-            const double v0 = surf.FirstVParameter(), v1 = surf.LastVParameter();
-            bool hit = false;
-            const int S = 4;
-            for (int i = 0; i <= S && !hit; ++i) {
-                for (int j = 0; j <= S && !hit; ++j) {
-                    const gp_Pnt q = surf.Value(u0 + (u1 - u0) * i / (double)S,
-                                                v0 + (v1 - v0) * j / (double)S);
-                    for (NSUInteger k = 0; k < count; ++k) {
-                        const gp_Pnt t(pts[3*k], pts[3*k+1], pts[3*k+2]);
-                        if (q.Distance(t) <= tolerance) { hit = true; break; }
-                    }
-                }
-            }
-            if (hit) toRemove.Append(face);
+        for (Standard_Integer i : OS3DNearestFaces(faceMap, pts, count, tolerance)) {
+            toRemove.Append(TopoDS::Face(faceMap(i)));
         }
         if (toRemove.IsEmpty()) return nil;
 
@@ -532,6 +564,50 @@ static TopoDS_Wire PolyWire(NSData *loop, double z) {
     return counts;
 }
 
+/// Edges the user actually picked: for EACH picked point, the single NEAREST
+/// edge (when it is within `tolerance`), rather than every edge that happens
+/// to fall inside the tolerance ball.
+///
+/// The all-within-tolerance rule was a real defect: tolerance is 1–2% of the
+/// body's AABB diagonal, so on an ordinary 100×100×1 mm plate it is 1.4–2.8 mm
+/// against a 1 mm thickness — picking one rim also rounded the rim on the
+/// opposite face (2026-08-25 review round 4). Nearest-wins keeps a
+/// tessellated rim working (its many midpoints all resolve to the same OCCT
+/// edge) while making the pick unambiguous on thin parts.
+static std::set<Standard_Integer> OS3DNearestEdges(
+    const TopTools_IndexedMapOfShape &edgeMap,
+    const double *pts, NSUInteger count, double tolerance
+) {
+    std::vector<double> bestDistance(count, std::numeric_limits<double>::max());
+    std::vector<Standard_Integer> bestEdge(count, 0);
+
+    for (Standard_Integer i = 1; i <= edgeMap.Extent(); ++i) {
+        const TopoDS_Edge edge = TopoDS::Edge(edgeMap(i));
+        if (BRep_Tool::Degenerated(edge)) continue;
+
+        BRepAdaptor_Curve curve(edge);
+        const double first = curve.FirstParameter();
+        const double last = curve.LastParameter();
+        const int samples = 16;
+        for (int s = 0; s <= samples; ++s) {
+            const gp_Pnt q = curve.Value(first + (last - first) * (double)s / (double)samples);
+            for (NSUInteger k = 0; k < count; ++k) {
+                const gp_Pnt target(pts[3*k], pts[3*k+1], pts[3*k+2]);
+                const double d = q.Distance(target);
+                if (d < bestDistance[k]) { bestDistance[k] = d; bestEdge[k] = i; }
+            }
+        }
+    }
+
+    std::set<Standard_Integer> chosen;
+    for (NSUInteger k = 0; k < count; ++k) {
+        if (bestEdge[k] != 0 && bestDistance[k] <= tolerance) {
+            chosen.insert(bestEdge[k]);
+        }
+    }
+    return chosen;
+}
+
 + (nullable OCCTShape *)filletedShape:(OCCTShape *)shape
                         atWorldPoints:(NSData *)worldPoints
                                radius:(double)radius
@@ -547,28 +623,12 @@ static TopoDS_Wire PolyWire(NSData *loop, double z) {
         if (edgeMap.Extent() == 0) return nil;
 
         BRepFilletAPI_MakeFillet mk(shape->_shape);
-        int added = 0;
-
-        for (Standard_Integer i = 1; i <= edgeMap.Extent(); ++i) {
-            const TopoDS_Edge edge = TopoDS::Edge(edgeMap(i));
-            if (BRep_Tool::Degenerated(edge)) continue;
-
-            BRepAdaptor_Curve curve(edge);
-            const double first = curve.FirstParameter();
-            const double last = curve.LastParameter();
-            const int samples = 16;
-            bool hit = false;
-
-            for (int s = 0; s <= samples && !hit; ++s) {
-                const gp_Pnt q = curve.Value(first + (last - first) * (double)s / (double)samples);
-                for (NSUInteger k = 0; k < count; ++k) {
-                    const gp_Pnt target(pts[3*k], pts[3*k+1], pts[3*k+2]);
-                    if (q.Distance(target) <= tolerance) { hit = true; break; }
-                }
-            }
-            if (hit) { mk.Add(radius, edge); ++added; }
+        const std::set<Standard_Integer> chosen =
+            OS3DNearestEdges(edgeMap, pts, count, tolerance);
+        for (Standard_Integer i : chosen) {
+            mk.Add(radius, TopoDS::Edge(edgeMap(i)));
         }
-        if (added == 0) return nil;
+        if (chosen.empty()) return nil;
 
         mk.Build();
         if (!mk.IsDone()) return nil;
@@ -597,30 +657,14 @@ static TopoDS_Wire PolyWire(NSData *loop, double z) {
         TopExp::MapShapes(shape->_shape, TopAbs_EDGE, edgeMap);
 
         BRepFilletAPI_MakeChamfer mk(shape->_shape);
-        int added = 0;
-
-        for (Standard_Integer i = 1; i <= edgeMap.Extent(); ++i) {
-            const TopoDS_Edge edge = TopoDS::Edge(edgeMap(i));
-            if (BRep_Tool::Degenerated(edge)) continue;
-
-            BRepAdaptor_Curve curve(edge);
-            const double first = curve.FirstParameter(), last = curve.LastParameter();
-            const int samples = 16;
-            bool hit = false;
-            for (int s = 0; s <= samples && !hit; ++s) {
-                const gp_Pnt q = curve.Value(first + (last - first) * (double)s / (double)samples);
-                for (NSUInteger k = 0; k < count; ++k) {
-                    const gp_Pnt t(pts[3*k], pts[3*k+1], pts[3*k+2]);
-                    if (q.Distance(t) <= tolerance) { hit = true; break; }
-                }
-            }
-            if (!hit) continue;
-
+        // Nearest-wins, same rule as the fillet path (see OS3DNearestEdges).
+        const std::set<Standard_Integer> chosen =
+            OS3DNearestEdges(edgeMap, pts, count, tolerance);
+        for (Standard_Integer i : chosen) {
             // Symmetric chamfer: equal setback on both adjacent faces.
-            mk.Add(distance, edge);
-            ++added;
+            mk.Add(distance, TopoDS::Edge(edgeMap(i)));
         }
-        if (added == 0) return nil;
+        if (chosen.empty()) return nil;
 
         mk.Build();
         if (!mk.IsDone()) return nil;
@@ -648,24 +692,13 @@ static TopoDS_Wire PolyWire(NSData *loop, double z) {
         // Empty selection => fully-enclosed hollow.
         TopTools_ListOfShape openFaces;
         if (count > 0) {
-            for (TopExp_Explorer ex(shape->_shape, TopAbs_FACE); ex.More(); ex.Next()) {
-                const TopoDS_Face face = TopoDS::Face(ex.Current());
-                BRepAdaptor_Surface surf(face);
-                const double u0 = surf.FirstUParameter(), u1 = surf.LastUParameter();
-                const double v0 = surf.FirstVParameter(), v1 = surf.LastVParameter();
-                bool hit = false;
-                const int S = 4;
-                for (int i = 0; i <= S && !hit; ++i) {
-                    for (int j = 0; j <= S && !hit; ++j) {
-                        const gp_Pnt q = surf.Value(u0 + (u1 - u0) * i / (double)S,
-                                                    v0 + (v1 - v0) * j / (double)S);
-                        for (NSUInteger k = 0; k < count; ++k) {
-                            const gp_Pnt t(pts[3*k], pts[3*k+1], pts[3*k+2]);
-                            if (q.Distance(t) <= tolerance) { hit = true; break; }
-                        }
-                    }
-                }
-                if (hit) openFaces.Append(face);
+            // Nearest-wins (see OS3DNearestFaces): the old rule opened every
+            // face within tolerance, which on a thin plate meant picking the
+            // top also opened the bottom.
+            TopTools_IndexedMapOfShape faceMap;
+            TopExp::MapShapes(shape->_shape, TopAbs_FACE, faceMap);
+            for (Standard_Integer i : OS3DNearestFaces(faceMap, pts, count, tolerance)) {
+                openFaces.Append(TopoDS::Face(faceMap(i)));
             }
             // The caller ASKED for openings but nothing matched. Falling
             // through to the fully-enclosed branch silently sealed the body:

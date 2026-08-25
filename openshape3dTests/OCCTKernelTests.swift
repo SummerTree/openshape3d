@@ -63,6 +63,41 @@ final class OCCTKernelTests: XCTestCase {
     /// through STEP with its faces and solid topology intact. This is what the
     /// mesh exporters (STL/OBJ/3MF) cannot do: they ship triangles, so analytic
     /// surfaces are lost.
+
+    /// Picking ONE rim of a thin plate must not round the opposite rim.
+    ///
+    /// The app passes a tolerance of 1% of the body's AABB diagonal, and the
+    /// bridge used to select EVERY edge within that ball. On a 100x100x1 plate
+    /// the tolerance is ~1.4mm against a 1mm thickness, so picking the top rim
+    /// silently rounded the bottom one too (2026-08-25 review round 4).
+    /// Every other test here passes an exact analytic point with a hand-tuned
+    /// small tolerance, which is never what the app does.
+    func testFilletOnAThinPlatePicksOnlyTheNearestRim() {
+        // width→x, depth→z, height→y: a flat plate 1mm thick, top face at y=1.
+        let spec = PrimitiveSpec.box(width: 100, depth: 100, height: 1)
+        guard let plate = OCCTKernel.primitiveShape(spec, placement: .identity) else {
+            return XCTFail("could not build the plate")
+        }
+        let before = OCCTKernel.faceTypeCounts(plate)
+        XCTAssertEqual(before.cylindrical, 0, "a box starts with no curved faces")
+
+        // The app's real tolerance: 1% of the AABB diagonal (~141) = 1.41,
+        // which EXCEEDS the 1mm plate thickness.
+        let tolerance = 1.41
+        // Midpoint of one top-face edge (y = 1 is the top face).
+        let topEdgePoint = SIMD3<Double>(0, 1, 50)
+        guard let filleted = OCCTKernel.fillet(plate, at: [topEdgePoint],
+                                               radius: 0.2, tolerance: tolerance) else {
+            return XCTFail("BRepFilletAPI could not round the picked edge")
+        }
+        let after = OCCTKernel.faceTypeCounts(filleted)
+        // One rounded edge => exactly one new cylindrical face. Two means the
+        // bottom edge 1mm away was swept in as well.
+        XCTAssertEqual(
+            after.cylindrical, 1,
+            "one pick must round one edge, not its neighbour across the thickness")
+    }
+
     func testSTEPRoundTripPreservesAnalyticTopology() throws {
         // A FILLETED cylinder: planar caps + a cylindrical wall + a torus blend.
         // If STEP round-trips that face mix intact, it is carrying real B-rep
