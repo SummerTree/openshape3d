@@ -62,7 +62,7 @@ filleted or shelled cylinder reverts to a faceted mesh body. Until the
 modification ops are ported, exactness doesn't survive a real modeling session.
 This is why G1–G3 come first.
 
-### Reality check — Shapr3D starter tutorial walkthrough (2026-08-26)
+### Reality check — driven against Shapr3D's own tutorials and manual (2026-08-26)
 
 The "Introducing Shapr3D basics" motorcycle-cover series (parts 2–4:
 [Creating complex shapes](https://support.shapr3d.com/hc/en-us/articles/13079104356380),
@@ -297,6 +297,22 @@ and History are mirrored relative to Shapr3D (it puts Items left / History
 right, and our Toolbar Side setting only moves the palette); renaming a design
 is gallery-only, where Shapr3D renames from the editor's upper-left title.
 
+**Audited against the official manual (2026-08-26).** The 343-page Shapr3D
+manual PDF (pages 77–259 are sketching + modeling) was read tool-by-tool
+against this repo. Two things worth recording:
+
+1. **`SHAPR3D_PARITY_SPEC.md` is accurate and complete in its coverage.** Every
+   tool in the manual's Sketch / Constraints / Insert / Construct / Transform /
+   Tools menus maps onto an existing spec section — there are no unaudited
+   features — and the statuses spot-checked (§1.4 spline, §1.9 offset edge,
+   §4.4 shell, §6.1/§6.2 construction geometry, §8.4 hotkeys) were all correct,
+   including the careful distinction in §1.4 between the spline *entity* (which
+   ships through the whole pipeline) and the spline *drawing tool* (which does
+   not). Trust that doc.
+2. **The gap is depth, not breadth.** Nearly every tool exists in some form;
+   what is missing is each tool's *variants and options*. That is a different
+   shape of work from G1–G7 and produced two new goals, G8 and G9.
+
 **One claim to re-check rather than act on.** The "Grid and sketch settings"
 video says Shapr3D squares the view to the sketch plane on entry, whereas
 `STATUS_AND_NEXT_STEPS.md` records our "draw from the current camera" behaviour
@@ -311,6 +327,64 @@ current Shapr3D before treating either reading as settled.
   parametric rebuild.
 - Every sketch and modeling hotkey the tutorials press does what the video
   shows, and no hotkey fires while a text field has focus.
+
+### G8 — Every feature's operands and options editable in History *(spec §10.1)*
+
+**The structural modeling gap, and the one the manual makes impossible to
+miss.** Every Shapr3D tool's History card exposes its full parameter set,
+including its *references*: Extrude shows Profile / Sides / Extent / Draft
+Angle / Start / Result + Target; Union shows Target / Tool / Type / Keep
+Target Bodies / Keep Tool Bodies; Sweep shows Profile / Path / Profile
+Position / Orientation / Twist / Scale / Corner type. Each reference row is a
+live `Edit…` / `Select…` picker, so "re-pick the profile this extrude uses" is
+a first-class edit — and the manual's own repair flows depend on it
+("remove the missing face from a Face Offset selection", "re-select the
+original face to fix a broken Shell").
+
+We already have the hard half. `FeatureKind` stores real operand references —
+`ProfileRef`, `AxisRef`, `PlaneRef`, `BodyRef`, `FaceRef`, `EdgeRef` — and
+topological naming re-resolves them across a rebuild. What is missing is the
+UI: `HistoryPanelView` exposes exactly **four** editable scalars (distance,
+pattern count / spacing / angle) and no reference pickers or option controls
+at all. So a feature's geometry is parametric while its inputs are frozen at
+creation time.
+
+**Acceptance**
+- Every `FeatureKind` case renders its full parameter set in its History row.
+- Reference rows re-enter the matching pick mode, and committing re-resolves
+  and rebuilds downstream.
+- A feature whose reference went stale offers the re-pick as the repair, which
+  is what closes the loop with the error badge §18 already specifies.
+
+### G9 — Tool variants and options *(spec §1.x, §4.x, §5.x)*
+
+Breadth exists; depth does not. Each row below is the *default path only* in
+our app. Ordered roughly by how often the manual reaches for them.
+
+| Tool | Missing variants / options |
+|---|---|
+| Extrude *(§4.1)* | **Extent**: To Object, Through All (+Flip); **Start**: Offset (start/end), From Plane; Draft Angle (G7.2); explicit boolean Target picker |
+| Chamfer/Fillet *(§4.3)* | Chamfer 2-distance; Fillet **Chordal**; **Corner** Rolling Ball vs Setback; **Continuity** G1/G2; profile slider + magnitude (−1…1); Overflow (Auto/Cliff/Smooth/Notch); Include Tangent Edges toggle; Y-shaped blend |
+| Booleans *(§4.6–4.8)* | **Keep Target Bodies / Keep Tool Bodies** (Shapr3D's All / Modified / Removed / None); switching Type after the fact |
+| Offset Face *(§4.2)* | **Distance Type**: Radius/Diameter, **Total** (with opposite-face pick), Offset; automatic tangent-face inclusion |
+| Sweep *(§4.11)* | Profile Position (Auto / path intersection / closest point / closest endpoint); Orientation (normal-to-path vs parallel); Twist; Scale; Corner type (mitre/round) |
+| Loft *(§4.5)* | **Guide curves**; **connection points** (vertex mapping / de-twisting); Periodic Loft; start/end tangent continuity + magnitude |
+| Split Body *(§4.9)* | Multiple cutters at once; sketch profiles, body faces/edges, images, and a body's own face as cutters; Keep Originals |
+| Revolve *(§4.10)* | **Height** → helical bodies (coils, springs, threads) directly from Revolve; ours needs the separate Helix tool |
+| Rectangle *(§1.5)* | Center and Three-point variants (Diagonal only today) |
+| Polygon *(§1.8)* | Pre-defined Triangle/Pentagon/Hexagon/Octagon menu |
+| Circle / Ellipse / Polygon / Rectangle *(§2.2)* | **Type-ahead numeric entry**: typing a value mid-draw, before placing the second point |
+| Text *(§1.12)* | **Alignment** setting; gizmo positioning pass after Continue |
+| Constraints *(§3.2)* | **Disconnect** (break connected points, dropping their coincident/midpoint constraints); **Anchored Sketch Entity** (First/Last Selected) setting; Always Show Constraints / Always Show Dimensions toggles |
+
+**Not in this table because they already have goals:** spline drawing (G5.1),
+sketch Offset Edge (G7.1), sketch Pattern (G5.3), construction planes and axes
+(§6.1/§6.2 — note `ConstructionAxisKit` has all five axis constructions tested
+with no document entity or UI), Replace Face / Offset Edge 3D / Wrap & Emboss
+(G4, all kernel-only).
+
+**Acceptance:** for each row, the variant is reachable from the tool's own bar
+(not only from History), and round-trips through save/reload and a rebuild.
 
 ---
 
@@ -345,6 +419,8 @@ G1 Fillet/Chamfer ──► G2 Shell ──► G3 Remaining creators ──► G
 G5 Sketch completeness (parallel track) ──┘──► G6 STEP
 
 G7 Starter-tutorial walls ── independent, do first (UI-only, unblocks new users)
+
+G8 Editable history params ──► G9 Tool variants and options
 ```
 
 G1–G3 are the critical path: they make exactness survive a modeling session.
@@ -358,10 +434,32 @@ difference between a new user completing the getting-started tutorial and
 hitting a wall on step one. Exactness matters to the user who stays; G7 decides
 whether they get that far.
 
+**G8 comes before G9, and the order is not arbitrary.** Most of G9's options
+are per-feature parameters, so G8's parameter-rendering layer is the surface
+they get added to — building it first means each G9 row is "add a case", not
+"add a case and invent a place to put it". G8 also stands on its own: without
+it a feature's inputs are frozen at creation time, which is the difference
+between a history that records what you did and one you can actually edit.
+
+Both are independent of the kernel track. Sequenced after G7, since a tool the
+user cannot reach at all outranks an option on a tool they can.
+
 **Milestone definition of done for "modeling core parity":** the end-to-end
 scenario in §1 completes with analytic results and a clean parametric rebuild —
 i.e. G1–G4 plus the top three items of G5. **G7 is the separate "a beginner can
 finish the official tutorial" bar**, and is worth tracking on its own.
+
+**Three bars, not one.** Keeping them apart stops "are we at parity?" from
+collapsing into a single unanswerable question:
+
+| Bar | Means | Gated by |
+|---|---|---|
+| **Reachable** | every tool in the manual has a UI entry point | G7 + the kernel-only tools in G4/G5 |
+| **Exact** | results are analytic and survive a rebuild | G1–G4 |
+| **Complete** | each tool's variants and options are all there | G8 + G9 |
+
+Today we are strongest on *reachable*, mid on *exact*, and weakest on
+*complete* — see the manual audit in §2.
 
 ---
 
