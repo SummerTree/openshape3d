@@ -62,6 +62,44 @@ filleted or shelled cylinder reverts to a faceted mesh body. Until the
 modification ops are ported, exactness doesn't survive a real modeling session.
 This is why G1–G3 come first.
 
+### Reality check — Shapr3D starter tutorial walkthrough (2026-08-26)
+
+The "Introducing Shapr3D basics" motorcycle-cover series (parts 2–4:
+[Creating complex shapes](https://support.shapr3d.com/hc/en-us/articles/13079104356380),
+[Create basic 3D geometry](https://support.shapr3d.com/hc/en-us/articles/13079130132508),
+[Modify features with Design History](https://support.shapr3d.com/hc/en-us/articles/13079145254172))
+was driven step-by-step against the app on the iPad simulator. It is a good
+parity yardstick because it is the *first* thing a new Shapr3D user does, so
+anything missing there is a wall, not a nicety.
+
+**Held up:** dimension-on-select with typed values driving the solver;
+the constraint menu with hotkey letters and context-sensitive enablement;
+auto-constraints while drawing (`H` badge); tap-a-profile → pull arrow with
+live drag and a typed distance; the boolean-result selector
+(`Auto / New Body / Union / Subtract / Intersect`); sketch-on-a-model-face;
+Shell with face picking and a live hollow preview; Fillet with live preview and
+a drag handle; sketch Text with font + height; named/isometric views; and the
+History panel's rename / suppress / delete / roll-back / inline parameter edit.
+
+**Walls hit** — these became G7:
+
+| Tutorial step | Gap |
+|---|---|
+| "click the offset edge tool, select a model edge, drag it in, key in a half inch" (used twice) | Offset Edge has no UI at all — see G5.2 |
+| "add draft to this using the curved arrow and key in 10" (used twice) | no draft angle on extrude *(§4.1 already records this)* |
+| "select the sketch plane and shift-select the extrude … drag these up the tree" | History rows are individually draggable only — no multi-select *(§10.1)* |
+
+**Cosmetic bug found and fixed the same day:** `HistoryPanelView`,
+`ItemsPanelView`, and `VariablesPanelView` are each
+`ScrollView { … }.background(.regularMaterial)` and still used hierarchical
+`.secondary`/`.tertiary`, so their section headers, row icons, trash buttons,
+and unit captions rendered **fully transparent** — the History panel read as a
+bare "Extrude / 1 / Shell / 0.3". This is the gotcha the `.barLabel` colour in
+`AdaptiveBar.swift` was introduced for; it had only ever been applied to the
+bottom bars. All three panels now use `.barLabel` / `.barLabelDim`. Note this
+class of bug is **invisible to XCUITest** — a transparent label still `exists`
+and is `isHittable` — so it needs a visual check.
+
 ---
 
 ## 3. Goals
@@ -150,6 +188,8 @@ The remaining gaps in the sketch half, ordered by how often they block real work
 1. **Spline (fit / control points)** *(§1.4)* — the biggest missing sketch
    primitive; needs solver integration for tangency.
 2. **Offset Edge in sketch mode** *(§1.9)* — kernel exists, UI does not.
+   **Promoted:** the starter tutorial opens with this tool and uses it twice, so
+   it blocks the very first workflow a new user attempts. Do it as part of G7.
 3. **Sketch pattern (linear/circular) + the pattern constraint** *(§1.11, §2.5)*.
 4. **Line/Arc pen mode** *(§1.2)* — drag-to-arc continuation, a core Shapr3D
    input idiom.
@@ -170,6 +210,39 @@ deliberately; it is a one-line flip in `scripts/build_occt_ios.sh`.
 
 **Acceptance:** round-trip a filleted, shelled part through STEP with faces and
 solid topology preserved.
+
+### G7 — Close the starter-tutorial walls *(spec §1.9, §4.1, §10.1)*
+
+The three gaps that stop a new user completing the Shapr3D getting-started
+series (see the walkthrough in §2). All three are **UI/feature work, not kernel
+work**, so this goal is independent of G1–G4 and can run in parallel.
+
+1. **Offset Edge in the sketch palette** *(§1.9)* — `SketchOffset` and
+   `EdgeOffsetKit` are tested backends with no entry point. Needs a palette
+   item, edge picking, a blue drag arrow, and a typed distance, matching the
+   push/pull arrow interaction already in `ViewportView`.
+2. **Draft angle on extrude** *(§4.1)* — a second, curved handle on the pull
+   gizmo plus an angle field in the extrude bar; the tapered prism is a kernel
+   op on both the Euclid and OCCT paths (`BRepPrimAPI_MakePrism` has no draft;
+   expect `BRepOffsetAPI_DraftAngle` or a lofted-profile construction).
+3. **Multi-select + group reorder in History** *(§10.1)* — rows are
+   individually `.draggable` with a single-UUID payload; the tutorial's key
+   move is selecting a sketch *and* its extrude and dragging both above the
+   shell in one gesture.
+
+**Lower-priority divergences found in the same pass** (record, don't schedule):
+a selected full circle reports **Radius** where Shapr3D reports **Ø** — and we
+already draw Ø in the live sketch overlay, so we are inconsistent with
+ourselves; sketch Text is a modal sheet rather than live-on-canvas with the
+move/rotate/reference-point pad; Shell thickness has a field but no drag
+handle, unlike the blend arrow.
+
+**Acceptance**
+- The "Create basic 3D geometry" tutorial can be followed end-to-end in the app
+  without substituting a different tool for any step.
+- Offsetting a model edge into a sketch, extruding the loop with 10° of draft,
+  and reordering that extrude above the shell all survive a save/reload and a
+  parametric rebuild.
 
 ---
 
@@ -202,6 +275,8 @@ These apply to every goal above and are easy to forget:
 G1 Fillet/Chamfer ──► G2 Shell ──► G3 Remaining creators ──► G4 Face ops
                                           │
 G5 Sketch completeness (parallel track) ──┘──► G6 STEP
+
+G7 Starter-tutorial walls ── independent, do first (UI-only, unblocks new users)
 ```
 
 G1–G3 are the critical path: they make exactness survive a modeling session.
@@ -209,9 +284,16 @@ G5 is independent of the kernel work and can proceed in parallel. G4 depends on
 robust B-rep topology, so it follows G3. G6 last, so the size cost is paid only
 once the modeling core justifies it.
 
+**G7 jumps the queue** despite not being on the exactness path: it is cheap
+(UI wiring over backends that already exist and are tested) and it is the
+difference between a new user completing the getting-started tutorial and
+hitting a wall on step one. Exactness matters to the user who stays; G7 decides
+whether they get that far.
+
 **Milestone definition of done for "modeling core parity":** the end-to-end
 scenario in §1 completes with analytic results and a clean parametric rebuild —
-i.e. G1–G4 plus the top three items of G5.
+i.e. G1–G4 plus the top three items of G5. **G7 is the separate "a beginner can
+finish the official tutorial" bar**, and is worth tracking on its own.
 
 ---
 

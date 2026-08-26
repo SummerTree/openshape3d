@@ -79,7 +79,7 @@ struct HistoryPanelView: View {
         HStack(spacing: 6) {
             Text(title)
                 .font(.caption.weight(.semibold))
-                .foregroundStyle(.secondary)
+                .foregroundStyle(.barLabel)
             Spacer(minLength: 4)
             // When the timeline is rolled back, offer a one-tap return to the
             // full (latest) history. Hidden when rollbackIndex is nil.
@@ -119,7 +119,7 @@ struct HistoryPanelView: View {
     private func emptyRow(_ text: String) -> some View {
         Text(text)
             .font(.footnote)
-            .foregroundStyle(.tertiary)
+            .foregroundStyle(.barLabelDim)
             .padding(.vertical, 4)
             .padding(.horizontal, 8)
     }
@@ -199,18 +199,18 @@ private struct HistoryRowView: View {
                 Image(systemName: icon)
                     .font(.system(size: 15))
                     .frame(width: 24)
-                    .foregroundStyle(dimmed ? .tertiary : .secondary)
+                    .foregroundStyle(dimmed ? Color.barLabelDim : Color.barLabel)
                 VStack(alignment: .leading, spacing: 1) {
                     TextField("Name", text: $draft)
                         .textFieldStyle(.plain)
                         .autocorrectionDisabled()
                         .onSubmit { onRename(draft) }
-                        .foregroundStyle(dimmed ? Color.secondary : Color.primary)
+                        .foregroundStyle(dimmed ? Color.barLabel : Color.primary)
                         .accessibilityIdentifier("HistoryName-\(row.name)")
                     HStack(spacing: 4) {
                         Text(row.kindLabel)
                             .font(.caption2)
-                            .foregroundStyle(.tertiary)
+                            .foregroundStyle(.barLabelDim)
                         if row.isRolledBack {
                             Text("· rolled back")
                                 .font(.caption2.weight(.semibold))
@@ -230,7 +230,7 @@ private struct HistoryRowView: View {
                 Button(action: onToggleSuppressed) {
                     Image(systemName: row.suppressed ? "eye.slash" : "eye")
                         .font(.system(size: 14))
-                        .foregroundStyle(dimmed ? Color.secondary : Color.primary)
+                        .foregroundStyle(dimmed ? Color.barLabel : Color.primary)
                 }
                 .buttonStyle(.plain)
                 .disabled(row.isRolledBack)
@@ -238,7 +238,7 @@ private struct HistoryRowView: View {
                 Button(action: onDelete) {
                     Image(systemName: "trash")
                         .font(.system(size: 13))
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(.barLabel)
                 }
                 .buttonStyle(.plain)
                 .accessibilityIdentifier("HistoryDelete-\(row.name)")
@@ -263,7 +263,7 @@ private struct HistoryRowView: View {
                         .accessibilityIdentifier("HistoryDistanceField")
                     Text("mm")
                         .font(.caption2)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(.barLabel)
                     Button(action: commitDistance) {
                         Image(systemName: "checkmark.circle.fill")
                             .font(.system(size: 14))
@@ -285,7 +285,7 @@ private struct HistoryRowView: View {
                     HStack(spacing: 4) {
                         Text("Count")
                             .font(.caption2)
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(.barLabel)
                         TextField("", text: $countText)
                             .textFieldStyle(.plain)
                             .keyboardType(.numberPad)
@@ -316,7 +316,7 @@ private struct HistoryRowView: View {
                         HStack(spacing: 4) {
                             Text("Angle")
                                 .font(.caption2)
-                                .foregroundStyle(.secondary)
+                                .foregroundStyle(.barLabel)
                             TextField("", text: $angleText)
                                 .textFieldStyle(.plain)
                                 .keyboardType(.numbersAndPunctuation)
@@ -327,7 +327,7 @@ private struct HistoryRowView: View {
                                 .accessibilityIdentifier("PatternAngleField-\(row.name)")
                             Text("°")
                                 .font(.caption2)
-                                .foregroundStyle(.secondary)
+                                .foregroundStyle(.barLabel)
                             Button(action: commitAngle) {
                                 Image(systemName: "checkmark.circle.fill")
                                     .font(.system(size: 14))
@@ -339,7 +339,7 @@ private struct HistoryRowView: View {
                         HStack(spacing: 4) {
                             Text("Spacing")
                                 .font(.caption2)
-                                .foregroundStyle(.secondary)
+                                .foregroundStyle(.barLabel)
                             TextField("", text: $spacingText)
                                 .textFieldStyle(.plain)
                                 .keyboardType(.numbersAndPunctuation)
@@ -350,7 +350,7 @@ private struct HistoryRowView: View {
                                 .accessibilityIdentifier("PatternSpacingField-\(row.name)")
                             Text("mm")
                                 .font(.caption2)
-                                .foregroundStyle(.secondary)
+                                .foregroundStyle(.barLabel)
                             Button(action: commitSpacing) {
                                 Image(systemName: "checkmark.circle.fill")
                                     .font(.system(size: 14))

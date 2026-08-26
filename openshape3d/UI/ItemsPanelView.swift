@@ -158,7 +158,7 @@ struct ItemsPanelView: View {
     private func sectionHeader(_ title: String) -> some View {
         Text(title)
             .font(.caption.weight(.semibold))
-            .foregroundStyle(.secondary)
+            .foregroundStyle(.barLabel)
             .padding(.top, 10)
             .padding(.bottom, 2)
     }
@@ -166,7 +166,7 @@ struct ItemsPanelView: View {
     private func emptyRow(_ text: String) -> some View {
         Text(text)
             .font(.footnote)
-            .foregroundStyle(.tertiary)
+            .foregroundStyle(.barLabelDim)
             .padding(.vertical, 4)
             .padding(.horizontal, 8)
     }
@@ -194,7 +194,7 @@ private struct ConstraintRowView: View {
             Button(action: onDelete) {
                 Image(systemName: "trash")
                     .font(.system(size: 13))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(.barLabel)
             }
             .buttonStyle(.plain)
             .accessibilityIdentifier("ConstraintDelete-\(title)")
@@ -235,24 +235,24 @@ private struct ItemRowView: View {
             Image(systemName: icon)
                 .font(.system(size: 15))
                 .frame(width: 24)
-                .foregroundStyle(isHidden ? .tertiary : .secondary)
+                .foregroundStyle(isHidden ? Color.barLabelDim : Color.barLabel)
             if renameable {
                 TextField("Name", text: $draft)
                     .textFieldStyle(.plain)
                     .autocorrectionDisabled()
                     .onSubmit { onRename(draft) }
-                    .foregroundStyle(isHidden ? Color.secondary : Color.primary)
+                    .foregroundStyle(isHidden ? Color.barLabel : Color.primary)
                     .accessibilityIdentifier("ItemName-\(name)")
             } else {
                 Text(name)
-                    .foregroundStyle(isHidden ? Color.secondary : Color.primary)
+                    .foregroundStyle(isHidden ? Color.barLabel : Color.primary)
             }
             Spacer(minLength: 4)
             if showsVisibility {
                 Button(action: onToggleVisibility) {
                     Image(systemName: isHidden ? "eye.slash" : "eye")
                         .font(.system(size: 14))
-                        .foregroundStyle(isHidden ? Color.secondary : Color.primary)
+                        .foregroundStyle(isHidden ? Color.barLabel : Color.primary)
                 }
                 .buttonStyle(.plain)
                 .accessibilityIdentifier("ItemEye-\(name)")
