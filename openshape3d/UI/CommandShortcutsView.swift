@@ -1,0 +1,78 @@
+//
+//  CommandShortcutsView.swift
+//  openshape3d
+//
+//  Spec §8.4 — how a hardware-keyboard chord physically reaches the editor.
+//
+//  Zero-sized buttons whose only job is to carry `.keyboardShortcut`. That
+//  looks odd, but it is the mechanism that works here, and it is already the
+//  pattern the constraint hotkeys use in `ToolPaletteView`:
+//
+//  * `.keyboardShortcut` lowers to a `UIKeyCommand`, which UIKit consults on
+//    the responder chain APP-WIDE — it does not need the viewport to hold
+//    focus, unlike `onKeyPress`, which the Metal view cannot reliably take.
+//  * The first responder wins first, so a focused text field still receives
+//    plain letters: typing "circle" into a History rename field types the
+//    word instead of arming Circle, Arc, Line… No extra guard needed.
+//  The list comes from `CommandRegistry.routableChordedCommands`, so a chord
+//  is registered only once something can actually run it.
+//
+//  **The labels are deliberately empty.** Titling these buttons is tempting —
+//  it would populate the iPad ⌘-hold shortcut HUD, the closest thing we have
+//  to the tutorials' "the hotkeys are shown as part of the tooltip". It also
+//  breaks the UI suite: several tests match by title (`buttons["Extrude"]`,
+//  see STATUS_AND_NEXT_STEPS gotcha 9), and a second, zero-framed "Extrude"
+//  makes those queries ambiguous — the run fails with "Multiple matching
+//  elements found", or resolves to this button and then cannot scroll a
+//  {{inf, inf}, {0, 0}} frame into view. `.accessibilityHidden(true)` on the
+//  container is NOT enough; the children stay queryable. An `EmptyView` label
+//  leaves nothing to match. If the HUD is ever wanted, give these real
+//  identifiers and move the UI suite off title-based queries first.
+//
+
+import SwiftUI
+
+struct CommandShortcutsView: View {
+    @Bindable var viewModel: EditorViewModel
+
+    var body: some View {
+        ZStack {
+            ForEach(CommandRegistry.routableChordedCommands) { command in
+                if let chord = command.chord, let key = chord.keyEquivalent {
+                    Button { viewModel.runCommand(command.id) } label: { EmptyView() }
+                        .keyboardShortcut(key, modifiers: chord.eventModifiers)
+                        .accessibilityHidden(true)
+                }
+            }
+        }
+        // Invisible and untappable: the buttons exist purely so their
+        // shortcuts register. `.hidden()` alone would drop them from the
+        // responder chain, so shrink and clear them instead.
+        .frame(width: 0, height: 0)
+        .opacity(0)
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+    }
+}
+
+// MARK: - KeyChord → SwiftUI
+
+extension KeyChord {
+    /// Nil for chords the catalog names but SwiftUI cannot express as a single
+    /// `KeyEquivalent` (none today beyond "space", which is spelled out).
+    var keyEquivalent: KeyEquivalent? {
+        if key == "space" { return .space }
+        guard key.count == 1, let character = key.first else { return nil }
+        return KeyEquivalent(character)
+    }
+
+    /// Note the empty set is meaningful: `.keyboardShortcut(_:)` defaults to
+    /// ⌘, so a bare letter has to pass `modifiers: []` explicitly.
+    var eventModifiers: EventModifiers {
+        var out: EventModifiers = []
+        if modifiers.contains(.command) { out.insert(.command) }
+        if modifiers.contains(.shift) { out.insert(.shift) }
+        if modifiers.contains(.option) { out.insert(.option) }
+        return out
+    }
+}

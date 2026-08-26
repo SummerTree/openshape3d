@@ -706,6 +706,11 @@ struct EditorView: View {
                 // Shapr3D on-arrow value pill for extrude / diameter (§4.1).
                 ExtrudeGizmoOverlay(viewModel: viewModel)
             }
+            .overlay {
+                // Hardware-keyboard hotkeys (spec §8.4). Zero-sized; see
+                // CommandShortcutsView for why the shortcuts ride on buttons.
+                CommandShortcutsView(viewModel: viewModel)
+            }
             .overlay(alignment: settings.paletteOnRight ? .trailing : .leading) {
                 ToolPaletteView(viewModel: viewModel)
                     // Interface side (spec §17): palette flips to the right

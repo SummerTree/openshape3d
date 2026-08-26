@@ -81,6 +81,16 @@ Shell with face picking and a live hollow preview; Fillet with live preview and
 a drag handle; sketch Text with font + height; named/isometric views; and the
 History panel's rename / suppress / delete / roll-back / inline parameter edit.
 
+A second pass (same day) covered the two earlier hands-on entries —
+[Grid and sketch settings](https://support.shapr3d.com/hc/en-us/articles/13079113458332)
+and [Introduction to 2D sketch tools and settings](https://support.shapr3d.com/hc/en-us/articles/13079114694684).
+More held up there: a fresh sketch **auto-arms Line** exactly as the video
+shows; marquee **window vs crossing by drag direction** is implemented; the
+Shift+letter constraint hotkeys were already wired; auto-constrain has
+per-inference toggles and an angle tolerance. (The two remaining series
+entries — "Introducing Shapr3D Basics" and "Get started: A Shapr3D Overview" —
+are narration only, with no steps to reproduce.)
+
 **Walls hit** — these became G7:
 
 | Tutorial step | Gap |
@@ -88,6 +98,8 @@ History panel's rename / suppress / delete / roll-back / inline parameter edit.
 | "click the offset edge tool, select a model edge, drag it in, key in a half inch" (used twice) | Offset Edge has no UI at all — see G5.2 |
 | "add draft to this using the curved arrow and key in 10" (used twice) | no draft angle on extrude *(§4.1 already records this)* |
 | "select the sketch plane and shift-select the extrude … drag these up the tree" | History rows are individually draggable only — no multi-select *(§10.1)* |
+| "click on circle or use C on the keyboard", "I'm using the A key", "the T hotkey" | ~~no per-tool hotkeys; `CommandRegistry` was dead code~~ **fixed 2026-08-26**, see G7.0 |
+| several minutes in snap / grid / units / circular-annotation settings | our Settings sheet has four rows *(§17)* — see G7.4 |
 
 **Cosmetic bug found and fixed the same day:** `HistoryPanelView`,
 `ItemsPanelView`, and `VariablesPanelView` are each
@@ -211,16 +223,44 @@ deliberately; it is a one-line flip in `scripts/build_occt_ios.sh`.
 **Acceptance:** round-trip a filleted, shelled part through STEP with faces and
 solid topology preserved.
 
-### G7 — Close the starter-tutorial walls *(spec §1.9, §4.1, §10.1)*
+### G7 — Close the starter-tutorial walls *(spec §1.9, §4.1, §8.4, §10.1, §17)*
 
-The three gaps that stop a new user completing the Shapr3D getting-started
-series (see the walkthrough in §2). All three are **UI/feature work, not kernel
+The gaps that stop a new user completing the Shapr3D getting-started series
+(see the walkthrough in §2). All of them are **UI/feature work, not kernel
 work**, so this goal is independent of G1–G4 and can run in parallel.
+
+**Done**
+
+0. ~~**Hotkeys** *(§8.4)*~~ — **landed 2026-08-26.** `CommandRegistry` was a
+   fully-tested catalog with *zero references outside its own test target*:
+   every hotkey in it was dead, while the tutorials lean on "press C for
+   circle, A for arc, T for trim" throughout. Now routed —
+   `CommandDispatch.swift` maps 34 catalog ids onto existing view-model entry
+   points, and `CommandShortcutsView` registers the chords.
+   Two things worth remembering:
+   - The chords ride on **zero-sized buttons carrying `.keyboardShortcut`**,
+     not `onKeyPress`. `.keyboardShortcut` lowers to a `UIKeyCommand` that
+     UIKit consults app-wide on the responder chain, so it does not need the
+     Metal viewport to hold focus — which it cannot reliably take. It is also
+     already the pattern the constraint hotkeys use in `ToolPaletteView`.
+   - Because the **first responder wins first**, a focused text field still
+     receives plain letters: verified on device by typing "cat" into a History
+     rename field and getting "cat", not Circle → Arc → Text.
+   - Every hotkey guard mirrors the palette's own `enabled` condition, so a
+     key can never reach a state the equivalent button would have refused.
+   - `CommandRegistry.unroutedChordedCommands` names what still has a chord but
+     no entry point (Insert Image, Offset, Command Search, the project/import
+     commands, Select All, Zoom to Selection); a test pins that list, so adding
+     a chorded command without routing it fails loudly instead of shipping a
+     key that quietly does nothing.
+
+**Remaining**
 
 1. **Offset Edge in the sketch palette** *(§1.9)* — `SketchOffset` and
    `EdgeOffsetKit` are tested backends with no entry point. Needs a palette
    item, edge picking, a blue drag arrow, and a typed distance, matching the
-   push/pull arrow interaction already in `ViewportView`.
+   push/pull arrow interaction already in `ViewportView`. Routing its `O`
+   hotkey is then a one-line addition to `routableIDs`.
 2. **Draft angle on extrude** *(§4.1)* — a second, curved handle on the pull
    gizmo plus an angle field in the extrude bar; the tapered prism is a kernel
    op on both the Euclid and OCCT paths (`BRepPrimAPI_MakePrism` has no draft;
@@ -229,13 +269,39 @@ work**, so this goal is independent of G1–G4 and can run in parallel.
    individually `.draggable` with a single-UUID payload; the tutorial's key
    move is selecting a sketch *and* its extrude and dragging both above the
    shell in one gesture.
+4. **The Settings sheet is far thinner than Shapr3D's** *(§17)* — ours is
+   Units / Theme / Toolbar Side / Anti-Aliasing. "Grid and sketch settings" and
+   "Introduction to 2D sketch tools" spend roughly three minutes in settings we
+   do not have:
+   - **snap toggles** — snap-to-grid, sketch guidelines, sketch guide points,
+     snapping hints. `SnapEngine` implements all four behaviours; none is
+     switchable.
+   - **grid position** (XY / XZ / ZX) and **grid-locked-size while zooming**.
+   - **circular annotations**: radius-always vs radius-and-diameter. This is
+     the *named source* of the Ø-vs-R divergence below — Shapr3D's default
+     reserves diameter for full circles and radius for arcs.
+   - **fractional inches** and **degree format** (fractional / decimal).
+   - orthographic↔perspective as a **slider**, where we have a binary toggle.
+5. **Grid does not re-orient to the active sketch plane** — it stays on the
+   world ground plane. Shapr3D moves the grid onto the sketch plane on entry
+   and back on exit. Already noted in `STATUS_AND_NEXT_STEPS.md`; recorded here
+   because the tutorial makes it a first-five-minutes observation.
 
 **Lower-priority divergences found in the same pass** (record, don't schedule):
 a selected full circle reports **Radius** where Shapr3D reports **Ø** — and we
 already draw Ø in the live sketch overlay, so we are inconsistent with
-ourselves; sketch Text is a modal sheet rather than live-on-canvas with the
-move/rotate/reference-point pad; Shell thickness has a field but no drag
-handle, unlike the blend arrow.
+ourselves (see item 4 for the setting that governs it); sketch Text is a modal
+sheet rather than live-on-canvas with the move/rotate/reference-point pad;
+Shell thickness has a field but no drag handle, unlike the blend arrow; Items
+and History are mirrored relative to Shapr3D (it puts Items left / History
+right, and our Toolbar Side setting only moves the palette); renaming a design
+is gallery-only, where Shapr3D renames from the editor's upper-left title.
+
+**One claim to re-check rather than act on.** The "Grid and sketch settings"
+video says Shapr3D squares the view to the sketch plane on entry, whereas
+`STATUS_AND_NEXT_STEPS.md` records our "draw from the current camera" behaviour
+as a *parity improvement*. The videos are two years old; confirm against
+current Shapr3D before treating either reading as settled.
 
 **Acceptance**
 - The "Create basic 3D geometry" tutorial can be followed end-to-end in the app
@@ -243,6 +309,8 @@ handle, unlike the blend arrow.
 - Offsetting a model edge into a sketch, extruding the loop with 10° of draft,
   and reordering that extrude above the shell all survive a save/reload and a
   parametric rebuild.
+- Every sketch and modeling hotkey the tutorials press does what the video
+  shows, and no hotkey fires while a text field has focus.
 
 ---
 

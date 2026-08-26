@@ -9192,6 +9192,11 @@ final class EditorViewModel {
     /// Whether the History panel is shown beside the Items panel.
     var showHistoryPanel = false
 
+    /// Hotkey / Command Search catalog (spec §8.4). Mutable because it tracks
+    /// most-recently-used commands; `CommandShortcutsView` registers the
+    /// chords and `runCommand(_:)` (CommandDispatch.swift) performs them.
+    var commandRegistry = CommandRegistry()
+
     /// The ordered history rows, derived from the graph + last eval errors.
     var historyRows: [FeatureRow] {
         _ = session.changeCount // re-derive when the document changes
