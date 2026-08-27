@@ -38,7 +38,7 @@ extension CommandRegistry {
         // Sketch tools — the tutorial's C / A / L / R / T / G.
         "sketch.line", "sketch.rectangle", "sketch.circle", "sketch.arc",
         "sketch.ellipse", "sketch.polygon", "sketch.text", "sketch.trim",
-        "sketch.construction",
+        "sketch.offset", "sketch.construction",
 
         // Modeling.
         "model.extrude", "model.revolve", "model.sweep", "model.loft",
@@ -59,9 +59,9 @@ extension CommandRegistry {
     ]
 
     /// Catalog entries that advertise a chord but have no editor entry point
-    /// yet — Insert Image, Offset, Command Search, the project/import
-    /// commands, Select All. Surfaced (and pinned by a test) so the gap stays
-    /// visible rather than presenting as a key that quietly does nothing.
+    /// yet — Insert Image, Command Search, the project/import commands,
+    /// Select All. Surfaced (and pinned by a test) so the gap stays visible
+    /// rather than presenting as a key that quietly does nothing.
     static var unroutedChordedCommands: [AppCommand] {
         all.filter { $0.chord != nil && !routableIDs.contains($0.id) }
             .sorted { $0.id < $1.id }
@@ -114,6 +114,7 @@ extension EditorViewModel {
         case "sketch.polygon":      return armSketchTool(.polygon)
         case "sketch.text":         return armSketchTool(.text)
         case "sketch.trim":         return armSketchTool(.trim)
+        case "sketch.offset":       return armSketchTool(.offset)
         case "model.project":       return armSketchTool(.project)
 
         case "sketch.construction":

@@ -407,6 +407,57 @@ struct EditorView: View {
         }
     }
 
+    /// Offset Edge bar (spec §1.9): Single/Chain type, the signed distance,
+    /// and Apply/Cancel. A negative distance offsets inward on a closed
+    /// profile, which is why the field is not clamped to zero the way Shell's
+    /// thickness is.
+    private func sketchOffsetBar(_ viewModel: EditorViewModel) -> some View {
+        let value = settings.unit.binding(Binding(
+            get: { viewModel.sketchOffsetDistance },
+            set: { viewModel.sketchOffsetDistance = $0 }))
+        let picked = viewModel.sketchOffsetSourceEntities.count
+        return AdaptiveBar(style: .capsule, spacing: 12) {
+            Image(systemName: "square.on.square.dashed")
+            Text(picked == 0
+                 ? "Tap sketch geometry to offset"
+                 : "\(picked) selected")
+                .font(.subheadline)
+                .fixedSize()
+            Divider().frame(height: 20)
+            Picker("Type", selection: Binding(
+                get: { viewModel.sketchOffsetType },
+                set: { viewModel.sketchOffsetType = $0 }
+            )) {
+                ForEach(SketchOffsetType.allCases, id: \.self) { type in
+                    Text(type.title).tag(type)
+                }
+            }
+            .pickerStyle(.segmented)
+            .fixedSize()
+            .accessibilityIdentifier("SketchOffsetType")
+            Text("Distance").font(.caption).foregroundStyle(.barLabel).fixedSize()
+            TextField(settings.unit.symbol, value: value,
+                      format: .number.precision(.fractionLength(0...3)))
+                .textFieldStyle(.roundedBorder)
+                .frame(width: 64)
+                .multilineTextAlignment(.trailing)
+                .keyboardType(.numbersAndPunctuation)
+                .accessibilityIdentifier("SketchOffsetDistanceField")
+            Text(settings.unit.symbol).font(.caption).foregroundStyle(.barLabel).fixedSize()
+        } actions: {
+            Button("Cancel") { viewModel.cancelSketchOffset() }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .keyboardShortcut(.cancelAction)
+                .accessibilityIdentifier("SketchOffsetCancel")
+            Button("Apply") { viewModel.commitSketchOffset() }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+                .disabled(!viewModel.canCommitSketchOffset)
+                .accessibilityIdentifier("SketchOffsetApply")
+        }
+    }
+
     /// Marquee rectangle over the viewport (plan §B13, spec §8.2). Standard
     /// visual cue: solid border = window (L→R drag, fully-inside selects),
     /// dashed = crossing (R→L, touched selects). Screen points come straight
@@ -734,6 +785,8 @@ struct EditorView: View {
                         blendBar(kind, viewModel)
                     } else if case .pickingShellFaces = viewModel.mode {
                         shellBar(viewModel)
+                    } else if viewModel.mode.sketchTool == .offset {
+                        sketchOffsetBar(viewModel)
                     } else {
                         NumericInputBar(viewModel: viewModel)
                     }

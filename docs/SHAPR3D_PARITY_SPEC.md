@@ -234,10 +234,20 @@ use gizmo to set offset direction + distance. If the selected item is shared by
 multiple loops, an arrow shows per loop — pick the arrow of the loop to offset.
 Finish with "Exit Sketching". Hotkey O. Used constantly in tutorials for wall
 thickness (e.g. offset outer edge 1 mm and cut).
-**Status:** 🟡 partial — kernel only: `SketchOffset` offsets closed
-primitives (circle/arc/rect/polygon) and connected line chains/loops with
-degenerate-collapse cleanup, unit-tested; no palette tool, gizmo, or
-loop-arrow disambiguation UI yet.
+**Status:** 🟡 partial — **the tool ships (2026-08-27).** "Offset" in the
+sketch palette (hotkey **O**, routed through `CommandRegistry`) arms a pick
+mode: taps toggle sketch entities, the bar carries the Single/Chain type and
+a signed distance, the result previews live in the pending colour while the
+picked sources highlight, and Apply commits the offset copies as new sketch
+entities in one undoable step. Committing keeps the tool armed for the next
+offset, matching Shapr3D. `SketchOffset.entitiesToOffset` does the Single vs
+Chain expansion (Chain walks `ProfileDetector.connectedEntityIDs`, and
+returns in SKETCH order because the mitring walk depends on it); the offset
+itself is the existing unit-tested `SketchOffset`. Covered by
+`SketchOffsetSelectionTests` + `SketchOffsetUITests`.
+**Missing:** the drag gizmo (distance is typed, as with Shell), and
+loop-arrow disambiguation when the picked item is shared by multiple loops —
+today the sign of the distance chooses the side.
 **Feasibility:** [mesh-kernel OK] (polyline/arc offsetting is 2D geometry)
 
 ### 1.10 Move/Rotate (sketch mode)

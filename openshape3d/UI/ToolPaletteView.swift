@@ -101,7 +101,11 @@ struct ToolPaletteView: View {
 
     private var sketchEntries: [PaletteEntry] {
         drawItems.map(PaletteEntry.item)
-        + [.item(sketchTool("Trim", "scissors", .trim)),
+        // Offset Edge sits with the sketch tools, matching the manual's order
+        // (…Polygon, Offset Edge, …). Sketch-only: there is nothing to offset
+        // from outside a sketch, so it is absent from the body-mode group.
+        + [.item(sketchTool("Offset", "square.on.square.dashed", .offset)),
+           .item(sketchTool("Trim", "scissors", .trim)),
            .item(sketchTool("Project", "square.on.square.dashed", .project)),
            .group(constrainGroup),
            .group(symbolGroup),

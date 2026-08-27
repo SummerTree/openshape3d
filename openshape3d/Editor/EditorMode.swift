@@ -20,6 +20,10 @@ enum SketchTool: String, CaseIterable {
     /// Project (plan §B8, spec §1.13 v1): taps on a visible body flatten its
     /// feature edges onto the active sketch plane.
     case project
+    /// Offset Edge (spec §1.9): no drawing — taps pick the entities to offset
+    /// (Single or Chain, see `SketchOffsetType`), a live preview follows the
+    /// distance, and Apply commits the offset copies into the sketch.
+    case offset
 }
 
 /// A 3D-create operation armed from the body-mode "Modify" palette group. The
@@ -103,6 +107,14 @@ enum EditorMode: Equatable {
     var isSketching: Bool {
         if case .sketching = self { return true }
         return false
+    }
+
+    /// The armed sketch tool, or nil when not sketching / no tool armed.
+    /// (`.sketching`'s tool is optional: with none armed, empty-space drags
+    /// orbit instead of drawing, so a plane can be sketched from any angle.)
+    var sketchTool: SketchTool? {
+        if case .sketching(_, let tool) = self { return tool }
+        return nil
     }
 }
 

@@ -82,10 +82,35 @@ Sketch/select UX pass (2026-07-21):
   mode (checked before all mode-specific drag handling); a tap still snaps to
   the view. See spec §7.2.
 
-**Test baseline: 464 unit tests, ~78 UI tests — all green.** Two UI tests
+### Shapr3D tutorial + manual parity audit (2026-08-26/27)
+
+Drove the "Introducing Shapr3D basics" starter series against the app on the
+iPad sim, then read the official 343-page manual (pages 77–259 = sketching +
+modeling) tool-by-tool. Full write-up in `MODELING_PARITY_GOALS.md` §2 and
+goals G7–G9. Headlines:
+
+- `SHAPR3D_PARITY_SPEC.md` is accurate — every manual tool maps to a spec
+  section, and the statuses spot-checked against code were all correct.
+- **The gap is depth, not breadth**: nearly every tool exists, but only as its
+  default path. That became G9 (tool variants/options) and G8 (History exposes
+  only four editable scalars, no reference pickers — so a feature's geometry is
+  parametric while its inputs are frozen at creation time).
+- Landed from the audit: the invisible-panel-label fix (see gotcha 10 — it had
+  never been applied to the three side panels), hotkey routing
+  (`CommandRegistry` was dead code with zero non-test references), and
+  **Offset Edge in sketch mode** (G7.1).
+
+**Test baseline: 785 unit tests, ~82 UI tests — all green.** Two UI tests
 (`FaceFlowUITests/testTypeNegativeIntoArrowPill`,
 `SweepLoftUITests/testSweepCircleAlongTwoSegmentLinePath`) are long-run flaky
 (pass in isolation) — rerun individually before suspecting a regression.
+
+**If the whole test target dies at bootstrap** with *"Early unexpected exit …
+Test crashed with signal bus before establishing connection"*, and the app also
+refuses `simctl launch` with `SBMainWorkspace` denials, suspect a **wedged
+simulator, not your code** — confirm by stashing and launching a known-good
+build, then `simctl shutdown` + `boot`. Do NOT `erase`: it destroys the saved
+designs. (Hit 2026-08-27 after a long driving session.)
 
 ---
 

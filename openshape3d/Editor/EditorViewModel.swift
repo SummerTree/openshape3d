@@ -650,6 +650,26 @@ final class EditorViewModel {
                     color: pendingColor
                 ))
             }
+            // Offset Edge (spec §1.9): the picked source entities read as
+            // selected, and the offset result previews in the pending colour
+            // so it is legible as not-yet-committed geometry.
+            if case .offset = mode.sketchTool {
+                let sources = sketchOffsetSourceEntities
+                if !sources.isEmpty {
+                    scene.sketchLines.append(SketchLineBatch(
+                        segments: SketchTessellator.segments(for: sources, on: sketch.plane),
+                        color: selectedColor
+                    ))
+                }
+                if !sketchOffsetPreview.isEmpty {
+                    scene.sketchLines.append(SketchLineBatch(
+                        segments: SketchTessellator.segments(
+                            for: sketchOffsetPreview, on: sketch.plane
+                        ),
+                        color: pendingColor
+                    ))
+                }
+            }
             // Line tool tap-chaining: mark the vertex the next tap extends from,
             // so a first tap (which draws no segment yet) still reads as landed.
             if tapChainActive, let anchor = chainAnchor {
@@ -2104,6 +2124,7 @@ final class EditorViewModel {
         cancelImagePlanePick()
         resetBlendState()
         resetShellState()
+        resetSketchOffsetState()
         pendingCreateTool = nil
         // Numeric-entry armed state must die with the mode that armed it: a
         // stale `scaleEntryActive` would make the next empty-space tap commit
@@ -3272,9 +3293,10 @@ final class EditorViewModel {
     private func sanitizeAfterHistoryChange() {
         // Face/tool contexts reference geometry that may have changed.
         cancelTool()
-        // A blend/shell pick references geometry that may have changed.
+        // A blend/shell/offset pick references geometry that may have changed.
         resetBlendState()
         resetShellState()
+        resetSketchOffsetState()
         axisEntryPart = nil
         scaleEntryActive = false
         // Pending sketch state may reference entities that no longer exist.
@@ -6082,11 +6104,18 @@ final class EditorViewModel {
         }
     }
 
-    /// Tap while sketching: Trim cuts the span under the tap; other tools
-    /// toggle entity selection, or finalize/clear pending state on empty space.
+    /// Tap while sketching: Trim cuts the span under the tap; Offset picks the
+    /// entities to offset; other tools toggle entity selection, or finalize/
+    /// clear pending state on empty space.
     private func handleSketchTap(ray: Ray, tool: SketchTool?) {
         if tool == .trim {
             performTrim(ray: ray)
+            return
+        }
+        if tool == .offset {
+            // A tap on empty space is not "clear the pick" here — the picks
+            // are the tool's whole state and the bar is the way out.
+            handleSketchOffsetTap(ray: ray)
             return
         }
         if tool == .text {
@@ -6185,6 +6214,98 @@ final class EditorViewModel {
         session.performWithSketchRebuild(TrimCommand(
             sketchID: sketchID, index: index, removed: hit.entity, fragments: fragments
         ), sketchID: sketchID)
+    }
+
+    // MARK: - Offset Edge (sketch, spec §1.9)
+
+    /// Single vs Chain, mirroring the manual's Offset Edge **Type** menu.
+    /// Changing it re-expands the existing picks rather than clearing them, so
+    /// flipping the type after picking does the obvious thing.
+    var sketchOffsetType: SketchOffsetType = .single {
+        didSet { if oldValue != sketchOffsetType { recomputeSketchOffsetPreview() } }
+    }
+
+    /// Signed offset distance. Negative offsets inward on a closed profile;
+    /// on an open chain the sign picks the side (see `SketchOffset`).
+    var sketchOffsetDistance: Double = 1 {
+        didSet { if oldValue != sketchOffsetDistance { recomputeSketchOffsetPreview() } }
+    }
+
+    /// The entities the user tapped. Expanded through `sketchOffsetType` at
+    /// preview time — storing the SEEDS (not the expansion) is what lets the
+    /// type flip re-derive without a re-pick.
+    private(set) var sketchOffsetSeedIDs: Set<UUID> = []
+
+    /// Live result of offsetting the current selection; rendered in place of
+    /// nothing (it is new geometry, so it never hides the source).
+    private(set) var sketchOffsetPreview: [SketchEntity] = []
+
+    /// Entities the current picks resolve to, in sketch order.
+    var sketchOffsetSourceEntities: [SketchEntity] {
+        guard let sketch = activeSketch else { return [] }
+        return SketchOffset.entitiesToOffset(
+            seedIDs: sketchOffsetSeedIDs, type: sketchOffsetType, in: sketch.entities
+        )
+    }
+
+    /// Apply is live only once a pick actually produces geometry — a distance
+    /// that collapses the source (a rect shrunk past its midlines) yields an
+    /// empty preview, and committing it would be a silent no-op.
+    var canCommitSketchOffset: Bool { !sketchOffsetPreview.isEmpty }
+
+    /// Tap while the Offset tool is armed: toggle the entity under the ray.
+    @discardableResult
+    func handleSketchOffsetTap(ray: Ray) -> Bool {
+        guard case .sketching(_, .offset) = mode,
+              let sketch = activeSketch,
+              let raw = rawSketchPoint(from: ray),
+              let hit = SketchHitTester.nearestEntity(
+                  to: raw, in: sketch.entities, tolerance: entityPickTolerance
+              )
+        else { return false }
+        if sketchOffsetSeedIDs.contains(hit.entity.id) {
+            sketchOffsetSeedIDs.remove(hit.entity.id)
+        } else {
+            sketchOffsetSeedIDs.insert(hit.entity.id)
+        }
+        recomputeSketchOffsetPreview()
+        return true
+    }
+
+    private func recomputeSketchOffsetPreview() {
+        let sources = sketchOffsetSourceEntities
+        guard !sources.isEmpty, abs(sketchOffsetDistance) > 1e-9 else {
+            sketchOffsetPreview = []
+            return
+        }
+        sketchOffsetPreview = KernelOps.offsetSketchEntities(sources, by: sketchOffsetDistance)
+    }
+
+    /// Commit the previewed offset as new sketch entities.
+    func commitSketchOffset() {
+        guard case .sketching(let sketchID, .offset) = mode,
+              canCommitSketchOffset
+        else { return }
+        // Offsetting ADDS geometry, so downstream profiles keep resolving; the
+        // sketch rebuild still runs so a dependent feature sees the new loop.
+        session.performWithSketchRebuild(AddSketchEntitiesCommand(
+            sketchID: sketchID,
+            entities: sketchOffsetPreview,
+            title: "Offset Edge"
+        ), sketchID: sketchID)
+        resetSketchOffsetState()
+    }
+
+    func cancelSketchOffset() {
+        resetSketchOffsetState()
+        deselectSketchTool()
+    }
+
+    /// State only — never touches `selection` (gotcha 7: internal cleanup
+    /// paths that write to `selection` make Delete delete the wrong thing).
+    func resetSketchOffsetState() {
+        sketchOffsetSeedIDs = []
+        sketchOffsetPreview = []
     }
 
     /// A drag landing on an entity edits it instead of drawing: control
@@ -6490,6 +6611,10 @@ final class EditorViewModel {
         guard case .sketching(let id, _) = mode else { return }
         commitPendingArc()
         clearChain()
+        // Offset picks belong to the tool, not the sketch: dropping the tool
+        // drops them, so re-arming starts clean rather than resuming a pick
+        // the user has visually lost track of.
+        resetSketchOffsetState()
         mode = .sketching(id, tool: nil)
     }
 
@@ -7057,7 +7182,7 @@ final class EditorViewModel {
                 id: UUID(), center: a, radius: radius,
                 sides: max(3, polygonSides), rotation: atan2(delta.y, delta.x)
             )
-        case .trim, .text, .project:
+        case .trim, .text, .project, .offset:
             return nil // These tools never rubber-band draw.
         }
     }

@@ -95,7 +95,7 @@ are narration only, with no steps to reproduce.)
 
 | Tutorial step | Gap |
 |---|---|
-| "click the offset edge tool, select a model edge, drag it in, key in a half inch" (used twice) | Offset Edge has no UI at all — see G5.2 |
+| "click the offset edge tool, select a model edge, drag it in, key in a half inch" (used twice) | ~~Offset Edge had no UI at all~~ **shipped 2026-08-27**, see G7.1 (distance is typed, not dragged) |
 | "add draft to this using the curved arrow and key in 10" (used twice) | no draft angle on extrude *(§4.1 already records this)* |
 | "select the sketch plane and shift-select the extrude … drag these up the tree" | History rows are individually draggable only — no multi-select *(§10.1)* |
 | "click on circle or use C on the keyboard", "I'm using the A key", "the T hotkey" | ~~no per-tool hotkeys; `CommandRegistry` was dead code~~ **fixed 2026-08-26**, see G7.0 |
@@ -199,9 +199,7 @@ The remaining gaps in the sketch half, ordered by how often they block real work
 
 1. **Spline (fit / control points)** *(§1.4)* — the biggest missing sketch
    primitive; needs solver integration for tangency.
-2. **Offset Edge in sketch mode** *(§1.9)* — kernel exists, UI does not.
-   **Promoted:** the starter tutorial opens with this tool and uses it twice, so
-   it blocks the very first workflow a new user attempts. Do it as part of G7.
+2. ~~**Offset Edge in sketch mode** *(§1.9)*~~ — **done 2026-08-27** as G7.1.
 3. **Sketch pattern (linear/circular) + the pattern constraint** *(§1.11, §2.5)*.
 4. **Line/Arc pen mode** *(§1.2)* — drag-to-arc continuation, a core Shapr3D
    input idiom.
@@ -256,11 +254,16 @@ work**, so this goal is independent of G1–G4 and can run in parallel.
 
 **Remaining**
 
-1. **Offset Edge in the sketch palette** *(§1.9)* — `SketchOffset` and
-   `EdgeOffsetKit` are tested backends with no entry point. Needs a palette
-   item, edge picking, a blue drag arrow, and a typed distance, matching the
-   push/pull arrow interaction already in `ViewportView`. Routing its `O`
-   hotkey is then a one-line addition to `routableIDs`.
+1. ~~**Offset Edge in the sketch palette** *(§1.9)*~~ — **landed 2026-08-27.**
+   "Offset" in the sketch palette (hotkey **O**) arms a pick mode with the
+   Single/Chain type, a signed distance, a live preview, and Apply; committing
+   keeps the tool armed for the next offset. The Single-vs-Chain expansion is
+   a pure static (`SketchOffset.entitiesToOffset`) so it is unit-testable
+   without an `EditorViewModel`. **Still missing:** the drag gizmo (the
+   distance is typed, as with Shell) and loop-arrow disambiguation when the
+   picked item is shared by several loops — today the sign of the distance
+   picks the side. Offset Edge **(3D)** *(§4.13, `EdgeOffsetKit`)* is still
+   kernel-only and belongs to G4.
 2. **Draft angle on extrude** *(§4.1)* — a second, curved handle on the pull
    gizmo plus an angle field in the extrude bar; the tapered prism is a kernel
    op on both the Euclid and OCCT paths (`BRepPrimAPI_MakePrism` has no draft;
@@ -378,7 +381,7 @@ our app. Ordered roughly by how often the manual reaches for them.
 | Constraints *(§3.2)* | **Disconnect** (break connected points, dropping their coincident/midpoint constraints); **Anchored Sketch Entity** (First/Last Selected) setting; Always Show Constraints / Always Show Dimensions toggles |
 
 **Not in this table because they already have goals:** spline drawing (G5.1),
-sketch Offset Edge (G7.1), sketch Pattern (G5.3), construction planes and axes
+sketch Pattern (G5.3), construction planes and axes
 (§6.1/§6.2 — note `ConstructionAxisKit` has all five axis constructions tested
 with no document entity or UI), Replace Face / Offset Edge 3D / Wrap & Emboss
 (G4, all kernel-only).

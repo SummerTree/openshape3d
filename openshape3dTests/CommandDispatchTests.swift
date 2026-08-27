@@ -64,7 +64,6 @@ final class CommandDispatchTests: XCTestCase {
             "project.importIntoCurrent",
             "project.new",
             "sketch.image",               // Insert Image is not a sketch tool here
-            "sketch.offset",              // G7: Offset Edge has no UI at all
             "view.zoomToSelection",
         ])
     }
