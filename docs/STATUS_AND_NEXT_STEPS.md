@@ -97,10 +97,15 @@ goals G7–G9. Headlines:
   parametric while its inputs are frozen at creation time).
 - Landed from the audit: the invisible-panel-label fix (see gotcha 10 — it had
   never been applied to the three side panels), hotkey routing
-  (`CommandRegistry` was dead code with zero non-test references), and
-  **Offset Edge in sketch mode** (G7.1).
+  (`CommandRegistry` was dead code with zero non-test references),
+  **Offset Edge in sketch mode** (G7.1), and **construction axes** (§6.2).
+- **Construction axes** are the first new SwiftData model type since Phase D.
+  `PersistedAxis` was added the same way `PersistedFeature`/`PersistedVariable`
+  were — a defaulted `@Relationship` on `Project`, no `VersionedSchema` —
+  and lightweight migration was verified against the existing 95-project
+  simulator store. Keep using that route for new row types.
 
-**Test baseline: 785 unit tests, ~82 UI tests — all green.** Two UI tests
+**Test baseline: 797 unit tests, ~85 UI tests — all green.** Two UI tests
 (`FaceFlowUITests/testTypeNegativeIntoArrowPill`,
 `SweepLoftUITests/testSweepCircleAlongTwoSegmentLinePath`) are long-run flaky
 (pass in isolation) — rerun individually before suspecting a regression.

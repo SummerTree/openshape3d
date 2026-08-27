@@ -103,6 +103,10 @@ enum EditorMode: Equatable {
     /// `EditorViewModel.shellSelectedFaces`; the shell bar sets the wall
     /// thickness. Zero open faces is valid — a fully enclosed hollow.
     case pickingShellFaces
+    /// Add Axis armed (spec §6.2): taps pick the references the axis is
+    /// derived from — a linear edge, a cylindrical face, or one or two planar
+    /// faces. See `EditorViewModel.axisPicks`.
+    case pickingAxisReferences
 
     var isSketching: Bool {
         if case .sketching = self { return true }

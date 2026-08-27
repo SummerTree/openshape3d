@@ -12,6 +12,9 @@ nonisolated struct DesignDocument: Sendable {
     var bodies: [Body] = []
     var sketches: [Sketch] = []
     var planes: [ConstructionPlane] = []
+    /// Construction axes (spec §6.2). Reference geometry only — they feed
+    /// Revolve, circular patterns and rotates, and never produce a body.
+    var axes: [ConstructionAxis] = []
     var images: [InsertedImage] = []
     var symbols: [Symbol] = []
 

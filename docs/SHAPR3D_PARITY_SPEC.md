@@ -1290,14 +1290,29 @@ to Face at Point**. All parametrically adjustable later; History param:
 Length (plus the defining references). Adaptive "Add Axis" shortcut: with a
 valid selection the adaptive menu offers Add Axis directly, skipping menu
 steps. Axes serve Revolve, patterns, and transforms.
-**Status:** 🟡 partial — the GEOMETRY for all five axis tools ships in
-`ConstructionAxisKit` (through-2-points, along-edge, perpendicular-to-face,
-2-plane intersection, and axis-of-revolution recovered from face samples by a
-least-squares fit), with degenerate selections refused rather than producing
-NaNs. Covered by `ConstructionAxisTests`.
-**Missing:** the document entity, the Add Axis tool/adaptive menu entry, the
-History Length parameter, rendering, and using an axis as the operand for
-Revolve / circular pattern / rotate.
+**Status:** 🟡 partial — **axes are now first-class document geometry
+(2026-08-27).** `ConstructionAxis` carries identity, name and visibility,
+lives on `DesignDocument.axes`, persists through `PersistedAxis` (added to
+the schema as a defaulted relationship, the same lightweight-migration route
+`PersistedFeature`/`PersistedVariable` took — verified against a 95-project
+store), renders as a dashed reference line, and appears in Items with
+eye/rename/zoom/delete. An **"Axis" palette tool** creates them, and an axis
+LYING IN the sketch plane is now a valid **Revolve** operand.
+
+Rather than a five-way type menu, the tool DERIVES the construction from what
+you tap — the manual's own adaptive route ("pre-select an element that will
+be used to define the axis, then select Add Axis"). Tap a round face → Axis
+of Cylinder/Cone (from `FaceTopology.cylindricalFace`'s fitted axis); a flat
+face → Perpendicular to Face; two flat faces → Through 2 Planes; a linear
+edge → Along Edge. The bar names the derived construction, which is what
+makes the inference legible. `EditorViewModel.deriveAxis` is a pure static so
+it is unit-tested without a view model (`ConstructionAxisDeriveTests`);
+end-to-end coverage in `ConstructionAxisUITests`.
+**Missing:** **Axis Through 2 Points** (needs the snap-point pick path, not
+the face/edge one everything else uses); the edge-pick route is wired
+(`pickAxisEdge`) but not yet reachable from the viewport's edge hit-test;
+Length is editable at creation but is not yet a History parameter (that is
+G8); and axes are not yet operands for circular pattern / rotate.
 **Feasibility:** [mesh-kernel OK] — remaining work is app/UI, not geometry.
 
 ### 6.3 Insert Image (reference images)

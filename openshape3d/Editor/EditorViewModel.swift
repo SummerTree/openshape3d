@@ -755,6 +755,21 @@ final class EditorViewModel {
                 into: &scene
             )
         }
+        // Construction axes (spec §6.2): a dashed reference line, drawn in the
+        // same muted blue as the plane tiles so construction geometry reads as
+        // one family and stays distinct from sketch geometry.
+        let axisColor = SIMD4<Float>(0.45, 0.58, 0.80, 0.95)
+        for axis in session.document.axes where !axis.isHidden {
+            scene.sketchLines.append(SketchLineBatch(
+                segments: Self.axisSegments(axis), color: axisColor))
+        }
+        // Live preview of the axis being defined, in the accent colour.
+        if let pending = pendingAxisPreview {
+            scene.sketchLines.append(SketchLineBatch(
+                segments: Self.axisSegments(pending),
+                color: SIMD4(0.0, 0.52, 1.0, 0.95)))
+        }
+
         // Pending offset plane: accent quad tracking the pull.
         if let context = toolContext, case .offsetPlane(let distance) = context.kind {
             let pending = offsetPlanePreview(context, distance: distance)
@@ -2125,6 +2140,7 @@ final class EditorViewModel {
         resetBlendState()
         resetShellState()
         resetSketchOffsetState()
+        resetAxisState()
         pendingCreateTool = nil
         // Numeric-entry armed state must die with the mode that armed it: a
         // stale `scaleEntryActive` would make the next empty-space tap commit
@@ -3293,10 +3309,11 @@ final class EditorViewModel {
     private func sanitizeAfterHistoryChange() {
         // Face/tool contexts reference geometry that may have changed.
         cancelTool()
-        // A blend/shell/offset pick references geometry that may have changed.
+        // A blend/shell/offset/axis pick references geometry that may have changed.
         resetBlendState()
         resetShellState()
         resetSketchOffsetState()
+        resetAxisState()
         axisEntryPart = nil
         scaleEntryActive = false
         // Pending sketch state may reference entities that no longer exist.
@@ -3660,6 +3677,8 @@ final class EditorViewModel {
             handleBlendEdgeTap(ray: ray, kind: kind)
         case .pickingShellFaces:
             handleShellFaceTap(ray: ray)
+        case .pickingAxisReferences:
+            handleAxisReferenceTap(ray: ray)
         }
     }
 
@@ -5284,11 +5303,22 @@ final class EditorViewModel {
         let world = ray.point(at: t)
         let local = plane.toLocal(SIMD3(Double(world.x), Double(world.y), Double(world.z)))
 
-        // Nearest line entity within a forgiving tap tolerance; taps that miss
-        // every line keep the picking mode armed. Construction lines are
-        // preferred axis candidates (spec §3.3): any construction hit beats
-        // any regular hit; ties within a class break by distance.
         let tolerance = SnapEngine.pointTolerance * 2
+
+        // A construction axis lying in the sketch plane is a first-class
+        // revolve axis (spec §6.2 — "creating an axis for a revolved body" is
+        // one of the manual's own stated reasons to make one). Checked before
+        // sketch lines because an axis is the more deliberate choice: you had
+        // to build it.
+        if let axis = nearestUsableRevolveAxis(to: world, plane: plane, tolerance: tolerance) {
+            applyRevolveAxis(axis, context: context)
+            return
+        }
+
+        // Otherwise the nearest line entity within a forgiving tap tolerance;
+        // taps that miss everything keep the picking mode armed. Construction
+        // lines are preferred axis candidates (spec §3.3): any construction hit
+        // beats any regular hit; ties within a class break by distance.
         var best: (a: SIMD2<Double>, b: SIMD2<Double>, distance: Double, isConstruction: Bool)?
         for entity in sketch.entities {
             guard case .line(let id, let a, let b) = entity else { continue }
@@ -5307,12 +5337,15 @@ final class EditorViewModel {
             }
         }
         guard let line = best else { return }
+        applyRevolveAxis(
+            RevolveAxis(point: line.a, direction: line.b - line.a), context: context)
+    }
 
+    /// Commit a chosen revolve axis into the live tool context, or report the
+    /// one failure Shapr3D also reports.
+    private func applyRevolveAxis(_ axis: RevolveAxis, context: ToolContext) {
         var candidate = context
-        candidate.kind = .revolve(
-            axis: RevolveAxis(point: line.a, direction: line.b - line.a),
-            angle: 360
-        )
+        candidate.kind = .revolve(axis: axis, angle: 360)
         rebuildToolPreview(&candidate)
         guard candidate.preview != nil else {
             // Profile crosses (or collapses onto) the axis — Shapr3D errors too.
@@ -5322,6 +5355,36 @@ final class EditorViewModel {
         }
         toolContext = candidate
         mode = .extruding
+    }
+
+    /// The nearest visible construction axis to a tapped world point that can
+    /// actually serve as a revolve axis for `plane`.
+    ///
+    /// "Can serve" means it LIES IN the plane: revolving a profile about an
+    /// axis skew to its own plane is not defined, so an axis that merely
+    /// passes nearby is rejected rather than silently projected onto the plane
+    /// (which would revolve about a line the user never drew).
+    private func nearestUsableRevolveAxis(
+        to world: SIMD3<Float>, plane: SketchPlane, tolerance: Double
+    ) -> RevolveAxis? {
+        let p = SIMD3<Double>(Double(world.x), Double(world.y), Double(world.z))
+        var best: (axis: RevolveAxis, distance: Double)?
+        for axis in session.document.axes where !axis.isHidden {
+            let distance = axis.distance(to: p)
+            guard distance <= tolerance else { continue }
+            let (start, end) = axis.endpoints
+            // Both ends on the plane ⇒ the whole (infinite) line is on it.
+            guard abs(simd_dot(start - plane.origin, plane.normal)) <= tolerance,
+                  abs(simd_dot(end - plane.origin, plane.normal)) <= tolerance
+            else { continue }
+            let a = plane.toLocal(start)
+            let b = plane.toLocal(end)
+            guard simd_length(b - a) > 1e-9 else { continue }
+            if best == nil || distance < best!.distance {
+                best = (RevolveAxis(point: a, direction: b - a), distance)
+            }
+        }
+        return best?.axis
     }
 
     static func distanceToSegment(
@@ -6214,6 +6277,199 @@ final class EditorViewModel {
         session.performWithSketchRebuild(TrimCommand(
             sketchID: sketchID, index: index, removed: hit.entity, fragments: fragments
         ), sketchID: sketchID)
+    }
+
+    // MARK: - Construction axes (spec §6.2)
+
+    /// One reference the Add Axis tool has picked, already in WORLD space.
+    ///
+    /// The axis construction is *derived* from the accumulated picks rather
+    /// than chosen from a type menu first. That is the manual's own adaptive
+    /// route — "pre-select an element that will be used to define the axis,
+    /// then select Add Axis" — and it collapses four separate tools into one
+    /// gesture: tap an edge, a round face, or one/two flat faces.
+    nonisolated enum AxisPick: Equatable {
+        case edge(start: SIMD3<Double>, end: SIMD3<Double>)
+        case planarFace(origin: SIMD3<Double>, normal: SIMD3<Double>)
+        case cylindrical(origin: SIMD3<Double>, direction: SIMD3<Double>, length: Double)
+    }
+
+    private(set) var axisPicks: [AxisPick] = []
+
+    /// Display extent of the axis being defined — the spec's Length parameter.
+    /// Never affects the math, only how long the drawn line is.
+    var axisLength: Double = 100 {
+        didSet { if oldValue != axisLength { recomputeAxisPreview() } }
+    }
+
+    private(set) var pendingAxisPreview: ConstructionAxis?
+
+    /// Names the construction the current picks resolve to, for the bar.
+    var axisConstructionLabel: String {
+        switch axisPicks.count {
+        case 0: return "Tap an edge or face"
+        case 1:
+            switch axisPicks[0] {
+            case .edge: return "Along Edge"
+            case .cylindrical: return "Axis of Cylinder/Cone"
+            case .planarFace: return "Perpendicular to Face"
+            }
+        default:
+            if case .planarFace = axisPicks[0], case .planarFace = axisPicks[1] {
+                return "Through 2 Planes"
+            }
+            return "Tap an edge or face"
+        }
+    }
+
+    var canCommitAxis: Bool { pendingAxisPreview != nil }
+
+    func beginAxisTool() {
+        cancelTransientPicks()
+        axisPicks = []
+        pendingAxisPreview = nil
+        axisLength = Self.defaultAxisLength(for: session.document)
+        mode = .pickingAxisReferences
+    }
+
+    func cancelAxisTool() {
+        resetAxisState()
+        if case .pickingAxisReferences = mode { mode = .idle }
+    }
+
+    /// State only — never writes `selection` (gotcha 7).
+    func resetAxisState() {
+        axisPicks = []
+        pendingAxisPreview = nil
+    }
+
+    /// Scale the default display length to the model so the axis is visible on
+    /// a 3 mm part and not absurd on a 3 m one.
+    private static func defaultAxisLength(for document: DesignDocument) -> Double {
+        var extent = 0.0
+        for body in document.bodies {
+            extent = max(extent, Self.worldBounds(of: body).size.length)
+        }
+        return extent > 1e-6 ? extent * 1.5 : 100
+    }
+
+    /// Tap while Add Axis is armed: pick an edge or a face off the tapped body.
+    private func handleAxisReferenceTap(ray: Ray) {
+        guard let hit = HitTester.pickBody(ray: ray, in: scene),
+              let body = session.document.body(with: hit.bodyID)
+        else { return }
+        let matrix = body.transform.matrixFloat
+        func world(_ p: SIMD3<Double>) -> SIMD3<Double> {
+            let w = matrix * SIMD4(SIMD3<Float>(p), 1)
+            return SIMD3(Double(w.x), Double(w.y), Double(w.z))
+        }
+        func worldDirection(_ d: SIMD3<Double>) -> SIMD3<Double> {
+            // A direction is not a point: translation must not apply.
+            let w = matrix * SIMD4(SIMD3<Float>(d), 0)
+            return SIMD3(Double(w.x), Double(w.y), Double(w.z))
+        }
+
+        // A round face gives its own fitted axis, so it wins outright.
+        if let cylinder = FaceTopology.cylindricalFace(
+            in: body.render, seedTriangle: hit.triangleIndex
+        ) {
+            appendAxisPick(.cylindrical(
+                origin: world(cylinder.axisPoint),
+                direction: worldDirection(cylinder.axisDir),
+                length: max(cylinder.height, 1e-6)
+            ))
+            return
+        }
+        if let face = FaceTopology.planarFace(
+            in: body.render, seedTriangle: hit.triangleIndex
+        ) {
+            appendAxisPick(.planarFace(
+                origin: world(face.origin),
+                normal: worldDirection(SIMD3<Double>(face.normal))
+            ))
+            return
+        }
+        errorMessage = "Tap a flat face, a round face, or an edge to define an axis."
+    }
+
+    /// Pick an edge for the axis (routed from the viewport's edge hit-test,
+    /// which is the same one Chamfer/Fillet uses).
+    func pickAxisEdge(start: SIMD3<Double>, end: SIMD3<Double>) {
+        appendAxisPick(.edge(start: start, end: end))
+    }
+
+    /// Picks are capped at two: every construction the tool derives needs one
+    /// reference or two, so a third tap starts over rather than silently
+    /// ignoring the user.
+    private func appendAxisPick(_ pick: AxisPick) {
+        if axisPicks.contains(pick) {
+            axisPicks.removeAll { $0 == pick }
+        } else if axisPicks.count >= 2 {
+            axisPicks = [pick]
+        } else {
+            axisPicks.append(pick)
+        }
+        recomputeAxisPreview()
+    }
+
+    private func recomputeAxisPreview() {
+        pendingAxisPreview = Self.deriveAxis(from: axisPicks, length: axisLength)
+    }
+
+    /// Pure derivation, so it is unit-testable without an `EditorViewModel`
+    /// (gotcha 1: an in-process `ModelContainer` crashes XCTest).
+    nonisolated static func deriveAxis(
+        from picks: [AxisPick], length: Double
+    ) -> ConstructionAxis? {
+        func sized(_ axis: ConstructionAxis?) -> ConstructionAxis? {
+            guard var axis else { return nil }
+            axis.length = length
+            return axis
+        }
+        switch picks.count {
+        case 1:
+            switch picks[0] {
+            case let .edge(start, end):
+                return sized(ConstructionAxisKit.alongEdge(start: start, end: end))
+            case let .planarFace(origin, normal):
+                return sized(ConstructionAxisKit.perpendicular(toFaceNormal: normal, at: origin))
+            case let .cylindrical(origin, direction, _):
+                return sized(ConstructionAxis(origin: origin, direction: direction))
+            }
+        case 2:
+            guard case let .planarFace(originA, normalA) = picks[0],
+                  case let .planarFace(originB, normalB) = picks[1]
+            else { return nil }
+            return sized(ConstructionAxisKit.intersection(
+                planeAOrigin: originA, planeANormal: normalA,
+                planeBOrigin: originB, planeBNormal: normalB
+            ))
+        default:
+            return nil
+        }
+    }
+
+    func commitAxis() {
+        guard case .pickingAxisReferences = mode, var axis = pendingAxisPreview else { return }
+        axis.name = "Axis \(session.document.axes.count + 1)"
+        session.perform(AddConstructionAxisCommand(axis: axis))
+        resetAxisState()
+        mode = .idle
+    }
+
+    /// Dashed world segments for a drawn axis — dashed so a construction axis
+    /// never reads as model geometry.
+    nonisolated static func axisSegments(_ axis: ConstructionAxis) -> [SIMD3<Float>] {
+        let (start, end) = axis.endpoints
+        let dashes = 24
+        var out: [SIMD3<Float>] = []
+        for i in stride(from: 0, to: dashes, by: 2) {
+            let t0 = Double(i) / Double(dashes)
+            let t1 = Double(i + 1) / Double(dashes)
+            out.append(SIMD3<Float>(simd_mix(start, end, SIMD3(repeating: t0))))
+            out.append(SIMD3<Float>(simd_mix(start, end, SIMD3(repeating: t1))))
+        }
+        return out
     }
 
     // MARK: - Offset Edge (sketch, spec §1.9)
@@ -8793,6 +9049,40 @@ final class EditorViewModel {
     }
 
     /// "Zoom to": fit the camera to the item's world AABB.
+    // MARK: Construction-axis item actions (spec §6.2)
+    //
+    // Axes stay OUT of `DocumentItemRef` on purpose, for the reason its own
+    // comment gives about images: adding a case there ripples through every
+    // exhaustive switch over it. Dedicated methods, like the image ones.
+
+    func setAxisHidden(_ id: ConstructionAxisID, hidden: Bool) {
+        session.perform(SetAxisHiddenCommand(id: id, hidden: hidden))
+    }
+
+    func renameAxis(_ id: ConstructionAxisID, to newName: String) {
+        let trimmed = newName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty,
+              let command = RenameAxisCommand(id: id, to: trimmed, document: session.document),
+              command.before != trimmed
+        else { return }
+        session.perform(command)
+    }
+
+    func deleteAxis(_ id: ConstructionAxisID) {
+        guard let command = DeleteAxisCommand(id: id, document: session.document) else { return }
+        session.perform(command)
+    }
+
+    func zoomToAxis(_ id: ConstructionAxisID) {
+        guard let axis = session.document.axes.first(where: { $0.id == id }) else { return }
+        let (start, end) = axis.endpoints
+        let lo = simd_min(start, end), hi = simd_max(start, end)
+        cameraControl?.fitTo(bounds: (
+            SIMD3(Float(lo.x), Float(lo.y), Float(lo.z)),
+            SIMD3(Float(hi.x), Float(hi.y), Float(hi.z))
+        ))
+    }
+
     func zoomToItem(_ item: DocumentItemRef) {
         guard let bounds = itemBounds(item) else { return }
         cameraControl?.fitTo(bounds: bounds)

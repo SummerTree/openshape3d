@@ -23,6 +23,7 @@ struct openshape3dApp: App {
             PersistedBody.self,
             PersistedSketch.self,
             PersistedPlane.self,
+            PersistedAxis.self,
             PersistedImage.self,
             PersistedSymbol.self,
             PersistedFeature.self,

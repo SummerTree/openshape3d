@@ -48,6 +48,7 @@ final class DocumentSession {
         var bodies: Set<UUID> = []
         var sketches: Set<UUID> = []
         var planes: Set<UUID> = []
+        var axes: Set<UUID> = []
         var images: Set<UUID> = []
         var symbols: Set<UUID> = []
         var features: Set<UUID> = []
@@ -58,8 +59,8 @@ final class DocumentSession {
         var bodyBrep: Set<UUID> = []
         /// Whole rows that could not be decoded (absent from the document).
         var rowCount: Int {
-            bodies.count + sketches.count + planes.count + images.count
-                + symbols.count + features.count
+            bodies.count + sketches.count + planes.count + axes.count
+                + images.count + symbols.count + features.count
         }
         /// Bodies present in the document but missing some detail.
         var partialBodyCount: Int {
@@ -645,6 +646,13 @@ final class DocumentSession {
                 unreadableRows.planes.insert(persisted.planeID)
             }
         }
+        for persisted in project.axes {
+            if let axis = try? JSONDecoder().decode(ConstructionAxis.self, from: persisted.axisData) {
+                loaded.axes.append(axis)
+            } else {
+                unreadableRows.axes.insert(persisted.axisID)
+            }
+        }
         for persisted in project.images {
             if var image = try? JSONDecoder().decode(InsertedImage.self, from: persisted.infoData) {
                 image.imageData = persisted.imageData
@@ -870,6 +878,28 @@ final class DocumentSession {
         for persisted in project.planes
         where !livePlaneIDs.contains(persisted.planeID)
             && !unreadableRows.planes.contains(persisted.planeID) {
+            modelContext.delete(persisted)
+        }
+
+        var persistedAxisByID = [UUID: PersistedAxis]()
+        for persisted in project.axes {
+            persistedAxisByID[persisted.axisID] = persisted
+        }
+        var liveAxisIDs = Set<UUID>()
+        for axis in document.axes {
+            liveAxisIDs.insert(axis.id.raw)
+            guard let data = try? JSONEncoder().encode(axis) else { continue }
+            if let persisted = persistedAxisByID[axis.id.raw] {
+                persisted.axisData = data
+            } else {
+                let persisted = PersistedAxis(axisID: axis.id.raw, axisData: data)
+                persisted.project = project
+                modelContext.insert(persisted)
+            }
+        }
+        for persisted in project.axes
+        where !liveAxisIDs.contains(persisted.axisID)
+            && !unreadableRows.axes.contains(persisted.axisID) {
             modelContext.delete(persisted)
         }
 

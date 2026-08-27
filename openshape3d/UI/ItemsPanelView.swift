@@ -124,6 +124,28 @@ struct ItemsPanelView: View {
                     )
                 }
 
+                sectionHeader("Axes")
+                if document.axes.isEmpty {
+                    emptyRow("No axes yet")
+                }
+                // Construction axes (spec §6.2): reference geometry, so they
+                // get the same eye / rename / zoom / delete row as planes.
+                ForEach(document.axes) { axis in
+                    ItemRowView(
+                        icon: "line.diagonal.arrow",
+                        name: axis.name,
+                        isHidden: axis.isHidden,
+                        renameable: true,
+                        onSelect: {},
+                        onToggleVisibility: {
+                            viewModel.setAxisHidden(axis.id, hidden: !axis.isHidden)
+                        },
+                        onRename: { viewModel.renameAxis(axis.id, to: $0) },
+                        onZoom: { viewModel.zoomToAxis(axis.id) },
+                        onDelete: { viewModel.deleteAxis(axis.id) }
+                    )
+                }
+
                 sectionHeader("Symbols")
                 if document.symbols.isEmpty {
                     emptyRow("No symbols yet")

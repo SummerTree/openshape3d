@@ -407,6 +407,43 @@ struct EditorView: View {
         }
     }
 
+    /// Add Axis bar (spec §6.2). The construction is derived from the picks
+    /// rather than chosen up front, so the bar's job is to NAME what the
+    /// current picks resolve to — otherwise "tap two flat faces" and "tap one"
+    /// would look identical right up until Apply.
+    private func axisBar(_ viewModel: EditorViewModel) -> some View {
+        let value = settings.unit.binding(Binding(
+            get: { viewModel.axisLength },
+            set: { viewModel.axisLength = max(0.001, $0) }))
+        return AdaptiveBar(style: .capsule, spacing: 12) {
+            Image(systemName: "line.diagonal.arrow")
+            Text(viewModel.axisConstructionLabel)
+                .font(.subheadline)
+                .fixedSize()
+            Divider().frame(height: 20)
+            Text("Length").font(.caption).foregroundStyle(.barLabel).fixedSize()
+            TextField(settings.unit.symbol, value: value,
+                      format: .number.precision(.fractionLength(0...3)))
+                .textFieldStyle(.roundedBorder)
+                .frame(width: 64)
+                .multilineTextAlignment(.trailing)
+                .keyboardType(.decimalPad)
+                .accessibilityIdentifier("AxisLengthField")
+            Text(settings.unit.symbol).font(.caption).foregroundStyle(.barLabel).fixedSize()
+        } actions: {
+            Button("Cancel") { viewModel.cancelAxisTool() }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .keyboardShortcut(.cancelAction)
+                .accessibilityIdentifier("AxisCancel")
+            Button("Apply") { viewModel.commitAxis() }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+                .disabled(!viewModel.canCommitAxis)
+                .accessibilityIdentifier("AxisApply")
+        }
+    }
+
     /// Offset Edge bar (spec §1.9): Single/Chain type, the signed distance,
     /// and Apply/Cancel. A negative distance offsets inward on a closed
     /// profile, which is why the field is not clamped to zero the way Shell's
@@ -785,6 +822,8 @@ struct EditorView: View {
                         blendBar(kind, viewModel)
                     } else if case .pickingShellFaces = viewModel.mode {
                         shellBar(viewModel)
+                    } else if case .pickingAxisReferences = viewModel.mode {
+                        axisBar(viewModel)
                     } else if viewModel.mode.sketchTool == .offset {
                         sketchOffsetBar(viewModel)
                     } else {

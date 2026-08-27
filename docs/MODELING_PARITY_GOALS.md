@@ -381,10 +381,11 @@ our app. Ordered roughly by how often the manual reaches for them.
 | Constraints *(§3.2)* | **Disconnect** (break connected points, dropping their coincident/midpoint constraints); **Anchored Sketch Entity** (First/Last Selected) setting; Always Show Constraints / Always Show Dimensions toggles |
 
 **Not in this table because they already have goals:** spline drawing (G5.1),
-sketch Pattern (G5.3), construction planes and axes
-(§6.1/§6.2 — note `ConstructionAxisKit` has all five axis constructions tested
-with no document entity or UI), Replace Face / Offset Edge 3D / Wrap & Emboss
-(G4, all kernel-only).
+sketch Pattern (G5.3), construction planes (§6.1 — still Offset-only),
+Replace Face / Offset Edge 3D / Wrap & Emboss (G4, all kernel-only).
+**Construction axes (§6.2) shipped 2026-08-27** — document entity,
+persistence, rendering, Items, an inference-based Add Axis tool, and use as a
+Revolve operand; only Through-2-Points remains.
 
 **Acceptance:** for each row, the variant is reachable from the tool's own bar
 (not only from History), and round-trips through save/reload and a rebuild.
