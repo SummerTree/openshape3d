@@ -21,8 +21,8 @@ nonisolated extension ProfileDetector {
         struct NodeKey: Hashable {
             let x, y: Int64
             init(_ p: SIMD2<Double>) {
-                x = Int64((p.x / 1e-6).rounded())
-                y = Int64((p.y / 1e-6).rounded())
+                x = MeshQuantize.key64(p.x, quantum: 1e-6)
+                y = MeshQuantize.key64(p.y, quantum: 1e-6)
             }
         }
 

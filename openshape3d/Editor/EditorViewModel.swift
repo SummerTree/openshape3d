@@ -73,6 +73,9 @@ final class EditorViewModel {
     init(project: Project, modelContext: ModelContext) {
         self.session = DocumentSession(project: project, modelContext: modelContext)
         loadAutoConstrainSettings()
+        // Data-safety warnings from load (newer-format store opens read-only,
+        // or rows this build couldn't read) surface once as the alert.
+        errorMessage = session.loadWarning
     }
 
     // MARK: - Scene for the viewport
@@ -309,6 +312,79 @@ final class EditorViewModel {
         }
     }
 
+    /// The pull-arrow handle, computed WITHOUT assembling the full scene.
+    /// `ExtrudeGizmoOverlay` re-reads it on every camera move (`cameraEpoch`)
+    /// and the viewport per drag tick — reading it off `scene` made plain
+    /// orbiting rebuild every drawable each frame (2026-08-25 review, S2).
+    /// Priority mirrors the scene builder's old last-write-wins order: an
+    /// armed profile tool wins; the section arrow appears only with no tool
+    /// armed; the blend-edge arrow comes last.
+    var pullArrowState: PullArrowState? {
+        // Armed profile tool (extrude / revolve / offset plane). Suppressed
+        // while a face Move/Scale/Rotate tool is armed: then only that gizmo
+        // shows, and drags reach it (shear/taper) instead of the arrow.
+        if let context = toolContext, !context.curvedRegion,
+           !faceMoveActive, !faceScaleActive, !faceRotateActive {
+            let centroid = context.plane.toWorld(context.profile.centroid)
+            switch context.kind {
+            case .extrude(let distance):
+                let n = context.plane.normal
+                let tip = centroid + n * distance
+                return PullArrowState(
+                    origin: SIMD3(Float(tip.x), Float(tip.y), Float(tip.z)),
+                    direction: SIMD3(Float(n.x), Float(n.y), Float(n.z)),
+                    isValid: context.isPendingValid
+                )
+            case .revolve:
+                let t = context.plane.xAxis
+                return PullArrowState(
+                    origin: SIMD3(Float(centroid.x), Float(centroid.y), Float(centroid.z)),
+                    direction: SIMD3(Float(t.x), Float(t.y), Float(t.z))
+                )
+            case .offsetPlane(let distance):
+                let n = context.plane.normal
+                let tip = centroid + n * distance
+                return PullArrowState(
+                    origin: SIMD3(Float(tip.x), Float(tip.y), Float(tip.z)),
+                    direction: SIMD3(Float(n.x), Float(n.y), Float(n.z))
+                )
+            case .sweep, .loft:
+                break // no drag-editable parameter → no arrow
+            }
+        }
+        // Section plane drag (offset-plane pattern); defers to a profile tool.
+        if let section = sectionState, toolContext == nil {
+            let plane = section.plane
+            let n = simd_normalize(section.basePlane.normal)
+            return PullArrowState(
+                origin: SIMD3(Float(plane.origin.x), Float(plane.origin.y), Float(plane.origin.z)),
+                direction: SIMD3(Float(n.x), Float(n.y), Float(n.z))
+            )
+        }
+        // Drag-to-size handle (spec §4.3 edge arrows): rides the LAST picked
+        // blend edge's midpoint, pointing INTO the body along the inward
+        // bisector — dragging the way it points carves a bigger blend.
+        if case .pickingBlendEdges = mode, let bodyID = blendBodyID,
+           let body = session.document.body(with: bodyID),
+           let last = blendSelectedEdges.last {
+            var bis = last.normalA + last.normalB
+            let bl = simd_length(bis)
+            if bl > 1e-5 {
+                bis /= bl
+                let matrix = body.transform.matrixFloat
+                let mid4 = matrix * SIMD4(last.midpoint, 1)
+                let dir4 = matrix * SIMD4(-bis, 0)   // inward, world space
+                let dir = simd_normalize(SIMD3(dir4.x, dir4.y, dir4.z))
+                return PullArrowState(
+                    origin: SIMD3(mid4.x, mid4.y, mid4.z),
+                    direction: dir,
+                    isValid: blendPreview != nil || blendValue <= 1e-6
+                )
+            }
+        }
+        return nil
+    }
+
     var scene: ViewportScene {
         _ = session.changeCount // establish observation dependency
         var drawables: [BodyDrawable] = []
@@ -486,62 +562,12 @@ final class EditorViewModel {
                 scene.sketchLines.append(SketchLineBatch(
                     segments: segs, color: SIMD4(0.16, 0.55, 1.0, 1)))
             }
-            // Drag-to-size handle (spec §4.3 edge arrows): the pull arrow rides
-            // the LAST picked edge's midpoint, pointing INTO the body along the
-            // inward bisector — dragging the arrow the way it points carves a
-            // bigger blend (Shapr3D: drag into the body).
-            if let last = blendSelectedEdges.last {
-                var bis = last.normalA + last.normalB
-                let bl = simd_length(bis)
-                if bl > 1e-5 {
-                    bis /= bl
-                    let mid4 = matrix * SIMD4(last.midpoint, 1)
-                    let dir4 = matrix * SIMD4(-bis, 0)   // inward, world space
-                    let dir = simd_normalize(SIMD3(dir4.x, dir4.y, dir4.z))
-                    scene.pullArrow = PullArrowState(
-                        origin: SIMD3(mid4.x, mid4.y, mid4.z),
-                        direction: dir,
-                        isValid: blendPreview != nil || blendValue <= 1e-6
-                    )
-                }
-            }
         }
 
-        // Pull arrow — "these arrows are the interface for creating an
-        // extrude" (Shapr3D tutorial). Sits at the moving cap of the pull;
-        // for revolve it lies along the plane tangent at the centroid.
-        //
-        // Suppressed while a face Move/Scale tool is armed: then only that gizmo
-        // shows, and drags reach it (shear/taper) instead of the extrude arrow.
-        if let context = toolContext, !context.curvedRegion,
-           !faceMoveActive, !faceScaleActive, !faceRotateActive {
-            let centroid = context.plane.toWorld(context.profile.centroid)
-            switch context.kind {
-            case .extrude(let distance):
-                let n = context.plane.normal
-                let tip = centroid + n * distance
-                scene.pullArrow = PullArrowState(
-                    origin: SIMD3(Float(tip.x), Float(tip.y), Float(tip.z)),
-                    direction: SIMD3(Float(n.x), Float(n.y), Float(n.z)),
-                    isValid: context.isPendingValid
-                )
-            case .revolve:
-                let t = context.plane.xAxis
-                scene.pullArrow = PullArrowState(
-                    origin: SIMD3(Float(centroid.x), Float(centroid.y), Float(centroid.z)),
-                    direction: SIMD3(Float(t.x), Float(t.y), Float(t.z))
-                )
-            case .offsetPlane(let distance):
-                let n = context.plane.normal
-                let tip = centroid + n * distance
-                scene.pullArrow = PullArrowState(
-                    origin: SIMD3(Float(tip.x), Float(tip.y), Float(tip.z)),
-                    direction: SIMD3(Float(n.x), Float(n.y), Float(n.z))
-                )
-            case .sweep, .loft:
-                break // no drag-editable parameter → no arrow
-            }
-        }
+        // Pull arrow — computed by `pullArrowState` (NOT inline here) so the
+        // gizmo overlay and drag hit-tests can re-read it per camera move
+        // without re-assembling this entire scene (2026-08-25 review, S2).
+        scene.pullArrow = pullArrowState
 
         // The move/rotate gizmo is drawn by the 2D `MoveGizmoOverlay` (flat
         // arrows like the extrude handle, curved double-headed rotate arrows),
@@ -623,6 +649,26 @@ final class EditorViewModel {
                     segments: SketchTessellator.segments(for: pendings, on: sketch.plane),
                     color: pendingColor
                 ))
+            }
+            // Offset Edge (spec §1.9): the picked source entities read as
+            // selected, and the offset result previews in the pending colour
+            // so it is legible as not-yet-committed geometry.
+            if case .offset = mode.sketchTool {
+                let sources = sketchOffsetSourceEntities
+                if !sources.isEmpty {
+                    scene.sketchLines.append(SketchLineBatch(
+                        segments: SketchTessellator.segments(for: sources, on: sketch.plane),
+                        color: selectedColor
+                    ))
+                }
+                if !sketchOffsetPreview.isEmpty {
+                    scene.sketchLines.append(SketchLineBatch(
+                        segments: SketchTessellator.segments(
+                            for: sketchOffsetPreview, on: sketch.plane
+                        ),
+                        color: pendingColor
+                    ))
+                }
             }
             // Line tool tap-chaining: mark the vertex the next tap extends from,
             // so a first tap (which draws no segment yet) still reads as landed.
@@ -709,6 +755,21 @@ final class EditorViewModel {
                 into: &scene
             )
         }
+        // Construction axes (spec §6.2): a dashed reference line, drawn in the
+        // same muted blue as the plane tiles so construction geometry reads as
+        // one family and stays distinct from sketch geometry.
+        let axisColor = SIMD4<Float>(0.45, 0.58, 0.80, 0.95)
+        for axis in session.document.axes where !axis.isHidden {
+            scene.sketchLines.append(SketchLineBatch(
+                segments: Self.axisSegments(axis), color: axisColor))
+        }
+        // Live preview of the axis being defined, in the accent colour.
+        if let pending = pendingAxisPreview {
+            scene.sketchLines.append(SketchLineBatch(
+                segments: Self.axisSegments(pending),
+                color: SIMD4(0.0, 0.52, 1.0, 0.95)))
+        }
+
         // Pending offset plane: accent quad tracking the pull.
         if let context = toolContext, case .offsetPlane(let distance) = context.kind {
             let pending = offsetPlanePreview(context, distance: distance)
@@ -786,14 +847,7 @@ final class EditorViewModel {
                 border: SIMD4(0.0, 0.52, 1.0, 0.85),
                 into: &scene
             )
-            // Pull arrow moves the plane along its normal (offset-plane drag
-            // pattern); an active profile tool keeps its own arrow.
-            if toolContext == nil {
-                scene.pullArrow = PullArrowState(
-                    origin: SIMD3(Float(plane.origin.x), Float(plane.origin.y), Float(plane.origin.z)),
-                    direction: SIMD3(Float(n.x), Float(n.y), Float(n.z))
-                )
-            }
+            // The section plane's own pull arrow comes from `pullArrowState`.
         }
 
         // Measure/Translate/Align picks: cross markers at each picked point
@@ -876,6 +930,13 @@ final class EditorViewModel {
     /// selections only — face selections use the pull arrow instead. A
     /// selected inserted image (plan §B10) attaches the gizmo at its center.
     var gizmoOrigin: SIMD3<Float>? {
+        guard let base = gizmoBaseOrigin else { return nil }
+        return base + activeGizmoPivotOffset
+    }
+
+    /// Where the gizmo attaches BEFORE the user repositions it (see
+    /// `activeGizmoPivotOffset`).
+    private var gizmoBaseOrigin: SIMD3<Float>? {
         if let image = selectedImage {
             let center = image.plane.origin
             return SIMD3(Float(center.x), Float(center.y), Float(center.z))
@@ -907,6 +968,76 @@ final class EditorViewModel {
         return SIMD3(Float(centroid.x), Float(centroid.y), Float(centroid.z))
     }
 
+    // MARK: - Gizmo pivot (tap the centre to reposition the control)
+
+    /// What a dropped pivot belongs to. Selecting something else — or the same
+    /// body's face instead of the body — starts over rather than inheriting the
+    /// last drop, so a stale offset can never strand the gizmo off in space.
+    private struct GizmoPivotOwner: Equatable {
+        var bodies: Set<BodyID>
+        var face: Bool
+        var image: Bool
+    }
+
+    private var currentGizmoPivotOwner: GizmoPivotOwner {
+        var face = false
+        if case .faceSelected = mode { face = true }
+        return GizmoPivotOwner(bodies: selection, face: face, image: selectedImage != nil)
+    }
+
+    /// Where the user dropped the gizmo, as an offset from `gizmoBaseOrigin`.
+    /// Repositioning moves the CONTROL only — the bodies stay where they are —
+    /// which is how you line an axis up with a corner before moving.
+    private var gizmoPivotOffset: SIMD3<Float> = .zero
+    private var gizmoPivotOwner: GizmoPivotOwner?
+    private var gizmoPivotArmed = false
+
+    /// True once the pivot has been tapped: the dot becomes a crosshair and a
+    /// drag on it repositions the gizmo instead of orbiting the camera.
+    var gizmoRepositionArmed: Bool {
+        gizmoPivotArmed && gizmoPivotOwner == currentGizmoPivotOwner
+    }
+
+    /// The offset in force right now — zero unless it belongs to what is
+    /// selected at this moment.
+    private var activeGizmoPivotOffset: SIMD3<Float> {
+        gizmoPivotOwner == currentGizmoPivotOwner ? gizmoPivotOffset : .zero
+    }
+
+    /// True when the gizmo has been dragged off its natural attach point.
+    var gizmoPivotIsOffset: Bool { activeGizmoPivotOffset != .zero }
+
+    /// Tap on the pivot: arm (or disarm) repositioning.
+    func toggleGizmoReposition() {
+        guard gizmoOrigin != nil else { return }
+        let armed = gizmoRepositionArmed
+        claimGizmoPivot()
+        gizmoPivotArmed = !armed
+    }
+
+    /// Drop the gizmo at `world` (the pivot drag; nothing else moves).
+    func setGizmoPivot(world: SIMD3<Float>) {
+        claimGizmoPivot()
+        guard let base = gizmoBaseOrigin else { return }
+        gizmoPivotOffset = world - base
+    }
+
+    /// Hand the pivot to whatever is selected NOW, dropping a previous
+    /// selection's offset instead of adopting it.
+    private func claimGizmoPivot() {
+        let owner = currentGizmoPivotOwner
+        guard gizmoPivotOwner != owner else { return }
+        gizmoPivotOwner = owner
+        gizmoPivotOffset = .zero
+    }
+
+    /// Send the gizmo back to its natural attach point and put the dot back.
+    func resetGizmoPivot() {
+        gizmoPivotOffset = .zero
+        gizmoPivotOwner = nil
+        gizmoPivotArmed = false
+    }
+
     // MARK: - Move drags (gizmo)
 
     private var moveBefore: [BodyID: Transform3D]?
@@ -914,6 +1045,10 @@ final class EditorViewModel {
     /// Copy badge (spec §5.1): when on, the next gizmo drag duplicates the
     /// selection and moves the copy. Resets after each drag.
     var copyOnDrag = false
+
+    /// World-space delta of the gizmo drag in flight — what the on-gizmo
+    /// distance pill reads. nil when no handle is being dragged.
+    private(set) var moveDragDelta: SIMD3<Float>?
 
     /// Live state for a gizmo drag that MOVES a selected face (deforming the
     /// solid), as opposed to translating a whole body. Everything is captured
@@ -1465,6 +1600,7 @@ final class EditorViewModel {
         if selectedImage != nil {
             axisEntryPart = nil
             scaleEntryActive = false
+            moveDragDelta = nil
             if copyOnDrag {
                 copyOnDrag = false
                 duplicateSelectedImageForDrag()
@@ -1476,6 +1612,7 @@ final class EditorViewModel {
         if case .faceSelected = mode {
             axisEntryPart = nil
             scaleEntryActive = false
+            moveDragDelta = nil
             copyOnDrag = false // Copy-on-drag is a whole-body affordance.
             _ = beginFaceMove()
             return
@@ -1483,6 +1620,7 @@ final class EditorViewModel {
         guard !selection.isEmpty else { return }
         axisEntryPart = nil
         scaleEntryActive = false
+        moveDragDelta = nil
         if copyOnDrag {
             copyOnDrag = false
             duplicateSelectionForDrag()
@@ -1511,6 +1649,10 @@ final class EditorViewModel {
                 revision: body.meshRevision
             )
             clone.euclid = body.euclid
+            // Carry the analytic solid: a copy of a smooth cylinder must not
+            // degrade to its tessellation (review C4). Handles are shared
+            // read-only; downstream ops derive new handles, never mutate.
+            clone.brep = body.brep
             session.perform(AddBodyCommand(body: clone, title: "Copy \(body.name)"))
             copies.insert(clone.id)
         }
@@ -1524,6 +1666,9 @@ final class EditorViewModel {
     }
 
     func updateMove(delta: SIMD3<Float>) {
+        // Feeds the distance pill riding the gizmo (Shapr3D shows the travelled
+        // distance on the handle as you drag).
+        moveDragDelta = delta
         if imageInteractionBaseline != nil {
             updateImageMove(delta: delta)
             return
@@ -1577,11 +1722,21 @@ final class EditorViewModel {
             angle: degrees * .pi / 180,
             axis: SIMD3(Double(axis.x), Double(axis.y), Double(axis.z))
         )
+        // A repositioned pivot is a rotation CENTRE too: dropping the gizmo on
+        // a corner and spinning turns the body about that corner. Left alone
+        // (the usual case) each body still spins about its own pivot, which is
+        // where the gizmo sits anyway.
+        let pivot: SIMD3<Double>? = gizmoPivotIsOffset ? gizmoOrigin.map {
+            SIMD3(Double($0.x), Double($0.y), Double($0.z))
+        } : nil
         session.preview { document in
             for (id, original) in moveBefore {
                 if let index = document.bodyIndex(of: id) {
                     var transform = original
                     transform.rotation = simd_normalize(q * original.rotation)
+                    if let pivot {
+                        transform.translation = pivot + q.act(original.translation - pivot)
+                    }
                     document.bodies[index].transform = transform
                 }
             }
@@ -1589,6 +1744,7 @@ final class EditorViewModel {
     }
 
     func endMove() {
+        moveDragDelta = nil
         if imageInteractionBaseline != nil {
             endImageInteraction()
             return
@@ -1625,6 +1781,48 @@ final class EditorViewModel {
 
     func cancelAxisDistanceEntry() {
         axisEntryPart = nil
+    }
+
+    /// The value pill riding the move gizmo (Shapr3D §5.1): the live distance
+    /// while a handle is dragged, or an empty editable field once an arrow has
+    /// been TAPPED, so a move can be typed exactly instead of dragged.
+    struct MoveDistanceLabel: Equatable {
+        var part: GizmoPart
+        var text: String
+        /// True = show the text field (an arrow was tapped); false = a live
+        /// read-out of the drag in flight.
+        var isEditable: Bool
+    }
+
+    var moveDistanceLabel: MoveDistanceLabel? {
+        guard gizmoOrigin != nil else { return nil }
+        if let part = axisEntryPart {
+            return MoveDistanceLabel(part: part, text: "", isEditable: true)
+        }
+        guard let delta = moveDragDelta, let part = gizmoHighlight, !part.isRing else {
+            return nil
+        }
+        let d = SIMD3<Double>(Double(delta.x), Double(delta.y), Double(delta.z))
+        let a = part.axisDirection
+        // An arrow reads its own axis component (signed travel); a plane tile
+        // reads how far the body slid in that plane.
+        let distance = part.isArrow
+            ? simd_dot(d, SIMD3<Double>(Double(a.x), Double(a.y), Double(a.z)))
+            : simd_length(d)
+        return MoveDistanceLabel(
+            part: part,
+            text: AppSettings.shared.unit.compactLengthString(fromMM: abs(distance)),
+            isEditable: false)
+    }
+
+    /// Commit a distance typed into the pill (supports "25.4/2" like the other
+    /// inline fields); the value is in the display unit.
+    func commitMoveDistance(_ text: String) {
+        guard let typed = ExpressionEvaluator.evaluate(text) else {
+            cancelAxisDistanceEntry()
+            return
+        }
+        commitAxisMove(distance: AppSettings.shared.unit.mm(fromDisplay: typed))
     }
 
     /// Move the selection by exactly `distance` along the tapped arrow's axis.
@@ -2081,7 +2279,14 @@ final class EditorViewModel {
         cancelImagePlanePick()
         resetBlendState()
         resetShellState()
+        resetSketchOffsetState()
+        resetAxisState()
         pendingCreateTool = nil
+        // Numeric-entry armed state must die with the mode that armed it: a
+        // stale `scaleEntryActive` would make the next empty-space tap commit
+        // a stray scale from inside an unrelated pick (2026-08-25 review, S3).
+        scaleEntryActive = false
+        axisEntryPart = nil
     }
 
     /// Translate: first tap picks the source snap point, second the
@@ -2355,6 +2560,39 @@ final class EditorViewModel {
             amount: blendValue, isFillet: kind == .fillet)
     }
 
+    /// The blend result for the current pick, branching on the source's
+    /// kernel exactly like `FeatureGraph.evalEdgeBlend` (2026-08-25 review,
+    /// C4): a brep body blends in OCCT (`BRepFilletAPI`), so the user
+    /// previews and commits the same class of geometry replay will later
+    /// produce — the Euclid mesh blend on an OCCT tessellation is the
+    /// documented malformed-facets path. Both the brep and the edge
+    /// midpoints are body-LOCAL, so no transform juggling is needed. Nil
+    /// when the blend fails (too-big radius) — preview shows invalid.
+    private func blendedBody(_ kind: BlendKind, source: Body, revision: UInt64) -> Body? {
+        if OCCTKernel.useOCCTAsSourceOfTruth, let brep = source.brep {
+            let aabb = source.render.localAABB
+            let scale = Double(simd_length(aabb.max - aabb.min))
+            let midpoints = blendSelectedEdges.map { edge -> SIMD3<Double> in
+                SIMD3(Double(edge.midpoint.x), Double(edge.midpoint.y), Double(edge.midpoint.z))
+            }
+            let tolerance = max(scale * 0.01, 1e-6)
+            let blended = kind == .fillet
+                ? OCCTKernel.fillet(brep, at: midpoints, radius: blendValue, tolerance: tolerance)
+                : OCCTKernel.chamfer(brep, at: midpoints, distance: blendValue, tolerance: tolerance)
+            guard let blended else { return nil }
+            var result = Body(
+                id: source.id, name: source.name, transform: source.transform,
+                primitive: nil, euclidMesh: source.euclidMesh(), revision: revision)
+            guard result.adoptBRep(blended) else { return nil }
+            return result
+        }
+        let mesh = blendedMesh(kind, source: source)
+        guard !mesh.polygons.isEmpty else { return nil }
+        return Body(
+            id: source.id, name: source.name, transform: source.transform,
+            primitive: nil, euclidMesh: mesh, revision: revision)
+    }
+
     /// Recompute the live blend preview (edge toggles and size edits call this).
     private func updateBlendPreview() {
         guard case .pickingBlendEdges(let kind) = mode,
@@ -2366,18 +2604,11 @@ final class EditorViewModel {
             blendPreview = nil
             return
         }
-        let mesh = blendedMesh(kind, source: source)
-        guard !mesh.polygons.isEmpty else {
-            blendPreview = nil
-            return
-        }
         blendPreviewRevision &+= 1
-        blendPreview = Body(
-            id: source.id, name: source.name, transform: source.transform,
-            primitive: nil, euclidMesh: mesh,
-            // High-bit revision space so preview revisions never collide with
-            // the document's own mesh revisions in the GPU cache.
-            revision: (1 << 62) | blendPreviewRevision)
+        // High-bit revision space so preview revisions never collide with
+        // the document's own mesh revisions in the GPU cache.
+        blendPreview = blendedBody(
+            kind, source: source, revision: (1 << 62) | blendPreviewRevision)
     }
 
     /// Whether the blend can be committed (edges picked on one body, a positive
@@ -2467,16 +2698,19 @@ final class EditorViewModel {
               blendValue > 1e-6   // a zero-size node would error on replay
         else { return }
 
-        // Reuse the live preview's mesh when it's current; else compute fresh.
-        let mesh = blendPreview?.euclid ?? blendedMesh(kind, source: source)
-        guard !mesh.polygons.isEmpty else {
+        // Reuse the live preview when it's current (it already carries the
+        // OCCT brep for analytic bodies — C4); else compute fresh.
+        let after: Body
+        if var preview = blendPreview {
+            preview.meshRevision = 0 // assigned by the command
+            after = preview
+        } else if let computed = blendedBody(kind, source: source, revision: 0) {
+            after = computed
+        } else {
             errorMessage = "The \(kind.title.lowercased()) produced no geometry."
             cancelBlend()
             return
         }
-        let after = Body(
-            id: source.id, name: source.name, transform: source.transform,
-            primitive: nil, euclidMesh: mesh, revision: 0)
         let replace = ReplaceBodyCommand(title: kind.title, before: source, after: after)
 
         // Record a parametric node only for a feature-owned body (else geometry
@@ -2613,6 +2847,42 @@ final class EditorViewModel {
     /// Recompute the live shell preview (face toggles and thickness edits call
     /// this). An empty kernel result (thickness ate the body, or an opening
     /// rim collapsed) clears the preview — that's the invalid state.
+    /// The shell result for the current pick, branching on the source's
+    /// kernel exactly like `FeatureGraph.evalShell` (2026-08-25 review, C4):
+    /// a brep body hollows with `BRepOffsetAPI_MakeThickSolid` so CURVED
+    /// walls come out right — the mesh inset is only honest on prismatic
+    /// bodies (a live-shelled cylinder used to commit wrong walls that the
+    /// next rebuild silently replaced). Falls back to the mesh shell when
+    /// OCCT can't offset the solid, matching eval. Nil = invalid.
+    private func shelledBody(source: Body, revision: UInt64) -> Body? {
+        if OCCTKernel.useOCCTAsSourceOfTruth, let brep = source.brep {
+            // A point at the centroid of each open face identifies it to OCCT.
+            let openPoints: [SIMD3<Double>] = shellSelectedFaces.map { face in
+                let n = Double(max(face.outline.count, 1))
+                let c = face.outline.reduce(SIMD2<Double>.zero, +) / n
+                return face.origin + face.basisX * c.x + face.basisY * c.y
+            }
+            let aabb = source.render.localAABB
+            let scale = Double(simd_length(aabb.max - aabb.min))
+            if let hollow = OCCTKernel.shell(
+                brep, openingAt: openPoints, thickness: shellThickness,
+                tolerance: max(scale * 0.02, 1e-6)) {
+                var result = Body(
+                    id: source.id, name: source.name, transform: source.transform,
+                    primitive: nil, euclidMesh: source.euclidMesh(), revision: revision)
+                if result.adoptBRep(hollow) { return result }
+            }
+            // Fall through to the mesh shell — same fallback as eval.
+        }
+        let mesh = KernelOps.shell(
+            mesh: source.euclidMesh(), thickness: shellThickness,
+            openFaces: shellSelectedFaces)
+        guard !mesh.polygons.isEmpty else { return nil }
+        return Body(
+            id: source.id, name: source.name, transform: source.transform,
+            primitive: nil, euclidMesh: mesh, revision: revision)
+    }
+
     private func updateShellPreview() {
         guard case .pickingShellFaces = mode,
               let bodyID = shellBodyID,
@@ -2622,18 +2892,9 @@ final class EditorViewModel {
             shellPreview = nil
             return
         }
-        let mesh = KernelOps.shell(
-            mesh: source.euclidMesh(), thickness: shellThickness,
-            openFaces: shellSelectedFaces)
-        guard !mesh.polygons.isEmpty else {
-            shellPreview = nil
-            return
-        }
         shellPreviewRevision &+= 1
-        shellPreview = Body(
-            id: source.id, name: source.name, transform: source.transform,
-            primitive: nil, euclidMesh: mesh,
-            revision: (1 << 61) | shellPreviewRevision)
+        shellPreview = shelledBody(
+            source: source, revision: (1 << 61) | shellPreviewRevision)
     }
 
     /// Whether the shell can be committed: a body picked, positive thickness,
@@ -2655,17 +2916,19 @@ final class EditorViewModel {
               shellThickness > 1e-6
         else { return }
 
-        let mesh = shellPreview?.euclid ?? KernelOps.shell(
-            mesh: source.euclidMesh(), thickness: shellThickness,
-            openFaces: shellSelectedFaces)
-        guard !mesh.polygons.isEmpty else {
+        // Reuse the live preview when current (it carries the OCCT brep for
+        // analytic bodies — C4); else compute fresh.
+        let after: Body
+        if var preview = shellPreview {
+            preview.meshRevision = 0 // assigned by the command
+            after = preview
+        } else if let computed = shelledBody(source: source, revision: 0) {
+            after = computed
+        } else {
             errorMessage = "The shell produced no geometry — try a thinner wall."
             cancelShell()
             return
         }
-        let after = Body(
-            id: source.id, name: source.name, transform: source.transform,
-            primitive: nil, euclidMesh: mesh, revision: 0)
         let replace = ReplaceBodyCommand(title: "Shell", before: source, after: after)
 
         // Parametric node only for a feature-owned body (same rule as blends).
@@ -2799,6 +3062,13 @@ final class EditorViewModel {
             case circular = "Circular"
         }
 
+        /// A construction axis chosen instead of a world axis. The manual's
+        /// own first stated reason to build one is "creating an axis for a
+        /// circular pattern" (spec §6.2), and unlike X/Y/Z it carries a
+        /// POSITION — so the pattern can spin about something other than the
+        /// world origin, which is all v1 could do.
+        var constructionAxisID: ConstructionAxisID?
+
         enum Axis: String, CaseIterable {
             case x = "X"
             case y = "Y"
@@ -2916,21 +3186,35 @@ final class EditorViewModel {
         }
     }
 
+    /// The rotation line a pattern should use: a chosen construction axis if
+    /// one is set and still exists, else the world axis through the origin.
+    ///
+    /// Falling back when the axis has been DELETED matters — the pattern bar
+    /// can outlive the axis it references, and silently spinning about the
+    /// origin is better than crashing or freezing the preview.
+    func patternAxisLine(_ state: PatternState) -> (direction: SIMD3<Double>, center: SIMD3<Double>) {
+        if let id = state.constructionAxisID,
+           let axis = session.document.axes.first(where: { $0.id == id }) {
+            return (axis.direction, axis.origin)
+        }
+        return (state.axis.direction, .zero)
+    }
+
     /// 3D instance transforms for the current parameters; the first is always
-    /// identity (the original). Circular patterns spin about the chosen world
-    /// axis through the origin in v1.
+    /// identity (the original).
     private func patternTransforms(_ state: PatternState) -> [Transform3D] {
+        let line = patternAxisLine(state)
         switch state.kind {
         case .linear:
             return PatternKit.linearTransforms(
-                direction: state.axis.direction,
+                direction: line.direction,
                 spacing: state.spacing,
                 count: max(1, state.count)
             )
         case .circular:
             return PatternKit.circularTransforms(
-                center: .zero,
-                axis: state.axis.direction,
+                center: line.center,
+                axis: line.direction,
                 count: max(1, state.count),
                 totalAngle: state.totalAngle * .pi / 180,
                 rotateInstances: true
@@ -3025,7 +3309,7 @@ final class EditorViewModel {
                 name: "Pattern",
                 kind: .pattern(
                     body: BodyRef(producer: owner.id, bodyID: bodyID),
-                    spec: Self.patternSpec(from: state)
+                    spec: patternSpec(from: state)
                 ),
                 outputBodyIDs: copyIDs
             )
@@ -3106,11 +3390,12 @@ final class EditorViewModel {
                 return
             }
             guard !selectedSketchEntityIDs.isEmpty, let sketch = activeSketch else { return }
-            session.perform(RemoveSketchEntitiesCommand(ids: selectedSketchEntityIDs, sketch: sketch))
-            selectedSketchEntityIDs.removeAll()
             // Phase D: deleting sketch entities changes referenced profiles —
-            // rebuild dependent features.
-            session.rebuildForSketchChange(sketch.id)
+            // the dependent-feature rebuild lands in the SAME undo step (S6).
+            session.performWithSketchRebuild(
+                RemoveSketchEntitiesCommand(ids: selectedSketchEntityIDs, sketch: sketch),
+                sketchID: sketch.id)
+            selectedSketchEntityIDs.removeAll()
             return
         }
         if let image = selectedImage {
@@ -3133,16 +3418,15 @@ final class EditorViewModel {
                 commands.append(DeleteBodiesCommand(ids: selection, document: session.document))
             }
             guard !commands.isEmpty else { return }
-            if commands.count == 1 {
-                session.perform(commands[0])
-            } else {
-                session.perform(CompositeCommand(title: "Delete", commands: commands))
-            }
+            // Delete + dependent-feature rebuild in ONE undo step (S6). One
+            // rebuild covers every touched sketch — the replay is whole-graph.
+            session.performWithSketchRebuild(
+                commands.count == 1
+                    ? commands[0]
+                    : CompositeCommand(title: "Delete", commands: commands),
+                sketchIDs: Set(touchedSketchIDs))
             selectedSketchEntityIDs.removeAll()
             selection.removeAll()
-            for id in touchedSketchIDs {
-                session.rebuildForSketchChange(id)
-            }
             cancelTool()
             mode = .idle
             return
@@ -3160,21 +3444,37 @@ final class EditorViewModel {
     }
 
     func undo() {
+        prepareForHistoryChange()
         session.undo()
         sanitizeAfterHistoryChange()
     }
 
     func redo() {
+        prepareForHistoryChange()
         session.redo()
         sanitizeAfterHistoryChange()
+    }
+
+    /// MUST run BEFORE any history mutation (undo/redo/rollback). An armed
+    /// rotate-axis tool has applied its preview to the document via
+    /// `session.preview` (outside the undo stack) and holds `before`
+    /// transforms captured against the CURRENT document. Restoring that
+    /// baseline now — while the document still matches it — cleanly reverts
+    /// the preview; restoring it AFTER the history change would silently
+    /// re-apply pre-change transforms the undo/rollback just removed
+    /// (2026-08-25 review, finding C3).
+    private func prepareForHistoryChange() {
+        if case .rotatingAroundAxis = mode { cancelRotateAxis() }
     }
 
     private func sanitizeAfterHistoryChange() {
         // Face/tool contexts reference geometry that may have changed.
         cancelTool()
-        // A blend/shell pick references geometry that may have changed.
+        // A blend/shell/offset/axis pick references geometry that may have changed.
         resetBlendState()
         resetShellState()
+        resetSketchOffsetState()
+        resetAxisState()
         axisEntryPart = nil
         scaleEntryActive = false
         // Pending sketch state may reference entities that no longer exist.
@@ -3229,9 +3529,12 @@ final class EditorViewModel {
                 mode = .idle
             }
         case .rotatingAroundAxis:
-            // The rotate baseline may reference undone bodies; drop the tool
-            // (cancel restores transforms for bodies that still exist).
-            cancelRotateAxis()
+            // Unreachable from undo/redo/rollback (prepareForHistoryChange
+            // cancelled the tool BEFORE the change). Defensive only: drop the
+            // state WITHOUT writing the baseline back — post-change it is
+            // stale, and re-applying it would corrupt the document (C3).
+            rotateAxisState = nil
+            mode = .idle
         case .translating:
             cancelTranslate()
         case .aligning:
@@ -3535,6 +3838,8 @@ final class EditorViewModel {
             handleBlendEdgeTap(ray: ray, kind: kind)
         case .pickingShellFaces:
             handleShellFaceTap(ray: ray)
+        case .pickingAxisReferences:
+            handleAxisReferenceTap(ray: ray)
         }
     }
 
@@ -4024,6 +4329,11 @@ final class EditorViewModel {
         mode = .idle
         let token = CancelToken()
         booleanCancelToken = token
+        // Snapshot the document generation: the CSG below runs detached, and
+        // the "Computing…" card blocks nothing, so the user can undo, delete
+        // or move either body meanwhile. Committing the stale result then
+        // would bake pre-edit transforms into the document (review, S3).
+        let dispatchedChangeCount = session.changeCount
 
         Task { [weak self] in
             let result = await Task.detached(priority: .userInitiated) { () -> Body? in
@@ -4051,12 +4361,27 @@ final class EditorViewModel {
                 }
                 return
             }
+            guard self.session.changeCount == dispatchedChangeCount else {
+                self.showNotice(
+                    "The \(kind.rawValue) was discarded — the model changed while it was computing."
+                )
+                return
+            }
+            var composed = result
+            // Compose the analytic solids too — the same decision feature
+            // replay makes (evalBoolean), so a live boolean and its later
+            // rebuild produce the same class of geometry instead of the live
+            // result silently degrading to mesh-only (review C4). On the
+            // MainActor, per BRepHandle's serialization caveat.
+            if let brep = OCCTKernel.composedBoolean(kind, target: target, tool: tool) {
+                composed.adoptBRep(brep)
+            }
             let boolean = BooleanCommand(
                 kind: kind,
                 targetBefore: target,
                 toolIndex: toolIndex,
                 toolBefore: tool,
-                result: result
+                result: composed
             )
             // Phase D (Task C2): record a `.boolean` feature node when BOTH the
             // target and tool are feature-produced, so replay can reconstruct
@@ -4993,9 +5318,9 @@ final class EditorViewModel {
             commands.append(ReplaceBodyCommand(title: title, before: entry.target, after: after))
         }
 
-        // Consumed sketches stay VISIBLE after the tool commits (they can be
-        // hidden manually from Items) — hiding them mid-flow read as the
-        // sketch vanishing whenever a body was made from it.
+        // Shapr3D parity (spec §11): sketches auto-hide once a tool consumes
+        // them into a body, in the same undo step.
+        commands.append(contentsOf: consumedSketchHideCommands(context))
         // Phase D: record the tool's feature node (extrude in tranche 1;
         // revolve / sweep / loft in tranche 2) with the resolved boolean intent,
         // but only for a SINGLE feature-owned target — the evaluators apply one
@@ -5043,6 +5368,7 @@ final class EditorViewModel {
             revision: preview.meshRevision
         )
         var commands: [DocumentCommand] = [AddBodyCommand(body: body, title: title)]
+        commands.append(contentsOf: consumedSketchHideCommands(context))
         // Phase D: a new stand-alone tool body becomes a `.newBody` history node
         // — extrude in tranche 1, or revolve / sweep / loft in tranche 2.
         if let node = toolFeatureNode(
@@ -5060,6 +5386,33 @@ final class EditorViewModel {
         mode = .selected(body.id)
         selection = [body.id]
         session.save()
+    }
+
+    /// Hide-the-consumed-sketch commands for a committing tool (Shapr3D
+    /// parity, spec §11): every sketch that fed the new body — the profile's
+    /// sketch, each loft section's, and any sweep-spine sketch — auto-hides
+    /// in the same undo step. Face pulls have no sketch, and already-hidden
+    /// sketches need no command.
+    private func consumedSketchHideCommands(_ context: ToolContext) -> [DocumentCommand] {
+        var ids: [SketchID] = []
+        if let id = context.sketchID { ids.append(id) }
+        for entry in context.loftProfiles where !ids.contains(entry.sketchID) {
+            ids.append(entry.sketchID)
+        }
+        if !context.sweepPathEntityIDs.isEmpty {
+            for sketch in session.document.sketches
+            where !ids.contains(sketch.id) && sketch.entities.contains(where: {
+                context.sweepPathEntityIDs.contains($0.id)
+            }) {
+                ids.append(sketch.id)
+            }
+        }
+        return ids.compactMap { id in
+            guard let sketch = session.document.sketches.first(where: { $0.id == id }),
+                  !sketch.isHidden
+            else { return nil }
+            return SetItemVisibilityCommand(item: .sketch(id), isHidden: true)
+        }
     }
 
     func cancelTool() {
@@ -5111,11 +5464,22 @@ final class EditorViewModel {
         let world = ray.point(at: t)
         let local = plane.toLocal(SIMD3(Double(world.x), Double(world.y), Double(world.z)))
 
-        // Nearest line entity within a forgiving tap tolerance; taps that miss
-        // every line keep the picking mode armed. Construction lines are
-        // preferred axis candidates (spec §3.3): any construction hit beats
-        // any regular hit; ties within a class break by distance.
         let tolerance = SnapEngine.pointTolerance * 2
+
+        // A construction axis lying in the sketch plane is a first-class
+        // revolve axis (spec §6.2 — "creating an axis for a revolved body" is
+        // one of the manual's own stated reasons to make one). Checked before
+        // sketch lines because an axis is the more deliberate choice: you had
+        // to build it.
+        if let axis = nearestUsableRevolveAxis(to: world, plane: plane, tolerance: tolerance) {
+            applyRevolveAxis(axis, context: context)
+            return
+        }
+
+        // Otherwise the nearest line entity within a forgiving tap tolerance;
+        // taps that miss everything keep the picking mode armed. Construction
+        // lines are preferred axis candidates (spec §3.3): any construction hit
+        // beats any regular hit; ties within a class break by distance.
         var best: (a: SIMD2<Double>, b: SIMD2<Double>, distance: Double, isConstruction: Bool)?
         for entity in sketch.entities {
             guard case .line(let id, let a, let b) = entity else { continue }
@@ -5134,12 +5498,15 @@ final class EditorViewModel {
             }
         }
         guard let line = best else { return }
+        applyRevolveAxis(
+            RevolveAxis(point: line.a, direction: line.b - line.a), context: context)
+    }
 
+    /// Commit a chosen revolve axis into the live tool context, or report the
+    /// one failure Shapr3D also reports.
+    private func applyRevolveAxis(_ axis: RevolveAxis, context: ToolContext) {
         var candidate = context
-        candidate.kind = .revolve(
-            axis: RevolveAxis(point: line.a, direction: line.b - line.a),
-            angle: 360
-        )
+        candidate.kind = .revolve(axis: axis, angle: 360)
         rebuildToolPreview(&candidate)
         guard candidate.preview != nil else {
             // Profile crosses (or collapses onto) the axis — Shapr3D errors too.
@@ -5149,6 +5516,36 @@ final class EditorViewModel {
         }
         toolContext = candidate
         mode = .extruding
+    }
+
+    /// The nearest visible construction axis to a tapped world point that can
+    /// actually serve as a revolve axis for `plane`.
+    ///
+    /// "Can serve" means it LIES IN the plane: revolving a profile about an
+    /// axis skew to its own plane is not defined, so an axis that merely
+    /// passes nearby is rejected rather than silently projected onto the plane
+    /// (which would revolve about a line the user never drew).
+    private func nearestUsableRevolveAxis(
+        to world: SIMD3<Float>, plane: SketchPlane, tolerance: Double
+    ) -> RevolveAxis? {
+        let p = SIMD3<Double>(Double(world.x), Double(world.y), Double(world.z))
+        var best: (axis: RevolveAxis, distance: Double)?
+        for axis in session.document.axes where !axis.isHidden {
+            let distance = axis.distance(to: p)
+            guard distance <= tolerance else { continue }
+            let (start, end) = axis.endpoints
+            // Both ends on the plane ⇒ the whole (infinite) line is on it.
+            guard abs(simd_dot(start - plane.origin, plane.normal)) <= tolerance,
+                  abs(simd_dot(end - plane.origin, plane.normal)) <= tolerance
+            else { continue }
+            let a = plane.toLocal(start)
+            let b = plane.toLocal(end)
+            guard simd_length(b - a) > 1e-9 else { continue }
+            if best == nil || distance < best!.distance {
+                best = (RevolveAxis(point: a, direction: b - a), distance)
+            }
+        }
+        return best?.axis
     }
 
     static func distanceToSegment(
@@ -5931,11 +6328,18 @@ final class EditorViewModel {
         }
     }
 
-    /// Tap while sketching: Trim cuts the span under the tap; other tools
-    /// toggle entity selection, or finalize/clear pending state on empty space.
+    /// Tap while sketching: Trim cuts the span under the tap; Offset picks the
+    /// entities to offset; other tools toggle entity selection, or finalize/
+    /// clear pending state on empty space.
     private func handleSketchTap(ray: Ray, tool: SketchTool?) {
         if tool == .trim {
             performTrim(ray: ray)
+            return
+        }
+        if tool == .offset {
+            // A tap on empty space is not "clear the pick" here — the picks
+            // are the tool's whole state and the bar is the way out.
+            handleSketchOffsetTap(ray: ray)
             return
         }
         if tool == .text {
@@ -6029,11 +6433,342 @@ final class EditorViewModel {
               let index = sketch.entities.firstIndex(where: { $0.id == hit.entity.id })
         else { return }
         selectedSketchEntityIDs.remove(hit.entity.id)
-        session.perform(TrimCommand(
+        // Phase D: trimming edits sketch geometry — the dependent-feature
+        // rebuild lands in the SAME undo step (S6).
+        session.performWithSketchRebuild(TrimCommand(
             sketchID: sketchID, index: index, removed: hit.entity, fragments: fragments
-        ))
-        // Phase D: trimming edits sketch geometry — rebuild dependent features.
-        session.rebuildForSketchChange(sketchID)
+        ), sketchID: sketchID)
+    }
+
+    // MARK: - Construction axes (spec §6.2)
+
+    /// One reference the Add Axis tool has picked, already in WORLD space.
+    ///
+    /// The axis construction is *derived* from the accumulated picks rather
+    /// than chosen from a type menu first. That is the manual's own adaptive
+    /// route — "pre-select an element that will be used to define the axis,
+    /// then select Add Axis" — and it collapses four separate tools into one
+    /// gesture: tap an edge, a round face, or one/two flat faces.
+    nonisolated enum AxisPick: Equatable {
+        case edge(start: SIMD3<Double>, end: SIMD3<Double>)
+        case planarFace(origin: SIMD3<Double>, normal: SIMD3<Double>)
+        case cylindrical(origin: SIMD3<Double>, direction: SIMD3<Double>, length: Double)
+    }
+
+    private(set) var axisPicks: [AxisPick] = []
+
+    /// Display extent of the axis being defined — the spec's Length parameter.
+    /// Never affects the math, only how long the drawn line is.
+    var axisLength: Double = 100 {
+        didSet { if oldValue != axisLength { recomputeAxisPreview() } }
+    }
+
+    private(set) var pendingAxisPreview: ConstructionAxis?
+
+    /// Names the construction the current picks resolve to, for the bar.
+    var axisConstructionLabel: String {
+        switch axisPicks.count {
+        case 0: return "Tap an edge or face"
+        case 1:
+            switch axisPicks[0] {
+            case .edge: return "Along Edge"
+            case .cylindrical: return "Axis of Cylinder/Cone"
+            case .planarFace: return "Perpendicular to Face"
+            }
+        default:
+            if case .planarFace = axisPicks[0], case .planarFace = axisPicks[1] {
+                return "Through 2 Planes"
+            }
+            return "Tap an edge or face"
+        }
+    }
+
+    var canCommitAxis: Bool { pendingAxisPreview != nil }
+
+    func beginAxisTool() {
+        cancelTransientPicks()
+        axisPicks = []
+        pendingAxisPreview = nil
+        axisLength = Self.defaultAxisLength(for: session.document)
+        mode = .pickingAxisReferences
+    }
+
+    func cancelAxisTool() {
+        resetAxisState()
+        if case .pickingAxisReferences = mode { mode = .idle }
+    }
+
+    /// State only — never writes `selection` (gotcha 7).
+    func resetAxisState() {
+        axisPicks = []
+        pendingAxisPreview = nil
+    }
+
+    /// Scale the default display length to the model so the axis is visible on
+    /// a 3 mm part and not absurd on a 3 m one.
+    private static func defaultAxisLength(for document: DesignDocument) -> Double {
+        var extent = 0.0
+        for body in document.bodies {
+            extent = max(extent, Self.worldBounds(of: body).size.length)
+        }
+        return extent > 1e-6 ? extent * 1.5 : 100
+    }
+
+    /// Tap while Add Axis is armed: pick an edge or a face off the tapped body.
+    private func handleAxisReferenceTap(ray: Ray) {
+        guard let hit = HitTester.pickBody(ray: ray, in: scene),
+              let body = session.document.body(with: hit.bodyID)
+        else { return }
+        let matrix = body.transform.matrixFloat
+        func world(_ p: SIMD3<Double>) -> SIMD3<Double> {
+            let w = matrix * SIMD4(SIMD3<Float>(p), 1)
+            return SIMD3(Double(w.x), Double(w.y), Double(w.z))
+        }
+        func worldDirection(_ d: SIMD3<Double>) -> SIMD3<Double> {
+            // A direction is not a point: translation must not apply.
+            let w = matrix * SIMD4(SIMD3<Float>(d), 0)
+            return SIMD3(Double(w.x), Double(w.y), Double(w.z))
+        }
+
+        // An edge near the tap wins over the face behind it: "Along Edge" is
+        // only reachable by aiming at an edge, whereas a face can always be hit
+        // in its middle.
+        if let edge = nearestStraightEdge(on: body, worldHit: hit.worldPoint) {
+            appendAxisPick(.edge(
+                start: world(SIMD3<Double>(edge.start)),
+                end: world(SIMD3<Double>(edge.end))))
+            return
+        }
+
+        // A round face gives its own fitted axis, so it wins outright.
+        if let cylinder = FaceTopology.cylindricalFace(
+            in: body.render, seedTriangle: hit.triangleIndex
+        ) {
+            appendAxisPick(.cylindrical(
+                origin: world(cylinder.axisPoint),
+                direction: worldDirection(cylinder.axisDir),
+                length: max(cylinder.height, 1e-6)
+            ))
+            return
+        }
+        if let face = FaceTopology.planarFace(
+            in: body.render, seedTriangle: hit.triangleIndex
+        ) {
+            appendAxisPick(.planarFace(
+                origin: world(face.origin),
+                normal: worldDirection(SIMD3<Double>(face.normal))
+            ))
+            return
+        }
+        errorMessage = "Tap a flat face, a round face, or an edge to define an axis."
+    }
+
+    /// The straight edge near a tap on `body`, in the body's LOCAL space, or
+    /// nil when the tap is out in the middle of a face.
+    ///
+    /// Two filters matter here, and they are the whole reason this is not just
+    /// `edges.min(by: distance)` the way Chamfer/Fillet does it:
+    ///
+    /// * **Proximity.** Blend only ever wants an edge, so it takes the nearest
+    ///   one unconditionally. This tool has to choose between the edge and the
+    ///   face behind it, so an edge has to be genuinely near the tap — within a
+    ///   band scaled to the body, so the same gesture works at any model size.
+    /// * **Straightness.** A tessellated rim is dozens of short segments, and
+    ///   one segment of a circle is a meaningless axis. `smoothChain` is the
+    ///   honest test: a straight edge is its own chain, a curved one is not.
+    private func nearestStraightEdge(
+        on body: Body, worldHit: SIMD3<Float>
+    ) -> SelectableEdge? {
+        let inverse = simd_inverse(body.transform.matrixFloat)
+        let local4 = inverse * SIMD4(worldHit, 1)
+        let localPoint = SIMD3<Float>(local4.x, local4.y, local4.z)
+
+        let aabb = body.render.localAABB
+        let diagonal = Double(simd_length(aabb.max - aabb.min))
+        guard diagonal > 1e-9 else { return nil }
+        let tolerance = Float(diagonal * Self.axisEdgePickFraction)
+
+        let edges = EdgeTopology.selectableEdges(from: body.render)
+        guard let nearest = edges.min(by: {
+            Self.pointSegmentDistance(localPoint, $0.start, $0.end)
+                < Self.pointSegmentDistance(localPoint, $1.start, $1.end)
+        }) else { return nil }
+        guard Self.pointSegmentDistance(localPoint, nearest.start, nearest.end) <= tolerance
+        else { return nil }
+        guard EdgeTopology.smoothChain(containing: nearest, in: edges).count == 1
+        else { return nil }
+        return nearest
+    }
+
+    /// How close to an edge a tap must land to mean "that edge", as a fraction
+    /// of the body's diagonal — proportional so it behaves the same on a 3 mm
+    /// part and a 3 m one.
+    private static let axisEdgePickFraction = 0.04
+
+    /// Picks are capped at two: every construction the tool derives needs one
+    /// reference or two, so a third tap starts over rather than silently
+    /// ignoring the user.
+    private func appendAxisPick(_ pick: AxisPick) {
+        if axisPicks.contains(pick) {
+            axisPicks.removeAll { $0 == pick }
+        } else if axisPicks.count >= 2 {
+            axisPicks = [pick]
+        } else {
+            axisPicks.append(pick)
+        }
+        recomputeAxisPreview()
+    }
+
+    private func recomputeAxisPreview() {
+        pendingAxisPreview = Self.deriveAxis(from: axisPicks, length: axisLength)
+    }
+
+    /// Pure derivation, so it is unit-testable without an `EditorViewModel`
+    /// (gotcha 1: an in-process `ModelContainer` crashes XCTest).
+    nonisolated static func deriveAxis(
+        from picks: [AxisPick], length: Double
+    ) -> ConstructionAxis? {
+        func sized(_ axis: ConstructionAxis?) -> ConstructionAxis? {
+            guard var axis else { return nil }
+            axis.length = length
+            return axis
+        }
+        switch picks.count {
+        case 1:
+            switch picks[0] {
+            case let .edge(start, end):
+                return sized(ConstructionAxisKit.alongEdge(start: start, end: end))
+            case let .planarFace(origin, normal):
+                return sized(ConstructionAxisKit.perpendicular(toFaceNormal: normal, at: origin))
+            case let .cylindrical(origin, direction, _):
+                return sized(ConstructionAxis(origin: origin, direction: direction))
+            }
+        case 2:
+            guard case let .planarFace(originA, normalA) = picks[0],
+                  case let .planarFace(originB, normalB) = picks[1]
+            else { return nil }
+            return sized(ConstructionAxisKit.intersection(
+                planeAOrigin: originA, planeANormal: normalA,
+                planeBOrigin: originB, planeBNormal: normalB
+            ))
+        default:
+            return nil
+        }
+    }
+
+    func commitAxis() {
+        guard case .pickingAxisReferences = mode, var axis = pendingAxisPreview else { return }
+        axis.name = "Axis \(session.document.axes.count + 1)"
+        session.perform(AddConstructionAxisCommand(axis: axis))
+        resetAxisState()
+        mode = .idle
+    }
+
+    /// Dashed world segments for a drawn axis — dashed so a construction axis
+    /// never reads as model geometry.
+    nonisolated static func axisSegments(_ axis: ConstructionAxis) -> [SIMD3<Float>] {
+        let (start, end) = axis.endpoints
+        let dashes = 24
+        var out: [SIMD3<Float>] = []
+        for i in stride(from: 0, to: dashes, by: 2) {
+            let t0 = Double(i) / Double(dashes)
+            let t1 = Double(i + 1) / Double(dashes)
+            out.append(SIMD3<Float>(simd_mix(start, end, SIMD3(repeating: t0))))
+            out.append(SIMD3<Float>(simd_mix(start, end, SIMD3(repeating: t1))))
+        }
+        return out
+    }
+
+    // MARK: - Offset Edge (sketch, spec §1.9)
+
+    /// Single vs Chain, mirroring the manual's Offset Edge **Type** menu.
+    /// Changing it re-expands the existing picks rather than clearing them, so
+    /// flipping the type after picking does the obvious thing.
+    var sketchOffsetType: SketchOffsetType = .single {
+        didSet { if oldValue != sketchOffsetType { recomputeSketchOffsetPreview() } }
+    }
+
+    /// Signed offset distance. Negative offsets inward on a closed profile;
+    /// on an open chain the sign picks the side (see `SketchOffset`).
+    var sketchOffsetDistance: Double = 1 {
+        didSet { if oldValue != sketchOffsetDistance { recomputeSketchOffsetPreview() } }
+    }
+
+    /// The entities the user tapped. Expanded through `sketchOffsetType` at
+    /// preview time — storing the SEEDS (not the expansion) is what lets the
+    /// type flip re-derive without a re-pick.
+    private(set) var sketchOffsetSeedIDs: Set<UUID> = []
+
+    /// Live result of offsetting the current selection; rendered in place of
+    /// nothing (it is new geometry, so it never hides the source).
+    private(set) var sketchOffsetPreview: [SketchEntity] = []
+
+    /// Entities the current picks resolve to, in sketch order.
+    var sketchOffsetSourceEntities: [SketchEntity] {
+        guard let sketch = activeSketch else { return [] }
+        return SketchOffset.entitiesToOffset(
+            seedIDs: sketchOffsetSeedIDs, type: sketchOffsetType, in: sketch.entities
+        )
+    }
+
+    /// Apply is live only once a pick actually produces geometry — a distance
+    /// that collapses the source (a rect shrunk past its midlines) yields an
+    /// empty preview, and committing it would be a silent no-op.
+    var canCommitSketchOffset: Bool { !sketchOffsetPreview.isEmpty }
+
+    /// Tap while the Offset tool is armed: toggle the entity under the ray.
+    @discardableResult
+    func handleSketchOffsetTap(ray: Ray) -> Bool {
+        guard case .sketching(_, .offset) = mode,
+              let sketch = activeSketch,
+              let raw = rawSketchPoint(from: ray),
+              let hit = SketchHitTester.nearestEntity(
+                  to: raw, in: sketch.entities, tolerance: entityPickTolerance
+              )
+        else { return false }
+        if sketchOffsetSeedIDs.contains(hit.entity.id) {
+            sketchOffsetSeedIDs.remove(hit.entity.id)
+        } else {
+            sketchOffsetSeedIDs.insert(hit.entity.id)
+        }
+        recomputeSketchOffsetPreview()
+        return true
+    }
+
+    private func recomputeSketchOffsetPreview() {
+        let sources = sketchOffsetSourceEntities
+        guard !sources.isEmpty, abs(sketchOffsetDistance) > 1e-9 else {
+            sketchOffsetPreview = []
+            return
+        }
+        sketchOffsetPreview = KernelOps.offsetSketchEntities(sources, by: sketchOffsetDistance)
+    }
+
+    /// Commit the previewed offset as new sketch entities.
+    func commitSketchOffset() {
+        guard case .sketching(let sketchID, .offset) = mode,
+              canCommitSketchOffset
+        else { return }
+        // Offsetting ADDS geometry, so downstream profiles keep resolving; the
+        // sketch rebuild still runs so a dependent feature sees the new loop.
+        session.performWithSketchRebuild(AddSketchEntitiesCommand(
+            sketchID: sketchID,
+            entities: sketchOffsetPreview,
+            title: "Offset Edge"
+        ), sketchID: sketchID)
+        resetSketchOffsetState()
+    }
+
+    func cancelSketchOffset() {
+        resetSketchOffsetState()
+        deselectSketchTool()
+    }
+
+    /// State only — never touches `selection` (gotcha 7: internal cleanup
+    /// paths that write to `selection` make Delete delete the wrong thing).
+    func resetSketchOffsetState() {
+        sketchOffsetSeedIDs = []
+        sketchOffsetPreview = []
     }
 
     /// A drag landing on an entity edits it instead of drawing: control
@@ -6339,6 +7074,10 @@ final class EditorViewModel {
         guard case .sketching(let id, _) = mode else { return }
         commitPendingArc()
         clearChain()
+        // Offset picks belong to the tool, not the sketch: dropping the tool
+        // drops them, so re-arming starts clean rather than resuming a pick
+        // the user has visually lost track of.
+        resetSketchOffsetState()
         mode = .sketching(id, tool: nil)
     }
 
@@ -6404,6 +7143,9 @@ final class EditorViewModel {
             let created = Sketch(name: session.document.uniqueSketchName(), plane: plane)
             session.preview { $0.sketches.append(created) }
             sketch = created
+            // Eligible for empty-sketch cleanup on exit (see
+            // `removeSketchIfEmpty`); re-opened sketches never are.
+            provisionalSketch = (created.id, session.undoStack.undoCommands.count)
         }
         mode = .sketching(sketch.id, tool: tool)
         // Keep the camera where the user put it — Shapr3D sketches in the
@@ -6451,9 +7193,39 @@ final class EditorViewModel {
             // boundary still propagates. No-op when nothing references it.
             session.rebuildForSketchChange(sketchID)
             mode = .idle
+            removeSketchIfEmpty(sketchID)
         }
         session.save()
     }
+
+    /// Sketch rows materialize transiently at entry (`beginSketch` uses
+    /// `session.preview`, not a command — the entity commands that follow are
+    /// what make the sketch durable). A sketch entered and left without
+    /// content would therefore linger as an invisible Items row that no undo
+    /// can ever remove (2026-08-25 review, S3): drop it the same transient
+    /// way on exit. Only a sketch CREATED at this entry is eligible, and only
+    /// when no command has been pushed or undone since — any undo/redo entry
+    /// might reference the sketch, and deleting the row out from under it
+    /// would break the history.
+    private func removeSketchIfEmpty(_ id: SketchID) {
+        defer { provisionalSketch = nil }
+        guard let provisional = provisionalSketch,
+              provisional.id == id,
+              session.undoStack.undoCommands.count == provisional.undoDepth,
+              !session.undoStack.canRedo,
+              let sketch = session.document.sketches.first(where: { $0.id == id }),
+              sketch.entities.isEmpty,
+              sketch.constraints.isEmpty,
+              sketch.dimensions.isEmpty
+        else { return }
+        session.preview { doc in
+            doc.sketches.removeAll { $0.id == id }
+        }
+    }
+
+    /// Set by `beginSketch` when it creates a brand-new sketch row: the id
+    /// plus the undo depth at creation, consumed by `removeSketchIfEmpty`.
+    private var provisionalSketch: (id: SketchID, undoDepth: Int)?
 
     /// Ray → unsnapped plane-local point, while sketching.
     private func rawSketchPoint(from ray: Ray) -> SIMD2<Double>? {
@@ -6873,7 +7645,7 @@ final class EditorViewModel {
                 id: UUID(), center: a, radius: radius,
                 sides: max(3, polygonSides), rotation: atan2(delta.y, delta.x)
             )
-        case .trim, .text, .project:
+        case .trim, .text, .project, .offset:
             return nil // These tools never rubber-band draw.
         }
     }
@@ -7194,9 +7966,8 @@ final class EditorViewModel {
         guard let sketch = session.document.sketches.first(where: { $0.id == sketchID }),
               sketch.plane != plane
         else { return }
-        session.perform(ChangeSketchPlaneCommand(
-            sketchID: sketchID, before: sketch.plane, after: plane))
-        session.rebuildForSketchChange(sketchID)
+        session.performWithSketchRebuild(ChangeSketchPlaneCommand(
+            sketchID: sketchID, before: sketch.plane, after: plane), sketchID: sketchID)
         session.save()
     }
 
@@ -7273,12 +8044,11 @@ final class EditorViewModel {
             ))
         }
         let title = Self.constraintTitle(kind)
-        session.perform(commands.count == 1
+        // Phase D: a constraint can re-solve entity positions — the
+        // dependent-feature rebuild lands in the SAME undo step (S6).
+        session.performWithSketchRebuild(commands.count == 1
             ? commands[0]
-            : CompositeCommand(title: title, commands: commands))
-        // Phase D: a constraint can re-solve entity positions — rebuild
-        // dependent features.
-        session.rebuildForSketchChange(sketchID)
+            : CompositeCommand(title: title, commands: commands), sketchID: sketchID)
         session.save()
     }
 
@@ -7915,12 +8685,11 @@ final class EditorViewModel {
                 sketchID: sketchID, before: before, after: after
             ))
         }
-        session.perform(commands.count == 1
+        // Phase D: a dimension re-solves entity positions — the dependent-
+        // feature rebuild lands in the SAME undo step (S6).
+        session.performWithSketchRebuild(commands.count == 1
             ? commands[0]
-            : CompositeCommand(title: "Dimension", commands: commands))
-        // Phase D: a dimension re-solves entity positions — rebuild dependent
-        // features.
-        session.rebuildForSketchChange(sketchID)
+            : CompositeCommand(title: "Dimension", commands: commands), sketchID: sketchID)
         session.save()
     }
 
@@ -8452,11 +9221,14 @@ final class EditorViewModel {
         switch item {
         case .body(let id):
             if toolContext?.sourceBody == id { cancelTool() }
-            // Transient modes may reference the body (rotate preview baseline,
-            // pattern source, split target) — revert them before deleting.
-            if rotateAxisState != nil || patternState?.bodyID == id {
-                cancelTransientPicks()
-            }
+            // Any transient pick may reference the body (rotate baseline,
+            // pattern source, blend/shell preview, boolean/split target) —
+            // cancel them ALL before deleting. The old conditional cancel
+            // missed blend/shell and left a ghost preview of the deleted
+            // body with the mode stuck (2026-08-25 review, S3); every
+            // cancel is a no-op outside its own mode, so unconditional is
+            // safe.
+            cancelTransientPicks()
             session.perform(DeleteBodiesCommand(ids: [id], document: session.document))
             selection.remove(id)
             switch mode {
@@ -8484,6 +9256,40 @@ final class EditorViewModel {
     }
 
     /// "Zoom to": fit the camera to the item's world AABB.
+    // MARK: Construction-axis item actions (spec §6.2)
+    //
+    // Axes stay OUT of `DocumentItemRef` on purpose, for the reason its own
+    // comment gives about images: adding a case there ripples through every
+    // exhaustive switch over it. Dedicated methods, like the image ones.
+
+    func setAxisHidden(_ id: ConstructionAxisID, hidden: Bool) {
+        session.perform(SetAxisHiddenCommand(id: id, hidden: hidden))
+    }
+
+    func renameAxis(_ id: ConstructionAxisID, to newName: String) {
+        let trimmed = newName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty,
+              let command = RenameAxisCommand(id: id, to: trimmed, document: session.document),
+              command.before != trimmed
+        else { return }
+        session.perform(command)
+    }
+
+    func deleteAxis(_ id: ConstructionAxisID) {
+        guard let command = DeleteAxisCommand(id: id, document: session.document) else { return }
+        session.perform(command)
+    }
+
+    func zoomToAxis(_ id: ConstructionAxisID) {
+        guard let axis = session.document.axes.first(where: { $0.id == id }) else { return }
+        let (start, end) = axis.endpoints
+        let lo = simd_min(start, end), hi = simd_max(start, end)
+        cameraControl?.fitTo(bounds: (
+            SIMD3(Float(lo.x), Float(lo.y), Float(lo.z)),
+            SIMD3(Float(hi.x), Float(hi.y), Float(hi.z))
+        ))
+    }
+
     func zoomToItem(_ item: DocumentItemRef) {
         guard let bounds = itemBounds(item) else { return }
         cameraControl?.fitTo(bounds: bounds)
@@ -8532,8 +9338,11 @@ final class EditorViewModel {
     ].joined()) ?? Data()
 
     /// Debug hook (OS3D_DEBUG_SEED): seed and select a box so automated
-    /// screenshots can exercise selection/gizmo states.
+    /// screenshots can exercise selection/gizmo states. Compiled out of
+    /// Release — the seed paths and their assets must not ship (2026-08-25
+    /// review / readiness audit §5).
     func debugSeedIfRequested() {
+        #if DEBUG
         // OS3D_DEBUG_SEED_IMAGE (plan §B10 UI tests): seed a reference image
         // on the ground plane so the insert flow is testable without the
         // Photos/Files pickers. Left unselected — tests exercise tap-select.
@@ -8657,6 +9466,7 @@ final class EditorViewModel {
         session.perform(AddBodyCommand(body: body))
         selection = [body.id]
         mode = .editingPrimitive(body.id)
+        #endif
     }
 
     // MARK: - Feature graph recording (Phase D, Task C2)
@@ -8803,10 +9613,15 @@ final class EditorViewModel {
     /// RADIANS (the state carries degrees); `rotateInstances` matches the live
     /// circular transform call (always true). Used both when recording a pattern
     /// commit and — via the panel edit API — when rebuilding a spec field-by-field.
-    private static func patternSpec(from state: PatternState) -> PatternSpec {
-        PatternSpec(
+    private func patternSpec(from state: PatternState) -> PatternSpec {
+        // Resolve the construction axis HERE rather than storing its id: the
+        // spec is replayed by the feature graph, which has no view model, and
+        // baking the line keeps a rebuild working after the axis is deleted.
+        let line = patternAxisLine(state)
+        return PatternSpec(
             kind: state.kind == .linear ? .linear : .circular,
-            axis: state.axis.direction,
+            axis: line.direction,
+            center: line.center,
             count: state.count,
             spacing: state.spacing,
             totalAngle: state.totalAngle * .pi / 180,
@@ -8954,6 +9769,7 @@ final class EditorViewModel {
         }
         let variable = Variable(name: name, expression: "0", value: 0)
         session.perform(AddVariableCommand(variable: variable))
+        prepareForHistoryChange()
         session.variablesDidChange()
         session.save()
     }
@@ -8969,11 +9785,22 @@ final class EditorViewModel {
             errorMessage = "\"\(name)\" isn't a valid variable name."
             return
         }
+        // Uniqueness was unchecked: renaming `b` onto an existing `a` was
+        // accepted, `b` then resolved to 0 as a duplicate, and every formula
+        // that said `b` silently started reading `a`'s value instead
+        // (2026-08-25 review round 4).
+        guard !session.document.variables.contains(where: {
+            $0.id != id && $0.name.caseInsensitiveCompare(trimmedName) == .orderedSame
+        }) else {
+            errorMessage = "A variable named \"\(trimmedName)\" already exists."
+            return
+        }
         guard before.name != trimmedName || before.expression != expression else { return }
         var after = before
         after.name = trimmedName
         after.expression = expression
         session.perform(EditVariableCommand(before: before, after: after))
+        prepareForHistoryChange()
         session.variablesDidChange()
         session.save()
     }
@@ -8984,12 +9811,18 @@ final class EditorViewModel {
         guard let index = session.document.variables.firstIndex(where: { $0.id == id }) else { return }
         let variable = session.document.variables[index]
         session.perform(RemoveVariableCommand(index: index, variable: variable))
+        prepareForHistoryChange()
         session.variablesDidChange()
         session.save()
     }
 
     /// Whether the History panel is shown beside the Items panel.
     var showHistoryPanel = false
+
+    /// Hotkey / Command Search catalog (spec §8.4). Mutable because it tracks
+    /// most-recently-used commands; `CommandShortcutsView` registers the
+    /// chords and `runCommand(_:)` (CommandDispatch.swift) performs them.
+    var commandRegistry = CommandRegistry()
 
     /// The ordered history rows, derived from the graph + last eval errors.
     var historyRows: [FeatureRow] {
@@ -9023,6 +9856,7 @@ final class EditorViewModel {
     /// bodies disappear, so clean up selection/mode the same way undo/redo do.
     func rollbackToFeature(_ id: FeatureID) {
         guard let idx = session.document.features.index(of: id) else { return }
+        prepareForHistoryChange()
         session.setRollback(idx + 1)
         sanitizeAfterHistoryChange()
         session.save()
@@ -9032,6 +9866,7 @@ final class EditorViewModel {
     /// (all nodes active). Newly restored bodies don't invalidate selection,
     /// but sanitize anyway for symmetry/safety.
     func clearRollback() {
+        prepareForHistoryChange()
         session.setRollback(nil)
         sanitizeAfterHistoryChange()
         session.save()
@@ -9068,20 +9903,29 @@ final class EditorViewModel {
 
     /// Delete a history node and rebuild everything downstream in one undo step.
     func deleteFeature(_ id: FeatureID) {
+        prepareForHistoryChange()
         session.deleteFeature(id)
-        selection = selection.filter { session.document.body(with: $0) != nil }
+        // The deleted node's bodies are gone: a blend/shell pick or tool
+        // context still holding one would keep drawing a ghost preview in a
+        // stuck mode — the Items-panel bug, reachable from History too
+        // (2026-08-25 review round 2).
+        sanitizeAfterHistoryChange()
         session.save()
     }
 
     /// Suppress / un-suppress a history node and rebuild downstream.
     func setFeatureSuppressed(_ id: FeatureID, _ value: Bool) {
+        prepareForHistoryChange()
         session.setSuppressed(id, value)
+        sanitizeAfterHistoryChange()
         session.save()
     }
 
     /// Drag-reorder a history node to a new position and rebuild downstream.
     func moveFeature(_ id: FeatureID, to newIndex: Int) {
+        prepareForHistoryChange()
         session.moveFeature(id, to: newIndex)
+        sanitizeAfterHistoryChange()
         session.save()
     }
 
@@ -9108,6 +9952,7 @@ final class EditorViewModel {
         guard let node = session.document.features.node(id),
               let after = Self.kind(node.kind, replacingScalar: value)
         else { return }
+        prepareForHistoryChange()
         session.editFeature(id, to: after)
         session.save()
     }
@@ -9159,6 +10004,7 @@ final class EditorViewModel {
         }
         let formula = ExpressionEvaluator.identifiers(in: text).isEmpty ? nil : text
         guard let after = Self.kind(node.kind, replacingExpr: Expr(value: value, formula: formula)) else { return }
+        prepareForHistoryChange()
         session.editFeature(id, to: after)
         session.save()
     }
@@ -9181,6 +10027,7 @@ final class EditorViewModel {
         let clamped = max(1, count)
         guard clamped != spec.count else { return }
         spec.count = clamped
+        prepareForHistoryChange()
         session.editPatternFeature(id, spec: spec)
         session.save()
     }
@@ -9191,6 +10038,7 @@ final class EditorViewModel {
         guard var spec = patternSpec(of: id) else { return }
         guard v != spec.spacing else { return }
         spec.spacing = v
+        prepareForHistoryChange()
         session.editPatternFeature(id, spec: spec)
         session.save()
     }
@@ -9203,6 +10051,7 @@ final class EditorViewModel {
         let radians: Double = deg * Double.pi / 180
         guard radians != spec.totalAngle else { return }
         spec.totalAngle = radians
+        prepareForHistoryChange()
         session.editPatternFeature(id, spec: spec)
         session.save()
     }

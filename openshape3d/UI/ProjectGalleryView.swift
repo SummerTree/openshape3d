@@ -18,6 +18,12 @@ struct ProjectGalleryView: View {
     @State private var showArchiveImporter = false
     @State private var importErrorMessage: String?
 
+    /// Select mode (Photos-style): card taps toggle membership instead of
+    /// opening, and the toolbar offers a confirmed multi-delete.
+    @State private var isSelecting = false
+    @State private var selectedProjectIDs: Set<PersistentIdentifier> = []
+    @State private var confirmingMultiDelete = false
+
     private let columns = [GridItem(.adaptive(minimum: 220, maximum: 300), spacing: 20)]
 
     var body: some View {
@@ -36,26 +42,35 @@ struct ProjectGalleryView: View {
                     ScrollView {
                         LazyVGrid(columns: columns, spacing: 20) {
                             ForEach(projects) { project in
-                                NavigationLink(value: project.persistentModelID) {
-                                    ProjectCard(project: project)
-                                }
-                                .buttonStyle(.plain)
-                                .contextMenu {
+                                if isSelecting {
                                     Button {
-                                        renameText = project.name
-                                        renamingProject = project
+                                        toggleSelection(project)
                                     } label: {
-                                        Label("Rename", systemImage: "pencil")
+                                        selectableCard(project)
                                     }
-                                    Button {
-                                        duplicate(project)
-                                    } label: {
-                                        Label("Duplicate", systemImage: "plus.square.on.square")
+                                    .buttonStyle(.plain)
+                                } else {
+                                    NavigationLink(value: project.persistentModelID) {
+                                        ProjectCard(project: project)
                                     }
-                                    Button(role: .destructive) {
-                                        modelContext.delete(project)
-                                    } label: {
-                                        Label("Delete", systemImage: "trash")
+                                    .buttonStyle(.plain)
+                                    .contextMenu {
+                                        Button {
+                                            renameText = project.name
+                                            renamingProject = project
+                                        } label: {
+                                            Label("Rename", systemImage: "pencil")
+                                        }
+                                        Button {
+                                            duplicate(project)
+                                        } label: {
+                                            Label("Duplicate", systemImage: "plus.square.on.square")
+                                        }
+                                        Button(role: .destructive) {
+                                            modelContext.delete(project)
+                                        } label: {
+                                            Label("Delete", systemImage: "trash")
+                                        }
                                     }
                                 }
                             }
@@ -66,19 +81,52 @@ struct ProjectGalleryView: View {
             }
             .navigationTitle("Designs")
             .toolbar {
-                ToolbarItem(placement: .secondaryAction) {
-                    Button {
-                        showArchiveImporter = true
-                    } label: {
-                        Label("Import Project…", systemImage: "square.and.arrow.down")
+                if isSelecting {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("Cancel", action: exitSelectMode)
+                            .accessibilityIdentifier("CancelSelectButton")
                     }
-                    .accessibilityIdentifier("ImportProjectButton")
-                }
-                ToolbarItem(placement: .primaryAction) {
-                    Button(action: createProject) {
-                        Label("New Design", systemImage: "plus")
+                    ToolbarItem(placement: .primaryAction) {
+                        Button(role: .destructive) {
+                            confirmingMultiDelete = true
+                        } label: {
+                            Text(selectedProjectIDs.isEmpty
+                                ? "Delete"
+                                : "Delete (\(selectedProjectIDs.count))")
+                        }
+                        .disabled(selectedProjectIDs.isEmpty)
+                        .accessibilityIdentifier("DeleteSelectedButton")
+                    }
+                } else {
+                    ToolbarItem(placement: .secondaryAction) {
+                        Button {
+                            showArchiveImporter = true
+                        } label: {
+                            Label("Import Project…", systemImage: "square.and.arrow.down")
+                        }
+                        .accessibilityIdentifier("ImportProjectButton")
+                    }
+                    if !projects.isEmpty {
+                        ToolbarItem(placement: .primaryAction) {
+                            Button("Select") { isSelecting = true }
+                                .accessibilityIdentifier("SelectProjectsButton")
+                        }
+                    }
+                    ToolbarItem(placement: .primaryAction) {
+                        Button(action: createProject) {
+                            Label("New Design", systemImage: "plus")
+                        }
                     }
                 }
+            }
+            .alert(
+                "Delete \(selectedProjectIDs.count) Design\(selectedProjectIDs.count == 1 ? "" : "s")?",
+                isPresented: $confirmingMultiDelete
+            ) {
+                Button("Delete", role: .destructive, action: deleteSelected)
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("This permanently deletes the selected designs.")
             }
             .fileImporter(
                 isPresented: $showArchiveImporter,
@@ -98,7 +146,7 @@ struct ProjectGalleryView: View {
                 importArchive(archive, fallbackName: url.deletingPathExtension().lastPathComponent)
             }
             .alert(
-                "Import Failed",
+                "Something Went Wrong",
                 isPresented: Binding(
                     get: { importErrorMessage != nil },
                     set: { if !$0 { importErrorMessage = nil } }
@@ -118,6 +166,9 @@ struct ProjectGalleryView: View {
                 // .task refires when navigation pops back to the gallery).
                 guard !didHandleLaunchHooks else { return }
                 didHandleLaunchHooks = true
+                // DEBUG only: test/screenshot hooks must not ship in the
+                // release binary (2026-08-25 review / readiness audit §5).
+                #if DEBUG
                 if ProcessInfo.processInfo.environment["OS3D_FRESH"] != nil {
                     createProject() // always a clean design (test isolation)
                 } else if ProcessInfo.processInfo.environment["OS3D_AUTO_OPEN"] != nil {
@@ -127,6 +178,7 @@ struct ProjectGalleryView: View {
                         createProject()
                     }
                 }
+                #endif
             }
             .alert("Rename Design", isPresented: renameAlertBinding) {
                 TextField("Name", text: $renameText)
@@ -147,6 +199,57 @@ struct ProjectGalleryView: View {
             get: { renamingProject != nil },
             set: { if !$0 { renamingProject = nil } }
         )
+    }
+
+    // MARK: - Select mode
+
+    /// A card in select mode: selection ring + corner check badge.
+    private func selectableCard(_ project: Project) -> some View {
+        let selected = selectedProjectIDs.contains(project.persistentModelID)
+        return ProjectCard(project: project)
+            .overlay {
+                if selected {
+                    RoundedRectangle(cornerRadius: 16)
+                        .strokeBorder(Color.accentColor, lineWidth: 2.5)
+                }
+            }
+            .overlay(alignment: .topTrailing) {
+                Image(systemName: selected ? "checkmark.circle.fill" : "circle")
+                    .font(.system(size: 22))
+                    .foregroundStyle(selected ? Color.accentColor : Color.secondary)
+                    .background(Circle().fill(Color(.systemBackground)))
+                    .padding(8)
+            }
+    }
+
+    private func toggleSelection(_ project: Project) {
+        let id = project.persistentModelID
+        if selectedProjectIDs.contains(id) {
+            selectedProjectIDs.remove(id)
+        } else {
+            selectedProjectIDs.insert(id)
+        }
+    }
+
+    private func exitSelectMode() {
+        isSelecting = false
+        selectedProjectIDs = []
+    }
+
+    private func deleteSelected() {
+        // Resolve against the live query rather than `model(for:)`: an id whose
+        // row was deleted elsewhere (another window, sync) can trap while
+        // faulting, and `as?` cannot catch a trap.
+        for project in projects where selectedProjectIDs.contains(project.persistentModelID) {
+            modelContext.delete(project)
+        }
+        do {
+            try modelContext.save()
+        } catch {
+            // Don't fail silently — the grid would still show the designs.
+            importErrorMessage = "Couldn't delete the selected designs. \(error.localizedDescription)"
+        }
+        exitSelectMode()
     }
 
     private func createProject() {

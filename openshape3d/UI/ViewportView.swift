@@ -139,6 +139,13 @@ final class ViewportCoordinator: NSObject, ViewportGestureDelegate, ViewportCame
     private var cubeOrbitActive = false
     private var lastCubeDragPoint: CGPoint = .zero
 
+    /// Pivot-reposition drag: moving the gizmo, not the model. The grab point
+    /// and the camera-facing plane it slides on are captured at drag start.
+    private var pivotDragActive = false
+    private var pivotDragOrigin = SIMD3<Float>.zero
+    private var pivotDragGrab = SIMD3<Float>.zero
+    private var pivotDragNormal = SIMD3<Float>(0, 0, 1)
+
     func gestureTapped(at point: CGPoint) {
         // Orientation cube first: taps on it never reach the model.
         if let renderer, let view,
@@ -146,6 +153,14 @@ final class ViewportCoordinator: NSObject, ViewportGestureDelegate, ViewportCame
                at: point, camera: renderer.camera, viewSize: view.bounds.size
            ) {
             cameraAnimator?.animate(to: pose, duration: 0.4)
+            return
+        }
+        // Tapping the very centre arms the pivot: the dot becomes a crosshair
+        // you drag to drop the whole control somewhere else (the model stays
+        // put). Tapping it again puts the dot back.
+        if hitsGizmoPivot(point) {
+            viewModel.toggleGizmoReposition()
+            sceneDidChange()
             return
         }
         // Tapping (not dragging) a gizmo arrow opens exact-distance entry.
@@ -188,6 +203,15 @@ final class ViewportCoordinator: NSObject, ViewportGestureDelegate, ViewportCame
         return part
     }
 
+    /// True when `point` lands on the gizmo's centre pivot. The target grows
+    /// once the pivot is armed — at that point dragging the control IS the
+    /// gesture, so it should be easy to catch.
+    private func hitsGizmoPivot(_ point: CGPoint) -> Bool {
+        guard let project = gizmoProjector() else { return false }
+        return GizmoScreenLayout.hitsPivot(
+            at: point, armed: viewModel.gizmoRepositionArmed, project: project)
+    }
+
     func gestureDoubleTapped(at point: CGPoint) {
         guard let ray = ray(at: point) else { return }
         viewModel.handle(.doubleTap(ray: ray))
@@ -227,7 +251,7 @@ final class ViewportCoordinator: NSObject, ViewportGestureDelegate, ViewportCame
     /// World-mm drag component along the blend arrow's on-screen direction —
     /// positive when dragging the way the arrow points (into the body).
     private func blendDragDelta(to point: CGPoint) -> Double {
-        guard let arrow = viewModel.scene.pullArrow else { return 0 }
+        guard let arrow = viewModel.pullArrowState else { return 0 }
         let o = SIMD3<Double>(Double(arrow.origin.x), Double(arrow.origin.y), Double(arrow.origin.z))
         guard let p0 = worldToScreenPoint(o) else { return 0 }
         let d = simd_normalize(SIMD3<Double>(Double(arrow.direction.x),
@@ -261,6 +285,20 @@ final class ViewportCoordinator: NSObject, ViewportGestureDelegate, ViewportCame
         }
 
         guard let ray = ray(at: point) else { return false }
+
+        // Armed pivot: this drag repositions the gizmo itself. Gated on the
+        // arming tap, so an ordinary drag near the centre is untouched.
+        if viewModel.gizmoRepositionArmed, let origin = viewModel.gizmoOrigin,
+           hitsGizmoPivot(point) {
+            pivotDragActive = true
+            pivotDragOrigin = origin
+            // Slide the pivot on the plane facing the camera through where it
+            // sits now — the plain "drag it around on screen" behaviour.
+            pivotDragNormal = simd_normalize(ray.direction)
+            pivotDragGrab = ray.intersect(planePoint: origin, planeNormal: pivotDragNormal)
+                .map { ray.point(at: $0) } ?? origin
+            return true
+        }
 
         // Select mode: one-finger drags draw the marquee (spec §8.2).
         if viewModel.beginMarquee(at: SIMD2(Double(point.x), Double(point.y))) {
@@ -331,7 +369,7 @@ final class ViewportCoordinator: NSObject, ViewportGestureDelegate, ViewportCame
         // Chamfer/Fillet pick: grabbing the edge arrow scrubs the blend size
         // (drag into the body = bigger, Shapr3D §4.3); anywhere else orbits.
         if case .pickingBlendEdges = viewModel.mode {
-            if let arrow = viewModel.scene.pullArrow,
+            if let arrow = viewModel.pullArrowState,
                hitsPullArrowScreen(point: point, arrow: arrow),
                viewModel.beginBlendDrag() {
                 blendDragActive = true
@@ -350,7 +388,7 @@ final class ViewportCoordinator: NSObject, ViewportGestureDelegate, ViewportCame
         // MOVES the face (shear); with Scale armed, grabbing a handle SCALES the
         // face about its centre (taper). A drag anywhere else orbits.
         if case .faceSelected = viewModel.mode {
-            if let arrow = viewModel.scene.pullArrow,
+            if let arrow = viewModel.pullArrowState,
                hitsPullArrowScreen(point: point, arrow: arrow),
                viewModel.beginToolDrag(ray: ray) {
                 pullActive = true
@@ -428,9 +466,22 @@ final class ViewportCoordinator: NSObject, ViewportGestureDelegate, ViewportCame
     }
 
     func gestureDragChanged(at point: CGPoint) {
+        if pivotDragActive {
+            if let ray = ray(at: point),
+               let t = ray.intersect(planePoint: pivotDragOrigin, planeNormal: pivotDragNormal) {
+                // Carry the grab offset so the crosshair doesn't jump to the
+                // fingertip on the first frame.
+                viewModel.setGizmoPivot(
+                    world: pivotDragOrigin + (ray.point(at: t) - pivotDragGrab))
+                sceneDidChange()
+            }
+            return
+        }
         if faceRotateDragActive {
-            if let ray = ray(at: point), let session = gizmoDrag,
-               let angle = session.rotationDelta(for: ray) {
+            // Mutate the STORED session (not a copy): rotationDelta
+            // accumulates its unwrapped total across frames.
+            if let ray = ray(at: point),
+               let angle = gizmoDrag?.rotationDelta(for: ray) {
                 viewModel.updateFaceRotate(angle: Double(angle), axis: faceRotateAxis)
                 sceneDidChange()
             }
@@ -491,7 +542,9 @@ final class ViewportCoordinator: NSObject, ViewportGestureDelegate, ViewportCame
         }
         guard let session = gizmoDrag else { return }
         if session.part.isRing {
-            if let angle = session.rotationDelta(for: ray) {
+            // Mutate the STORED session (not a copy): rotationDelta
+            // accumulates its unwrapped total across frames.
+            if let angle = gizmoDrag?.rotationDelta(for: ray) {
                 viewModel.updateRotation(part: session.part, deltaRadians: angle)
                 sceneDidChange()
             }
@@ -503,6 +556,11 @@ final class ViewportCoordinator: NSObject, ViewportGestureDelegate, ViewportCame
     }
 
     func gestureDragEnded(at point: CGPoint) {
+        if pivotDragActive {
+            pivotDragActive = false
+            sceneDidChange()
+            return
+        }
         if faceRotateDragActive {
             faceRotateDragActive = false
             gizmoDrag = nil

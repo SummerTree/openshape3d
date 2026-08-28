@@ -14,7 +14,95 @@ final class ProfileTests: XCTestCase {
         Sketch(plane: .ground, entities: entities)
     }
 
+
+    // MARK: - Junctions (shared endpoints)
+
+    /// A divider drawn across a rectangle splits it into two regions. The old
+    /// walker abandoned at any node whose degree wasn't 2, so the two shared
+    /// corners (degree 3) killed BOTH cells and the outer boundary at once —
+    /// and because `resolveProfile` re-runs detection on every rebuild and
+    /// treats nil as a hard failure, an already-built body vanished the moment
+    /// its sketch gained a junction (2026-08-25 review round 3).
+    func testDividerAcrossARectangleYieldsTwoRegions() {
+        // 4x2 rectangle with a vertical divider at x = 1.
+        let bl = SIMD2<Double>(0, 0), br = SIMD2<Double>(4, 0)
+        let tr = SIMD2<Double>(4, 2), tl = SIMD2<Double>(0, 2)
+        let bm = SIMD2<Double>(1, 0), tm = SIMD2<Double>(1, 2)
+        let sketch = makeSketch([
+            .line(id: UUID(), a: bl, b: bm),
+            .line(id: UUID(), a: bm, b: br),
+            .line(id: UUID(), a: br, b: tr),
+            .line(id: UUID(), a: tr, b: tm),
+            .line(id: UUID(), a: tm, b: tl),
+            .line(id: UUID(), a: tl, b: bl),
+            .line(id: UUID(), a: bm, b: tm),   // the divider
+        ])
+        let profiles = ProfileDetector.detectProfiles(in: sketch)
+        XCTAssertEqual(profiles.count, 2, "both cells must be detected")
+        let areas = profiles.map(\.area).sorted()
+        XCTAssertEqual(areas[0], 2, accuracy: 1e-9, "left cell 1x2")
+        XCTAssertEqual(areas[1], 6, accuracy: 1e-9, "right cell 3x2")
+        for profile in profiles {
+            XCTAssertGreaterThan(profile.area, 0, "interior faces are CCW")
+        }
+    }
+
+    /// Two rectangles mirrored about a shared edge — the corners on that edge
+    /// have degree 4.
+    func testTwoRectanglesSharingAnEdgeYieldTwoRegions() {
+        let a = SIMD2<Double>(0, 0), b = SIMD2<Double>(2, 0)
+        let c = SIMD2<Double>(2, 2), d = SIMD2<Double>(0, 2)
+        let e = SIMD2<Double>(4, 0), f = SIMD2<Double>(4, 2)
+        let sketch = makeSketch([
+            .line(id: UUID(), a: a, b: b),
+            .line(id: UUID(), a: b, b: c),   // shared edge
+            .line(id: UUID(), a: c, b: d),
+            .line(id: UUID(), a: d, b: a),
+            .line(id: UUID(), a: b, b: e),
+            .line(id: UUID(), a: e, b: f),
+            .line(id: UUID(), a: f, b: c),
+        ])
+        let profiles = ProfileDetector.detectProfiles(in: sketch)
+        XCTAssertEqual(profiles.count, 2)
+        for profile in profiles {
+            XCTAssertEqual(profile.area, 4, accuracy: 1e-9, "each cell is 2x2")
+        }
+    }
+
+    /// The outer boundary must NOT come back as a profile of its own — a plain
+    /// rectangle stays one region, not two (interior plus outline).
+    func testAPlainRectangleFromLinesIsStillExactlyOneProfile() {
+        let a = SIMD2<Double>(0, 0), b = SIMD2<Double>(3, 0)
+        let c = SIMD2<Double>(3, 3), d = SIMD2<Double>(0, 3)
+        let sketch = makeSketch([
+            .line(id: UUID(), a: a, b: b),
+            .line(id: UUID(), a: b, b: c),
+            .line(id: UUID(), a: c, b: d),
+            .line(id: UUID(), a: d, b: a),
+        ])
+        let profiles = ProfileDetector.detectProfiles(in: sketch)
+        XCTAssertEqual(profiles.count, 1, "the outer face is not a profile")
+        XCTAssertEqual(profiles[0].area, 9, accuracy: 1e-9)
+    }
+
+    /// A dangling line attached to a corner must not break detection.
+    func testASpurAttachedToARectangleDoesNotBreakIt() {
+        let a = SIMD2<Double>(0, 0), b = SIMD2<Double>(3, 0)
+        let c = SIMD2<Double>(3, 3), d = SIMD2<Double>(0, 3)
+        let sketch = makeSketch([
+            .line(id: UUID(), a: a, b: b),
+            .line(id: UUID(), a: b, b: c),
+            .line(id: UUID(), a: c, b: d),
+            .line(id: UUID(), a: d, b: a),
+            .line(id: UUID(), a: c, b: SIMD2(5, 5)),   // spur sticking out
+        ])
+        let profiles = ProfileDetector.detectProfiles(in: sketch)
+        XCTAssertEqual(profiles.count, 1, "the rectangle is still a region")
+        XCTAssertEqual(profiles[0].area, 9, accuracy: 1e-9)
+    }
+
     // MARK: - Detection
+
 
     func testRectEntityMakesProfile() {
         let sketch = makeSketch([

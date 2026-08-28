@@ -19,6 +19,32 @@ phase plan), `SHAPR3D_PARITY_SPEC.md` (feature spec), `PHASE_D_DESIGN.md`
 | **E** — edge blends (mesh-domain): chamfer/fillet, multi-edge, live preview, drag-to-size arrow | ✅ tranches 1–3 done |
 | **E (B-rep)** — OpenCASCADE port for high-quality fillet/shell/offset | ❌ not started |
 
+**Architecture review (2026-08-25): `ARCHITECTURE_REVIEW_2026-08-25.md`** —
+four-pass deep review; criticals: silent data loss on save of undecodable
+rows, no schema versioning, undo-stomp from armed transform tools, and the
+path-dependent Euclid-vs-OCCT kernel seam. Read it before the next tranche.
+**Same-day fix pass:** all four criticals fixed (C4 largely — see the fix
+table in the review doc), plus the S3 lifecycle bugs, S6 composite undo,
+the OCCT exception barrier, the `pullArrowState` orbit-perf fix, and every
+ship-config item (privacy manifest, iOS 17.0 target, display name,
+encryption key, `#if DEBUG` hooks).
+
+**Round 2 (same day, deeper + adversarial):** fixed two crash-on-input
+classes — an `Int32` weld-key trap at **20 sites in 6 files** (including
+both importers: any model past ±21 m or containing a NaN crashed on
+import/tap) and `MeshBlob.decode` accepting out-of-range indices (a shared
+`.os3d` could crash on open). The adversarial pass over round 1's own fixes
+found and closed three real gaps in them: C1 leaked at column granularity
+(brep/material/primitive blobs were still being nil-ed over), C3's guard
+covered only 3 of 8 history-mutating entry points, and the ghost-preview fix
+missed the History-panel delete. **Read the R2 open list before the next
+tranche** — it includes two criticals (a radial cylinder drag silently
+deleting features; sketch delete/trim orphaning constraints so a driving
+dimension quietly stops driving) and an unvalidated-solver-writeback issue.
+Still open from round 1, in rough order: off-main eval/preview service (S1),
+full scene caching + GPU buffer pooling (S2), `ToolLifecycle` registry
+refactor (S3), ref-resolution margin checks (S4), relative epsilons (S5).
+
 Also landed recently (all on `main`): context-sensitive Shapr3D-style tool
 palette with flyout groups; extrude gizmo = SF Symbol `arrow.up.and.down` +
 value pill; drag-reorder of History rows; bug-hunt regression tests.
@@ -36,9 +62,11 @@ Sketch/select UX pass (2026-07-21):
 - **Select mode selects sketch entities**: tap fallback
   (`toggleSketchEntityUnderRay`) + marquee candidates now built for the
   Sketches-only filter too (was `filter == .bodiesAndSketchEntities`).
-- **Consumed sketches stay visible after extrude/revolve/…** — the spec §11
-  auto-hide (`consumedSketchHideCommand`) was removed as a UX bug; hide
-  manually from Items when wanted.
+- **Consumed sketches auto-hide again (2026-08-25, reversing 2026-07-21)** —
+  the user ruled the stay-visible behavior a bug vs Shapr3D: a tool that
+  makes a body now hides every sketch that fed it (profile + loft sections +
+  sweep spine) via `consumedSketchHideCommands`, in the same undo step. The
+  Items eye (a11y value "hidden"/"visible") brings a sketch back.
 - **Delete works on Select-mode sketch picks** (`deleteSelection`): selected
   sketch entities delete outside sketch mode too (bodies + entities in one
   undo step); the palette Delete button enables for them; a plain tap
@@ -54,10 +82,40 @@ Sketch/select UX pass (2026-07-21):
   mode (checked before all mode-specific drag handling); a tap still snaps to
   the view. See spec §7.2.
 
-**Test baseline: 464 unit tests, ~78 UI tests — all green.** Two UI tests
+### Shapr3D tutorial + manual parity audit (2026-08-26/27)
+
+Drove the "Introducing Shapr3D basics" starter series against the app on the
+iPad sim, then read the official 343-page manual (pages 77–259 = sketching +
+modeling) tool-by-tool. Full write-up in `MODELING_PARITY_GOALS.md` §2 and
+goals G7–G9. Headlines:
+
+- `SHAPR3D_PARITY_SPEC.md` is accurate — every manual tool maps to a spec
+  section, and the statuses spot-checked against code were all correct.
+- **The gap is depth, not breadth**: nearly every tool exists, but only as its
+  default path. That became G9 (tool variants/options) and G8 (History exposes
+  only four editable scalars, no reference pickers — so a feature's geometry is
+  parametric while its inputs are frozen at creation time).
+- Landed from the audit: the invisible-panel-label fix (see gotcha 10 — it had
+  never been applied to the three side panels), hotkey routing
+  (`CommandRegistry` was dead code with zero non-test references),
+  **Offset Edge in sketch mode** (G7.1), and **construction axes** (§6.2).
+- **Construction axes** are the first new SwiftData model type since Phase D.
+  `PersistedAxis` was added the same way `PersistedFeature`/`PersistedVariable`
+  were — a defaulted `@Relationship` on `Project`, no `VersionedSchema` —
+  and lightweight migration was verified against the existing 95-project
+  simulator store. Keep using that route for new row types.
+
+**Test baseline: 797 unit tests, ~85 UI tests — all green.** Two UI tests
 (`FaceFlowUITests/testTypeNegativeIntoArrowPill`,
 `SweepLoftUITests/testSweepCircleAlongTwoSegmentLinePath`) are long-run flaky
 (pass in isolation) — rerun individually before suspecting a regression.
+
+**If the whole test target dies at bootstrap** with *"Early unexpected exit …
+Test crashed with signal bus before establishing connection"*, and the app also
+refuses `simctl launch` with `SBMainWorkspace` denials, suspect a **wedged
+simulator, not your code** — confirm by stashing and launching a known-good
+build, then `simctl shutdown` + `boot`. Do NOT `erase`: it destroys the saved
+designs. (Hit 2026-08-27 after a long driving session.)
 
 ---
 
@@ -114,6 +172,59 @@ multi-edge additivity, error surfacing),
   and G2 need the B-rep kernel).
 
 ---
+
+## 2b. Platforms — iPhone, iPad, and desktop (Mac Catalyst)
+
+The app is universal (`TARGETED_DEVICE_FAMILY = "1,2"`) and builds for the Mac
+through **Mac Catalyst** (`SUPPORTS_MACCATALYST = YES`).
+
+**The one prerequisite is an OCCT Catalyst slice**, and it is already in the
+repo: `ThirdParty/OCCT.xcframework` is COMMITTED (the static libs via Git LFS,
+see `.gitattributes`), so a fresh checkout builds for iOS *and* Mac without
+running the build script. Without a `ios-arm64-maccatalyst` slice the Mac build
+fails at link with *"no library for this platform was found"* — that is the
+only thing that was missing; the whole Swift/Obj-C++ tree compiles for Catalyst
+unchanged.
+
+Cost of carrying it: ~140 MB of static lib (LFS) plus the slice's own copy of
+the OCCT headers (an xcframework duplicates headers per slice).
+
+To REBUILD the slice — or add another platform — without rebuilding the iOS
+ones (an xcframework assembly replaces the framework, so a Catalyst-only run
+would otherwise delete them):
+
+```
+OCCT_SRC=/path/to/OCCT-7_8_1 \
+IOS_TOOLCHAIN=/path/to/ios.toolchain.cmake \
+PLATFORMS="MAC_CATALYST_ARM64" REUSE_EXISTING_SLICES=1 \
+scripts/build_occt_ios.sh
+```
+
+`REUSE_EXISTING_SLICES=1` harvests the existing slices' libs and headers first
+and folds them into the new framework. `DEPLOYMENT_TARGET` is an iOS version
+(Catalyst is versioned on the iOS scale) and must stay ≤ the app's
+`IPHONEOS_DEPLOYMENT_TARGET`.
+
+Build/run for the Mac:
+
+```
+xcodebuild build -scheme openshape3d -destination 'platform=macOS,variant=Mac Catalyst'
+```
+
+Notes:
+- **visionOS was removed** from `SUPPORTED_PLATFORMS`/`TARGETED_DEVICE_FAMILY`.
+  It was declared but the platform isn't installed, so it only produced
+  destinations that failed to resolve — which broke plain `-destination`
+  commands. Re-add deliberately if visionOS is ever a target.
+- **"Designed for iPad"** is the zero-work alternative: Apple Silicon Macs run
+  the unmodified iOS build, no Catalyst slice needed
+  (`SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD` is already YES). It ships as a
+  checkbox in App Store Connect, but gives an iPad-shaped window rather than a
+  Mac app.
+- AR Quick Look degrades to a plain 3D preview on Catalyst (AR needs a device);
+  `QLPreviewController` itself is available, so nothing is guarded out.
+- The Catalyst window has a 900×620 floor (`macWindowSizing`) so the layout
+  stays in its regular-width form instead of collapsing to the compact bars.
 
 ## 3. Dev workflow essentials
 

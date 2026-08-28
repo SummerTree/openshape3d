@@ -13,10 +13,17 @@
 import Foundation
 import simd
 
-/// Owns an OCCT solid handle (`TopoDS_Shape`), world-space. The underlying B-rep
-/// is immutable after creation, so this is safe to share across the kernel/
-/// render boundary — hence `@unchecked Sendable` (the audited wrapper the design
-/// doc calls for). Freed when the handle is released.
+/// Owns an OCCT solid handle (`TopoDS_Shape`), world-space. Freed when the
+/// handle is released.
+///
+/// `@unchecked Sendable` — CAVEAT (2026-08-25 review, S1): the shape is NOT
+/// deeply immutable. `renderMesh(from:)` runs `BRepMesh_IncrementalMesh`,
+/// which stores triangulations into the faces' shared `TShape`, and handles
+/// are aliased (undo snapshots retain the same instance; identity transforms
+/// return `self`). This is only safe because every OCCT call currently runs
+/// on the MainActor. Before moving any OCCT work off-main, all access to
+/// handles MUST be serialized on one executor — do not rely on this
+/// annotation for actual thread safety.
 nonisolated final class BRepHandle: @unchecked Sendable {
     let shape: OCCTShape
     init(_ shape: OCCTShape) { self.shape = shape }
@@ -162,6 +169,33 @@ nonisolated enum OCCTKernel {
     }
 
     /// OCCT boolean of two solids. op: 0 = union, 1 = subtract (a − b), 2 = intersect.
+    /// Map a `BooleanKind` to `OCCTBridge`'s op code (0 union, 1 subtract,
+    /// 2 intersect).
+    static func booleanOp(_ kind: BooleanKind) -> Int {
+        switch kind {
+        case .union: 0
+        case .subtract: 1
+        case .intersect: 2
+        }
+    }
+
+    /// Compose two bodies' analytic solids with an OCCT boolean, in world
+    /// space (each body's transform applied first, mirroring what
+    /// `KernelOps.boolean` does for the Euclid meshes). Nil when either body
+    /// is mesh-only or OCCT fails — the caller keeps the Euclid result.
+    /// Shared by feature replay AND the live boolean tool, so both paths make
+    /// the same kernel decision (2026-08-25 review, C4).
+    static func composedBoolean(
+        _ kind: BooleanKind, target: Body, tool: Body
+    ) -> BRepHandle? {
+        guard useOCCTAsSourceOfTruth,
+              let a0 = target.brep, let b0 = tool.brep,
+              let a = transformed(a0, by: target.transform),
+              let b = transformed(b0, by: tool.transform)
+        else { return nil }
+        return boolean(a, b, op: booleanOp(kind))
+    }
+
     static func boolean(_ a: BRepHandle, _ b: BRepHandle, op: Int) -> BRepHandle? {
         OCCTBridge.boolean(of: a.shape, with: b.shape, op: op).map(BRepHandle.init)
     }

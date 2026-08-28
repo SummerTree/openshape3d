@@ -68,9 +68,9 @@ nonisolated extension KernelOps {
         struct Key: Hashable {
             let x, y, z: Int64
             init(_ p: Vector, _ inv: Double) {
-                x = Int64((p.x * inv).rounded())
-                y = Int64((p.y * inv).rounded())
-                z = Int64((p.z * inv).rounded())
+                x = MeshQuantize.key64(p.x, inverseQuantum: inv)
+                y = MeshQuantize.key64(p.y, inverseQuantum: inv)
+                z = MeshQuantize.key64(p.z, inverseQuantum: inv)
             }
         }
         let inv = 1 / quantum

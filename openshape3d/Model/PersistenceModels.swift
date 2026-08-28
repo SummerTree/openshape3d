@@ -22,6 +22,11 @@ final class Project {
     @Relationship(deleteRule: .cascade, inverse: \PersistedPlane.project)
     var planes: [PersistedPlane] = []
 
+    /// Construction axes (spec §6.2). Defaulted so pre-axis stores migrate:
+    /// an old project loads with none.
+    @Relationship(deleteRule: .cascade, inverse: \PersistedAxis.project)
+    var axes: [PersistedAxis] = []
+
     @Relationship(deleteRule: .cascade, inverse: \PersistedImage.project)
     var images: [PersistedImage] = []
 
@@ -46,6 +51,18 @@ final class Project {
     /// `rollbackIndex == nil`. Load/save wiring into/out of
     /// `document.features.rollbackIndex` lives in task B1.
     var rollbackIndex: Int? = nil
+
+    /// Store format version, bumped ONLY on a non-additive change to any
+    /// persisted payload (the JSON kind/sketch blobs, `MeshBlob`, the brep
+    /// blob). Defaulted so every pre-versioning store reads as v1 (repo
+    /// convention). A store whose version is NEWER than this build's
+    /// `Project.currentFormatVersion` opens for viewing but `save()` refuses
+    /// to touch it — an older app must never rewrite (or diff-delete) rows it
+    /// can't fully decode. 2026-08-25 review, finding C2.
+    var formatVersion: Int = 1
+
+    /// The newest store format this build reads AND writes.
+    static let currentFormatVersion = 1
 
     init(name: String) {
         self.name = name
@@ -138,6 +155,24 @@ final class PersistedPlane {
     init(planeID: UUID, planeData: Data) {
         self.planeID = planeID
         self.planeData = planeData
+    }
+}
+
+/// A construction axis (spec §6.2), persisted.
+///
+/// All properties are defaulted and the `Project` relationship is optional so
+/// stores written before axes existed migrate without a `VersionedSchema` —
+/// the same route `PersistedFeature` and `PersistedVariable` took.
+@Model
+final class PersistedAxis {
+    @Attribute(.unique) var axisID: UUID = UUID()
+    /// JSON-encoded ConstructionAxis (tiny).
+    var axisData: Data = Data()
+    var project: Project?
+
+    init(axisID: UUID, axisData: Data) {
+        self.axisID = axisID
+        self.axisData = axisData
     }
 }
 

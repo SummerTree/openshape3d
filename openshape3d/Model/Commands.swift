@@ -1058,6 +1058,88 @@ struct AddConstructionPlaneCommand: DocumentCommand {
     }
 }
 
+// MARK: - Construction axes (spec §6.2)
+
+struct AddConstructionAxisCommand: DocumentCommand {
+    let title: String
+    let axis: ConstructionAxis
+
+    init(axis: ConstructionAxis, title: String = "Add Axis") {
+        self.axis = axis
+        self.title = title
+    }
+
+    func apply(to document: inout DesignDocument) {
+        document.axes.append(axis)
+    }
+
+    func revert(in document: inout DesignDocument) {
+        document.axes.removeAll { $0.id == axis.id }
+    }
+}
+
+struct DeleteAxisCommand: DocumentCommand {
+    let title = "Delete"
+    let index: Int
+    let axis: ConstructionAxis
+
+    init?(id: ConstructionAxisID, document: DesignDocument) {
+        guard let index = document.axes.firstIndex(where: { $0.id == id }) else { return nil }
+        self.index = index
+        self.axis = document.axes[index]
+    }
+
+    func apply(to document: inout DesignDocument) {
+        document.axes.removeAll { $0.id == axis.id }
+    }
+
+    func revert(in document: inout DesignDocument) {
+        document.axes.insert(axis, at: min(index, document.axes.count))
+    }
+}
+
+struct SetAxisHiddenCommand: DocumentCommand {
+    let title: String
+    let id: ConstructionAxisID
+    let hidden: Bool
+
+    init(id: ConstructionAxisID, hidden: Bool) {
+        self.id = id
+        self.hidden = hidden
+        self.title = hidden ? "Hide Axis" : "Show Axis"
+    }
+
+    func apply(to document: inout DesignDocument) { set(&document, hidden) }
+    func revert(in document: inout DesignDocument) { set(&document, !hidden) }
+
+    private func set(_ document: inout DesignDocument, _ value: Bool) {
+        guard let index = document.axes.firstIndex(where: { $0.id == id }) else { return }
+        document.axes[index].isHidden = value
+    }
+}
+
+struct RenameAxisCommand: DocumentCommand {
+    let title = "Rename"
+    let id: ConstructionAxisID
+    let before: String
+    let after: String
+
+    init?(id: ConstructionAxisID, to newName: String, document: DesignDocument) {
+        guard let axis = document.axes.first(where: { $0.id == id }) else { return nil }
+        self.id = id
+        self.before = axis.name
+        self.after = newName
+    }
+
+    func apply(to document: inout DesignDocument) { set(&document, after) }
+    func revert(in document: inout DesignDocument) { set(&document, before) }
+
+    private func set(_ document: inout DesignDocument, _ value: String) {
+        guard let index = document.axes.firstIndex(where: { $0.id == id }) else { return }
+        document.axes[index].name = value
+    }
+}
+
 struct ResizePrimitiveCommand: DocumentCommand {
     let title: String
     let bodyID: BodyID
@@ -1083,6 +1165,24 @@ struct ResizePrimitiveCommand: DocumentCommand {
             revision: document.nextRevision()
         )
         rebuilt.name = old.name
+        // Carry the user-owned metadata the rebuild would otherwise reset —
+        // resizing a hidden primitive used to make it visible again and drop
+        // its material (2026-08-25 review round 2).
+        rebuilt.isHidden = old.isHidden
+        rebuilt.material = old.material
+        // Rebuild the analytic B-rep too, mirroring FeatureGraph.evalPrimitive:
+        // resizing an OCCT-rendered cylinder must not degrade it to the 48-gon
+        // Euclid mesh (2026-08-25 review, C4). Curved primitives take the OCCT
+        // tessellation for render+CSG; a box keeps the Euclid mesh but still
+        // carries the brep so booleans stay analytic.
+        if OCCTKernel.useOCCTAsSourceOfTruth,
+           let handle = OCCTKernel.primitiveShape(spec, placement: .identity) {
+            if OCCTKernel.hasCurvedFaces(spec) {
+                rebuilt.adoptBRep(handle)
+            } else {
+                rebuilt.brep = handle
+            }
+        }
         document.bodies[index] = rebuilt
     }
 

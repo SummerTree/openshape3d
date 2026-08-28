@@ -96,12 +96,17 @@ struct ToolPaletteView: View {
 
     private var bodyEntries: [PaletteEntry] {
         [.group(sketchGroup), .group(modifyGroup), .group(transformGroup), .group(combineGroup),
-         .item(measureItem), .item(materialItem), .item(selectItem), .item(deleteItem)]
+         .item(axisItem), .item(measureItem), .item(materialItem),
+         .item(selectItem), .item(deleteItem)]
     }
 
     private var sketchEntries: [PaletteEntry] {
         drawItems.map(PaletteEntry.item)
-        + [.item(sketchTool("Trim", "scissors", .trim)),
+        // Offset Edge sits with the sketch tools, matching the manual's order
+        // (…Polygon, Offset Edge, …). Sketch-only: there is nothing to offset
+        // from outside a sketch, so it is absent from the body-mode group.
+        + [.item(sketchTool("Offset", "square.on.square.dashed", .offset)),
+           .item(sketchTool("Trim", "scissors", .trim)),
            .item(sketchTool("Project", "square.on.square.dashed", .project)),
            .group(constrainGroup),
            .group(symbolGroup),
@@ -216,6 +221,15 @@ struct ToolPaletteView: View {
          sketchTool("Ellipse", "oval", .ellipse),
          sketchTool("Polygon", "hexagon", .polygon),
          sketchTool("Text", "textformat", .text)]
+    }
+
+    /// Add Axis (spec §6.2). Construction geometry, so it sits with the
+    /// reference tools rather than inside Modify — nothing it makes is a body.
+    private var axisItem: ToolItem {
+        toggleItem("Axis", "line.diagonal.arrow", "AxisButton",
+                   active: isMode { if case .pickingAxisReferences = $0 { return true }; return false },
+                   enabled: !viewModel.session.document.bodies.isEmpty, tint: .blue,
+                   begin: { viewModel.beginAxisTool() }, cancel: { viewModel.cancelAxisTool() })
     }
 
     private var measureItem: ToolItem {

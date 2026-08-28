@@ -20,7 +20,10 @@ import SwiftData
 // MARK: - Container
 
 nonisolated struct ProjectArchive: Codable, Sendable {
-    static let currentVersion = 1
+    /// v2 (2026-08-25): `BodyRecord.brep` carries the OCCT analytic solid —
+    /// before that, export/import silently degraded smooth geometry to its
+    /// tessellation (review C4). v1 archives load fine (field decodes nil).
+    static let currentVersion = 2
     /// Readers refuse archives NEWER than they understand (best-effort forward
     /// reads risk silent data loss); older versions always load.
     var version: Int = ProjectArchive.currentVersion
@@ -37,6 +40,17 @@ nonisolated struct ProjectArchive: Codable, Sendable {
         var mesh: Data
         var isHidden: Bool
         var material: Data?
+        /// OCCT brep blob (v2+); nil for Euclid-only bodies and v1 archives.
+        ///
+        /// STILL WRITTEN, NEVER READ BACK (2026-08-25 review round 3 fuzzing).
+        /// Feeding an archive's brep to `BRepTools::Read` is a remote-crash
+        /// vector: of 294 malformed blobs, 53 segfaulted and 46 hung forever
+        /// — inside the reader, so the bridge's `catch (...)` cannot help, and
+        /// on the MainActor, so a hang is an unrecoverable freeze. A poisoned
+        /// project then re-kills the app every time it is opened.
+        /// Re-enable `insert(into:name:)`'s import only once the reader is
+        /// hardened (bail on stream fail/eof, clamp declared section counts).
+        var brep: Data?
     }
     /// Sketches / planes / symbols: one JSON blob each.
     struct BlobRecord: Codable, Sendable {
@@ -191,7 +205,8 @@ extension ProjectArchive {
             BodyRecord(
                 id: $0.bodyID, name: $0.name, transform: $0.transformData,
                 primitive: $0.primitiveData, mesh: $0.meshData,
-                isHidden: $0.isHidden, material: $0.materialData)
+                isHidden: $0.isHidden, material: $0.materialData,
+                brep: $0.brepData)
         }
         archive.sketches = project.sketches.map {
             BlobRecord(id: $0.sketchID, data: $0.sketchData)
@@ -237,6 +252,14 @@ extension ProjectArchive {
                 primitiveData: record.primitive, meshData: record.mesh)
             row.isHidden = record.isHidden
             row.materialData = record.material
+            // DELIBERATELY NOT IMPORTED — see the note on `BodyRecord.brep`.
+            // An archive is untrusted input; OCCT's BREP reader is not
+            // hardened against hostile bytes (fuzzing: 34% of malformed blobs
+            // segfault or hang the process, inside BRepTools::Read where no
+            // catch(...) can help). Dropping it costs analytic fidelity on
+            // imported bodies — `load()` already falls back to the archived
+            // render mesh — and removes the entire remote-crash surface.
+            row.brepData = nil
             row.project = project
             context.insert(row)
         }

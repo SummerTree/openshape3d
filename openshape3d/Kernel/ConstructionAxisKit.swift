@@ -13,23 +13,69 @@
 import Foundation
 import simd
 
+nonisolated struct ConstructionAxisID: Hashable, Codable, Sendable {
+    let raw: UUID
+    init() { self.raw = UUID() }
+    init(raw: UUID) { self.raw = raw }
+}
+
 /// An infinite construction axis: a point plus a unit direction. `length` is the
 /// display extent (the History parameter the spec calls "Length"); it never
 /// affects the math.
-nonisolated struct ConstructionAxis: Equatable, Sendable {
+///
+/// Unlike planes — where `ConstructionPlane` wraps a separate `SketchPlane`
+/// because sketching needs the geometry on its own — the axis geometry has no
+/// second consumer, so identity lives directly on this type rather than in a
+/// wrapper. The kit's constructors mint a fresh `id` for every axis they build.
+nonisolated struct ConstructionAxis: Identifiable, Codable, Equatable, Sendable {
+    let id: ConstructionAxisID
     var origin: SIMD3<Double>
     /// Always unit length.
     var direction: SIMD3<Double>
     var length: Double = 100
+    /// Items Manager display name (spec §11); defaulted on decode so a
+    /// document written before axes existed still loads.
+    var name: String
+    /// Items Manager visibility (spec §11).
+    var isHidden: Bool
 
     /// Nil when `direction` is degenerate — callers surface "can't build an axis
     /// from this selection" rather than propagating NaNs.
-    init?(origin: SIMD3<Double>, direction: SIMD3<Double>, length: Double = 100) {
+    init?(
+        id: ConstructionAxisID = ConstructionAxisID(),
+        origin: SIMD3<Double>,
+        direction: SIMD3<Double>,
+        length: Double = 100,
+        name: String = "Axis",
+        isHidden: Bool = false
+    ) {
         let n = simd_length(direction)
         guard n > 1e-9, n.isFinite else { return nil }
+        // A non-finite origin or length would poison every downstream
+        // projection the same way a NaN direction would.
+        guard origin.x.isFinite, origin.y.isFinite, origin.z.isFinite,
+              length.isFinite, length > 0
+        else { return nil }
+        self.id = id
         self.origin = origin
         self.direction = direction / n
         self.length = length
+        self.name = name
+        self.isHidden = isHidden
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, origin, direction, length, name, isHidden
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(ConstructionAxisID.self, forKey: .id)
+        origin = try c.decode(SIMD3<Double>.self, forKey: .origin)
+        direction = try c.decode(SIMD3<Double>.self, forKey: .direction)
+        length = try c.decode(Double.self, forKey: .length)
+        name = try c.decodeIfPresent(String.self, forKey: .name) ?? "Axis"
+        isHidden = try c.decodeIfPresent(Bool.self, forKey: .isHidden) ?? false
     }
 
     /// The drawn segment, centred on `origin`.

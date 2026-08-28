@@ -437,9 +437,9 @@ nonisolated extension KernelOps {
         struct QKey: Hashable { let x, y, z: Int64 }
         func key(_ p: SIMD3<Double>) -> QKey {
             let s = 1e5
-            return QKey(x: Int64((p.x * s).rounded()),
-                        y: Int64((p.y * s).rounded()),
-                        z: Int64((p.z * s).rounded()))
+            return QKey(x: MeshQuantize.key64(p.x, inverseQuantum: s),
+                        y: MeshQuantize.key64(p.y, inverseQuantum: s),
+                        z: MeshQuantize.key64(p.z, inverseQuantum: s))
         }
         func dir(_ s: BlendEdgeSpec) -> SIMD3<Double> {
             let d = s.p1 - s.p0

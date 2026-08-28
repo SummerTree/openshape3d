@@ -102,8 +102,8 @@ nonisolated enum SketchOffset {
     private struct NodeKey: Hashable {
         let x, y: Int64
         init(_ p: SIMD2<Double>) {
-            x = Int64((p.x / SketchOffset.quantum).rounded())
-            y = Int64((p.y / SketchOffset.quantum).rounded())
+            x = MeshQuantize.key64(p.x, quantum: SketchOffset.quantum)
+            y = MeshQuantize.key64(p.y, quantum: SketchOffset.quantum)
         }
     }
 
@@ -377,5 +377,40 @@ nonisolated extension KernelOps {
         _ entities: [SketchEntity], by distance: Double
     ) -> [SketchEntity] {
         SketchOffset.offset(entities: entities, by: distance)
+    }
+}
+
+// MARK: - Seed → offset set
+
+/// Which entities one tap contributes to an offset (spec §1.9). Mirrors the
+/// manual's Offset Edge **Type** menu.
+nonisolated enum SketchOffsetType: String, CaseIterable, Codable, Sendable {
+    /// Only the tapped entity.
+    case single
+    /// The tapped entity plus everything endpoint-connected to it, so one tap
+    /// on a wall of a closed profile offsets the whole loop.
+    case chain
+
+    var title: String { self == .single ? "Single" : "Chain" }
+}
+
+nonisolated extension SketchOffset {
+
+    /// Expand tapped seed IDs into the entities an offset should consume.
+    ///
+    /// Returned in **sketch order**, not seed order: `offset(entities:by:)`
+    /// walks line chains to mitre their joins, and feeding it a shuffled chain
+    /// would break the walk.
+    static func entitiesToOffset(
+        seedIDs: Set<UUID>, type: SketchOffsetType, in entities: [SketchEntity]
+    ) -> [SketchEntity] {
+        guard !seedIDs.isEmpty else { return [] }
+        var wanted = seedIDs
+        if type == .chain {
+            for seed in seedIDs {
+                wanted.formUnion(ProfileDetector.connectedEntityIDs(from: seed, in: entities))
+            }
+        }
+        return entities.filter { wanted.contains($0.id) }
     }
 }

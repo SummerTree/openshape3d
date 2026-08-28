@@ -38,7 +38,12 @@ final class BooleanFlowUITests: XCTestCase {
         window.coordinate(withNormalizedOffset: tapInside).tap()
         XCTAssertTrue(app.staticTexts["Extrude"].waitForExistence(timeout: 5))
         typeExtrudeHeight(app)
-        XCTAssertFalse(app.staticTexts["Extrude"].exists)
+        // The commit dismisses the keyboard + extrude bar, and the tool
+        // palette re-centers. A palette tap issued mid-animation uses a stale
+        // frame and lands one button off (CombineGroup's tap armed Measure).
+        // Wait for the bar to leave, then let the palette settle.
+        XCTAssertTrue(app.staticTexts["Extrude"].waitForNonExistence(timeout: 5))
+        sleep(1)
     }
 
     func testSubtractFlow() throws {
@@ -66,6 +71,10 @@ final class BooleanFlowUITests: XCTestCase {
         window.coordinate(withNormalizedOffset: CGVector(dx: 0.37, dy: 0.5)).tap()
         let deleteButton = app.buttons.containing(.staticText, identifier: "Delete").firstMatch
         XCTAssertTrue(deleteButton.isEnabled, "First body should be selected")
+        // Selecting slides the info strip in and the palette re-centers; a
+        // palette tap mid-animation lands on a stale frame one button off
+        // (CombineGroup's tap armed Measure). Let it settle.
+        sleep(1)
 
         // Arm Subtract (in the Combine flyout) and tap the second body.
         app.buttons["CombineGroup"].tap()

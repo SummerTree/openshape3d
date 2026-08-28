@@ -171,6 +171,11 @@ nonisolated enum ProjectMergeKit {
             result.transform.translation += translation
             result.isHidden = body.isHidden
             result.material = body.material
+            // Carry the CSG mesh and analytic solid: an inserted project's
+            // smooth cylinders must not degrade to their tessellation
+            // (2026-08-25 review, C4).
+            result.euclid = body.euclid
+            result.brep = body.brep
             return result
         }
 

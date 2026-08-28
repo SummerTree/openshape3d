@@ -25,6 +25,17 @@
 #   PLATFORMS="SIMULATORARM64 OS64" \
 #   scripts/build_occt_ios.sh
 #
+# ADDING a slice to the existing xcframework (e.g. Mac Catalyst for the desktop
+# build) without rebuilding the ones you already have — the whole point of
+# REUSE_EXISTING_SLICES, since assembling an xcframework REPLACES it and a
+# Catalyst-only run would otherwise delete both iOS slices:
+#
+#   PLATFORMS="MAC_CATALYST_ARM64" REUSE_EXISTING_SLICES=1 \
+#   OCCT_SRC=… IOS_TOOLCHAIN=… scripts/build_occt_ios.sh
+#
+# Catalyst note: DEPLOYMENT_TARGET is an iOS version (Catalyst is versioned on
+# the iOS scale), so it must stay <= the app's IPHONEOS_DEPLOYMENT_TARGET.
+#
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -35,12 +46,33 @@ PLATFORMS="${PLATFORMS:-SIMULATORARM64 OS64}"
 DEPLOYMENT_TARGET="${DEPLOYMENT_TARGET:-16.0}"
 OUT_XCFRAMEWORK="$REPO_ROOT/ThirdParty/OCCT.xcframework"
 JOBS="${JOBS:-$(sysctl -n hw.ncpu)}"
+# Carry the slices already in OUT_XCFRAMEWORK into the new one, so a run that
+# builds a single platform ADDS to the framework instead of replacing it.
+REUSE_EXISTING_SLICES="${REUSE_EXISTING_SLICES:-0}"
 
 echo "OCCT_SRC=$OCCT_SRC"
 echo "WORK=$WORK  PLATFORMS=$PLATFORMS  JOBS=$JOBS"
 
 mkdir -p "$WORK"
 declare -a CREATE_ARGS=()
+
+# Harvest the existing slices FIRST — the assembly step deletes the framework,
+# so the libs and headers have to be copied out beforehand.
+if [ "$REUSE_EXISTING_SLICES" = "1" ] && [ -d "$OUT_XCFRAMEWORK" ]; then
+  STAGE="$WORK/existing-slices"
+  rm -rf "$STAGE"
+  for SLICE in "$OUT_XCFRAMEWORK"/*/; do
+    NAME="$(basename "$SLICE")"
+    LIB="$(find "$SLICE" -maxdepth 1 -name '*.a' | head -1)"
+    [ -n "$LIB" ] || continue
+    [ -d "$SLICE/Headers" ] || continue
+    mkdir -p "$STAGE/$NAME"
+    cp "$LIB" "$STAGE/$NAME/"
+    cp -R "$SLICE/Headers" "$STAGE/$NAME/Headers"
+    CREATE_ARGS+=( -library "$STAGE/$NAME/$(basename "$LIB")" -headers "$STAGE/$NAME/Headers" )
+    echo "==> Reusing existing slice: $NAME"
+  done
+fi
 
 for PLAT in $PLATFORMS; do
   BUILD_DIR="$WORK/build-$PLAT"

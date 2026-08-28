@@ -42,12 +42,15 @@ nonisolated enum EdgeTopology {
     private static let quantum: Float = 1e-5
 
     private struct PositionKey: Hashable {
-        let x, y, z: Int32
+        let x, y, z: Int64
         init(_ p: SIMD3<Float>) {
             let inv = 1 / EdgeTopology.quantum
-            x = Int32((p.x * inv).rounded())
-            y = Int32((p.y * inv).rounded())
-            z = Int32((p.z * inv).rounded())
+            // key64: a raw Int32/Int64(_: Float) traps on NaN, and an Int32
+            // key at this quantum saturates at ±21 m — which silently WELDED
+            // far-apart vertices together instead. Int64 + NaN guard.
+            x = MeshQuantize.key64(p.x, inverseQuantum: inv)
+            y = MeshQuantize.key64(p.y, inverseQuantum: inv)
+            z = MeshQuantize.key64(p.z, inverseQuantum: inv)
         }
     }
 
@@ -150,12 +153,12 @@ nonisolated enum EdgeTopology {
         // can preserve the fold), which used to weld opposite sides of a
         // cylinder rim into bogus diameter-length "edges".
         struct QVec: Hashable, Comparable {
-            let x, y, z: Int32
+            let x, y, z: Int64
             static func < (l: QVec, r: QVec) -> Bool {
                 (l.x, l.y, l.z) < (r.x, r.y, r.z)
             }
         }
-        func q(_ v: Float, _ s: Float) -> Int32 { Int32((v * s).rounded()) }
+        func q(_ v: Float, _ s: Float) -> Int64 { MeshQuantize.key64(v, inverseQuantum: s) }
         func qv(_ v: SIMD3<Float>, _ s: Float) -> QVec {
             QVec(x: q(v.x, s), y: q(v.y, s), z: q(v.z, s))
         }

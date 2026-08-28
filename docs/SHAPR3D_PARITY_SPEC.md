@@ -234,10 +234,20 @@ use gizmo to set offset direction + distance. If the selected item is shared by
 multiple loops, an arrow shows per loop — pick the arrow of the loop to offset.
 Finish with "Exit Sketching". Hotkey O. Used constantly in tutorials for wall
 thickness (e.g. offset outer edge 1 mm and cut).
-**Status:** 🟡 partial — kernel only: `SketchOffset` offsets closed
-primitives (circle/arc/rect/polygon) and connected line chains/loops with
-degenerate-collapse cleanup, unit-tested; no palette tool, gizmo, or
-loop-arrow disambiguation UI yet.
+**Status:** 🟡 partial — **the tool ships (2026-08-27).** "Offset" in the
+sketch palette (hotkey **O**, routed through `CommandRegistry`) arms a pick
+mode: taps toggle sketch entities, the bar carries the Single/Chain type and
+a signed distance, the result previews live in the pending colour while the
+picked sources highlight, and Apply commits the offset copies as new sketch
+entities in one undoable step. Committing keeps the tool armed for the next
+offset, matching Shapr3D. `SketchOffset.entitiesToOffset` does the Single vs
+Chain expansion (Chain walks `ProfileDetector.connectedEntityIDs`, and
+returns in SKETCH order because the mitring walk depends on it); the offset
+itself is the existing unit-tested `SketchOffset`. Covered by
+`SketchOffsetSelectionTests` + `SketchOffsetUITests`.
+**Missing:** the drag gizmo (distance is typed, as with Shell), and
+loop-arrow disambiguation when the picked item is shared by multiple loops —
+today the sign of the distance chooses the side.
 **Feasibility:** [mesh-kernel OK] (polyline/arc offsetting is 2D geometry)
 
 ### 1.10 Move/Rotate (sketch mode)
@@ -1280,14 +1290,29 @@ to Face at Point**. All parametrically adjustable later; History param:
 Length (plus the defining references). Adaptive "Add Axis" shortcut: with a
 valid selection the adaptive menu offers Add Axis directly, skipping menu
 steps. Axes serve Revolve, patterns, and transforms.
-**Status:** 🟡 partial — the GEOMETRY for all five axis tools ships in
-`ConstructionAxisKit` (through-2-points, along-edge, perpendicular-to-face,
-2-plane intersection, and axis-of-revolution recovered from face samples by a
-least-squares fit), with degenerate selections refused rather than producing
-NaNs. Covered by `ConstructionAxisTests`.
-**Missing:** the document entity, the Add Axis tool/adaptive menu entry, the
-History Length parameter, rendering, and using an axis as the operand for
-Revolve / circular pattern / rotate.
+**Status:** 🟡 partial — **axes are now first-class document geometry
+(2026-08-27).** `ConstructionAxis` carries identity, name and visibility,
+lives on `DesignDocument.axes`, persists through `PersistedAxis` (added to
+the schema as a defaulted relationship, the same lightweight-migration route
+`PersistedFeature`/`PersistedVariable` took — verified against a 95-project
+store), renders as a dashed reference line, and appears in Items with
+eye/rename/zoom/delete. An **"Axis" palette tool** creates them, and an axis
+LYING IN the sketch plane is now a valid **Revolve** operand.
+
+Rather than a five-way type menu, the tool DERIVES the construction from what
+you tap — the manual's own adaptive route ("pre-select an element that will
+be used to define the axis, then select Add Axis"). Tap a round face → Axis
+of Cylinder/Cone (from `FaceTopology.cylindricalFace`'s fitted axis); a flat
+face → Perpendicular to Face; two flat faces → Through 2 Planes; a linear
+edge → Along Edge. The bar names the derived construction, which is what
+makes the inference legible. `EditorViewModel.deriveAxis` is a pure static so
+it is unit-tested without a view model (`ConstructionAxisDeriveTests`);
+end-to-end coverage in `ConstructionAxisUITests`.
+**Missing:** **Axis Through 2 Points** (needs the snap-point pick path, not
+the face/edge one everything else uses); the edge-pick route is wired
+(`pickAxisEdge`) but not yet reachable from the viewport's edge hit-test;
+Length is editable at creation but is not yet a History parameter (that is
+G8); and axes are not yet operands for circular pattern / rotate.
 **Feasibility:** [mesh-kernel OK] — remaining work is app/UI, not geometry.
 
 ### 6.3 Insert Image (reference images)
@@ -1719,10 +1744,11 @@ Visibility. Names are shared with History (rename in one place updates both).
 `ItemsPanelView`) lists bodies, sketches, construction planes, **images**,
 and **symbols** with type icons; per row: visibility eye
 (`SetItemVisibilityCommand`), inline rename (`RenameItemCommand`), delete,
-tap-to-select, and Zoom To (camera fit to the item's AABB). DELIBERATE
-deviation: consumed sketches are NOT auto-hidden on extrude (read as the
-sketch vanishing — hide manually via the eye); re-opening a hidden sketch
-for editing still un-hides it. `isHidden` persists. Missing: folders, filter dropdown,
+tap-to-select, and Zoom To (camera fit to the item's AABB). Shapr3D parity:
+sketches consumed into a body (extrude/revolve/sweep/loft — profile, loft
+sections, sweep spine) auto-hide in the same undo step
+(`consumedSketchHideCommands`); the eye un-hides them, and re-opening a
+hidden sketch for editing still un-hides it. `isHidden` persists. Missing: folders, filter dropdown,
 multi-select, per-row image opacity percentage (opacity edits live in the
 image bar), Reveal in Items, Show Hidden Items / Invert Visibility menu,
 shared names with History (no history engine).

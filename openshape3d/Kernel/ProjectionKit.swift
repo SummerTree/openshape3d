@@ -82,7 +82,7 @@ nonisolated enum ProjectionKit {
             let ax, ay, bx, by: Int64
         }
         func quantized(_ p: SIMD2<Double>) -> (Int64, Int64) {
-            (Int64((p.x / epsilon).rounded()), Int64((p.y / epsilon).rounded()))
+            (MeshQuantize.key64(p.x, quantum: epsilon), MeshQuantize.key64(p.y, quantum: epsilon))
         }
         var seen = Set<EdgeKey>()
         var edges: [(SIMD2<Double>, SIMD2<Double>)] = []
@@ -191,9 +191,9 @@ nonisolated enum ProjectionKit {
             let normal = SIMD2(-direction.y, direction.x)
             let offset = simd_dot(a, normal)
             let key = LineKey(
-                dx: Int64((direction.x / lineQuantum).rounded()),
-                dy: Int64((direction.y / lineQuantum).rounded()),
-                offset: Int64((offset / lineQuantum).rounded())
+                dx: MeshQuantize.key64(direction.x, quantum: lineQuantum),
+                dy: MeshQuantize.key64(direction.y, quantum: lineQuantum),
+                offset: MeshQuantize.key64(offset, quantum: lineQuantum)
             )
             let ta = simd_dot(a, direction)
             let tb = simd_dot(b, direction)

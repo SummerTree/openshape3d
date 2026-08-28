@@ -8,7 +8,10 @@
 //   • axis translate arrows — solid flat arrows with a dark outline, exactly
 //     like the extrude pull handle;
 //   • rotation handles — thin double-headed arrows on a curve;
-//   • plane-move handles — rounded squares; a small dot at the pivot.
+//   • plane-move handles — tiles lying IN their own plane (so the square
+//     leans with the model and shows which way it drags);
+//   • the pivot — a dot, or a crosshair once tapped (drag it to reposition
+//     the whole control without moving the model).
 //
 //  Purely visual: it projects the gizmo's own local part anchors (the same
 //  positions the 3D hit test in `GizmoGeometry` uses) to screen, so a tap on a
@@ -27,10 +30,11 @@ struct MoveGizmoOverlay: View {
     private static let fill = Color.white
     private static let highlight = Color(red: 0.20, green: 0.52, blue: 1.0)
     private static let pivot = Color(red: 0.20, green: 0.80, blue: 0.85)
+    /// The armed-pivot crosshair (Shapr3D uses a violet crosshair here).
+    private static let reposition = Color(red: 0.55, green: 0.36, blue: 0.96)
 
     private let axes: [GizmoPart] = [.xAxis, .yAxis, .zAxis]
     private let rings: [GizmoPart] = [.xRing, .yRing, .zRing]
-    private let planes: [GizmoPart] = [.xyPlane, .yzPlane, .zxPlane]
 
     var body: some View {
         let _ = viewModel.cameraEpoch
@@ -44,7 +48,7 @@ struct MoveGizmoOverlay: View {
                 // Face-rotate shows ONLY the rings (+ pivot) so the control reads
                 // as a pure rotate; body/move/scale keep their plane handles.
                 if !viewModel.faceRotateActive {
-                    ForEach(planes, id: \.self) { planeHandle($0, ctx) }
+                    planeTiles(ctx)
                 }
                 // A selected face translates/scales only — hide the rotation rings
                 // unless the Rotate tool armed them.
@@ -184,27 +188,81 @@ struct MoveGizmoOverlay: View {
         }
     }
 
-    // MARK: - Plane-move handle (rounded square)
+    // MARK: - Plane-move handle (a tile lying IN its plane)
 
+    /// The plane tiles, drawn as the projected quads they actually are: each
+    /// square lies in the plane it drags along, so it leans with the model and
+    /// tells the user which way it will move (Shapr3D draws them the same way).
+    /// A screen-aligned square said nothing about its plane — and worse, it
+    /// disagreed with the hit test, which is the quad.
     @ViewBuilder
-    private func planeHandle(_ part: GizmoPart, _ ctx: ProjectionContext) -> some View {
-        if let p = GizmoScreenLayout.planeAnchor(part, project: ctx.project) {
-            let colored = viewModel.gizmoHighlight == part ? Self.highlight : Self.fill
-            RoundedRectangle(cornerRadius: 4, style: .continuous)
-                .fill(colored)
-                .overlay(RoundedRectangle(cornerRadius: 4, style: .continuous)
-                    .stroke(Self.outline, lineWidth: 1.5))
-                .frame(width: 16, height: 16)
-                .position(p)
+    private func planeTiles(_ ctx: ProjectionContext) -> some View {
+        // Edge-on tiles are dropped here and by the hit test alike, so what is
+        // drawn is exactly what is grabbable.
+        let tiles = GizmoScreenLayout.visiblePlaneQuads(project: ctx.project)
+        ForEach(tiles) { tile in
+            planeTile(tile.part, quad: tile.quad, area: tile.area)
         }
     }
 
     @ViewBuilder
+    private func planeTile(_ part: GizmoPart, quad: [CGPoint], area: CGFloat) -> some View {
+        let colored = viewModel.gizmoHighlight == part ? Self.highlight : Self.fill
+        let path = Path { p in
+            p.addLines(quad)
+            p.closeSubpath()
+        }
+        ZStack {
+            // Outline pass: the same quad stroked fat with round joins, which
+            // rounds the corners outward the way the flat arrows are rounded.
+            path.fill(Self.outline)
+            path.stroke(Self.outline, style: StrokeStyle(lineWidth: 6, lineJoin: .round))
+            path.fill(colored)
+            path.stroke(colored, style: StrokeStyle(lineWidth: 3, lineJoin: .round))
+        }
+        // Fade a tile as it tips toward edge-on, so it never reads as a crisp
+        // target while it is collapsing into a line.
+        .opacity(min(1, Double(area) / 90))
+        .accessibilityIdentifier("GizmoPlane-\(part.axisName)")
+    }
+
+    // MARK: - Pivot (tap it to reposition the whole control)
+
+    @ViewBuilder
     private func pivotDot(at p: CGPoint) -> some View {
-        Circle().fill(Self.pivot)
-            .overlay(Circle().stroke(Self.outline, lineWidth: 1))
-            .frame(width: 11, height: 11)
-            .position(p)
+        if viewModel.gizmoRepositionArmed {
+            crosshair(at: p)
+        } else {
+            Circle().fill(Self.pivot)
+                .overlay(Circle().stroke(Self.outline, lineWidth: 1))
+                .frame(width: 11, height: 11)
+                .position(p)
+        }
+    }
+
+    /// The armed pivot: a crosshair you drag to drop the gizmo somewhere else
+    /// (the bodies stay put). Tapping the centre again puts the dot back.
+    @ViewBuilder
+    private func crosshair(at p: CGPoint) -> some View {
+        let r: CGFloat = 17
+        ZStack {
+            ForEach(0..<2, id: \.self) { i in
+                Path { path in
+                    if i == 0 {
+                        path.move(to: CGPoint(x: p.x - r, y: p.y))
+                        path.addLine(to: CGPoint(x: p.x + r, y: p.y))
+                    } else {
+                        path.move(to: CGPoint(x: p.x, y: p.y - r))
+                        path.addLine(to: CGPoint(x: p.x, y: p.y + r))
+                    }
+                }
+                .stroke(Self.reposition, style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
+            }
+            Circle().stroke(Self.reposition, lineWidth: 2.5)
+                .frame(width: 15, height: 15)
+                .position(p)
+        }
+        .accessibilityIdentifier("GizmoPivotCrosshair")
     }
 
     private func dbl(_ v: SIMD3<Float>) -> SIMD3<Double> {

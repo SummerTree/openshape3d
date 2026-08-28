@@ -28,16 +28,30 @@
 import SwiftUI
 
 extension ShapeStyle where Self == Color {
-    /// Caption colour for the bottom bars' field labels ("Distance", "W", …).
+    /// Caption colour for de-emphasized label text over a material — the bottom
+    /// bars' field labels ("Distance", "W", …) and the side panels' rows.
     ///
-    /// These used `.secondary`, which is a *hierarchical* style — over the
-    /// bars' `.regularMaterial` it is drawn with vibrancy, and vibrancy does
-    /// not composite inside the compact layout's `ScrollView`: the labels came
-    /// out fully transparent while still taking up their layout width, so the
-    /// bar read as "Box [4] [4] [4]" with no W/D/H at all. (`Color.secondary`
-    /// is hierarchical too, so it is not an escape hatch.) A concrete colour
-    /// renders the same at regular width and actually shows up at compact.
+    /// These used `.secondary`, which is a *hierarchical* style — over
+    /// `.regularMaterial` it is drawn with vibrancy, and vibrancy does not
+    /// composite inside a `ScrollView`: the labels come out fully transparent
+    /// while still taking up their layout width, so the bar read as
+    /// "Box [4] [4] [4]" with no W/D/H at all. (`Color.secondary` is
+    /// hierarchical too, so it is not an escape hatch.) A concrete colour
+    /// renders the same outside a ScrollView and actually shows up inside one.
+    ///
+    /// This bites **any** material-backed `ScrollView`, not just the compact
+    /// bars: `HistoryPanelView`, `ItemsPanelView`, and `VariablesPanelView` are
+    /// all `ScrollView { … }.background(.regularMaterial)` and lost their
+    /// headers, row icons, trash buttons, and unit captions to it. Reach for
+    /// these two instead of `.secondary`/`.tertiary` in those contexts.
+    ///
+    /// Note this is invisible to XCUITest — a transparent label still `exists`
+    /// and is `isHittable` — so it needs a visual check, not a test.
     static var barLabel: Color { Color(uiColor: .secondaryLabel) }
+
+    /// The `.tertiary` counterpart to ``barLabel``, for the faintest tier of
+    /// label text (a row's kind caption, a dimmed icon, "No features yet").
+    static var barLabelDim: Color { Color(uiColor: .tertiaryLabel) }
 }
 
 /// Advisory copy in a bar ("Drag the arrow, or type a distance"). It is the
@@ -189,14 +203,30 @@ struct AdaptiveBar<Controls: View, Actions: View, Footer: View>: View {
             }
         } else if hasFooter {
             VStack(alignment: .leading, spacing: 10) {
-                HStack(spacing: spacing) {
-                    controls
-                    actions
-                }
+                regularRow
                 footer
             }
         } else {
+            regularRow
+        }
+    }
+
+    /// The regular-width row: the natural fixed HStack when everything fits
+    /// (Spacers keep the actions pushed to the trailing edge), and the same
+    /// scrolling row as compact when it doesn't. Without the fallback, a bar
+    /// squeezed by a narrow-but-regular width (iPad Split View / Stage
+    /// Manager) compresses its last labels to per-character wrapping — the
+    /// commit button rendered as "Ex-trude" on two lines, the exact failure
+    /// the compact layout already solved. `lineLimit(1)` guards the fitted
+    /// row too, so a measurement edge case truncates instead of wrapping.
+    private var regularRow: some View {
+        ViewThatFits(in: .horizontal) {
             HStack(spacing: spacing) {
+                controls
+                actions
+            }
+            .lineLimit(1)
+            scrollRow {
                 controls
                 actions
             }

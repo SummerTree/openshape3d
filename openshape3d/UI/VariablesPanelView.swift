@@ -54,7 +54,7 @@ struct VariablesPanelView: View {
     private func sectionHeader(_ title: String) -> some View {
         Text(title)
             .font(.caption.weight(.semibold))
-            .foregroundStyle(.secondary)
+            .foregroundStyle(.barLabel)
             .padding(.top, 10)
             .padding(.bottom, 2)
     }
@@ -62,7 +62,7 @@ struct VariablesPanelView: View {
     private func emptyRow(_ text: String) -> some View {
         Text(text)
             .font(.footnote)
-            .foregroundStyle(.tertiary)
+            .foregroundStyle(.barLabelDim)
             .padding(.vertical, 4)
             .padding(.horizontal, 8)
     }
@@ -92,7 +92,7 @@ private struct VariableRowView: View {
                     .accessibilityIdentifier("VariableNameField-\(row.name)")
                 Text("=")
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(.barLabel)
                 TextField("expression", text: $exprDraft)
                     .textFieldStyle(.plain)
                     .autocorrectionDisabled()
@@ -112,7 +112,7 @@ private struct VariableRowView: View {
                 Button(action: onDelete) {
                     Image(systemName: "trash")
                         .font(.system(size: 13))
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(.barLabel)
                 }
                 .buttonStyle(.plain)
                 .accessibilityIdentifier("VariableDelete-\(row.name)")
@@ -122,7 +122,7 @@ private struct VariableRowView: View {
                 Text("= \(Self.fmt(row.value))")
                     .font(.caption.weight(.semibold))
                     .monospacedDigit()
-                    .foregroundStyle(row.hasError ? Color.orange : Color.secondary)
+                    .foregroundStyle(row.hasError ? Color.orange : Color.barLabel)
                     .accessibilityIdentifier("VariableValue-\(row.name)")
                 if row.hasError, let text = row.errorText {
                     Text(text)

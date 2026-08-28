@@ -25,6 +25,9 @@ nonisolated enum GizmoScreenLayout {
 
     /// Screen grab tolerances (points). Generous — these are touch targets.
     static let arrowHitRadius: CGFloat = 44
+    /// Slop OUTSIDE a plane tile. The tile itself is a projected quad and a tap
+    /// anywhere INSIDE it grabs the plane outright; this band only widens the
+    /// target a little past the drawn edge for touch.
     static let planeHitRadius: CGFloat = 20
     /// Rotation arcs get a big touch band — they are now off on their own
     /// (outside the move arrows), so a generous target is safe and grabbable.
@@ -33,6 +36,47 @@ nonisolated enum GizmoScreenLayout {
     /// rather than a random nearby handle, and it keeps the generous arrow band
     /// from claiming a dead-centre tap.
     static let pivotDeadZone: CGFloat = 18
+    /// Grab radius for the pivot once it is ARMED for repositioning (tapping
+    /// the centre turns the dot into a crosshair you drag). Bigger than the
+    /// dead zone: at that point moving the control IS the gesture.
+    static let pivotGrabRadius: CGFloat = 40
+
+    /// A plane tile whose projected quad has shrunk below this fraction of the
+    /// LARGEST tile's area is edge-on (its plane points at the camera) — it is
+    /// faded by the overlay and skipped by the hit test, so an invisible sliver
+    /// never claims a drag. Relative, so it means the same at every gizmo size.
+    static let planeEdgeOnFraction: CGFloat = 0.18
+    /// …with an absolute floor, for the degenerate case where ALL three tiles
+    /// are small (a very short viewport).
+    static let planeMinArea: CGFloat = 16
+
+    /// The projected arm length these point tolerances were tuned against.
+    ///
+    /// The gizmo's on-screen size follows the VIEWPORT HEIGHT (its world scale
+    /// cancels against the projection's half-height divide), so one gizmo unit
+    /// is ~0.24 × viewportHeight/2 points: ~165pt on a portrait iPad, but only
+    /// ~47pt in iPhone LANDSCAPE, where the 0.82-unit arm projects to ~39pt.
+    /// Fixed point tolerances then stop describing the gizmo at all — see
+    /// `shrinkFactor` (2026-08-25 review round 3, finding R3-A).
+    static let referenceArmPoints: CGFloat = 96
+
+    /// Fraction of the LONGEST arm below which an axis counts as foreshortened
+    /// (pointing into the screen) and is skipped. Relative, so it means the
+    /// same thing at every gizmo size.
+    static let foreshortenedFraction: CGFloat = 0.25
+
+    /// Scales the touch tolerances down when the gizmo itself is small.
+    ///
+    /// 1.0 at reference size and above (iPad and the test projector are
+    /// unaffected); ~0.4 in iPhone landscape. Without it the tolerances were
+    /// LARGER than the gizmo: the arrow gate compared the arm against the 44pt
+    /// touch radius and skipped all three axes, and the 18pt pivot dead zone
+    /// swallowed the plane handles at ~11pt — so a fully-opaque gizmo was
+    /// completely un-grabbable and drags fell through to a camera orbit.
+    static func shrinkFactor(longestArm: CGFloat) -> CGFloat {
+        guard longestArm > 0 else { return 1 }
+        return min(1, longestArm / referenceArmPoints)
+    }
 
     static let axes: [GizmoPart] = [.xAxis, .yAxis, .zAxis]
     static let rings: [GizmoPart] = [.xRing, .yRing, .zRing]
@@ -73,14 +117,98 @@ nonisolated enum GizmoScreenLayout {
         }
     }
 
+    /// The two in-plane axes of a plane tile (matching `GizmoGeometry`'s plane
+    /// coordinates, so the drawn quad and the 3D drag constraint agree).
+    static func planeBasis(for part: GizmoPart) -> (u: SIMD3<Float>, v: SIMD3<Float>) {
+        switch part {
+        case .yzPlane: (SIMD3(0, 1, 0), SIMD3(0, 0, 1))
+        case .zxPlane: (SIMD3(0, 0, 1), SIMD3(1, 0, 0))
+        default:       (SIMD3(1, 0, 0), SIMD3(0, 1, 0))   // xyPlane
+        }
+    }
+
+    /// The tile's four corners in gizmo-local space, spanning the SAME square
+    /// the 3D hit test accepts. Because they lie IN the plane, their projection
+    /// is a parallelogram that leans with the plane — which is the whole point:
+    /// the square a user sees tells them which way it will drag.
+    static func planeCornersLocal(_ part: GizmoPart) -> [SIMD3<Float>] {
+        let (u, v) = planeBasis(for: part)
+        let a = GizmoGeometry.planeMin, b = GizmoGeometry.planeMax
+        return [u * a + v * a, u * b + v * a, u * b + v * b, u * a + v * b]
+    }
+
+    /// The tile's projected quad (4 screen points), or nil if it clips.
+    static func planeQuad(_ part: GizmoPart,
+                          project: (SIMD3<Float>) -> CGPoint?) -> [CGPoint]? {
+        let pts = planeCornersLocal(part).compactMap(project)
+        return pts.count == 4 ? pts : nil
+    }
+
+    /// Shoelace area of a projected polygon (points²). Zero when edge-on.
+    static func polygonArea(_ pts: [CGPoint]) -> CGFloat {
+        guard pts.count >= 3 else { return 0 }
+        var sum: CGFloat = 0
+        for i in 0..<pts.count {
+            let a = pts[i], b = pts[(i + 1) % pts.count]
+            sum += a.x * b.y - b.x * a.y
+        }
+        return abs(sum) / 2
+    }
+
+    /// True when `point` is inside the projected quad (even-odd crossing).
+    static func polygonContains(_ pts: [CGPoint], _ point: CGPoint) -> Bool {
+        guard pts.count >= 3 else { return false }
+        var inside = false
+        var j = pts.count - 1
+        for i in 0..<pts.count {
+            let a = pts[i], b = pts[j]
+            if (a.y > point.y) != (b.y > point.y) {
+                let t = (point.y - a.y) / (b.y - a.y)
+                if point.x < a.x + t * (b.x - a.x) { inside.toggle() }
+            }
+            j = i
+        }
+        return inside
+    }
+
+    /// Screen radius of the pivot target: the dead zone normally, a bigger
+    /// grab circle once the pivot is armed for repositioning.
+    static func pivotRadius(armed: Bool,
+                            project: (SIMD3<Float>) -> CGPoint?) -> CGFloat {
+        let shrink = shrinkFactor(longestArm: longestArm(project: project))
+        return max(armed ? 22 : 12, (armed ? pivotGrabRadius : pivotDeadZone) * shrink)
+    }
+
+    /// True when a tap lands on the gizmo's centre pivot.
+    static func hitsPivot(at point: CGPoint, armed: Bool,
+                          project: (SIMD3<Float>) -> CGPoint?) -> Bool {
+        guard let center = project(.zero) else { return false }
+        return hypot(point.x - center.x, point.y - center.y)
+            <= pivotRadius(armed: armed, project: project)
+    }
+
+    /// Longest projected arm, the yardstick every tolerance is scaled by.
+    static func longestArm(project: (SIMD3<Float>) -> CGPoint?) -> CGFloat {
+        guard let center = project(.zero) else { return 0 }
+        var longest: CGFloat = 0
+        for part in axes {
+            guard let tip = axisAnchor(part, project: project) else { continue }
+            longest = max(longest, hypot(tip.x - center.x, tip.y - center.y))
+        }
+        return longest
+    }
+
     /// The gizmo part under a screen tap, matching what the overlay draws.
     ///
-    /// Arrows and plane handles are point targets; rings are the projected arc
-    /// polyline. Ties resolve by the SMALLEST normalised distance (distance /
-    /// that part's tolerance), so a tap that is a hair inside two overlapping
-    /// targets picks the one it is most centred on. Arrows and planes are
-    /// tested before rings, so where an arc passes behind an arrow the arrow
-    /// wins — translation stays the easy default.
+    /// Plane tiles are projected QUADS — a tap inside one grabs that plane
+    /// outright, before the arrows or the pivot dead zone get a say, because
+    /// that quad is exactly the square the user aimed at. (The axis lines never
+    /// cross a tile: it starts at `GizmoGeometry.planeMin` out from each axis.)
+    /// Arrows are then line targets and rings the projected arc polyline, and
+    /// ties resolve by the SMALLEST normalised distance (distance / that part's
+    /// tolerance), so a tap a hair inside two overlapping targets picks the one
+    /// it is most centred on. Rings go last, so where an arc passes behind an
+    /// arrow the arrow wins — translation stays the easy default.
     static func hitTest(at point: CGPoint,
                         project: (SIMD3<Float>) -> CGPoint?,
                         ringsOnly: Bool = false) -> GizmoPart? {
@@ -91,15 +219,46 @@ nonisolated enum GizmoScreenLayout {
             if best == nil || score < best!.score { best = (part, score) }
         }
 
+        // How big is the gizmo on screen right now? Every tolerance below is
+        // scaled by this, so the handles stay grabbable — and stay distinct —
+        // at any viewport size.
+        let center = project(.zero)
+        var arms: [(part: GizmoPart, tip: CGPoint, length: CGFloat)] = []
+        var longestArm: CGFloat = 0
+        for part in axes {
+            guard let tip = axisAnchor(part, project: project) else { continue }
+            let length = center.map { hypot(tip.x - $0.x, tip.y - $0.y) } ?? 0
+            arms.append((part, tip, length))
+            longestArm = max(longestArm, length)
+        }
+        let shrink = shrinkFactor(longestArm: longestArm)
+        // Floors keep a very small gizmo from having sub-pixel targets.
+        let arrowTol = max(10, arrowHitRadius * shrink)
+        let planeTol = max(6, planeHitRadius * shrink)
+        let ringTol = max(12, ringHitRadius * shrink)
+        let deadZone = pivotDeadZone * shrink
+
         // Rotate-a-face shows ONLY the rings; test them alone so the (invisible)
         // axis/plane targets can't win the hit near the centre and then get
         // filtered out, leaving the drag to fall through to a camera orbit.
         if ringsOnly {
             for part in rings {
                 let poly = ringPolyline(part, project: project)
-                if let d = distance(from: point, toPolyline: poly) { consider(part, d, ringHitRadius) }
+                if let d = distance(from: point, toPolyline: poly) { consider(part, d, ringTol) }
             }
             return best?.part
+        }
+
+        // Plane tiles first, as the quads they are drawn as. A tap INSIDE a
+        // tile returns immediately: it beats the arrows' generous line band and
+        // it is exempt from the pivot dead zone, which used to swallow the
+        // inner corner of a tile on a small viewport (the tiles start only
+        // ~0.18 gizmo units out).
+        // Reversed, so where two tiles overlap on screen the one drawn ON TOP
+        // (the overlay draws them in `planes` order) is the one grabbed.
+        let tiles = visiblePlaneQuads(project: project)
+        if let hit = tiles.reversed().first(where: { polygonContains($0.quad, point) }) {
+            return hit.part
         }
 
         // An axis is grabbable along its whole projected LINE — from the pivot
@@ -107,28 +266,34 @@ nonisolated enum GizmoScreenLayout {
         // arrow lands. A foreshortened axis (arrow collapsed onto the pivot,
         // pointing into the screen) is skipped: the overlay fades it and
         // grabbing it there would be a surprise.
-        let center = project(.zero)
         // Dead-centre taps are the free-move pivot — grab nothing.
-        if let center, hypot(point.x - center.x, point.y - center.y) < pivotDeadZone {
+        if let center, hypot(point.x - center.x, point.y - center.y) < deadZone {
             return nil
         }
-        for part in axes {
-            guard let tip = axisAnchor(part, project: project) else { continue }
-            if let center {
-                guard hypot(tip.x - center.x, tip.y - center.y) >= arrowHitRadius else { continue }
+        // Just OUTSIDE a tile still counts, within a touch band around its edge.
+        for tile in tiles {
+            if let d = distance(from: point, toPolyline: tile.quad + [tile.quad[0]]) {
+                consider(tile.part, d, planeTol)
+            }
+        }
+        for arm in arms {
+            if center != nil {
+                // Skip an axis that is FORESHORTENED — collapsed toward the
+                // pivot because it points into the screen. Measured against
+                // the longest arm, not against a touch radius: comparing an
+                // arm to `arrowHitRadius` meant that on any viewport where the
+                // whole gizmo was smaller than the touch target, every axis
+                // was skipped.
+                guard arm.length >= longestArm * foreshortenedFraction else { continue }
                 // Start the grabbable segment partway out from the pivot, so a
                 // tap dead-centre (over the free-move dot) does not grab a
                 // random axis, while grabs along the arrow's line still land.
-                let start = CGPoint(x: center.x + (tip.x - center.x) * 0.4,
-                                    y: center.y + (tip.y - center.y) * 0.4)
-                consider(part, distance(from: point, toSegment: start, tip), arrowHitRadius)
+                let c = center!
+                let start = CGPoint(x: c.x + (arm.tip.x - c.x) * 0.4,
+                                    y: c.y + (arm.tip.y - c.y) * 0.4)
+                consider(arm.part, distance(from: point, toSegment: start, arm.tip), arrowTol)
             } else {
-                consider(part, hypot(tip.x - point.x, tip.y - point.y), arrowHitRadius)
-            }
-        }
-        for part in planes {
-            if let a = planeAnchor(part, project: project) {
-                consider(part, hypot(a.x - point.x, a.y - point.y), planeHitRadius)
+                consider(arm.part, hypot(arm.tip.x - point.x, arm.tip.y - point.y), arrowTol)
             }
         }
         // Rings only if nothing closer already won on a point target.
@@ -136,10 +301,35 @@ nonisolated enum GizmoScreenLayout {
             for part in rings {
                 let poly = ringPolyline(part, project: project)
                 let d = distance(from: point, toPolyline: poly)
-                if let d { consider(part, d, ringHitRadius) }
+                if let d { consider(part, d, ringTol) }
             }
         }
         return best?.part
+    }
+
+    /// One plane handle as it lands on screen: the quad the overlay draws and
+    /// the hit test grabs, plus how big it is (how face-on the plane is).
+    struct PlaneTile: Identifiable {
+        let part: GizmoPart
+        let quad: [CGPoint]
+        let area: CGFloat
+        var id: GizmoPart { part }
+    }
+
+    /// The plane tiles worth drawing/grabbing: projected quads, minus any that
+    /// has collapsed edge-on (its plane pointing at the camera), where the
+    /// drawn sliver would be both invisible and a lie about what it drags.
+    static func visiblePlaneQuads(project: (SIMD3<Float>) -> CGPoint?) -> [PlaneTile] {
+        var tiles: [PlaneTile] = []
+        var largest: CGFloat = 0
+        for part in planes {
+            guard let quad = planeQuad(part, project: project) else { continue }
+            let area = polygonArea(quad)
+            tiles.append(PlaneTile(part: part, quad: quad, area: area))
+            largest = max(largest, area)
+        }
+        let floor = max(largest * planeEdgeOnFraction, planeMinArea)
+        return tiles.filter { $0.area >= floor }
     }
 
     private static func distance(from p: CGPoint, toPolyline pts: [CGPoint]) -> CGFloat? {

@@ -407,6 +407,94 @@ struct EditorView: View {
         }
     }
 
+    /// Add Axis bar (spec §6.2). The construction is derived from the picks
+    /// rather than chosen up front, so the bar's job is to NAME what the
+    /// current picks resolve to — otherwise "tap two flat faces" and "tap one"
+    /// would look identical right up until Apply.
+    private func axisBar(_ viewModel: EditorViewModel) -> some View {
+        let value = settings.unit.binding(Binding(
+            get: { viewModel.axisLength },
+            set: { viewModel.axisLength = max(0.001, $0) }))
+        return AdaptiveBar(style: .capsule, spacing: 12) {
+            Image(systemName: "line.diagonal.arrow")
+            Text(viewModel.axisConstructionLabel)
+                .font(.subheadline)
+                .fixedSize()
+            Divider().frame(height: 20)
+            Text("Length").font(.caption).foregroundStyle(.barLabel).fixedSize()
+            TextField(settings.unit.symbol, value: value,
+                      format: .number.precision(.fractionLength(0...3)))
+                .textFieldStyle(.roundedBorder)
+                .frame(width: 64)
+                .multilineTextAlignment(.trailing)
+                .keyboardType(.decimalPad)
+                .accessibilityIdentifier("AxisLengthField")
+            Text(settings.unit.symbol).font(.caption).foregroundStyle(.barLabel).fixedSize()
+        } actions: {
+            Button("Cancel") { viewModel.cancelAxisTool() }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .keyboardShortcut(.cancelAction)
+                .accessibilityIdentifier("AxisCancel")
+            Button("Apply") { viewModel.commitAxis() }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+                .disabled(!viewModel.canCommitAxis)
+                .accessibilityIdentifier("AxisApply")
+        }
+    }
+
+    /// Offset Edge bar (spec §1.9): Single/Chain type, the signed distance,
+    /// and Apply/Cancel. A negative distance offsets inward on a closed
+    /// profile, which is why the field is not clamped to zero the way Shell's
+    /// thickness is.
+    private func sketchOffsetBar(_ viewModel: EditorViewModel) -> some View {
+        let value = settings.unit.binding(Binding(
+            get: { viewModel.sketchOffsetDistance },
+            set: { viewModel.sketchOffsetDistance = $0 }))
+        let picked = viewModel.sketchOffsetSourceEntities.count
+        return AdaptiveBar(style: .capsule, spacing: 12) {
+            Image(systemName: "square.on.square.dashed")
+            Text(picked == 0
+                 ? "Tap sketch geometry to offset"
+                 : "\(picked) selected")
+                .font(.subheadline)
+                .fixedSize()
+            Divider().frame(height: 20)
+            Picker("Type", selection: Binding(
+                get: { viewModel.sketchOffsetType },
+                set: { viewModel.sketchOffsetType = $0 }
+            )) {
+                ForEach(SketchOffsetType.allCases, id: \.self) { type in
+                    Text(type.title).tag(type)
+                }
+            }
+            .pickerStyle(.segmented)
+            .fixedSize()
+            .accessibilityIdentifier("SketchOffsetType")
+            Text("Distance").font(.caption).foregroundStyle(.barLabel).fixedSize()
+            TextField(settings.unit.symbol, value: value,
+                      format: .number.precision(.fractionLength(0...3)))
+                .textFieldStyle(.roundedBorder)
+                .frame(width: 64)
+                .multilineTextAlignment(.trailing)
+                .keyboardType(.numbersAndPunctuation)
+                .accessibilityIdentifier("SketchOffsetDistanceField")
+            Text(settings.unit.symbol).font(.caption).foregroundStyle(.barLabel).fixedSize()
+        } actions: {
+            Button("Cancel") { viewModel.cancelSketchOffset() }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .keyboardShortcut(.cancelAction)
+                .accessibilityIdentifier("SketchOffsetCancel")
+            Button("Apply") { viewModel.commitSketchOffset() }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+                .disabled(!viewModel.canCommitSketchOffset)
+                .accessibilityIdentifier("SketchOffsetApply")
+        }
+    }
+
     /// Marquee rectangle over the viewport (plan §B13, spec §8.2). Standard
     /// visual cue: solid border = window (L→R drag, fully-inside selects),
     /// dashed = crossing (R→L, touched selects). Screen points come straight
@@ -703,8 +791,19 @@ struct EditorView: View {
                 }
             }
             .overlay {
-                // Shapr3D on-arrow value pill for extrude / diameter (§4.1).
-                ExtrudeGizmoOverlay(viewModel: viewModel)
+                // Shapr3D on-arrow value pills: extrude / diameter (§4.1), and
+                // the move gizmo's twin — live drag distance, plus the typed
+                // exact-distance field when an arrow is tapped (§5.1). One
+                // ZStack, so the modifier chain stays type-checkable.
+                ZStack {
+                    ExtrudeGizmoOverlay(viewModel: viewModel)
+                    MoveDistanceOverlay(viewModel: viewModel)
+                }
+            }
+            .overlay {
+                // Hardware-keyboard hotkeys (spec §8.4). Zero-sized; see
+                // CommandShortcutsView for why the shortcuts ride on buttons.
+                CommandShortcutsView(viewModel: viewModel)
             }
             .overlay(alignment: settings.paletteOnRight ? .trailing : .leading) {
                 ToolPaletteView(viewModel: viewModel)
@@ -729,6 +828,10 @@ struct EditorView: View {
                         blendBar(kind, viewModel)
                     } else if case .pickingShellFaces = viewModel.mode {
                         shellBar(viewModel)
+                    } else if case .pickingAxisReferences = viewModel.mode {
+                        axisBar(viewModel)
+                    } else if viewModel.mode.sketchTool == .offset {
+                        sketchOffsetBar(viewModel)
                     } else {
                         NumericInputBar(viewModel: viewModel)
                     }
@@ -1441,6 +1544,14 @@ struct EditorView: View {
                 Button("OK") { viewModel.errorMessage = nil }
             } message: {
                 Text(viewModel.errorMessage ?? "")
+            }
+            .onChange(of: viewModel.session.lastSaveError) { _, saveError in
+                // A failed SwiftData save means recent work isn't reaching
+                // disk — the one storage problem worth an alert mid-session.
+                if let saveError {
+                    viewModel.errorMessage =
+                        "Saving failed — recent changes may not be stored. (\(saveError))"
+                }
             }
     }
 }

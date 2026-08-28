@@ -44,12 +44,15 @@ nonisolated enum FaceTopology {
     private static let weldQuantum: Float = 1e-5
 
     private struct PositionKey: Hashable {
-        let x, y, z: Int32
+        let x, y, z: Int64
         init(_ p: SIMD3<Float>) {
             let inv = 1 / FaceTopology.weldQuantum
-            x = Int32((p.x * inv).rounded())
-            y = Int32((p.y * inv).rounded())
-            z = Int32((p.z * inv).rounded())
+            // key64: a raw Int32/Int64(_: Float) traps on NaN, and an Int32
+            // key at this quantum saturates at ±21 m — which silently WELDED
+            // far-apart vertices together instead. Int64 + NaN guard.
+            x = MeshQuantize.key64(p.x, inverseQuantum: inv)
+            y = MeshQuantize.key64(p.y, inverseQuantum: inv)
+            z = MeshQuantize.key64(p.z, inverseQuantum: inv)
         }
     }
 

@@ -124,6 +124,28 @@ struct ItemsPanelView: View {
                     )
                 }
 
+                sectionHeader("Axes")
+                if document.axes.isEmpty {
+                    emptyRow("No axes yet")
+                }
+                // Construction axes (spec §6.2): reference geometry, so they
+                // get the same eye / rename / zoom / delete row as planes.
+                ForEach(document.axes) { axis in
+                    ItemRowView(
+                        icon: "line.diagonal.arrow",
+                        name: axis.name,
+                        isHidden: axis.isHidden,
+                        renameable: true,
+                        onSelect: {},
+                        onToggleVisibility: {
+                            viewModel.setAxisHidden(axis.id, hidden: !axis.isHidden)
+                        },
+                        onRename: { viewModel.renameAxis(axis.id, to: $0) },
+                        onZoom: { viewModel.zoomToAxis(axis.id) },
+                        onDelete: { viewModel.deleteAxis(axis.id) }
+                    )
+                }
+
                 sectionHeader("Symbols")
                 if document.symbols.isEmpty {
                     emptyRow("No symbols yet")
@@ -158,7 +180,7 @@ struct ItemsPanelView: View {
     private func sectionHeader(_ title: String) -> some View {
         Text(title)
             .font(.caption.weight(.semibold))
-            .foregroundStyle(.secondary)
+            .foregroundStyle(.barLabel)
             .padding(.top, 10)
             .padding(.bottom, 2)
     }
@@ -166,7 +188,7 @@ struct ItemsPanelView: View {
     private func emptyRow(_ text: String) -> some View {
         Text(text)
             .font(.footnote)
-            .foregroundStyle(.tertiary)
+            .foregroundStyle(.barLabelDim)
             .padding(.vertical, 4)
             .padding(.horizontal, 8)
     }
@@ -194,7 +216,7 @@ private struct ConstraintRowView: View {
             Button(action: onDelete) {
                 Image(systemName: "trash")
                     .font(.system(size: 13))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(.barLabel)
             }
             .buttonStyle(.plain)
             .accessibilityIdentifier("ConstraintDelete-\(title)")
@@ -235,27 +257,28 @@ private struct ItemRowView: View {
             Image(systemName: icon)
                 .font(.system(size: 15))
                 .frame(width: 24)
-                .foregroundStyle(isHidden ? .tertiary : .secondary)
+                .foregroundStyle(isHidden ? Color.barLabelDim : Color.barLabel)
             if renameable {
                 TextField("Name", text: $draft)
                     .textFieldStyle(.plain)
                     .autocorrectionDisabled()
                     .onSubmit { onRename(draft) }
-                    .foregroundStyle(isHidden ? Color.secondary : Color.primary)
+                    .foregroundStyle(isHidden ? Color.barLabel : Color.primary)
                     .accessibilityIdentifier("ItemName-\(name)")
             } else {
                 Text(name)
-                    .foregroundStyle(isHidden ? Color.secondary : Color.primary)
+                    .foregroundStyle(isHidden ? Color.barLabel : Color.primary)
             }
             Spacer(minLength: 4)
             if showsVisibility {
                 Button(action: onToggleVisibility) {
                     Image(systemName: isHidden ? "eye.slash" : "eye")
                         .font(.system(size: 14))
-                        .foregroundStyle(isHidden ? Color.secondary : Color.primary)
+                        .foregroundStyle(isHidden ? Color.barLabel : Color.primary)
                 }
                 .buttonStyle(.plain)
                 .accessibilityIdentifier("ItemEye-\(name)")
+                .accessibilityValue(isHidden ? "hidden" : "visible")
             }
         }
         .padding(.vertical, 7)
