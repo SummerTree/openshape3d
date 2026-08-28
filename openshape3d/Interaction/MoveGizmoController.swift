@@ -68,9 +68,11 @@ nonisolated enum GizmoGeometry {
     static let axisHitRadius: Float = 0.16
     static let axisLength: Float = 1.0
     /// Plane handles span [planeMin, planeMax]² on their plane — clustered
-    /// close to the centre (Shapr3D style).
+    /// close to the centre (Shapr3D style), but chunky enough to hit: a tile
+    /// seen at an angle projects to a narrow parallelogram, and a near-miss on
+    /// a skinny tile used to fall through to something else entirely.
     static let planeMin: Float = 0.13
-    static let planeMax: Float = 0.34
+    static let planeMax: Float = 0.38
     /// Rotation arcs sit at this radius from the origin (gizmo units), outside
     /// the plane handles and clear of the arrow shafts. The hit test uses the
     /// full circle here (forgiving for touch) while a prominent quarter-arc

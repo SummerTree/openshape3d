@@ -54,6 +54,52 @@ final class TransformTests: XCTestCase {
         XCTAssertTrue(mirrored.isWatertight)
     }
 
+    // MARK: - Plane-handle drag math
+
+    /// Each plane tile drags IN its own plane: whatever the ray does, the
+    /// delta has no component along that plane's normal. Checked with an
+    /// oblique 3/4 view, where a bug that leaked the camera direction into the
+    /// delta would show up immediately.
+    func testPlaneDragDeltaStaysInThatPlane() throws {
+        let gizmo = GizmoState(origin: SIMD3(1, 2, 3), scale: 1.5, highlighted: nil)
+        let view = simd_normalize(SIMD3<Float>(-0.5, -0.62, -0.6))
+        let cases: [(GizmoPart, SIMD3<Float>)] = [
+            (.xyPlane, SIMD3(0, 0, 1)),
+            (.yzPlane, SIMD3(1, 0, 0)),
+            (.zxPlane, SIMD3(0, 1, 0)),
+        ]
+        for (part, normal) in cases {
+            // Grab off-centre (where the tile actually sits), then sweep the
+            // ray sideways as a finger would.
+            let grab = Ray(origin: gizmo.origin - view * 20 + SIMD3(0.2, 0.3, -0.1),
+                           direction: view)
+            let session = try XCTUnwrap(
+                GizmoDragSession(part: part, gizmo: gizmo, ray: grab))
+            let moved = Ray(origin: grab.origin + SIMD3(0.9, -0.4, 0.6), direction: view)
+            let delta = try XCTUnwrap(session.translationDelta(for: moved))
+            XCTAssertEqual(simd_dot(delta, normal), 0, accuracy: 1e-4,
+                           "\(part) must not move along its own normal")
+            XCTAssertGreaterThan(simd_length(delta), 1e-3,
+                                 "\(part) should actually have moved")
+        }
+    }
+
+    /// …and an axis arrow stays on its line (the twin property).
+    func testAxisDragDeltaStaysOnThatAxis() throws {
+        let gizmo = GizmoState(origin: SIMD3(1, 2, 3), scale: 1.5, highlighted: nil)
+        let view = simd_normalize(SIMD3<Float>(-0.5, -0.62, -0.6))
+        for part in [GizmoPart.xAxis, .yAxis, .zAxis] {
+            let grab = Ray(origin: gizmo.origin - view * 20, direction: view)
+            let session = try XCTUnwrap(
+                GizmoDragSession(part: part, gizmo: gizmo, ray: grab))
+            let moved = Ray(origin: grab.origin + SIMD3(0.9, -0.4, 0.6), direction: view)
+            let delta = try XCTUnwrap(session.translationDelta(for: moved))
+            let along = simd_dot(delta, part.axisDirection)
+            XCTAssertEqual(simd_length(delta - part.axisDirection * along), 0,
+                           accuracy: 1e-4, "\(part) must stay on its axis")
+        }
+    }
+
     // MARK: - Rotation ring math
 
     func testRingHitTestAndQuarterTurnDelta() throws {
