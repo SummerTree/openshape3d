@@ -97,9 +97,7 @@ final class SymbolUITests: XCTestCase {
         let symbolField = app.textFields["ItemName-Bracket"]
         XCTAssertTrue(symbolField.waitForExistence(timeout: 3),
                       "The symbol should be listed in Items")
-        symbolField.tap()
-        symbolField.doubleTap() // select the current name so typing replaces it
-        symbolField.typeText("Clip\n")
+        replaceText(symbolField, with: "Clip")
         XCTAssertTrue(app.textFields["ItemName-Clip"].waitForExistence(timeout: 3),
                       "Submitting the field should rename the symbol")
 

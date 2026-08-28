@@ -225,6 +225,14 @@ nonisolated struct GizmoDragSession {
         return accumulatedRotation
     }
 
+    /// Angle (radians, in the ring's own basis) where this ring drag was
+    /// grabbed. The rotation orbit draws its swept arc from here, so the arc
+    /// starts under the user's finger the way Shapr3D's does.
+    var ringStartAngle: Float? {
+        guard part.isRing else { return nil }
+        return Self.ringAngle(of: anchor - startOrigin, part: part)
+    }
+
     private static func ringAngle(of offset: SIMD3<Float>, part: GizmoPart) -> Float {
         let (u, v) = GizmoGeometry.ringBasis(for: part)
         return atan2(simd_dot(offset, v), simd_dot(offset, u))

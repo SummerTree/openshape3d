@@ -798,6 +798,7 @@ struct EditorView: View {
                 ZStack {
                     ExtrudeGizmoOverlay(viewModel: viewModel)
                     MoveDistanceOverlay(viewModel: viewModel)
+                    RotationOrbitOverlay(viewModel: viewModel)
                 }
             }
             .overlay {

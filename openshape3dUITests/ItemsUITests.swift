@@ -67,9 +67,7 @@ final class ItemsUITests: XCTestCase {
         let nameField = app.textFields["ItemName-Extrude"]
         XCTAssertTrue(nameField.waitForExistence(timeout: 3),
                       "The extruded body should be listed")
-        nameField.tap()
-        nameField.doubleTap() // select the current name so typing replaces it
-        nameField.typeText("MyPart\n")
+        replaceText(nameField, with: "MyPart")
         let renamedField = app.textFields["ItemName-MyPart"]
         XCTAssertTrue(renamedField.waitForExistence(timeout: 3),
                       "Submitting the field should rename the body")

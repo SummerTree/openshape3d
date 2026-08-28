@@ -163,11 +163,19 @@ final class ViewportCoordinator: NSObject, ViewportGestureDelegate, ViewportCame
             sceneDidChange()
             return
         }
-        // Tapping (not dragging) a gizmo arrow opens exact-distance entry.
-        if let part = gizmoPart(at: point), part.isArrow {
-            viewModel.beginAxisDistanceEntry(part)
-            sceneDidChange()
-            return
+        // Tapping (not dragging) a gizmo handle opens exact numeric entry:
+        // a distance on an arrow, an angle on a rotation ring.
+        if let part = gizmoPart(at: point) {
+            if part.isArrow {
+                viewModel.beginAxisDistanceEntry(part)
+                sceneDidChange()
+                return
+            }
+            if part.isRing {
+                viewModel.beginAngleEntry(part)
+                sceneDidChange()
+                return
+            }
         }
         guard let ray = ray(at: point) else { return }
         viewModel.handle(.tap(ray: ray))
@@ -424,6 +432,8 @@ final class ViewportCoordinator: NSObject, ViewportGestureDelegate, ViewportCame
                         faceRotateAxis = SIMD3<Double>(part.axisDirection)
                         faceRotateDragActive = true
                         viewModel.gizmoHighlight = part
+                        viewModel.beginRingRotation(
+                            part: part, startAngle: Double(session.ringStartAngle ?? 0))
                         return true
                     }
                     return false
@@ -472,6 +482,10 @@ final class ViewportCoordinator: NSObject, ViewportGestureDelegate, ViewportCame
                 gizmoDrag = session
                 viewModel.gizmoHighlight = part
                 viewModel.beginMove()
+                if part.isRing {
+                    viewModel.beginRingRotation(
+                        part: part, startAngle: Double(session.ringStartAngle ?? 0))
+                }
                 gizmoDebug("grab \(part) at \(point)")
                 return true
             }
@@ -563,6 +577,7 @@ final class ViewportCoordinator: NSObject, ViewportGestureDelegate, ViewportCame
             // accumulates its unwrapped total across frames.
             if let angle = gizmoDrag?.rotationDelta(for: ray) {
                 viewModel.updateRotation(part: session.part, deltaRadians: angle)
+                gizmoDebug("rotate \(session.part) pill=\(viewModel.rotationAngleLabel?.text ?? "-")")
                 sceneDidChange()
             }
             return

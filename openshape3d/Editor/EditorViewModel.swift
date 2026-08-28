@@ -1498,6 +1498,7 @@ final class EditorViewModel {
     /// Live preview of the face rotation (bumping revision so the GPU re-uploads).
     func updateFaceRotate(angle: Double, axis: SIMD3<Double>) {
         guard let s = faceRotateSession else { return }
+        setRotationOrbitAngle(radians: angle)
         faceRotateLastAngle = angle
         faceRotateLastAxis = axis
         guard let rotated = faceRotatedLocalMesh(s, angle: angle, axis: axis) else { return }
@@ -1516,6 +1517,7 @@ final class EditorViewModel {
 
     /// Commit the face rotation (uses the last previewed angle/axis).
     func endFaceRotate() {
+        endRotationOrbit()
         guard faceRotateSession != nil else { return }
         commitFaceRotate(angle: faceRotateLastAngle, axis: faceRotateLastAxis)
     }
@@ -1715,8 +1717,17 @@ final class EditorViewModel {
     /// (quaternion delta pre-multiplied; translation unchanged). Snaps in
     /// 5° increments while dragging (spec §5.3).
     func updateRotation(part: GizmoPart, deltaRadians: Float) {
-        guard let moveBefore, part.isRing else { return }
+        guard part.isRing else { return }
+        // Drags snap to 5° (spec §5.3); a TYPED angle goes through
+        // `applyRotation` directly and is honoured exactly.
         let degrees = (Double(deltaRadians) * 180 / .pi / 5).rounded() * 5
+        rotationOrbit?.degrees = degrees
+        applyRotation(part: part, degrees: degrees)
+    }
+
+    /// Rotate the captured selection by an exact angle about `part`'s axis.
+    private func applyRotation(part: GizmoPart, degrees: Double) {
+        guard let moveBefore, part.isRing else { return }
         let axis = part.axisDirection
         let q = simd_quatd(
             angle: degrees * .pi / 180,
@@ -1745,6 +1756,7 @@ final class EditorViewModel {
 
     func endMove() {
         moveDragDelta = nil
+        endRotationOrbit()
         if imageInteractionBaseline != nil {
             endImageInteraction()
             return
@@ -1765,6 +1777,134 @@ final class EditorViewModel {
         }
         guard changed else { return }
         session.perform(TransformBodiesCommand(before: before, after: after))
+    }
+
+    // MARK: - Rotation orbit + exact angle (spec §5.3)
+
+    /// The dashed circle Shapr3D draws around the body while you rotate, plus
+    /// the solid arc of how far it has swung. Live during a ring drag, and
+    /// also up while an exact angle is being typed.
+    struct RotationOrbit: Equatable {
+        /// Which ring — its axis is the rotation axis and its basis the plane
+        /// the circle is drawn in.
+        var part: GizmoPart
+        /// Where the drag was grabbed, radians in the ring's basis. The arc is
+        /// swept from here, so it starts under the finger.
+        var startAngle: Double
+        /// Signed degrees swept so far.
+        var degrees: Double
+        /// True while the angle field is open instead of a drag being in flight.
+        var isEditing: Bool
+    }
+
+    private(set) var rotationOrbit: RotationOrbit?
+
+    /// Ring tapped (not dragged) → type an exact angle, the rotate twin of
+    /// `axisEntryPart`.
+    private(set) var angleEntryPart: GizmoPart?
+
+    /// World radius of the orbit circle: outside the selection, so the circle
+    /// rings the BODY rather than cutting through it (Shapr3D draws it that
+    /// way). Falls back to the gizmo's own size when nothing has bounds.
+    var rotationOrbitRadius: Double {
+        guard let origin = gizmoOrigin else { return 0 }
+        let pivot = SIMD3<Double>(Double(origin.x), Double(origin.y), Double(origin.z))
+        var radius: Double = 0
+        for id in selection {
+            guard let body = session.document.body(with: id) else { continue }
+            let bounds = Self.worldBounds(of: body)
+            for i in 0..<8 {
+                let corner = SIMD3<Double>(
+                    (i & 1) == 0 ? bounds.min.x : bounds.max.x,
+                    (i & 2) == 0 ? bounds.min.y : bounds.max.y,
+                    (i & 4) == 0 ? bounds.min.z : bounds.max.z)
+                radius = max(radius, simd_length(corner - pivot))
+            }
+        }
+        let gizmoWorld = Double(cameraControl?.gizmoWorldScale(at: origin) ?? 1)
+        return max(radius * 1.08, gizmoWorld * 1.35)
+    }
+
+    /// A ring drag started: put the orbit up, anchored where it was grabbed.
+    func beginRingRotation(part: GizmoPart, startAngle: Double) {
+        guard part.isRing else { return }
+        angleEntryPart = nil
+        rotationOrbit = RotationOrbit(part: part, startAngle: startAngle,
+                                      degrees: 0, isEditing: false)
+    }
+
+    /// The face-rotate path drives its own angle (unsnapped radians) — keep the
+    /// orbit in step with it.
+    func setRotationOrbitAngle(radians: Double) {
+        rotationOrbit?.degrees = radians * 180 / .pi
+    }
+
+    func endRotationOrbit() {
+        guard rotationOrbit?.isEditing != true else { return }
+        rotationOrbit = nil
+    }
+
+    func beginAngleEntry(_ part: GizmoPart) {
+        guard part.isRing, gizmoOrigin != nil else { return }
+        axisEntryPart = nil
+        scaleEntryActive = false
+        angleEntryPart = part
+        rotationOrbit = RotationOrbit(part: part, startAngle: 0, degrees: 0, isEditing: true)
+    }
+
+    func cancelAngleEntry() {
+        angleEntryPart = nil
+        rotationOrbit = nil
+    }
+
+    /// Rotate by exactly `degrees` about the tapped ring's axis. No 5° snap —
+    /// a typed angle is meant literally.
+    func commitAngleRotate(degrees: Double) {
+        guard let part = angleEntryPart else { return }
+        angleEntryPart = nil
+        rotationOrbit = nil
+        guard abs(degrees) > 1e-9 else { return }
+        let a = part.axisDirection
+        let axis = SIMD3<Double>(Double(a.x), Double(a.y), Double(a.z))
+        // Rotate tool armed on a FACE: spin the face, deforming the solid.
+        if faceRotateActive {
+            guard beginFaceRotate() else { return }
+            updateFaceRotate(angle: degrees * .pi / 180, axis: axis)
+            endFaceRotate()
+            return
+        }
+        beginMove()                       // captures the pre-rotation transforms
+        applyRotation(part: part, degrees: degrees)
+        endMove()                         // one undoable TransformBodies step
+    }
+
+    /// The pill riding the orbit: the live swept angle, or an empty editable
+    /// field once a ring has been tapped.
+    struct RotationAngleLabel: Equatable {
+        var part: GizmoPart
+        var text: String
+        var isEditable: Bool
+    }
+
+    var rotationAngleLabel: RotationAngleLabel? {
+        guard let orbit = rotationOrbit else { return nil }
+        if orbit.isEditing {
+            return RotationAngleLabel(part: orbit.part, text: "", isEditable: true)
+        }
+        let rounded = (orbit.degrees * 10).rounded() / 10
+        let text = rounded == rounded.rounded()
+            ? String(format: "%.0f°", rounded)
+            : String(format: "%.1f°", rounded)
+        return RotationAngleLabel(part: orbit.part, text: text, isEditable: false)
+    }
+
+    /// Commit a typed angle (supports "45/2" like the other inline fields).
+    func commitRotationAngle(_ text: String) {
+        guard let typed = ExpressionEvaluator.evaluate(text) else {
+            cancelAngleEntry()
+            return
+        }
+        commitAngleRotate(degrees: typed)
     }
 
     // MARK: - Gizmo numeric entry (tap an arrow → exact axis distance)
