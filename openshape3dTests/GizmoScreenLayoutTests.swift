@@ -138,6 +138,40 @@ final class GizmoScreenLayoutTests: XCTestCase {
         XCTAssertEqual(hitSmall(p), .xyPlane)
     }
 
+    /// A grab near the plane tiles must never be claimed by a rotation arc.
+    /// The arcs' touch band is deliberately fat, and it used to reach right
+    /// back over the tiles: a near-miss on a skinny tile rotated the body
+    /// instead of sliding it, which is what "the squares don't drag in their
+    /// plane" actually was.
+    func testAGrabNearThePlaneTilesIsNeverARotation() {
+        let centre = project(.zero)!
+        // Out to the furthest tile corner (plus a touch): the band a user aims
+        // at when they go for a square.
+        let reach = GizmoScreenLayout.planes
+            .compactMap { GizmoScreenLayout.planeQuad($0, project: project) }
+            .flatMap { $0 }
+            .map { hypot($0.x - centre.x, $0.y - centre.y) }
+            .max()! + 6
+        for radius in stride(from: CGFloat(15), through: reach, by: 5) {
+            for degrees in stride(from: CGFloat(0), to: 360, by: 5) {
+                let a = degrees * .pi / 180
+                let p = CGPoint(x: centre.x + cos(a) * radius, y: centre.y + sin(a) * radius)
+                if let part = hit(p) {
+                    XCTAssertFalse(part.isRing,
+                                   "a grab \(Int(radius))pt from the pivot became \(part)")
+                }
+            }
+        }
+    }
+
+    /// …while the arcs themselves stay grabbable where they are drawn.
+    func testRotationArcsAreStillGrabbableOutAtTheirRadius() {
+        for part in GizmoScreenLayout.rings {
+            let poly = GizmoScreenLayout.ringPolyline(part, project: project)
+            XCTAssertEqual(hit(poly[poly.count / 2]), part)
+        }
+    }
+
     // MARK: Pivot
 
     func testThePivotTargetGrowsOnceArmed() {

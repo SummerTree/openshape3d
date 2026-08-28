@@ -203,6 +203,22 @@ final class ViewportCoordinator: NSObject, ViewportGestureDelegate, ViewportCame
         return part
     }
 
+    /// Debug hook (OS3D_GIZMO_DEBUG=1): trace which gizmo handle a drag grabbed
+    /// and the world delta it produces, so a "that didn't move the way the
+    /// handle said it would" report can be checked against the actual part.
+    private func gizmoDebug(_ message: @autoclosure () -> String) {
+        #if DEBUG
+        // Read the environment ONCE — `ProcessInfo.environment` rebuilds a
+        // dictionary on every access, and this is called per drag frame.
+        if Self.gizmoDebugEnabled { print("[gizmo] " + message()) }
+        #endif
+    }
+
+    #if DEBUG
+    private static let gizmoDebugEnabled =
+        ProcessInfo.processInfo.environment["OS3D_GIZMO_DEBUG"] != nil
+    #endif
+
     /// True when `point` lands on the gizmo's centre pivot. The target grows
     /// once the pivot is armed — at that point dragging the control IS the
     /// gesture, so it should be easy to catch.
@@ -456,6 +472,7 @@ final class ViewportCoordinator: NSObject, ViewportGestureDelegate, ViewportCame
                 gizmoDrag = session
                 viewModel.gizmoHighlight = part
                 viewModel.beginMove()
+                gizmoDebug("grab \(part) at \(point)")
                 return true
             }
         }
@@ -551,6 +568,7 @@ final class ViewportCoordinator: NSObject, ViewportGestureDelegate, ViewportCame
             return
         }
         guard let delta = session.translationDelta(for: ray) else { return }
+        gizmoDebug("move \(session.part) delta \(delta)")
         viewModel.updateMove(delta: delta)
         sceneDidChange()
     }

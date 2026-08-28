@@ -1,6 +1,6 @@
 # Status & Next Steps — Handoff Notes
 
-Last updated: 2026-07-21 (after commit `ee5baee`). This is the living handoff
+Last updated: 2026-08-28 (move-gizmo parity pass). This is the living handoff
 document: what is DONE, how the newest subsystems work, the dev workflow, and
 the prioritized next missions. Companions: `IMPLEMENTATION_PLAN.md` (original
 phase plan), `SHAPR3D_PARITY_SPEC.md` (feature spec), `PHASE_D_DESIGN.md`
@@ -116,6 +116,43 @@ refuses `simctl launch` with `SBMainWorkspace` denials, suspect a **wedged
 simulator, not your code** — confirm by stashing and launching a known-good
 build, then `simctl shutdown` + `boot`. Do NOT `erase`: it destroys the saved
 designs. (Hit 2026-08-27 after a long driving session.)
+
+### Move gizmo parity pass (2026-08-28)
+
+Driven from side-by-side screenshots of Shapr3D's move control. Everything
+lives in `GizmoScreenLayout` (the one source of truth for where handles are)
++ `MoveGizmoOverlay` (drawing) + `ViewportView` (gestures).
+
+- **Plane handles are tiles that lie IN their plane.** `planeCornersLocal` /
+  `planeQuad` project the four corners of the tile's square, so the drawn
+  shape is a parallelogram that leans with the model and shows which way it
+  drags. The hit test uses that same quad: a tap INSIDE it grabs that plane
+  outright — before the arrows, and exempt from the pivot dead zone. A tile
+  seen edge-on is dropped from BOTH drawing and hit testing
+  (`visiblePlaneQuads`), so what is drawn is exactly what is grabbable.
+- **Root cause of "the squares don't drag in their plane":** the rotation
+  arcs' deliberately fat 50pt touch band reached all the way back over the
+  tiles, so a near-miss on a skinny tile became a ROTATION (which snaps in 5°
+  steps — it read as the body swinging instead of sliding). Ring hits are now
+  rejected inside `ringInnerFraction` (0.75) of the arc's own projected
+  radius, and the band never exceeds 0.35 × that radius. Tiles also grew
+  (`GizmoGeometry.planeMax` 0.34 → 0.38).
+- **Tap the pivot to reposition the control.** The dot becomes a violet
+  crosshair; dragging it slides the gizmo on the camera-facing plane while
+  the model stays put (`gizmoPivotOffset`, scoped to the current selection by
+  `GizmoPivotOwner` so a new selection never inherits a stale drop). A
+  repositioned pivot is also the rotation centre. Drag-to-reposition is
+  gated on the arming tap, so ordinary drags near the centre are unchanged.
+- **Distance pill rides the handle** (`MoveDistanceOverlay`, twin of
+  `ExtrudeGizmoOverlay`): live distance while dragging a handle, and tapping
+  an arrow opens an inline field (Enter commits, ✕ cancels). The old
+  bottom-bar `axisMoveBar` was removed — one input, where the user is looking.
+- **Debug hook:** `OS3D_GIZMO_DEBUG=1` prints the grabbed part and each world
+  delta (`ViewportView.gizmoDebug`, DEBUG-only, flag read once). It is what
+  turned "doesn't lock to the plane" into the ring-band finding in minutes —
+  reach for it before theorising about gizmo reports.
+
+**Test baseline after this pass: 811 unit tests green.**
 
 ---
 

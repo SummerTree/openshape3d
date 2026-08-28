@@ -21,7 +21,8 @@ nonisolated enum GizmoScreenLayout {
     /// share space — a grab meant for a move handle no longer catches a rotate
     /// arc. (They used to be at 0.62, tucked among the move controls.)
     static let ringLocal: Float = 0.98
-    static let planeLocal: Float = 0.235 // plane-tile centre
+    /// Plane-tile centre — derived, so it tracks the tile's own span.
+    static var planeLocal: Float { (GizmoGeometry.planeMin + GizmoGeometry.planeMax) / 2 }
 
     /// Screen grab tolerances (points). Generous — these are touch targets.
     static let arrowHitRadius: CGFloat = 44
@@ -49,6 +50,12 @@ nonisolated enum GizmoScreenLayout {
     /// …with an absolute floor, for the degenerate case where ALL three tiles
     /// are small (a very short viewport).
     static let planeMinArea: CGFloat = 16
+
+    /// How far out from the pivot a grab must be, as a fraction of that arc's
+    /// own projected radius, before it counts as a rotation. Keeps the arcs'
+    /// generous touch band from reaching in over the plane tiles — the tiles'
+    /// outer corners already sit at ~0.54 gizmo units, and the arcs at 0.98.
+    static let ringInnerFraction: CGFloat = 0.75
 
     /// The projected arm length these point tolerances were tuned against.
     ///
@@ -296,12 +303,24 @@ nonisolated enum GizmoScreenLayout {
                 consider(arm.part, hypot(arm.tip.x - point.x, arm.tip.y - point.y), arrowTol)
             }
         }
-        // Rings only if nothing closer already won on a point target.
+        // Rings only if nothing closer already won on a point target — and
+        // only OUT where the arc actually is. A rotation arc rides at ~0.98
+        // gizmo units, so its fat touch band (deliberately fat: rotation was
+        // hard to grab) reaches all the way back over the plane tiles near the
+        // pivot. That turned a near-miss on a skinny tile into a ROTATION —
+        // the "dragging the squares doesn't stay in its plane" report. Grabs
+        // deep inside the ring are not for the ring.
         if best == nil {
             for part in rings {
                 let poly = ringPolyline(part, project: project)
-                let d = distance(from: point, toPolyline: poly)
-                if let d { consider(part, d, ringTol) }
+                guard let d = distance(from: point, toPolyline: poly) else { continue }
+                guard let center else { consider(part, d, ringTol); continue }
+                let radii = poly.map { hypot($0.x - center.x, $0.y - center.y) }
+                let inner = radii.min() ?? 0, outer = radii.max() ?? 0
+                guard hypot(point.x - center.x, point.y - center.y) >= inner * ringInnerFraction
+                else { continue }
+                // …and the band never grows wider than the arc it belongs to.
+                consider(part, d, min(ringTol, max(12, outer * 0.35)))
             }
         }
         return best?.part
