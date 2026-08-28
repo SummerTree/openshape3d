@@ -306,9 +306,7 @@ final class ParityWalkthroughUITests: XCTestCase {
         // (viewport pinches are unreliable under synthesized touches).
         let sizeField = app.textFields["ImageSizeField"]
         XCTAssertTrue(sizeField.exists)
-        sizeField.tap()
-        sizeField.doubleTap() // select the current value so typing replaces it
-        sizeField.typeText("12\n")
+        replaceText(sizeField, with: "12")
         sleep(1)
         snap("24-inserted-image-selected-bar")
     }

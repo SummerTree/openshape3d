@@ -92,4 +92,32 @@ extension XCTestCase {
         field.tap()
         field.typeText("\(value)\n") // onSubmit commits the extrude
     }
+
+    /// Replace a text field's whole contents and submit.
+    ///
+    /// The rename tests used to do `tap()` + `doubleTap()` + `typeText`,
+    /// relying on the double tap to select the existing word so the typed text
+    /// replaced it. On this simulator (iOS 26.2) the double tap no longer
+    /// selects, so the text was APPENDED — the body really was renamed, just
+    /// to "ExtrudeMyPart" instead of "MyPart", and the assertion on the new
+    /// name failed while the app was behaving correctly.
+    ///
+    /// Cmd-A is the deterministic replacement for the double tap, but focus is
+    /// asynchronous: sent too close behind the tap it can land before the field
+    /// is first responder, and the append comes back (that one still bit the
+    /// symbol rename). So this VERIFIES what actually landed and repairs it
+    /// with backspaces — the caret is at the end after typing, so deleting
+    /// `value.count` characters always empties the field, whatever the
+    /// selection did.
+    func replaceText(_ field: XCUIElement, with text: String, submit: Bool = true) {
+        field.tap()
+        field.typeKey("a", modifierFlags: .command)   // select the old value
+        field.typeText(text)
+        if let landed = field.value as? String, landed != text {
+            field.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue,
+                                  count: landed.count))
+            field.typeText(text)
+        }
+        if submit { field.typeText("\n") }
+    }
 }

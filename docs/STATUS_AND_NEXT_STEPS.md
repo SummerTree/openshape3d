@@ -7,11 +7,13 @@ Companions: `IMPLEMENTATION_PLAN.md` (original phase plan),
 `SHAPR3D_PARITY_SPEC.md` (feature spec), `PHASE_D_DESIGN.md` (feature-graph
 design).
 
-**Current test baseline: 811 unit tests, all green** (run 2026-08-28). The UI
-target holds 92 test functions today; the last full UI-suite green recorded
-here is 2026-08-27, at ~85 — nobody has run the whole UI suite since, so treat
-UI green as unverified until you do. Historical counts appear in the dated
-sections below — those are snapshots, not the baseline.
+**Current test baseline: 811 unit tests green, and the full UI suite run
+2026-08-28 — 95 executed, 2 skipped (the compact-width pair, by design on
+iPad), 0 real failures.** Two tests fail only in the long serial run and pass
+in isolation (`FaceFlowUITests/testTypeNegativeIntoArrowPill`,
+`HistoryReorderUITests/testDragReorderTwoExtrudes`); rerun individually before
+suspecting a regression. Historical counts appear in the dated sections below —
+those are snapshots, not the baseline.
 
 **Sections dated in the past are history.** §1 and §4 are the only two that
 claim to describe the present; if you find them disagreeing with the code,
@@ -140,6 +142,30 @@ refuses `simctl launch` with `SBMainWorkspace` denials, suspect a **wedged
 simulator, not your code** — confirm by stashing and launching a known-good
 build, then `simctl shutdown` + `boot`. Do NOT `erase`: it destroys the saved
 designs. (Hit 2026-08-27 after a long driving session.)
+
+### Rotate orbit + exact angle (2026-08-28)
+
+The rotate half of the same parity pass — `RotationOrbitOverlay`, the twin of
+`MoveDistanceOverlay`.
+
+- **Grabbing a rotation arc raises the orbit**: the full circle of that
+  rotation, dashed, drawn in the ring's own plane at a radius that clears the
+  selection (`rotationOrbitRadius` — the body's bounding radius + 8%, floored
+  against the gizmo's own size), with the swept slice solid on top of it. The
+  sweep starts where the drag was grabbed (`GizmoDragSession.ringStartAngle`),
+  so the arc grows from under the finger.
+- **The angle rides the arc**: a live pill at the sweep's leading end, stepping
+  in the same 5° snap the drag applies (verified on device: −5°, −10°, … −35°).
+- **Tapping an arc types an exact angle** — the rotate twin of tapping an
+  arrow. `commitAngleRotate` skips the 5° snap (a typed angle is meant
+  literally), goes through `beginMove`/`applyRotation`/`endMove` so it lands as
+  ONE undoable step, and honours a repositioned pivot. Verified: typing 45 on a
+  4 mm box gives bounds 5.66 × 5.66 × 4.00 = 4√2, exactly.
+- `updateRotation` is now a snapping front end over a shared `applyRotation`,
+  which is what let the typed path reuse the drag's tested math.
+- The pill is clamped into the viewport and, while typing, into the top ~42% of
+  it: the orbit is drawn at the BODY's radius, so its rim regularly projects
+  off-screen, and the software keyboard owns the bottom half.
 
 ### Move gizmo parity pass (2026-08-28)
 
@@ -325,7 +351,7 @@ Notes:
 | `OS3D_DEBUG_SEED_BOOLEAN` | Cylinder − cylinder, staying round through the brep path |
 | `OS3D_DEBUG_SEED_PRIMBOOL` | Cylinder primitive − box primitive (mixed analytic boolean) |
 | `OS3D_DEBUG_SEED_IMAGE` | Reference image on the ground plane, left unselected |
-| `OS3D_GIZMO_DEBUG` | Print the gizmo part each drag grabs + its world delta |
+| `OS3D_GIZMO_DEBUG` | Print the gizmo part each drag grabs, its world delta, and the rotation pill's live value |
 | `OS3D_AGENT` / `OS3D_AGENT_PORT` | Loopback control channel (`Agent/AgentServer.swift`). Answers `GET /v1/health` and nothing else so far, and the MCP client its header names is **not in this repo** — treat it as a stub. |
 
 To read `print()` output from a hook, launch through a console pty:
