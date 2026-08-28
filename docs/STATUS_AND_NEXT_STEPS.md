@@ -7,13 +7,23 @@ Companions: `IMPLEMENTATION_PLAN.md` (original phase plan),
 `SHAPR3D_PARITY_SPEC.md` (feature spec), `PHASE_D_DESIGN.md` (feature-graph
 design).
 
-**Current test baseline: 811 unit tests green, and the full UI suite run
-2026-08-28 — 95 executed, 2 skipped (the compact-width pair, by design on
-iPad), 0 real failures.** Two tests fail only in the long serial run and pass
-in isolation (`FaceFlowUITests/testTypeNegativeIntoArrowPill`,
-`HistoryReorderUITests/testDragReorderTwoExtrudes`); rerun individually before
-suspecting a regression. Historical counts appear in the dated sections below —
-those are snapshots, not the baseline.
+**Current test baseline: 811 unit tests green, and the full UI suite CLEAN at
+`3cd0af1` (2026-08-28, 41m44s) — 95 executed, 2 skipped, 0 failures.** The
+skips are `CompactWidthBarUITests`, which skip by design on the iPad
+destination.
+
+Across the two earlier full runs that day, FOUR tests failed only inside the
+long serial run and passed in isolation —
+`FaceFlowUITests/testTypeNegativeIntoArrowPill`,
+`HistoryReorderUITests/testDragReorderTwoExtrudes`,
+`ParityWalkthroughUITests/testWalkthrough10ConstraintsAndStates`,
+`DragSolveUITests/testDragTopCornerKeepsHorizontalEdgeAndCoalesces`. All four
+passed in-suite on this run, so a red one of them is NOT automatically a
+regression: rerun it alone before you go looking. (A clean run is also not
+proof they are fixed — nothing was changed to fix them.)
+
+Historical counts appear in the dated sections below — those are snapshots,
+not the baseline.
 
 **Sections dated in the past are history.** §1 and §4 are the only two that
 claim to describe the present; if you find them disagreeing with the code,
