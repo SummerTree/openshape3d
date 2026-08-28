@@ -59,6 +59,99 @@ final class GizmoScreenLayoutTests: XCTestCase {
         XCTAssertEqual(hit(a), .xyPlane)
     }
 
+    /// The tile is a QUAD lying in its plane, not a screen-aligned square, so
+    /// every point inside the shape the user sees grabs that plane — including
+    /// the corners, which a centre-plus-radius target used to miss entirely.
+    func testTapAnywhereInsideAPlaneTileGrabsIt() {
+        for part in GizmoScreenLayout.planes {
+            let quad = GizmoScreenLayout.planeQuad(part, project: project)!
+            let centre = GizmoScreenLayout.planeAnchor(part, project: project)!
+            for corner in quad {
+                // 80% of the way out to each corner — inside, but well past
+                // where a small circular target would have ended.
+                let p = CGPoint(x: centre.x + (corner.x - centre.x) * 0.8,
+                                y: centre.y + (corner.y - centre.y) * 0.8)
+                XCTAssertEqual(hit(p), part, "\(part) must be grabbable at its corners")
+            }
+        }
+    }
+
+    /// Each tile leans with its plane: its projected edges run along the two
+    /// axes that span that plane. That orientation is the whole affordance —
+    /// the square tells you which way it drags.
+    func testAPlaneTileIsOrientedToItsPlane() {
+        for part in GizmoScreenLayout.planes {
+            let quad = GizmoScreenLayout.planeQuad(part, project: project)!
+            let (u, v) = GizmoScreenLayout.planeBasis(for: part)
+            let centre = project(.zero)!
+            func screenDir(_ axis: SIMD3<Float>) -> CGVector {
+                let p = project(axis)!
+                let dx = p.x - centre.x, dy = p.y - centre.y
+                let len = hypot(dx, dy)
+                return CGVector(dx: dx / len, dy: dy / len)
+            }
+            // Corner order is (u,v) = (min,min) → (max,min) → (max,max), so
+            // edge 0→1 runs along u and edge 1→2 along v.
+            let edges = [(quad[0], quad[1], screenDir(u)), (quad[1], quad[2], screenDir(v))]
+            for (a, b, expected) in edges {
+                let dx = b.x - a.x, dy = b.y - a.y
+                let len = hypot(dx, dy)
+                XCTAssertGreaterThan(len, 1, "\(part) edge should not be degenerate")
+                let dot = (dx / len) * expected.dx + (dy / len) * expected.dy
+                XCTAssertEqual(dot, 1, accuracy: 0.01,
+                               "\(part) edge should run along its own plane axis")
+            }
+        }
+    }
+
+    /// A tile seen edge-on (its plane pointing at the camera) is a sliver: the
+    /// overlay fades it out, so the hit test must not hand it a drag either.
+    func testAnEdgeOnPlaneTileIsNotGrabbable() {
+        // y collapses onto the pivot: the xy and yz tiles go edge-on, zx stays.
+        func projectFlat(_ local: SIMD3<Float>) -> CGPoint? {
+            let s: CGFloat = 120
+            let x = CGFloat(local.x), z = CGFloat(local.z)
+            return CGPoint(x: 500 + (x * 0.866 - z * 0.866) * s,
+                           y: 500 + (x * 0.5 + z * 0.5) * s)
+        }
+        let visible = GizmoScreenLayout.visiblePlaneQuads(project: projectFlat).map(\.part)
+        XCTAssertEqual(visible, [.zxPlane],
+                       "only the tile still facing the camera should survive")
+        let collapsed = GizmoScreenLayout.planeAnchor(.xyPlane, project: projectFlat)!
+        XCTAssertNotEqual(GizmoScreenLayout.hitTest(at: collapsed, project: projectFlat),
+                          .xyPlane, "an edge-on tile must not claim a drag")
+    }
+
+    /// The tiles start ~0.18 gizmo units out, so on a short viewport their
+    /// inner corners land inside the pivot dead zone. Containment has to win
+    /// there, or the tiles are ungrabbable exactly where they are smallest.
+    func testAPlaneTileBeatsThePivotDeadZone() {
+        let quad = GizmoScreenLayout.planeQuad(.xyPlane, project: projectSmall)!
+        let centre = projectSmall(.zero)!
+        // The corner nearest the pivot.
+        let inner = quad.min(by: {
+            hypot($0.x - centre.x, $0.y - centre.y) < hypot($1.x - centre.x, $1.y - centre.y)
+        })!
+        let tileCentre = GizmoScreenLayout.planeAnchor(.xyPlane, project: projectSmall)!
+        let p = CGPoint(x: tileCentre.x + (inner.x - tileCentre.x) * 0.9,
+                        y: tileCentre.y + (inner.y - tileCentre.y) * 0.9)
+        XCTAssertEqual(hitSmall(p), .xyPlane)
+    }
+
+    // MARK: Pivot
+
+    func testThePivotTargetGrowsOnceArmed() {
+        // 26pt off-centre: outside the dead zone, inside the armed grab circle.
+        let p = CGPoint(x: 526, y: 500)
+        XCTAssertFalse(GizmoScreenLayout.hitsPivot(at: p, armed: false, project: project))
+        XCTAssertTrue(GizmoScreenLayout.hitsPivot(at: p, armed: true, project: project))
+    }
+
+    func testThePivotIsHitDeadCentre() {
+        let centre = project(.zero)!
+        XCTAssertTrue(GizmoScreenLayout.hitsPivot(at: centre, armed: false, project: project))
+    }
+
     // MARK: Rotation arcs
 
     func testTapOnARotationArcPicksThatRing() {

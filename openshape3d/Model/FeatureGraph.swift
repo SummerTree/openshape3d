@@ -36,6 +36,11 @@ nonisolated struct PatternSpec: Codable, Hashable, Sendable {
     enum Kind: String, Codable, Hashable, Sendable { case linear, circular }
     var kind: Kind
     var axis: SIMD3<Double>       // linear: direction; circular: rotation axis (world)
+    /// Circular only: a point ON the rotation axis. Was implicitly the world
+    /// origin before construction axes existed (spec §6.2), which is why it
+    /// decodes to `.zero` when absent — every pattern written before this
+    /// field spun about the origin, and must keep doing so.
+    var center: SIMD3<Double>
     var count: Int                // TOTAL instances incl. the original (>=1)
     var spacing: Double           // linear: adjacent-center distance
     var totalAngle: Double        // circular: first->last sweep in RADIANS
@@ -44,6 +49,7 @@ nonisolated struct PatternSpec: Codable, Hashable, Sendable {
     init(
         kind: Kind = .linear,
         axis: SIMD3<Double> = SIMD3(1, 0, 0),
+        center: SIMD3<Double> = .zero,
         count: Int = 1,
         spacing: Double = 0,
         totalAngle: Double = 2 * .pi,
@@ -51,10 +57,29 @@ nonisolated struct PatternSpec: Codable, Hashable, Sendable {
     ) {
         self.kind = kind
         self.axis = axis
+        self.center = center
         self.count = count
         self.spacing = spacing
         self.totalAngle = totalAngle
         self.rotateInstances = rotateInstances
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case kind, axis, center, count, spacing, totalAngle, rotateInstances
+    }
+
+    /// Hand-written because a synthesized `init(from:)` ignores property
+    /// defaults: a stored spec with no `center` key would fail to decode
+    /// outright, taking the whole feature node with it.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        kind = try c.decode(Kind.self, forKey: .kind)
+        axis = try c.decode(SIMD3<Double>.self, forKey: .axis)
+        center = try c.decodeIfPresent(SIMD3<Double>.self, forKey: .center) ?? .zero
+        count = try c.decode(Int.self, forKey: .count)
+        spacing = try c.decode(Double.self, forKey: .spacing)
+        totalAngle = try c.decode(Double.self, forKey: .totalAngle)
+        rotateInstances = try c.decode(Bool.self, forKey: .rotateInstances)
     }
 }
 
@@ -1229,7 +1254,7 @@ nonisolated extension FeatureGraph {
                 direction: spec.axis, spacing: spec.spacing, count: max(1, spec.count))
         case .circular:
             transforms = PatternKit.circularTransforms(
-                center: .zero, axis: spec.axis, count: max(1, spec.count),
+                center: spec.center, axis: spec.axis, count: max(1, spec.count),
                 totalAngle: spec.totalAngle, rotateInstances: spec.rotateInstances)
         }
 

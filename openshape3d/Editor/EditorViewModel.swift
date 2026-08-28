@@ -930,6 +930,13 @@ final class EditorViewModel {
     /// selections only — face selections use the pull arrow instead. A
     /// selected inserted image (plan §B10) attaches the gizmo at its center.
     var gizmoOrigin: SIMD3<Float>? {
+        guard let base = gizmoBaseOrigin else { return nil }
+        return base + activeGizmoPivotOffset
+    }
+
+    /// Where the gizmo attaches BEFORE the user repositions it (see
+    /// `activeGizmoPivotOffset`).
+    private var gizmoBaseOrigin: SIMD3<Float>? {
         if let image = selectedImage {
             let center = image.plane.origin
             return SIMD3(Float(center.x), Float(center.y), Float(center.z))
@@ -961,6 +968,76 @@ final class EditorViewModel {
         return SIMD3(Float(centroid.x), Float(centroid.y), Float(centroid.z))
     }
 
+    // MARK: - Gizmo pivot (tap the centre to reposition the control)
+
+    /// What a dropped pivot belongs to. Selecting something else — or the same
+    /// body's face instead of the body — starts over rather than inheriting the
+    /// last drop, so a stale offset can never strand the gizmo off in space.
+    private struct GizmoPivotOwner: Equatable {
+        var bodies: Set<BodyID>
+        var face: Bool
+        var image: Bool
+    }
+
+    private var currentGizmoPivotOwner: GizmoPivotOwner {
+        var face = false
+        if case .faceSelected = mode { face = true }
+        return GizmoPivotOwner(bodies: selection, face: face, image: selectedImage != nil)
+    }
+
+    /// Where the user dropped the gizmo, as an offset from `gizmoBaseOrigin`.
+    /// Repositioning moves the CONTROL only — the bodies stay where they are —
+    /// which is how you line an axis up with a corner before moving.
+    private var gizmoPivotOffset: SIMD3<Float> = .zero
+    private var gizmoPivotOwner: GizmoPivotOwner?
+    private var gizmoPivotArmed = false
+
+    /// True once the pivot has been tapped: the dot becomes a crosshair and a
+    /// drag on it repositions the gizmo instead of orbiting the camera.
+    var gizmoRepositionArmed: Bool {
+        gizmoPivotArmed && gizmoPivotOwner == currentGizmoPivotOwner
+    }
+
+    /// The offset in force right now — zero unless it belongs to what is
+    /// selected at this moment.
+    private var activeGizmoPivotOffset: SIMD3<Float> {
+        gizmoPivotOwner == currentGizmoPivotOwner ? gizmoPivotOffset : .zero
+    }
+
+    /// True when the gizmo has been dragged off its natural attach point.
+    var gizmoPivotIsOffset: Bool { activeGizmoPivotOffset != .zero }
+
+    /// Tap on the pivot: arm (or disarm) repositioning.
+    func toggleGizmoReposition() {
+        guard gizmoOrigin != nil else { return }
+        let armed = gizmoRepositionArmed
+        claimGizmoPivot()
+        gizmoPivotArmed = !armed
+    }
+
+    /// Drop the gizmo at `world` (the pivot drag; nothing else moves).
+    func setGizmoPivot(world: SIMD3<Float>) {
+        claimGizmoPivot()
+        guard let base = gizmoBaseOrigin else { return }
+        gizmoPivotOffset = world - base
+    }
+
+    /// Hand the pivot to whatever is selected NOW, dropping a previous
+    /// selection's offset instead of adopting it.
+    private func claimGizmoPivot() {
+        let owner = currentGizmoPivotOwner
+        guard gizmoPivotOwner != owner else { return }
+        gizmoPivotOwner = owner
+        gizmoPivotOffset = .zero
+    }
+
+    /// Send the gizmo back to its natural attach point and put the dot back.
+    func resetGizmoPivot() {
+        gizmoPivotOffset = .zero
+        gizmoPivotOwner = nil
+        gizmoPivotArmed = false
+    }
+
     // MARK: - Move drags (gizmo)
 
     private var moveBefore: [BodyID: Transform3D]?
@@ -968,6 +1045,10 @@ final class EditorViewModel {
     /// Copy badge (spec §5.1): when on, the next gizmo drag duplicates the
     /// selection and moves the copy. Resets after each drag.
     var copyOnDrag = false
+
+    /// World-space delta of the gizmo drag in flight — what the on-gizmo
+    /// distance pill reads. nil when no handle is being dragged.
+    private(set) var moveDragDelta: SIMD3<Float>?
 
     /// Live state for a gizmo drag that MOVES a selected face (deforming the
     /// solid), as opposed to translating a whole body. Everything is captured
@@ -1519,6 +1600,7 @@ final class EditorViewModel {
         if selectedImage != nil {
             axisEntryPart = nil
             scaleEntryActive = false
+            moveDragDelta = nil
             if copyOnDrag {
                 copyOnDrag = false
                 duplicateSelectedImageForDrag()
@@ -1530,6 +1612,7 @@ final class EditorViewModel {
         if case .faceSelected = mode {
             axisEntryPart = nil
             scaleEntryActive = false
+            moveDragDelta = nil
             copyOnDrag = false // Copy-on-drag is a whole-body affordance.
             _ = beginFaceMove()
             return
@@ -1537,6 +1620,7 @@ final class EditorViewModel {
         guard !selection.isEmpty else { return }
         axisEntryPart = nil
         scaleEntryActive = false
+        moveDragDelta = nil
         if copyOnDrag {
             copyOnDrag = false
             duplicateSelectionForDrag()
@@ -1582,6 +1666,9 @@ final class EditorViewModel {
     }
 
     func updateMove(delta: SIMD3<Float>) {
+        // Feeds the distance pill riding the gizmo (Shapr3D shows the travelled
+        // distance on the handle as you drag).
+        moveDragDelta = delta
         if imageInteractionBaseline != nil {
             updateImageMove(delta: delta)
             return
@@ -1635,11 +1722,21 @@ final class EditorViewModel {
             angle: degrees * .pi / 180,
             axis: SIMD3(Double(axis.x), Double(axis.y), Double(axis.z))
         )
+        // A repositioned pivot is a rotation CENTRE too: dropping the gizmo on
+        // a corner and spinning turns the body about that corner. Left alone
+        // (the usual case) each body still spins about its own pivot, which is
+        // where the gizmo sits anyway.
+        let pivot: SIMD3<Double>? = gizmoPivotIsOffset ? gizmoOrigin.map {
+            SIMD3(Double($0.x), Double($0.y), Double($0.z))
+        } : nil
         session.preview { document in
             for (id, original) in moveBefore {
                 if let index = document.bodyIndex(of: id) {
                     var transform = original
                     transform.rotation = simd_normalize(q * original.rotation)
+                    if let pivot {
+                        transform.translation = pivot + q.act(original.translation - pivot)
+                    }
                     document.bodies[index].transform = transform
                 }
             }
@@ -1647,6 +1744,7 @@ final class EditorViewModel {
     }
 
     func endMove() {
+        moveDragDelta = nil
         if imageInteractionBaseline != nil {
             endImageInteraction()
             return
@@ -1683,6 +1781,48 @@ final class EditorViewModel {
 
     func cancelAxisDistanceEntry() {
         axisEntryPart = nil
+    }
+
+    /// The value pill riding the move gizmo (Shapr3D §5.1): the live distance
+    /// while a handle is dragged, or an empty editable field once an arrow has
+    /// been TAPPED, so a move can be typed exactly instead of dragged.
+    struct MoveDistanceLabel: Equatable {
+        var part: GizmoPart
+        var text: String
+        /// True = show the text field (an arrow was tapped); false = a live
+        /// read-out of the drag in flight.
+        var isEditable: Bool
+    }
+
+    var moveDistanceLabel: MoveDistanceLabel? {
+        guard gizmoOrigin != nil else { return nil }
+        if let part = axisEntryPart {
+            return MoveDistanceLabel(part: part, text: "", isEditable: true)
+        }
+        guard let delta = moveDragDelta, let part = gizmoHighlight, !part.isRing else {
+            return nil
+        }
+        let d = SIMD3<Double>(Double(delta.x), Double(delta.y), Double(delta.z))
+        let a = part.axisDirection
+        // An arrow reads its own axis component (signed travel); a plane tile
+        // reads how far the body slid in that plane.
+        let distance = part.isArrow
+            ? simd_dot(d, SIMD3<Double>(Double(a.x), Double(a.y), Double(a.z)))
+            : simd_length(d)
+        return MoveDistanceLabel(
+            part: part,
+            text: AppSettings.shared.unit.compactLengthString(fromMM: abs(distance)),
+            isEditable: false)
+    }
+
+    /// Commit a distance typed into the pill (supports "25.4/2" like the other
+    /// inline fields); the value is in the display unit.
+    func commitMoveDistance(_ text: String) {
+        guard let typed = ExpressionEvaluator.evaluate(text) else {
+            cancelAxisDistanceEntry()
+            return
+        }
+        commitAxisMove(distance: AppSettings.shared.unit.mm(fromDisplay: typed))
     }
 
     /// Move the selection by exactly `distance` along the tapped arrow's axis.
@@ -2922,6 +3062,13 @@ final class EditorViewModel {
             case circular = "Circular"
         }
 
+        /// A construction axis chosen instead of a world axis. The manual's
+        /// own first stated reason to build one is "creating an axis for a
+        /// circular pattern" (spec §6.2), and unlike X/Y/Z it carries a
+        /// POSITION — so the pattern can spin about something other than the
+        /// world origin, which is all v1 could do.
+        var constructionAxisID: ConstructionAxisID?
+
         enum Axis: String, CaseIterable {
             case x = "X"
             case y = "Y"
@@ -3039,21 +3186,35 @@ final class EditorViewModel {
         }
     }
 
+    /// The rotation line a pattern should use: a chosen construction axis if
+    /// one is set and still exists, else the world axis through the origin.
+    ///
+    /// Falling back when the axis has been DELETED matters — the pattern bar
+    /// can outlive the axis it references, and silently spinning about the
+    /// origin is better than crashing or freezing the preview.
+    func patternAxisLine(_ state: PatternState) -> (direction: SIMD3<Double>, center: SIMD3<Double>) {
+        if let id = state.constructionAxisID,
+           let axis = session.document.axes.first(where: { $0.id == id }) {
+            return (axis.direction, axis.origin)
+        }
+        return (state.axis.direction, .zero)
+    }
+
     /// 3D instance transforms for the current parameters; the first is always
-    /// identity (the original). Circular patterns spin about the chosen world
-    /// axis through the origin in v1.
+    /// identity (the original).
     private func patternTransforms(_ state: PatternState) -> [Transform3D] {
+        let line = patternAxisLine(state)
         switch state.kind {
         case .linear:
             return PatternKit.linearTransforms(
-                direction: state.axis.direction,
+                direction: line.direction,
                 spacing: state.spacing,
                 count: max(1, state.count)
             )
         case .circular:
             return PatternKit.circularTransforms(
-                center: .zero,
-                axis: state.axis.direction,
+                center: line.center,
+                axis: line.direction,
                 count: max(1, state.count),
                 totalAngle: state.totalAngle * .pi / 180,
                 rotateInstances: true
@@ -3148,7 +3309,7 @@ final class EditorViewModel {
                 name: "Pattern",
                 kind: .pattern(
                     body: BodyRef(producer: owner.id, bodyID: bodyID),
-                    spec: Self.patternSpec(from: state)
+                    spec: patternSpec(from: state)
                 ),
                 outputBodyIDs: copyIDs
             )
@@ -6369,6 +6530,16 @@ final class EditorViewModel {
             return SIMD3(Double(w.x), Double(w.y), Double(w.z))
         }
 
+        // An edge near the tap wins over the face behind it: "Along Edge" is
+        // only reachable by aiming at an edge, whereas a face can always be hit
+        // in its middle.
+        if let edge = nearestStraightEdge(on: body, worldHit: hit.worldPoint) {
+            appendAxisPick(.edge(
+                start: world(SIMD3<Double>(edge.start)),
+                end: world(SIMD3<Double>(edge.end))))
+            return
+        }
+
         // A round face gives its own fitted axis, so it wins outright.
         if let cylinder = FaceTopology.cylindricalFace(
             in: body.render, seedTriangle: hit.triangleIndex
@@ -6392,11 +6563,47 @@ final class EditorViewModel {
         errorMessage = "Tap a flat face, a round face, or an edge to define an axis."
     }
 
-    /// Pick an edge for the axis (routed from the viewport's edge hit-test,
-    /// which is the same one Chamfer/Fillet uses).
-    func pickAxisEdge(start: SIMD3<Double>, end: SIMD3<Double>) {
-        appendAxisPick(.edge(start: start, end: end))
+    /// The straight edge near a tap on `body`, in the body's LOCAL space, or
+    /// nil when the tap is out in the middle of a face.
+    ///
+    /// Two filters matter here, and they are the whole reason this is not just
+    /// `edges.min(by: distance)` the way Chamfer/Fillet does it:
+    ///
+    /// * **Proximity.** Blend only ever wants an edge, so it takes the nearest
+    ///   one unconditionally. This tool has to choose between the edge and the
+    ///   face behind it, so an edge has to be genuinely near the tap — within a
+    ///   band scaled to the body, so the same gesture works at any model size.
+    /// * **Straightness.** A tessellated rim is dozens of short segments, and
+    ///   one segment of a circle is a meaningless axis. `smoothChain` is the
+    ///   honest test: a straight edge is its own chain, a curved one is not.
+    private func nearestStraightEdge(
+        on body: Body, worldHit: SIMD3<Float>
+    ) -> SelectableEdge? {
+        let inverse = simd_inverse(body.transform.matrixFloat)
+        let local4 = inverse * SIMD4(worldHit, 1)
+        let localPoint = SIMD3<Float>(local4.x, local4.y, local4.z)
+
+        let aabb = body.render.localAABB
+        let diagonal = Double(simd_length(aabb.max - aabb.min))
+        guard diagonal > 1e-9 else { return nil }
+        let tolerance = Float(diagonal * Self.axisEdgePickFraction)
+
+        let edges = EdgeTopology.selectableEdges(from: body.render)
+        guard let nearest = edges.min(by: {
+            Self.pointSegmentDistance(localPoint, $0.start, $0.end)
+                < Self.pointSegmentDistance(localPoint, $1.start, $1.end)
+        }) else { return nil }
+        guard Self.pointSegmentDistance(localPoint, nearest.start, nearest.end) <= tolerance
+        else { return nil }
+        guard EdgeTopology.smoothChain(containing: nearest, in: edges).count == 1
+        else { return nil }
+        return nearest
     }
+
+    /// How close to an edge a tap must land to mean "that edge", as a fraction
+    /// of the body's diagonal — proportional so it behaves the same on a 3 mm
+    /// part and a 3 m one.
+    private static let axisEdgePickFraction = 0.04
 
     /// Picks are capped at two: every construction the tool derives needs one
     /// reference or two, so a third tap starts over rather than silently
@@ -9406,10 +9613,15 @@ final class EditorViewModel {
     /// RADIANS (the state carries degrees); `rotateInstances` matches the live
     /// circular transform call (always true). Used both when recording a pattern
     /// commit and — via the panel edit API — when rebuilding a spec field-by-field.
-    private static func patternSpec(from state: PatternState) -> PatternSpec {
-        PatternSpec(
+    private func patternSpec(from state: PatternState) -> PatternSpec {
+        // Resolve the construction axis HERE rather than storing its id: the
+        // spec is replayed by the feature graph, which has no view model, and
+        // baking the line keeps a rebuild working after the axis is deleted.
+        let line = patternAxisLine(state)
+        return PatternSpec(
             kind: state.kind == .linear ? .linear : .circular,
-            axis: state.axis.direction,
+            axis: line.direction,
+            center: line.center,
             count: state.count,
             spacing: state.spacing,
             totalAngle: state.totalAngle * .pi / 180,

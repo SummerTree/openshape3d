@@ -13,7 +13,6 @@ struct NumericInputBar: View {
     @Bindable var viewModel: EditorViewModel
 
     @State private var values: [Double] = []
-    @State private var axisDistance: Double = 0
     @FocusState private var focusedField: Int?
 
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
@@ -23,9 +22,10 @@ struct NumericInputBar: View {
     private var isCompact: Bool { horizontalSizeClass == .compact }
 
     var body: some View {
-        if let part = viewModel.axisEntryPart {
-            axisMoveBar(part)
-        } else if viewModel.scaleEntryActive {
+        // (Exact-distance moves are typed in the pill riding the gizmo arrow —
+        // `MoveDistanceOverlay` — not down here, so the field sits where the
+        // user is looking.)
+        if viewModel.scaleEntryActive {
             scaleBar
         } else if viewModel.mode == .rotatingAroundAxis,
                   viewModel.rotateAxisState?.hasAxis == true {
@@ -100,39 +100,6 @@ struct NumericInputBar: View {
                 if old != nil, new != old { commit() }
             }
         }
-    }
-
-    /// Exact-distance move along a tapped gizmo arrow (spec §5.1).
-    private func axisMoveBar(_ part: GizmoPart) -> some View {
-        AdaptiveBar {
-            Text("Move \(part.axisName)")
-                .font(.headline)
-                .fixedSize()
-
-            HStack(spacing: 6) {
-                Text("Distance")
-                    .font(.caption)
-                    .foregroundStyle(.barLabel)
-                    .fixedSize()
-                TextField("Distance", value: AppSettings.shared.unit.binding($axisDistance),
-                          format: .number.precision(.fractionLength(0...3)))
-                    .keyboardType(.numbersAndPunctuation)
-                    .textFieldStyle(.roundedBorder)
-                    .frame(width: 90)
-                    .onSubmit { viewModel.commitAxisMove(distance: axisDistance) }
-            }
-
-            Spacer()
-        } actions: {
-            Button("Cancel") {
-                viewModel.cancelAxisDistanceEntry()
-            }
-            Button("Move") {
-                viewModel.commitAxisMove(distance: axisDistance)
-            }
-            .buttonStyle(.borderedProminent)
-        }
-        .onAppear { axisDistance = 0 }
     }
 
     /// Uniform scale about the body pivot (spec §5.4): factor field, Copy
@@ -334,7 +301,28 @@ struct NumericInputBar: View {
         .pickerStyle(.segmented)
         .fixedSize()
 
-        if !axisChoices.isEmpty {
+        let constructionAxes = viewModel.session.document.axes
+        if !constructionAxes.isEmpty {
+            // With construction axes in the document the choice is no longer
+            // three-way, and a segmented control carrying named axes would blow
+            // the row's width apart at compact size (gotcha 11). A menu stays
+            // one control wide however many axes exist.
+            Menu {
+                Picker("Axis", selection: axisSelection) {
+                    ForEach(axisChoices, id: \.self) { axis in
+                        Text(axis.rawValue).tag(PatternAxisChoice.world(axis))
+                    }
+                    ForEach(constructionAxes) { axis in
+                        Text(axis.name).tag(PatternAxisChoice.construction(axis.id))
+                    }
+                }
+            } label: {
+                Label(currentAxisLabel(), systemImage: "line.diagonal.arrow")
+                    .font(.caption)
+                    .fixedSize()
+            }
+            .accessibilityIdentifier("PatternAxisMenu")
+        } else if !axisChoices.isEmpty {
             Picker("Axis", selection: Binding(
                 get: { viewModel.patternState?.axis ?? .x },
                 set: { viewModel.patternState?.axis = $0 }
@@ -346,6 +334,40 @@ struct NumericInputBar: View {
             .pickerStyle(.segmented)
             .fixedSize()
         }
+    }
+
+    /// A world axis or a construction axis, as one selectable value.
+    private enum PatternAxisChoice: Hashable {
+        case world(EditorViewModel.PatternState.Axis)
+        case construction(ConstructionAxisID)
+    }
+
+    private var axisSelection: Binding<PatternAxisChoice> {
+        Binding(
+            get: {
+                if let id = viewModel.patternState?.constructionAxisID {
+                    return .construction(id)
+                }
+                return .world(viewModel.patternState?.axis ?? .x)
+            },
+            set: { choice in
+                switch choice {
+                case .world(let axis):
+                    viewModel.patternState?.axis = axis
+                    viewModel.patternState?.constructionAxisID = nil
+                case .construction(let id):
+                    viewModel.patternState?.constructionAxisID = id
+                }
+            }
+        )
+    }
+
+    private func currentAxisLabel() -> String {
+        if let id = viewModel.patternState?.constructionAxisID,
+           let axis = viewModel.session.document.axes.first(where: { $0.id == id }) {
+            return axis.name
+        }
+        return (viewModel.patternState?.axis ?? .x).rawValue
     }
 
     /// Opacity label + slider, sized for whichever row it lands on.

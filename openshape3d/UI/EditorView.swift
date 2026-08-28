@@ -791,8 +791,14 @@ struct EditorView: View {
                 }
             }
             .overlay {
-                // Shapr3D on-arrow value pill for extrude / diameter (§4.1).
-                ExtrudeGizmoOverlay(viewModel: viewModel)
+                // Shapr3D on-arrow value pills: extrude / diameter (§4.1), and
+                // the move gizmo's twin — live drag distance, plus the typed
+                // exact-distance field when an arrow is tapped (§5.1). One
+                // ZStack, so the modifier chain stays type-checkable.
+                ZStack {
+                    ExtrudeGizmoOverlay(viewModel: viewModel)
+                    MoveDistanceOverlay(viewModel: viewModel)
+                }
             }
             .overlay {
                 // Hardware-keyboard hotkeys (spec §8.4). Zero-sized; see
