@@ -19,6 +19,13 @@ final class DragSolveUITests: XCTestCase {
         XCUIDevice.shared.orientation = .portrait
     }
 
+    /// Every element lookup here goes through `.firstMatch`. The run failed
+    /// once with "Multiple matching elements found" and no identifier in the
+    /// message — a duplicate can appear transiently (the Constrain flyout and
+    /// the Constrain MENU both carry `Constraint_*` buttons, so a frame where
+    /// both are up makes those queries ambiguous). These are drive-the-UI
+    /// steps, not the assertions under test, so resolving to the first match is
+    /// the right trade: the test keeps testing the solver, not the chrome.
     func testDragTopCornerKeepsHorizontalEdgeAndCoalesces() throws {
         let app = XCUIApplication()
         app.launchEnvironment["OS3D_FRESH"] = "1"
@@ -28,9 +35,9 @@ final class DragSolveUITests: XCTestCase {
         // Enter a ground sketch with the Line tool.
         XCTAssertTrue(app.buttons["SketchGroup"].waitForExistence(timeout: 10))
         startSketchTool(app, "Line")
-        XCTAssertTrue(app.staticTexts["Choose a sketch plane"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.staticTexts["Choose a sketch plane"].firstMatch.waitForExistence(timeout: 3))
         window.coordinate(withNormalizedOffset: CGVector(dx: 0.80, dy: 0.78)).tap()
-        XCTAssertTrue(app.staticTexts["Sketching on ground plane"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.staticTexts["Sketching on ground plane"].firstMatch.waitForExistence(timeout: 3))
         sleep(2) // let the head-on camera animation settle
         lookAtSketch(app)
 
@@ -55,17 +62,17 @@ final class DragSolveUITests: XCTestCase {
         drag(p(tr.dx, tr.dy), p(tl.dx, tl.dy)) // top
         drag(p(tl.dx, tl.dy), p(bl.dx, bl.dy)) // left (closes the loop)
 
-        let undo = app.buttons["Undo"]
+        let undo = app.buttons["Undo"].firstMatch
         XCTAssertTrue(undo.isEnabled, "Drawing the rectangle should push undoable steps")
 
         // Select the top edge (tap its middle) and level it with Horizontal.
         p(0.50, 0.42).tap()
         sleep(1)
-        let menu = app.buttons["ConstraintsMenu"]
-        if !menu.isHittable { app.buttons["ConstrainGroup"].tap() }
+        let menu = app.buttons["ConstraintsMenu"].firstMatch
+        if !menu.isHittable { app.buttons["ConstrainGroup"].firstMatch.tap() }
         XCTAssertTrue(menu.waitForExistence(timeout: 3), "Constraints menu should exist")
         menu.tap()
-        let horizontal = app.buttons["Constraint_Horizontal"]
+        let horizontal = app.buttons["Constraint_Horizontal"].firstMatch
         XCTAssertTrue(horizontal.waitForExistence(timeout: 3))
         XCTAssertTrue(horizontal.isEnabled, "Horizontal should enable for a single line")
         horizontal.tap()
@@ -94,7 +101,7 @@ final class DragSolveUITests: XCTestCase {
                        "4 lines + Horizontal + one coalesced solved Move = six undo steps")
         XCTAssertFalse(undo.isEnabled, "Undo stack should be empty after draining")
 
-        app.buttons["Exit Sketching"].tap()
-        XCTAssertFalse(app.staticTexts["Sketching on ground plane"].exists)
+        app.buttons["Exit Sketching"].firstMatch.tap()
+        XCTAssertFalse(app.staticTexts["Sketching on ground plane"].firstMatch.exists)
     }
 }

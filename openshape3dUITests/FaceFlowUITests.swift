@@ -121,7 +121,18 @@ final class FaceFlowUITests: XCTestCase {
         XCTAssertTrue(field.waitForExistence(timeout: 3))
         field.tap()
         field.typeText("-3\n")   // explicit negative → push inward
-        sleep(1)
+
+        // Wait for the COMMIT, not for a stopwatch. Submitting runs a CSG push
+        // and ends the face selection, and a fixed sleep(1) is not enough on a
+        // loaded machine — the undo assertions below then ran against a stack
+        // that had only the seed in it, and read as "the negative did not
+        // commit" when it simply had not finished. (Long-serial-run flake.)
+        XCTAssertTrue(field.waitForNonExistence(timeout: 15),
+                      "Submitting should close the pill's field")
+        XCTAssertTrue(
+            app.staticTexts["Face selected — drag it to push or pull"]
+                .waitForNonExistence(timeout: 15),
+            "Committing the push should end the face selection")
 
         // Seed add + inward push = two undoable commands (the push committed).
         let undo = app.buttons["Undo"]

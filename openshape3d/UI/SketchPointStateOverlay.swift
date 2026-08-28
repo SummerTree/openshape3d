@@ -36,6 +36,11 @@ struct SketchPointStateOverlay: View {
             // inset by default, which would draw every projected point ~85pt
             // below the geometry it annotates.
             .ignoresSafeArea()
+            // `children: .contain` matters: an identifier ALONE collapses this
+            // into a single element and hides every marker from XCUITest (see
+            // STATUS gotcha 2), which is why a test could not tell whether a
+            // sketch stroke had actually landed.
+            .accessibilityElement(children: .contain)
             .accessibilityIdentifier("SketchPointStateOverlay")
         }
     }
