@@ -165,7 +165,15 @@ The rotate half of the same parity pass — `RotationOrbitOverlay`, the twin of
   which is what let the typed path reuse the drag's tested math.
 - The pill is clamped into the viewport and, while typing, into the top ~42% of
   it: the orbit is drawn at the BODY's radius, so its rim regularly projects
-  off-screen, and the software keyboard owns the bottom half.
+  off-screen, and the software keyboard owns the bottom half. That radius is
+  also why the whole control only reads properly when the body is NOT filling
+  the viewport — zoomed right in, the rim and the swept arc leave the screen
+  and the clamped pill is all that survives. Shapr3D has the same property.
+- A mid-drag capture of the finished control (orbit + swept arc + live pill +
+  highlighted handle) was taken on the iPad sim; it lives at
+  `marketing/screenshots/feature-rotate-orbit-mid-drag.png`, which is in the
+  **gitignored** `marketing/` tree — a fresh clone will not have it, so re-shoot
+  it with the recipe in §3 if you need it.
 
 ### Move gizmo parity pass (2026-08-28)
 
@@ -366,6 +374,31 @@ xcrun simctl launch --console-pty 69DB84F4-607C-46F2-9089-3E8C0770B4A9 \
 That loop — seed, drive the sim with taps/swipes, read the log — is how the
 "plane squares don't drag in their plane" report was diagnosed in minutes
 after a long stretch of theorising. Reach for it early.
+
+### Screenshotting a gesture MID-drag
+
+Verifying a live overlay (the rotation orbit, the drag pill, a preview) means
+catching a frame while a finger is still down. Two things make that harder than
+it looks, both learned the slow way:
+
+1. **A slow `swipe` is a LONG PRESS, not a drag.** Stretching a swipe to
+   several seconds to leave room for a screenshot pops the Select Through menu
+   instead: the touch sits still long enough for the long-press recogniser.
+   Drive it with `touch_path` and keep every point moving — the movement is
+   what cancels the long press.
+2. **A single timed screenshot loses the race.** The tool call that starts the
+   gesture has its own dispatch latency, so a `sleep N && screenshot` scheduled
+   beforehand usually fires before the finger is down. Take a BURST and pick
+   the frame:
+
+```
+for i in 1 2 3 4 5 6 7 8; do
+  xcrun simctl io <UDID> screenshot frames/f$i.png; sleep 0.7
+done
+```
+
+Identical file sizes = identical frames = the gesture had not started yet; the
+first differing frame is the one you want.
 
 ### Gotchas that will bite you
 1. **SwiftData in XCTest**: any in-process `ModelContainer` with the 7-type
