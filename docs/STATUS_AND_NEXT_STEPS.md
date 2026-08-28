@@ -1,10 +1,21 @@
 # Status & Next Steps — Handoff Notes
 
-Last updated: 2026-08-28 (move-gizmo parity pass). This is the living handoff
-document: what is DONE, how the newest subsystems work, the dev workflow, and
-the prioritized next missions. Companions: `IMPLEMENTATION_PLAN.md` (original
-phase plan), `SHAPR3D_PARITY_SPEC.md` (feature spec), `PHASE_D_DESIGN.md`
-(feature-graph design).
+Last updated: 2026-08-28 (move-gizmo parity pass; §1/§4 re-audited against the
+code). This is the living handoff document: what is DONE, how the newest
+subsystems work, the dev workflow, and the prioritized next missions.
+Companions: `IMPLEMENTATION_PLAN.md` (original phase plan),
+`SHAPR3D_PARITY_SPEC.md` (feature spec), `PHASE_D_DESIGN.md` (feature-graph
+design).
+
+**Current test baseline: 811 unit tests, all green** (run 2026-08-28). The UI
+target holds 92 test functions today; the last full UI-suite green recorded
+here is 2026-08-27, at ~85 — nobody has run the whole UI suite since, so treat
+UI green as unverified until you do. Historical counts appear in the dated
+sections below — those are snapshots, not the baseline.
+
+**Sections dated in the past are history.** §1 and §4 are the only two that
+claim to describe the present; if you find them disagreeing with the code,
+the code wins — fix them in the same commit.
 
 ---
 
@@ -16,8 +27,20 @@ phase plan), `SHAPR3D_PARITY_SPEC.md` (feature spec), `PHASE_D_DESIGN.md`
 | **B** — sweep, loft, split, pattern, offset, text, project, section, display, selection, materials, symbols | ✅ done |
 | **C** — 2D constraint solver (Levenberg–Marquardt), dimensions, auto-constrain, DOF coloring, sketch mirror | ✅ done |
 | **D** — parametric feature graph: topo naming, all creation ops, sketch associativity, variables/expressions, pattern-as-feature, rollback, **reorder + suppress** | ✅ done (tranches 1–6) |
-| **E** — edge blends (mesh-domain): chamfer/fillet, multi-edge, live preview, drag-to-size arrow | ✅ tranches 1–3 done |
-| **E (B-rep)** — OpenCASCADE port for high-quality fillet/shell/offset | ❌ not started |
+| **E** — edge blends: chamfer/fillet, multi-edge, live preview, drag-to-size arrow | ✅ tranches 1–3 done |
+| **E4** — Shell (face-removal + whole-body) | ✅ done — `FeatureKind.shell`, `KernelShellTests`/`FeatureShellEvalTests`/`ShellUITests` |
+| **F (B-rep)** — OpenCASCADE port | ✅ largely landed — see §4 F for what is left |
+
+**The kernel seam has moved (re-audited 2026-08-28).** OCCT is no longer a
+spike: when `OCCTKernel.useOCCTAsSourceOfTruth` is on and a body carries a
+`brep`, extrude, boolean, **fillet, chamfer, shell and delete-face** all run
+through OCCT (`FeatureGraph` for the parametric path, `EditorViewModel` for
+the live preview), and breps persist through `DocumentSession`
+(`OCCTKernel.serialize/deserialize`). The Euclid mesh blend is now the
+**legacy fallback for brep-less bodies only** — a brep body whose OCCT blend
+fails ERRORS rather than degrading to it (FeatureGraph ~L836 explains why:
+the mesh path ships spiky facets on analytic solids and desyncs render from
+brep). Read that comment before touching either path.
 
 **Architecture review (2026-08-25): `ARCHITECTURE_REVIEW_2026-08-25.md`** —
 four-pass deep review; criticals: silent data loss on save of undecodable
@@ -105,7 +128,8 @@ goals G7–G9. Headlines:
   and lightweight migration was verified against the existing 95-project
   simulator store. Keep using that route for new row types.
 
-**Test baseline: 797 unit tests, ~85 UI tests — all green.** Two UI tests
+**Baseline at the time of that audit: 797 unit tests, ~85 UI tests — all green**
+(current numbers are in the header). Two UI tests
 (`FaceFlowUITests/testTypeNegativeIntoArrowPill`,
 `SweepLoftUITests/testSweepCircleAlongTwoSegmentLinePath`) are long-run flaky
 (pass in isolation) — rerun individually before suspecting a regression.
@@ -152,11 +176,21 @@ lives in `GizmoScreenLayout` (the one source of truth for where handles are)
   turned "doesn't lock to the plane" into the ring-band finding in minutes —
   reach for it before theorising about gizmo reports.
 
-**Test baseline after this pass: 811 unit tests green.**
+**811 unit tests green after this pass, and the user confirmed the gizmo on
+device (2026-08-28)** — plane tiles, the on-arrow distance field and the
+crosshair pivot are all accepted behaviour now. Treat changes to
+`GizmoScreenLayout`'s tolerances as changes to tested, signed-off behaviour.
 
 ---
 
 ## 2. Architecture of the newest subsystems (Phase E blends)
+
+> **Read §1's kernel-seam note first.** What follows describes the **mesh**
+> blend, which is now the fallback for brep-less bodies: a body with a `brep`
+> blends through OCCT instead (tangent chains and rolling-ball corners come
+> free there — the "known v1 gaps" below are the MESH path's gaps). The
+> selection, preview, command and UI plumbing described here is shared by both
+> paths, which is why it is still the thing to read.
 
 The mesh-domain chamfer/fillet the spec §4.3 blesses for prismatic edges.
 Everything routes through the same three seams as the rest of the app:
@@ -199,7 +233,7 @@ Tests: `openshape3dTests/KernelBlendTests.swift` (exact volumes),
 multi-edge additivity, error surfacing),
 `openshape3dUITests/BlendUITests.swift` (4 end-to-end flows incl. drag).
 
-### Known v1 gaps (deliberate, documented)
+### Known v1 gaps of the MESH path (deliberate, documented)
 - Corners where 3+ blended edges meet are best-effort (sequential CSG order).
 - Concave edges unsupported (material-removal only; concave needs additive fill).
 - No tangent-chain auto-propagation (spec: picking 2 edges of a chain rounds
@@ -280,6 +314,33 @@ Notes:
   `HistorySuppress-<name>` / `HistoryDistanceField`, Items `ItemRow-*`, error
   alert title "Something Went Wrong".
 
+### Debug env hooks (all `#if DEBUG`; prefix `SIMCTL_CHILD_` for `simctl`)
+
+| Var | What it does |
+|---|---|
+| `OS3D_FRESH` | Open a brand-new document instead of the gallery/last file |
+| `OS3D_AUTO_OPEN` | Open the most recent document straight away |
+| `OS3D_DEBUG_SEED` | Seed a 4 mm box, **selected** (`.editingPrimitive`) — the fastest way to a live move gizmo |
+| `OS3D_DEBUG_SEED_CYLINDER` | Circle extrude via OCCT (a TRUE smooth cylinder) |
+| `OS3D_DEBUG_SEED_BOOLEAN` | Cylinder − cylinder, staying round through the brep path |
+| `OS3D_DEBUG_SEED_PRIMBOOL` | Cylinder primitive − box primitive (mixed analytic boolean) |
+| `OS3D_DEBUG_SEED_IMAGE` | Reference image on the ground plane, left unselected |
+| `OS3D_GIZMO_DEBUG` | Print the gizmo part each drag grabs + its world delta |
+| `OS3D_AGENT` / `OS3D_AGENT_PORT` | Loopback control channel (`Agent/AgentServer.swift`). Answers `GET /v1/health` and nothing else so far, and the MCP client its header names is **not in this repo** — treat it as a stub. |
+
+To read `print()` output from a hook, launch through a console pty:
+
+```
+SIMCTL_CHILD_OS3D_FRESH=1 SIMCTL_CHILD_OS3D_DEBUG_SEED=1 \
+SIMCTL_CHILD_OS3D_GIZMO_DEBUG=1 \
+xcrun simctl launch --console-pty 69DB84F4-607C-46F2-9089-3E8C0770B4A9 \
+  com.laan.labs.openshape3d > /tmp/os3d.log 2>&1 &
+```
+
+That loop — seed, drive the sim with taps/swipes, read the log — is how the
+"plane squares don't drag in their plane" report was diagnosed in minutes
+after a long stretch of theorising. Reach for it early.
+
 ### Gotchas that will bite you
 1. **SwiftData in XCTest**: any in-process `ModelContainer` with the 7-type
    `PersistedFeature` schema crashes deterministically (malloc double-free).
@@ -338,7 +399,17 @@ Notes:
    pass `showsFooter: isCompact`, because an `if` inside the footer builder
    yields `_ConditionalContent`, not `EmptyView`, and would still claim the
    row's stack spacing at regular width.
-12. **Bottom-edge insets must be measured, not hardcoded.** The palette and the
+12. **Gizmo handles share screen space — every new touch band steals from a
+   neighbour.** `GizmoScreenLayout.hitTest` resolves arrows, plane tiles and
+   rotation arcs against tolerances that are all far larger than the drawn
+   art, so a generous band added for one handle silently eats another's
+   near-misses (the rotation arcs' 50pt band reached back over the plane
+   tiles, turning a tile near-miss into a 5°-snapped rotation — it read as
+   "the square doesn't drag in its plane"). When you add or widen a handle:
+   bound the band by that handle's OWN projected size, and copy
+   `testAGrabNearThePlaneTilesIsNeverARotation` — a radial sweep asserting no
+   grab in one handle's neighbourhood resolves to a different kind.
+13. **Bottom-edge insets must be measured, not hardcoded.** The palette and the
    bottom corner chips inset above the bars via `bottomBarInset`, fed by
    `BottomBarHeightKey`. The old fixed 96pt assumed an iPad-height bar and let
    the Copy badge sit on top of a taller compact bar.
@@ -347,21 +418,43 @@ Notes:
 
 ## 4. Next missions (prioritized)
 
-### E4 — Shell (recommended next; spec §4.4)
-Hollow a solid to a uniform wall by removing selected face(s); whole-body mode
-cores it hollow. The spec blesses a prismatic mesh approximation:
-- Face-removal mode: reuse the face-selection context
-  (`FaceTopology.planarFace` outline/holes) → inset the outline by thickness
-  (`SketchOffset` does 2D offset already) → extrude the inset profile into the
-  body and subtract (`KernelOps` has all the pieces).
-- Whole-body mode: scale/offset a copy inward and subtract (exact for convex
-  prisms; document the gap for concave).
-- Parametric: `FeatureKind.shell(body: BodyRef, face: FaceRef?, thickness:
-  Expr)`; eval mirrors `evalPushPull` (resolve FaceRef → kernel op → relabel).
-- Live red/blue validity on the thickness drag mirrors the blend arrow's
-  `isValid` wiring exactly.
+> **Re-audited against the code on 2026-08-28.** The list below used to open
+> with "E4 — Shell (recommended next)"; Shell shipped (`FeatureKind.shell`,
+> `shellThickness` UI, `KernelShellTests` / `FeatureShellEvalTests` /
+> `ShellUITests`), as did most of the B-rep port that F describes as a spike.
+> What remains is ranked here.
 
-### E5 — Blend polish
+### 1. Wire the backends that have no UI (highest value, smallest risk)
+
+Several tested kernels are reachable only from tests. Each is a small UI
+tranche on top of code that already works:
+
+- **STEP import/export** — `OCCTKernel.writeSTEP` / `readSTEP` exist and have
+  **zero callers outside the kernel**. This is the format CAD users actually
+  exchange; the Export menu offers none of it today.
+- **Delete Face / Replace Face** — `FeatureGraph.evalDeleteFace` (OCCT
+  defeaturing) and `ReplaceFaceKit` are both single gestures on an existing
+  face selection.
+- **Command Search launcher** — the hotkey half landed in the 2026-08-26/27
+  pass (`CommandShortcutsView` routes `CommandRegistry.routableChordedCommands`
+  through `runCommand`). What is still missing is the *search* UI: the fuzzy
+  matcher lives in `CommandRegistry`/`CommandDispatch` with no view that opens
+  it.
+
+### 2. B-rep follow-through (F below is the design doc)
+
+General (polygonal/arc) profiles as B-rep source, analytic holes, and
+extrude-into-target boolean are the remaining Euclid-first paths — each one
+still forces a body down the mesh route, which is where the blend fallback and
+its known gaps live.
+
+### 3. Blend polish (E5) — mesh path only, so rank it against mission 2
+
+The first two items are things OCCT already does for a body with a `brep`
+(FeatureGraph ~L833: the OCCT fillet "propagates along tangent chains for
+free"). They only buy anything for brep-less bodies — which is an argument for
+doing mission 2 instead, and letting these two die with the mesh path.
+
 - **Tangent-chain propagation**: group `SelectableEdge`s whose endpoints touch
   and whose directions are near-parallel at the join; a tap selects the chain.
 - **Concave edges**: additive corner fill (union the wedge instead of
@@ -370,7 +463,7 @@ cores it hollow. The spec blesses a prismatic mesh approximation:
   additive edit-mode selection) — needs a History row action that re-enters
   `.pickingBlendEdges` seeded from the node's EdgeRefs.
 
-### F — OpenCASCADE B-rep port (the big one)
+### 4. F — OpenCASCADE B-rep port (mostly landed; this is its design record)
 Behind the existing `KernelOps` facade (see `IMPLEMENTATION_PLAN.md` Phase E
 section for scope): OCCT compiled for iOS, solids become B-rep, Euclid stays
 the render/preview path. Unlocks true fillets (tangent chains, rolling-ball
@@ -381,8 +474,10 @@ build OCCT.xcframework, round-trip one box through
 This is what fixes extruded circles rendering as 48-gon prisms (no mesh-side fix
 exists — the representation itself must become analytic).
 **M0 spike + M1 wiring DONE (2026-07-22):** OCCT 7.8.1 cross-built for iOS
-(`scripts/build_occt_ios.sh` → `ThirdParty/OCCT.xcframework`, gitignored,
-modeling-only ~74 MB/arch). OCCT is now **linked into the app** and callable
+(`scripts/build_occt_ios.sh` → `ThirdParty/OCCT.xcframework`, modeling-only
+~74 MB/arch — **committed to the repo via Git LFS**, see §2b; the "gitignored"
+claim that used to sit here was stale, a fresh checkout builds without running
+the script). OCCT is now **linked into the app** and callable
 from Swift via `OCCTKernel` (Obj-C++ `OCCTBridge` behind a dedicated bridging
 header — NOT `ShaderTypes.h`, which Metal shares). `openshape3dTests/
 OCCTKernelTests` proves it in-suite (extruded circle = 1 analytic cylinder);
@@ -395,9 +490,33 @@ with `SIMCTL_CHILD_OS3D_FRESH=1 SIMCTL_CHILD_OS3D_DEBUG_SEED_CYLINDER=1`.
 (`BRepHandle`) carries the analytic solid; `evalBoolean` composes breps
 (`BRepAlgoAPI_Fuse/Cut/Common`) and renders smooth — so a cylinder MINUS a
 cylinder stays round (verified on-device: `SIMCTL_CHILD_OS3D_DEBUG_SEED_BOOLEAN=1`).
-Euclid still computes CSG → suite 500 green. Next: general (polygonal/arc)
-profiles as B-rep source, analytic holes, extrude-into-target boolean, B-rep
-persistence, then fillet/shell on B-rep. Repro: `scripts/run_occt_spike.sh`.
+Euclid still computes CSG → suite 500 green. Repro: `scripts/run_occt_spike.sh`.
+
+**Since then (verified in the code 2026-08-28), the rest of that "next" list
+landed except the first three items:** B-rep persistence ships
+(`DocumentSession` ↔ `OCCTKernel.serialize/deserialize`), and fillet, chamfer,
+shell and delete-face all run on the brep in both `FeatureGraph` and
+`EditorViewModel`. Still Euclid-first: general (polygonal/arc) profiles as
+B-rep source, analytic holes, extrude-into-target boolean — see mission 2.
+STEP is no longer a build-flag question either: the bridge is compiled in and
+just needs UI (mission 1).
+
+### 5. Deferred backlog (from Phase D)
+- Transform-as-a-feature — **design blocker documented** in
+  `PHASE_D_DESIGN.md` / memory: eval emits world-space+identity meshes while
+  live tools store localized-mesh+pivot; needs an eval-representation rework
+  (dedicated tranche).
+- Sketch patterns, EdgeRef-based dimensioning, MaterialTagNaming (needs OS3D
+  v2 blob format), linked copies, PrimitiveSpec-dim variables, full unit
+  conversion.
+
+---
+
+## 4b. Retrospectives — passes already done (not missions)
+
+These record what a review covered and what it deliberately left. Anything
+still open from them is promoted into §4 above; read these for the reasoning,
+not for a task list.
 
 ### Shapr3D UI parity review (2026-07-23)
 
@@ -448,19 +567,11 @@ UI wiring called out as missing in its spec entry:
 Stale statuses corrected in the same pass: §4.14 (ships as §1.13's 3D entry
 point), §6.4 (import exists), §17 (Settings ships).
 
-**Next:** these are backends without UI. The highest-value follow-on is wiring
-them into the palette/gizmo layer — Delete Face and Replace Face are single
+**Next (promoted to §4 mission 1 — still true a month later, and STEP joined
+the list):** these are backends without UI. The highest-value follow-on is
+wiring them into the palette/gizmo layer — Delete Face and Replace Face are single
 gestures on an existing face selection, and Command Search needs only a
 UIKit key-command bridge plus a launcher sheet.
-
-### Deferred backlog (from Phase D)
-- Transform-as-a-feature — **design blocker documented** in
-  `PHASE_D_DESIGN.md` / memory: eval emits world-space+identity meshes while
-  live tools store localized-mesh+pivot; needs an eval-representation rework
-  (dedicated tranche).
-- Sketch patterns, EdgeRef-based dimensioning, MaterialTagNaming (needs OS3D
-  v2 blob format), linked copies, PrimitiveSpec-dim variables, full unit
-  conversion.
 
 ---
 
@@ -473,4 +584,10 @@ UIKit key-command bridge plus a launcher sheet.
 - New feature kinds: add the case + eval + arms in `HistoryPanelView.iconName`,
   `distanceValue`, `EditorViewModel.kindLabel`, `kind(_:replacingExpr:)` —
   the compiler's exhaustive-switch errors will walk you through them.
-- Update this file at the end of each mission.
+- Update this file at the end of each mission — and when you touch §1 or §4,
+  re-audit them against the CODE, not against what this file last said. Both
+  drifted for a month here: §1 called the B-rep port "not started" while OCCT
+  was running fillet/chamfer/shell/delete-face, and §4's top mission (Shell)
+  had already shipped with three test files. A grep for the type or the test
+  file is a ten-second check that keeps the next session from building
+  something twice.
