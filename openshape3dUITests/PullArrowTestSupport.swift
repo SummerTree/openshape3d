@@ -101,23 +101,36 @@ extension XCTestCase {
     /// to "ExtrudeMyPart" instead of "MyPart", and the assertion on the new
     /// name failed while the app was behaving correctly.
     ///
-    /// Cmd-A is the deterministic replacement for the double tap, but focus is
-    /// asynchronous: sent too close behind the tap it can land before the field
-    /// is first responder, and the append comes back (that one still bit the
-    /// symbol rename). So this VERIFIES what actually landed and repairs it
-    /// with backspaces — the caret is at the end after typing, so deleting
-    /// `value.count` characters always empties the field, whatever the
-    /// selection did.
+    /// It also matters for the NUMERIC fields, which arrive pre-filled: the
+    /// extrude Distance field and the arrow pill both hold the current value,
+    /// so typing without clearing produced "0-3" (evaluates to -3 — right by
+    /// luck) or "-30" (30 mm into a 4 mm box — refused, no command).
+    ///
+    /// So: caret to the end, backspace it empty, type, then VERIFY what landed
+    /// and retry once. The verify is not belt-and-braces — it fires in real
+    /// runs, and without it a mistyped value reaches the tool as a silently
+    /// different number.
     func replaceText(_ field: XCUIElement, with text: String, submit: Bool = true) {
         func attempt() {
-            field.tap()
-            // Select-all THEN delete. Backspaces alone are not enough: the
-            // caret lands wherever the tap put it, and at position 0 they
-            // delete nothing — which is how "-3" typed into a field already
-            // holding "0" came out as "-30" (30 mm into a 4 mm box: refused,
-            // no command, and a failure 10 lines later blaming the commit).
-            field.typeKey("a", modifierFlags: .command)
-            field.typeText(XCUIKeyboardKey.delete.rawValue)
+            // Put the caret at the END, then backspace. Tapping the field's
+            // trailing edge lands the caret after the last character, which is
+            // what makes plain backspaces reliable — `field.tap()` hits the
+            // centre, and at caret position 0 backspaces delete nothing. That
+            // is how "-3" typed into a field already holding "0" came out as
+            // "-30": 30 mm into a 4 mm box, refused, no command, and a failure
+            // ten lines later blaming the commit.
+            //
+            // The two tidier-looking options are both wrong here:
+            //  • ⌘A is the app's own Select All hotkey (CommandRegistry
+            //    "edit.selectAll"), so sending it fires that command and leaves
+            //    the app non-idle — XCTest then waits 60s for animations on
+            //    EVERY field edit, which took the suite from 41 to 78 minutes.
+            //  • `XCUIKeyboardKey.forwardDelete` is not interpreted by iOS text
+            //    input; it gets typed in as an invisible character, so the field
+            //    ends up holding "2\u{F728}…" and compares unequal to "2".
+            field.coordinate(withNormalizedOffset: CGVector(dx: 0.95, dy: 0.5)).tap()
+            let existing = ((field.value as? String) ?? "").count + 2
+            field.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: existing))
             field.typeText(text)
         }
         attempt()
