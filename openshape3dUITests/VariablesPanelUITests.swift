@@ -21,6 +21,7 @@ final class VariablesPanelUITests: XCTestCase {
     func testAddVariableAndEvaluateExpression() throws {
         let app = XCUIApplication()
         app.launchEnvironment["OS3D_FRESH"] = "1"
+        app.launchEnvironment["OS3D_RESET_STORE"] = "1"
         app.launch()
         // Editor is up when the sketch palette exists.
         XCTAssertTrue(app.buttons["SketchGroup"].waitForExistence(timeout: 10))

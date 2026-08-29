@@ -55,6 +55,7 @@ final class DimensionUITests: XCTestCase {
     func testLineLengthDimensionDrivesGeometry() throws {
         let app = XCUIApplication()
         app.launchEnvironment["OS3D_FRESH"] = "1"
+        app.launchEnvironment["OS3D_RESET_STORE"] = "1"
         app.launch()
         let window = app.windows.firstMatch
         startGroundSketch(app, window: window, tool: "Line")
@@ -90,6 +91,7 @@ final class DimensionUITests: XCTestCase {
     func testCircleRadiusDimensionDrivesGeometry() throws {
         let app = XCUIApplication()
         app.launchEnvironment["OS3D_FRESH"] = "1"
+        app.launchEnvironment["OS3D_RESET_STORE"] = "1"
         app.launch()
         let window = app.windows.firstMatch
         startGroundSketch(app, window: window, tool: "Circle")

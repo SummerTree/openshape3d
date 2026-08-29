@@ -34,6 +34,7 @@ final class BugHuntUITests: XCTestCase {
     func testBuildRectWithHoleExtrude() throws {
         let app = XCUIApplication()
         app.launchEnvironment["OS3D_FRESH"] = "1"
+        app.launchEnvironment["OS3D_RESET_STORE"] = "1"
         app.launch()
         let window = app.windows.firstMatch
         XCTAssertTrue(app.buttons["SketchGroup"].waitForExistence(timeout: 10))
@@ -113,6 +114,7 @@ final class BugHuntUITests: XCTestCase {
     func testCircleAloneDraws() throws {
         let app = XCUIApplication()
         app.launchEnvironment["OS3D_FRESH"] = "1"
+        app.launchEnvironment["OS3D_RESET_STORE"] = "1"
         app.launch()
         let window = app.windows.firstMatch
         XCTAssertTrue(app.buttons["SketchGroup"].waitForExistence(timeout: 10))
@@ -127,6 +129,7 @@ final class BugHuntUITests: XCTestCase {
     func testCircleInsideRect() throws {
         let app = XCUIApplication()
         app.launchEnvironment["OS3D_FRESH"] = "1"
+        app.launchEnvironment["OS3D_RESET_STORE"] = "1"
         app.launch()
         let window = app.windows.firstMatch
         XCTAssertTrue(app.buttons["SketchGroup"].waitForExistence(timeout: 10))
@@ -154,6 +157,7 @@ final class BugHuntUITests: XCTestCase {
     func testSketchOnFaceBossAndEditBase() throws {
         let app = XCUIApplication()
         app.launchEnvironment["OS3D_FRESH"] = "1"
+        app.launchEnvironment["OS3D_RESET_STORE"] = "1"
         app.launch()
         let window = app.windows.firstMatch
         XCTAssertTrue(app.buttons["SketchGroup"].waitForExistence(timeout: 10))

@@ -30,6 +30,12 @@ struct openshape3dApp: App {
             PersistedVariable.self,
         ])
         let modelConfiguration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: false)
+        #if DEBUG
+        // Must run BEFORE the container opens — and this closure is the only
+        // place that is true. A struct's stored-property initialisers run
+        // ahead of `init()`, so wiping from there would be too late.
+        Self.resetStoreIfRequested(at: modelConfiguration.url)
+        #endif
 
         do {
             return try ModelContainer(for: schema, configurations: [modelConfiguration])
@@ -37,6 +43,34 @@ struct openshape3dApp: App {
             fatalError("Could not create ModelContainer: \(error)")
         }
     }()
+
+    #if DEBUG
+    /// Debug hook (`OS3D_RESET_STORE=1`): delete the SwiftData store before it
+    /// is opened, so the app starts with ZERO projects.
+    ///
+    /// This exists for the UI suite. Every test launches with `OS3D_FRESH`,
+    /// which creates a new document and never removes it, so the store grew by
+    /// ~95 projects per full run — it was past 400 when this was written. That
+    /// is not just clutter: a bigger store slows launch and save, which shifts
+    /// focus and gesture timing, which is what turned fixed `sleep()`s and
+    /// caret races into "only fails in the long serial run" flakes.
+    ///
+    /// It is DESTRUCTIVE and deliberately awkward to reach: `#if DEBUG` (so it
+    /// cannot ship, matching the seed hooks) plus an explicit env var. Do not
+    /// set it in a shell profile or a scheme you also use for real modelling —
+    /// it deletes every saved design in that simulator or device.
+    static func resetStoreIfRequested(at url: URL) {
+        guard ProcessInfo.processInfo.environment["OS3D_RESET_STORE"] != nil else { return }
+        // The sidecars are `<store>-wal` / `<store>-shm` (a suffix, not a path
+        // extension), and leaving them behind next to a deleted store is how
+        // you get a container that opens onto half-migrated garbage.
+        let base = url.path
+        for path in [base, base + "-wal", base + "-shm", base + "-journal"] {
+            try? FileManager.default.removeItem(atPath: path)
+        }
+        print("[OS3D] OS3D_RESET_STORE: deleted the store at \(base)")
+    }
+    #endif
 
     var body: some Scene {
         WindowGroup {

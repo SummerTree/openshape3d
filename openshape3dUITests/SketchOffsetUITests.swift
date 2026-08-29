@@ -19,6 +19,7 @@ final class SketchOffsetUITests: XCTestCase {
     /// Arm Offset on a fresh sketch containing one rectangle.
     private func sketchWithRectangle(_ app: XCUIApplication) -> XCUIElement {
         app.launchEnvironment["OS3D_FRESH"] = "1"
+        app.launchEnvironment["OS3D_RESET_STORE"] = "1"
         app.launch()
 
         let window = app.windows.firstMatch

@@ -18,6 +18,7 @@ final class FaceFlowUITests: XCTestCase {
     func testSelectFaceAndPull() throws {
         let app = XCUIApplication()
         app.launchEnvironment["OS3D_FRESH"] = "1"
+        app.launchEnvironment["OS3D_RESET_STORE"] = "1"
         app.launchEnvironment["OS3D_DEBUG_SEED"] = "1"
         app.launch()
         XCTAssertTrue(app.buttons["SketchGroup"].waitForExistence(timeout: 10))
@@ -61,6 +62,7 @@ final class FaceFlowUITests: XCTestCase {
     func testPushFaceInwardLeavesOneCleanBody() throws {
         let app = XCUIApplication()
         app.launchEnvironment["OS3D_FRESH"] = "1"
+        app.launchEnvironment["OS3D_RESET_STORE"] = "1"
         app.launchEnvironment["OS3D_DEBUG_SEED"] = "1"
         app.launch()
         XCTAssertTrue(app.buttons["SketchGroup"].waitForExistence(timeout: 10))
@@ -101,6 +103,7 @@ final class FaceFlowUITests: XCTestCase {
     func testTypeNegativeIntoArrowPill() throws {
         let app = XCUIApplication()
         app.launchEnvironment["OS3D_FRESH"] = "1"
+        app.launchEnvironment["OS3D_RESET_STORE"] = "1"
         app.launchEnvironment["OS3D_DEBUG_SEED"] = "1"
         app.launch()
         XCTAssertTrue(app.buttons["SketchGroup"].waitForExistence(timeout: 10))
@@ -119,9 +122,23 @@ final class FaceFlowUITests: XCTestCase {
         pill.tap()
         let field = app.textFields["ExtrudeArrowField"]
         XCTAssertTrue(field.waitForExistence(timeout: 3))
-        field.tap()
-        field.typeText("-3\n")   // explicit negative → push inward
-        sleep(1)
+        // The pill's field arrives holding the current value ("0"), so typing
+        // into it without clearing produced "0-3" (which evaluates to -3 and
+        // passed by luck) or "-30" (30 mm into a 4 mm box — refused, no
+        // command). `replaceText` clears first and verifies what landed.
+        replaceText(field, with: "-3")   // explicit negative → push inward
+
+        // Wait for the COMMIT, not for a stopwatch. Submitting runs a CSG push
+        // and ends the face selection, and a fixed sleep(1) is not enough on a
+        // loaded machine — the undo assertions below then ran against a stack
+        // that had only the seed in it, and read as "the negative did not
+        // commit" when it simply had not finished. (Long-serial-run flake.)
+        XCTAssertTrue(field.waitForNonExistence(timeout: 15),
+                      "Submitting should close the pill's field")
+        XCTAssertTrue(
+            app.staticTexts["Face selected — drag it to push or pull"]
+                .waitForNonExistence(timeout: 15),
+            "Committing the push should end the face selection")
 
         // Seed add + inward push = two undoable commands (the push committed).
         let undo = app.buttons["Undo"]

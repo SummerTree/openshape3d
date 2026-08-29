@@ -28,6 +28,7 @@ final class ParityWalkthroughUITests: XCTestCase {
     private func launchFresh(seed: Bool = false) -> XCUIApplication {
         let app = XCUIApplication()
         app.launchEnvironment["OS3D_FRESH"] = "1"
+        app.launchEnvironment["OS3D_RESET_STORE"] = "1"
         if seed { app.launchEnvironment["OS3D_DEBUG_SEED"] = "1" }
         app.launch()
         XCTAssertTrue(app.buttons["SketchGroup"].waitForExistence(timeout: 10))
@@ -290,6 +291,7 @@ final class ParityWalkthroughUITests: XCTestCase {
     func testWalkthrough08ImageSelected() throws {
         let app = XCUIApplication()
         app.launchEnvironment["OS3D_FRESH"] = "1"
+        app.launchEnvironment["OS3D_RESET_STORE"] = "1"
         app.launchEnvironment["OS3D_DEBUG_SEED_IMAGE"] = "1"
         app.launch()
         let window = app.windows.firstMatch
@@ -391,9 +393,34 @@ final class ParityWalkthroughUITests: XCTestCase {
 
         // Two near-touching lines: a horizontal-ish top and a slanted side, all
         // four endpoints free → the sketch is under-defined.
-        p(0.30, 0.45).press(forDuration: 0.15, thenDragTo: p(0.55, 0.45))
-        p(0.57, 0.47).press(forDuration: 0.15, thenDragTo: p(0.66, 0.70))
-        sleep(1)
+        //
+        // Each stroke is confirmed by the per-point DOF markers it should leave
+        // behind (2 per line), and retried once if it left none. A synthesized
+        // press-and-drag is occasionally swallowed, and when the SECOND line
+        // went missing the failure landed six steps later as "Parallel should
+        // enable for two lines" — the menu was right, the sketch was short a
+        // line. (This was the long-serial-run flake.)
+        let markers = app.descendants(matching: .any)
+            .matching(identifier: "SketchPointMarker")
+        func drawLine(_ a: XCUICoordinate, _ b: XCUICoordinate, expecting count: Int) {
+            func settled() -> Bool {
+                let deadline = Date().addingTimeInterval(4)
+                while Date() < deadline {
+                    if markers.count >= count { return true }
+                    usleep(250_000)
+                }
+                return false
+            }
+            a.press(forDuration: 0.15, thenDragTo: b)
+            if !settled() {
+                a.press(forDuration: 0.2, thenDragTo: b)
+                XCTAssertTrue(settled(),
+                              "the line stroke never landed — \(markers.count) point markers, "
+                              + "expected \(count)")
+            }
+        }
+        drawLine(p(0.30, 0.45), p(0.55, 0.45), expecting: 2)
+        drawLine(p(0.57, 0.47), p(0.66, 0.70), expecting: 4)
 
         // Under-defined geometry reads on-canvas (blue points), not as a toolbar
         // badge — so no "Fully defined" chip should be present yet.
@@ -419,7 +446,9 @@ final class ParityWalkthroughUITests: XCTestCase {
         menu.tap()
         let parallel = app.buttons["Constraint_Parallel"]
         XCTAssertTrue(parallel.waitForExistence(timeout: 3))
-        XCTAssertTrue(parallel.isEnabled, "Parallel should enable for two lines")
+        XCTAssertTrue(parallel.isEnabled,
+                      "Parallel should enable for two lines (both midpoint taps must have "
+                      + "selected a line)")
         XCTAssertFalse(app.buttons["Constraint_Concentric"].isEnabled,
                        "Concentric needs two circles — disabled for two lines")
         snap("28-constraint-menu-adaptive")

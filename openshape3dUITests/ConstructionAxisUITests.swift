@@ -21,6 +21,7 @@ final class ConstructionAxisUITests: XCTestCase {
     private func appWithCylinder() -> (XCUIApplication, XCUIElement) {
         let app = XCUIApplication()
         app.launchEnvironment["OS3D_FRESH"] = "1"
+        app.launchEnvironment["OS3D_RESET_STORE"] = "1"
         app.launchEnvironment["OS3D_DEBUG_SEED_CYLINDER"] = "1"
         app.launch()
         XCTAssertTrue(app.buttons["AxisButton"].waitForExistence(timeout: 10))
