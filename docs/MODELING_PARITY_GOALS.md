@@ -209,17 +209,22 @@ The remaining gaps in the sketch half, ordered by how often they block real work
 **Acceptance:** a spline can be drawn, dimensioned, constrained tangent to an
 adjacent line, and extruded; sketches reach a fully-defined (green) state.
 
-### G6 — STEP interchange *(spec §12.1, §12.2)*
+### G6 — STEP interchange *(spec §12.1, §12.2)* — ✅ DONE 2026-08-29
 
 STEP import/export via OCCT DataExchange — the format that makes the app usable
-alongside other CAD.
+alongside other CAD. `Kernel/STEPKit.swift` + the Import/Export menu entries;
+see `STATUS_AND_NEXT_STEPS.md` §4.1b for the three things worth knowing.
 
-**Cost to be explicit about:** enabling `DataExchange` + XDE roughly doubles the
-static library (18 → 47 toolkits, ~74 → ~140 MB/arch, measured). Decide
-deliberately; it is a one-line flip in `scripts/build_occt_ios.sh`.
+**The cost was already paid.** This section used to warn that `DataExchange` +
+XDE is "a one-line flip in `scripts/build_occt_ios.sh`" that doubles the
+library. Both toolkits have been ON since the port (script L99–104), and the
+committed `libOCCT-OS64.a` is 142 MB — the post-flip size. Nothing to decide.
 
-**Acceptance:** round-trip a filleted, shelled part through STEP with faces and
-solid topology preserved.
+**Acceptance — met.** `OCCTKernelTests.testSTEPRoundTripPreservesAnalyticTopology`
+round-trips a FILLETED cylinder with its planar, cylindrical and blend faces
+intact; `STEPKitTests` covers the document layer; and on-device a cylinder
+exported to `CYLINDRICAL_SURFACE('',#33,3.)` in mm, re-imported analytic, and
+re-exported to the same single cylindrical surface (Simulator, not a device).
 
 ### G7 — Close the starter-tutorial walls *(spec §1.9, §4.1, §8.4, §10.1, §17)*
 

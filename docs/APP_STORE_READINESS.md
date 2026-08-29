@@ -34,7 +34,7 @@ Everything verified so far was on the **Simulator**. That leaves real gaps:
 | **Any real device** | The app is a custom **Metal** renderer. Simulator Metal is a different implementation — shader behaviour, precision and performance differ. This is the single biggest untested risk. |
 | **`xcodebuild archive` + export** | Archiving is a different path from `build`; it can fail (symbols, entitlements, bitcode settings) where a build succeeds. All builds here used `CODE_SIGNING_ALLOWED=NO`. |
 | **Code signing / provisioning** | Never exercised with a distribution cert or profile. |
-| **Import / Export** | Headline feature, real file I/O — a prime crash area. Only the menu was opened; no STEP/STL/OBJ/DXF was ever imported or exported. |
+| **Import / Export** | Headline feature, real file I/O — a prime crash area. STEP was exercised end-to-end on the Simulator on 2026-08-29 (export → Files → import → re-export, geometry verified); STL/OBJ/DXF/3MF/GLB still have only had their menu entries opened, and nothing has been through a real device's file providers. |
 | **Apple Pencil** | Implemented but the Simulator cannot test it. |
 | **AR Quick Look** | Needs a device. |
 | **iOS 17 at runtime** | 17.0 is compile-verified only. An API that compiles but is unavailable at runtime would crash on a real 17.x device. |
@@ -92,10 +92,24 @@ the app ships no custom crypto) removes that friction permanently.
 ## 4. No document type declarations
 
 The app has its own `.os3d` project format and imports STEP / STL / OBJ / DXF,
-but declares no `CFBundleDocumentTypes` or `UTExportedTypeDeclarations`. Today a
-user cannot open a `.os3d` file from Files or Mail into the app, and the type
-isn't registered to it. Not a blocker; a real UX gap for a CAD app, and it makes
-a good listing bullet ("open STEP/STL files straight from Files").
+but declares no `CFBundleDocumentTypes`, `UTExportedTypeDeclarations` or
+`UTImportedTypeDeclarations`. Today a user cannot open a `.os3d` file from Files
+or Mail into the app, and the type isn't registered to it. Not a blocker; a real
+UX gap for a CAD app, and it makes a good listing bullet ("open STEP/STL files
+straight from Files").
+
+**This now has a second, concrete cost (found 2026-08-29).** Because nothing
+declares `.step`, `.stp`, `.dxf` or `.os3d`, `UTType(filenameExtension:)`
+returns a DYNAMIC type for each, and a document picker filtered to a dynamic
+type matches no file at all. The importers work around it by also allowing
+`.data`, which means the STEP and DXF pickers show every file on the device
+rather than the ones they can read. Declaring the types fixes the filtering and
+the Files integration together.
+
+**Sequencing note:** the declaration cannot be added while
+`GENERATE_INFOPLIST_FILE = YES` — Xcode then ignores `INFOPLIST_FILE` outright
+(tried it; the keys never reach the built bundle). Moving the app to a checked-in
+Info.plist is the actual first step.
 
 ## 5. Debug hooks ship in the release binary
 

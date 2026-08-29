@@ -7,16 +7,19 @@ Companions: `IMPLEMENTATION_PLAN.md` (original phase plan),
 `SHAPR3D_PARITY_SPEC.md` (feature spec), `PHASE_D_DESIGN.md` (feature-graph
 design).
 
-**Current test baseline, both suites green at `d5e6470` (2026-08-29): 811 unit
-tests in 91s, and the full UI suite CLEAN TWICE IN A ROW** — 95 executed,
-2 skipped, 0 failures, in 41m52s (at `76ba58d`, 2026-08-28) and 42m06s. The
-skips are `CompactWidthBarUITests`, which skip by design on the iPad
-destination.
+**Current test baseline, both suites green at the STEP-interchange branch
+(2026-08-29): 820 unit tests in 93s, and the full UI suite CLEAN TWICE IN A
+ROW** — 96 executed, 2 skipped, 0 failures, in 42m29s and 42m29s. The skips are
+`CompactWidthBarUITests`, which skip by design on the iPad destination. The
+second run is on the EXACT source that shipped: run 1's build predated three
+late edits, and a run that does not test what you commit proves nothing about
+what you commit.
 
 Two runs, not one, is the point: the three runs before the fixes each surfaced
 a DIFFERENT pair of failures, so a single green run proved nothing. Four other
 numbers are worth reading alongside the pass count, because a green suite hid a
-regression once already (see the ⌘A trap below):
+regression once already (see the ⌘A trap below) — all four were clean on both
+runs above:
 
 | Signal | Healthy | Why it matters |
 |---|---|---|
@@ -50,6 +53,7 @@ the code wins — fix them in the same commit.
 | **E** — edge blends: chamfer/fillet, multi-edge, live preview, drag-to-size arrow | ✅ tranches 1–3 done |
 | **E4** — Shell (face-removal + whole-body) | ✅ done — `FeatureKind.shell`, `KernelShellTests`/`FeatureShellEvalTests`/`ShellUITests` |
 | **F (B-rep)** — OpenCASCADE port | ✅ largely landed — see §4 F for what is left |
+| **STEP interchange** — exact-B-rep import/export | ✅ done 2026-08-29 — `STEPKit`, §4.1b |
 
 **The kernel seam has moved (re-audited 2026-08-28).** OCCT is no longer a
 spike: when `OCCTKernel.useOCCTAsSourceOfTruth` is on and a body carries a
@@ -373,7 +377,7 @@ Notes:
 | `OS3D_FRESH` | Open a brand-new document instead of the gallery/last file |
 | `OS3D_AUTO_OPEN` | Open the most recent document straight away |
 | `OS3D_DEBUG_SEED` | Seed a 4 mm box, **selected** (`.editingPrimitive`) — the fastest way to a live move gizmo |
-| `OS3D_DEBUG_SEED_CYLINDER` | Circle extrude via OCCT (a TRUE smooth cylinder) |
+| `OS3D_DEBUG_SEED_CYLINDER` | Circle extrude via OCCT (a TRUE smooth cylinder), `brep` and all — it calls `adoptBRep` exactly like `evalExtrude` |
 | `OS3D_DEBUG_SEED_BOOLEAN` | Cylinder − cylinder, staying round through the brep path |
 | `OS3D_DEBUG_SEED_PRIMBOOL` | Cylinder primitive − box primitive (mixed analytic boolean) |
 | `OS3D_DEBUG_SEED_IMAGE` | Reference image on the ground plane, left unselected |
@@ -556,6 +560,27 @@ first differing frame is the one you want.
    bottom corner chips inset above the bars via `bottomBarInset`, fed by
    `BottomBarHeightKey`. The old fixed 96pt assumed an iPad-height bar and let
    the Copy badge sit on top of a taller compact bar.
+14. **Only the LAST `.fileImporter` in a chain is alive.** Stack two on one
+   view and the earlier one silently stops presenting — no error, no log, the
+   button just does nothing. `EditorView` had four (STL, DXF, STEP, image), so
+   STL and DXF import were dead for as long as the image importer sat below
+   them, and the menu-listing tests passed the whole time because the entries
+   existed. A second importer bound to `.constant(false)` is enough to break
+   the first, so this is about the modifier's presence, not its state. There is
+   now exactly ONE, switched by `EditorView.ImportRequest`; keep it that way
+   (`ImportPickerUITests` fails the moment a second appears).
+15. **`.step`, `.stp`, `.dxf` and `.os3d` have no system UTI** — measured, by
+   printing the identifiers: `UTType(filenameExtension:)` returns a `dyn.…`
+   placeholder for each, while `.stl` gets the real
+   `public.standard-tesselated-geometry-format`. A dynamic type is fine for
+   STAMPING an export (the saved `.step` file opens and reads back correctly)
+   but is not something a file provider can match, so the importers pair it
+   with `.data` — which is why `.os3d` already did, and the tell that this bit
+   someone before. The cost is that those pickers list every file rather than
+   only readable ones. The real fix is a `UTImportedTypeDeclarations` block,
+   which needs the app off `GENERATE_INFOPLIST_FILE` first: with that setting
+   on, Xcode ignores `INFOPLIST_FILE` outright and the keys never reach the
+   built bundle (tried it — the declaration was simply absent).
 
 ---
 
@@ -572,9 +597,7 @@ first differing frame is the one you want.
 Several tested kernels are reachable only from tests. Each is a small UI
 tranche on top of code that already works:
 
-- **STEP import/export** — `OCCTKernel.writeSTEP` / `readSTEP` exist and have
-  **zero callers outside the kernel**. This is the format CAD users actually
-  exchange; the Export menu offers none of it today.
+- ~~**STEP import/export**~~ — **DONE 2026-08-29**, see below.
 - **Delete Face / Replace Face** — `FeatureGraph.evalDeleteFace` (OCCT
   defeaturing) and `ReplaceFaceKit` are both single gestures on an existing
   face selection.
@@ -583,6 +606,41 @@ tranche on top of code that already works:
   through `runCommand`). What is still missing is the *search* UI: the fuzzy
   matcher lives in `CommandRegistry`/`CommandDispatch` with no view that opens
   it.
+
+### 1b. STEP interchange — DONE (2026-08-29)
+
+`STEPKit` (`Kernel/STEPKit.swift`) sits on top of `OCCTKernel.writeSTEP` /
+`readSTEP`; `EditorViewModel.exportSTEP()` / `importSTEP(data:fileName:)` wire
+it to the Export and Import menus. Unlike every other export we offer, STEP
+carries the EXACT B-rep — verified in the Simulator, not inferred: a cylinder
+exported to `CYLINDRICAL_SURFACE('',#33,3.)` in millimetres, re-imported as an
+analytic body, and exported AGAIN to the same single cylindrical surface. No
+hop degrades to triangles.
+
+Three things worth knowing before touching it:
+
+- **Mesh-only bodies are skipped, by name.** A body with no `brep` (an imported
+  STL, anything the mesh path built) has no analytic geometry to write, and
+  triangulating it into a format whose whole value is that it is not triangles
+  would be a lie. `STEPKit.ExportOutcome` reports the skipped names; the UI
+  shows a notice for a partial export and an error when nothing is analytic.
+- **Body transforms are baked in.** A `brep` lives in body-local space and flat
+  STEP has no per-solid placement, so a moved body would otherwise export back
+  at the origin — silently wrong, and only visible in another CAD tool
+  (`testBodyTransformIsBakedIntoTheExportedSolid`).
+- **Wiring it uncovered two UI traps, both pre-existing**, now gotchas 14 and
+  15: every Import-menu picker was dead except the last one in the chain (so
+  STL and DXF import had quietly never worked — that is the bug to be sorry
+  about, not the missing STEP entry), and STEP/DXF have no system UTI.
+  `ImportPickerUITests` guards the first, and fails if a second `.fileImporter`
+  is ever added back.
+
+`OS3D_DEBUG_SEED_CYLINDER` was also fixed in the same pass: it built a smooth
+render mesh via `cylinderRenderMesh` and never called `adoptBRep`, so the
+seeded body LOOKED like a real extrude while carrying no `brep` at all. It now
+mirrors `evalExtrude` properly. A debug seed that behaves differently from the
+app is worse than no seed — this one sent me hunting a STEP bug that did not
+exist.
 
 ### 2. B-rep follow-through (F below is the design doc)
 

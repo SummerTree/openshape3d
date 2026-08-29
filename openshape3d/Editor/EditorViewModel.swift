@@ -207,6 +207,41 @@ final class EditorViewModel {
         }
     }
 
+    /// STEP AP214 of every ANALYTIC body (spec §12.2), or nil with a
+    /// user-facing error. Unlike the mesh formats above this one carries the
+    /// exact B-rep, so a cylinder arrives in the other CAD tool as a cylinder
+    /// — which is also why mesh-only bodies can't ride along: they are named
+    /// in a notice instead of being quietly triangulated.
+    func exportSTEP() -> Data? {
+        guard let bodies = exportableBodies() else { return nil }
+        switch STEPKit.export(bodies: bodies) {
+        case let .success(data, skipped):
+            if !skipped.isEmpty {
+                showNotice(skippedNotice(skipped))
+            }
+            return data
+        case let .nothingAnalytic(skipped):
+            errorMessage = skipped.count == 1
+                ? "“\(skipped[0])” has no analytic B-rep, so there is nothing to write "
+                  + "to STEP. Bodies imported as meshes can be exported as STL, OBJ, GLB or 3MF."
+                : "None of these \(skipped.count) bodies has an analytic B-rep, so there is "
+                  + "nothing to write to STEP. Mesh bodies can be exported as STL, OBJ, GLB or 3MF."
+            return nil
+        case .failed:
+            errorMessage = "Couldn't write the STEP file — please try again."
+            return nil
+        }
+    }
+
+    /// "2 mesh-only bodies were skipped (Imported, Imported 2)" — the names
+    /// matter, because a partial export otherwise looks like a complete one.
+    private func skippedNotice(_ skipped: [String]) -> String {
+        let names = skipped.prefix(3).joined(separator: ", ")
+        let more = skipped.count > 3 ? ", +\(skipped.count - 3) more" : ""
+        let noun = skipped.count == 1 ? "body" : "bodies"
+        return "STEP skipped \(skipped.count) mesh-only \(noun) (\(names)\(more))."
+    }
+
     /// DXF of the active sketch while sketching, else of the ground-plane
     /// sketch (plan §B14, spec §12); nil (with a user-facing error) when
     /// neither has entities.
@@ -304,6 +339,47 @@ final class EditorViewModel {
         selection = [body.id]
         mode = .idle
         cameraControl?.fitScene()
+    }
+
+    /// STEP import (spec §12.1): every solid in the file becomes its own body,
+    /// carrying its analytic `brep` — so an imported part can be filleted,
+    /// shelled and booleaned on the OCCT path exactly like one modelled here.
+    /// All of them land as ONE undo step.
+    func importSTEP(data: Data, fileName: String) {
+        let solids = STEPKit.solids(from: data)
+        guard !solids.isEmpty else {
+            errorMessage = "Couldn't import “\(fileName)” — no solids found in the STEP file."
+            return
+        }
+        let stem = (fileName as NSString).deletingPathExtension
+        let base = stem.isEmpty ? "Imported" : stem
+        // A local COPY of the document, grown as we go: `uniqueBodyName` reads
+        // the bodies it can see, and a multi-solid file has to number its own
+        // parts before any of them reach the real document.
+        var document = session.document
+        var bodies: [Body] = []
+        for handle in solids {
+            let name = document.uniqueBodyName(base: base)
+            guard let body = STEPKit.body(
+                from: handle, name: name, revision: document.nextRevision()) else { continue }
+            document.bodies.append(body)
+            bodies.append(body)
+        }
+        guard !bodies.isEmpty else {
+            errorMessage = "Couldn't import “\(fileName)” — its solids could not be meshed."
+            return
+        }
+        cancelTransientPicks()
+        session.perform(CompositeCommand(
+            title: "Import STEP",
+            commands: bodies.map { AddBodyCommand(body: $0, title: "Import \($0.name)") }))
+        selection = Set(bodies.map(\.id))
+        mode = .idle
+        cameraControl?.fitScene()
+        if bodies.count < solids.count {
+            showNotice("Imported \(bodies.count) of \(solids.count) solids — "
+                       + "the rest could not be meshed.")
+        }
     }
 
     func saveThumbnail() {
@@ -9509,12 +9585,21 @@ final class EditorViewModel {
             var body = Body(name: "Cylinder", transform: .identity, primitive: nil,
                             euclidMesh: solid, revision: seedDoc.nextRevision())
             let z = OCCTKernel.extrudeZRange(distance: 5, symmetric: false)
-            let m = OCCTKernel.cylinderRenderMesh(
-                center: .zero, radius: radius, zMin: z.zMin, zMax: z.zMax,
+            // `adoptBRep`, not just a smooth render mesh. This hook used to
+            // call `cylinderRenderMesh` and stop there, which LOOKED like the
+            // real extrude — same round cylinder on screen — while leaving
+            // `brep` nil. Anything that asks the body for its analytic solid
+            // (STEP export, an OCCT fillet, a boolean staying round) then
+            // behaved differently under the seed than in the app, which is
+            // the one thing a debug seed must never do.
+            if let handle = OCCTKernel.extrudeShape(
+                outerLoop: profile.loop, isCircle: true,
+                circleCenter: .zero, circleRadius: radius,
+                holes: [], zMin: z.zMin, zMax: z.zMax,
                 origin: plane.origin, xAxis: plane.xAxis,
-                yAxis: plane.yAxis, normal: plane.normal)
-            body.render = RenderMesh(positions: m.positions, normals: m.normals, indices: m.indices)
-            body.edges = FeatureEdgeExtractor.edges(from: body.render)
+                yAxis: plane.yAxis, normal: plane.normal) {
+                body.adoptBRep(handle)
+            }
             body.material = BodyMaterialSpec.default
             session.perform(AddBodyCommand(body: body))
             return
