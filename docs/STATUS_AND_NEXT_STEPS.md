@@ -7,9 +7,22 @@ Companions: `IMPLEMENTATION_PLAN.md` (original phase plan),
 `SHAPR3D_PARITY_SPEC.md` (feature spec), `PHASE_D_DESIGN.md` (feature-graph
 design).
 
-**Current test baseline: 811 unit tests green, and the full UI suite CLEAN —
-95 executed, 2 skipped, 0 failures in 41m52s.** The skips are
-`CompactWidthBarUITests`, which skip by design on the iPad destination.
+**Current test baseline: 811 unit tests green, and the full UI suite CLEAN
+TWICE IN A ROW at `76ba58d`** — 95 executed, 2 skipped, 0 failures, in 41m52s
+(2026-08-28) and 42m06s (2026-08-29). The skips are `CompactWidthBarUITests`,
+which skip by design on the iPad destination.
+
+Two runs, not one, is the point: the three runs before the fixes each surfaced
+a DIFFERENT pair of failures, so a single green run proved nothing. Three other
+numbers are worth reading alongside the pass count, because a green suite hid a
+regression once already (see the ⌘A trap below):
+
+| Signal | Healthy | Why it matters |
+|---|---|---|
+| wall clock | ~42m | 78m with ⌘A firing Select All — and still green |
+| `animations complete notification not received` | 0 | each one is a 60s idle-wait timeout |
+| `OS3D_BUG field held` | 0 | the field-clear self-heal is not having to paper over anything |
+| projects in the store | 1, before and after | it used to climb ~95 per run |
 
 **The four long-serial-run flakes are fixed** (2026-08-28) — see "Flaky UI
 tests: what they actually were" below. They were bad tests, not bad app code,
