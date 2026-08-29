@@ -363,7 +363,12 @@ nonisolated struct SignatureNaming: TopoNaming {
         return faces
     }
 
-    private static func signature(planar face: FaceTopology.PlanarFace) -> FaceSignature {
+    /// Internal, not private: `DeleteFaceKit` mints refs for LIVE picks and
+    /// must produce byte-identical signatures to the ones `enumerate` records,
+    /// or the ref it stores will not resolve on replay. Two copies of these
+    /// formulas would drift silently — the failure would look like "delete
+    /// face forgets its face after a rebuild".
+    static func signature(planar face: FaceTopology.PlanarFace) -> FaceSignature {
         let n = SIMD3<Double>(Double(face.normal.x), Double(face.normal.y), Double(face.normal.z))
         let centroid = face.origin // loop centroid, in body-local space
         var area = abs(Profile.signedArea(face.outline))
@@ -373,7 +378,7 @@ nonisolated struct SignatureNaming: TopoNaming {
             area: max(area, 0), planeOffset: simd_dot(n, centroid))
     }
 
-    private static func signature(cylinder cyl: FaceTopology.CylindricalFace) -> FaceSignature {
+    static func signature(cylinder cyl: FaceTopology.CylindricalFace) -> FaceSignature {
         let axis = unit(cyl.axisDir)
         let centroid = cyl.baseCenter + axis * (cyl.height / 2)
         let area = 2 * Double.pi * cyl.radius * cyl.height

@@ -189,6 +189,16 @@ Face, Delete Face with healing (OCCT defeaturing / `RemoveFeatures`), Offset
 Edge in 3D. These are what make it feel like *direct* modeling rather than
 history-only modeling.
 
+**Delete Face: ✅ done 2026-08-29** — `DeleteFaceKit` + the
+`.pickingDeleteFaces` mode; see `STATUS_AND_NEXT_STEPS.md` §4.1c. Deleting a
+Ø4 through-hole's wall from a 10 × 10 × 6 box returns it to exactly 600.00 mm³.
+
+**Replace Face: still open**, and larger than it looks — `ReplaceFaceKit` is
+built and tested but there is no `FeatureKind.replaceFace`, so it needs a new
+case through four exhaustive switches, a two-stage pick (source then target
+face) with Flip Alignment, and an analytic path so a B-rep body is not
+silently degraded to mesh by the kit's Euclid booleans.
+
 **Acceptance:** deleting a fillet face heals the surrounding faces back to a
 valid solid; offsetting a cylindrical face changes its radius rather than
 faceting it.

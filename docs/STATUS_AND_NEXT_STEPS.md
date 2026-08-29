@@ -7,13 +7,16 @@ Companions: `IMPLEMENTATION_PLAN.md` (original phase plan),
 `SHAPR3D_PARITY_SPEC.md` (feature spec), `PHASE_D_DESIGN.md` (feature-graph
 design).
 
-**Current test baseline, both suites green at the STEP-interchange branch
-(2026-08-29): 820 unit tests in 93s, and the full UI suite CLEAN TWICE IN A
-ROW** — 96 executed, 2 skipped, 0 failures, in 42m29s and 42m29s. The skips are
-`CompactWidthBarUITests`, which skip by design on the iPad destination. The
-second run is on the EXACT source that shipped: run 1's build predated three
-late edits, and a run that does not test what you commit proves nothing about
-what you commit.
+**Current test baseline, both suites green at the Delete Face commit
+(2026-08-29): 827 unit tests in 90s, full UI suite 97 executed, 2 skipped,
+0 failures, 42m45s** — 0 idle-timeouts, 0 field-clear retries, store pinned at
+1 project. The skips are `CompactWidthBarUITests`, which skip by design on the
+iPad destination.
+
+The STEP-interchange commit before it ran the UI suite CLEAN TWICE IN A ROW
+(96 executed, 42m29s each). Two runs, not one, was the point there: run 1's
+build predated three late edits, and a run that does not test what you commit
+proves nothing about what you commit.
 
 Two runs, not one, is the point: the three runs before the fixes each surfaced
 a DIFFERENT pair of failures, so a single green run proved nothing. Four other
@@ -54,6 +57,7 @@ the code wins — fix them in the same commit.
 | **E4** — Shell (face-removal + whole-body) | ✅ done — `FeatureKind.shell`, `KernelShellTests`/`FeatureShellEvalTests`/`ShellUITests` |
 | **F (B-rep)** — OpenCASCADE port | ✅ largely landed — see §4 F for what is left |
 | **STEP interchange** — exact-B-rep import/export | ✅ done 2026-08-29 — `STEPKit`, §4.1b |
+| **Delete Face** — OCCT defeaturing, live | ✅ done 2026-08-29 — `DeleteFaceKit`, §4.1c |
 
 **The kernel seam has moved (re-audited 2026-08-28).** OCCT is no longer a
 spike: when `OCCTKernel.useOCCTAsSourceOfTruth` is on and a body carries a
@@ -379,6 +383,7 @@ Notes:
 | `OS3D_DEBUG_SEED` | Seed a 4 mm box, **selected** (`.editingPrimitive`) — the fastest way to a live move gizmo |
 | `OS3D_DEBUG_SEED_CYLINDER` | Circle extrude via OCCT (a TRUE smooth cylinder), `brep` and all — it calls `adoptBRep` exactly like `evalExtrude` |
 | `OS3D_DEBUG_SEED_BOOLEAN` | Cylinder − cylinder, staying round through the brep path |
+| `OS3D_DEBUG_SEED_HOLE` | 10×10×6 box with a Ø4 through-hole (524.62 mm³) — the only seed with a CYLINDRICAL face, so the one Delete Face needs |
 | `OS3D_DEBUG_SEED_PRIMBOOL` | Cylinder primitive − box primitive (mixed analytic boolean) |
 | `OS3D_DEBUG_SEED_IMAGE` | Reference image on the ground plane, left unselected |
 | `OS3D_GIZMO_DEBUG` | Print the gizmo part each drag grabs, its world delta, and the rotation pill's live value |
@@ -598,9 +603,14 @@ Several tested kernels are reachable only from tests. Each is a small UI
 tranche on top of code that already works:
 
 - ~~**STEP import/export**~~ — **DONE 2026-08-29**, see below.
-- **Delete Face / Replace Face** — `FeatureGraph.evalDeleteFace` (OCCT
-  defeaturing) and `ReplaceFaceKit` are both single gestures on an existing
-  face selection.
+- ~~**Delete Face**~~ — **DONE 2026-08-29**, see §1c. **Replace Face** is
+  still open and is its own tranche, not a sibling gesture: `ReplaceFaceKit`
+  is fully built and tested, but there is no `FeatureKind.replaceFace`, so
+  wiring it means a new case through `FeatureGraph.evaluate`,
+  `referencedSketchIDs`, `ProjectMergeKit.remap`, the History icon and
+  `kindLabel` — plus a TWO-STAGE pick (source face, then target face) with a
+  Flip Alignment toggle, and an analytic path so a B-rep body does not
+  silently degrade to mesh (the kit is Euclid-only today).
 - **Command Search launcher** — the hotkey half landed in the 2026-08-26/27
   pass (`CommandShortcutsView` routes `CommandRegistry.routableChordedCommands`
   through `runCommand`). What is still missing is the *search* UI: the fuzzy
@@ -641,6 +651,42 @@ seeded body LOOKED like a real extrude while carrying no `brep` at all. It now
 mirrors `evalExtrude` properly. A debug seed that behaves differently from the
 app is worse than no seed — this one sent me hunting a STEP bug that did not
 exist.
+
+### 1c. Delete Face — DONE (2026-08-29)
+
+`FeatureGraph.evalDeleteFace` (OCCT defeaturing) shipped with the B-rep port
+and had no way in. `DeleteFaceKit` + a `.pickingDeleteFaces` mode now give it
+one: arm Delete Face in Modify, tap faces, Apply. It is modelled on Shell —
+same single-body pick, same live preview swapped in for the source, same
+"reuse the preview at commit" rule — and records a `.deleteFace` node for a
+feature-owned body so it replays.
+
+- **It had to be a picking MODE, not an action on the current selection.** A
+  hole's wall is the face worth deleting, and tapping one today routes to
+  `beginCylinderRadial` or falls through to whole-body select, so the face
+  never becomes selectable. This is also why the tool handles cylindrical
+  faces at all: `DeleteFaceKit.target(in:seedTriangle:)` prefers the cylinder
+  over the coplanar sliver `planarFace` returns on a curved surface.
+- **The sample point is the whole trick.** OCCT is told WHICH face to remove
+  by a point lying on it. The obvious centroid-of-triangles lands on a
+  cylinder's AXIS — inside the solid — and removes nothing or the wrong face.
+  `DeleteFaceKit` steps out to the surface at mid-height instead, matching
+  what `evalDeleteFace` already did for replay.
+- **Signatures are minted by `SignatureNaming`, not re-derived.** The live
+  pick's `FaceRef` has to match what a rebuild enumerates, so the two private
+  `signature(planar:)` / `signature(cylinder:)` builders are now internal and
+  shared. Two copies of those formulas would drift, and the symptom would be
+  "delete face forgets its face after a rebuild".
+- **Refusals are visible.** No brep → a notice saying so (a mesh has no
+  surfaces to extend). A pick OCCT cannot close → the bar says "The
+  surrounding faces can't heal that" and Apply stays off, because §4.16 is
+  explicit that some deletions legitimately leave a sheet body.
+
+Verified on numbers, not screenshots: the `OS3D_DEBUG_SEED_HOLE` body is a
+10 × 10 × 6 box with a Ø4 through-hole, 524.62 mm³. Deleting the hole's wall
+takes it to **600.00 mm³ — exactly the full box** — and one undo puts it back.
+`DeleteFaceUITests` asserts both numbers; `DeleteFaceKitTests` proves the same
+heal at the kernel level (cylindrical faces 1 → 0, planar 6).
 
 ### 2. B-rep follow-through (F below is the design doc)
 

@@ -103,6 +103,11 @@ enum EditorMode: Equatable {
     /// `EditorViewModel.shellSelectedFaces`; the shell bar sets the wall
     /// thickness. Zero open faces is valid — a fully enclosed hollow.
     case pickingShellFaces
+    /// Delete Face armed (spec §4.16): taps toggle faces into
+    /// `EditorViewModel.deleteFaceTargets`; Apply removes them and lets the
+    /// neighbouring surfaces heal. B-rep only — a mesh has no surfaces to
+    /// extend, so there is nothing to heal with.
+    case pickingDeleteFaces
     /// Add Axis armed (spec §6.2): taps pick the references the axis is
     /// derived from — a linear edge, a cylindrical face, or one or two planar
     /// faces. See `EditorViewModel.axisPicks`.

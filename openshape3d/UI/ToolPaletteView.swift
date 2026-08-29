@@ -145,6 +145,11 @@ struct ToolPaletteView: View {
                        active: isMode { if case .pickingShellFaces = $0 { return true }; return false },
                        enabled: !viewModel.session.document.bodies.isEmpty, tint: .blue,
                        begin: { viewModel.beginShell() }, cancel: { viewModel.cancelShell() }),
+            toggleItem("Delete Face", "square.slash", "DeleteFaceButton",
+                       active: isMode { if case .pickingDeleteFaces = $0 { return true }; return false },
+                       enabled: !viewModel.session.document.bodies.isEmpty, tint: .blue,
+                       begin: { viewModel.beginDeleteFace() },
+                       cancel: { viewModel.cancelDeleteFace() }),
         ])
     }
 
