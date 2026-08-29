@@ -473,6 +473,9 @@ final class EditorViewModel {
         let blendPreviewSource: BodyID? = blendPreview != nil ? blendBodyID : nil
         // …and so does a live shell preview.
         let shellPreviewSource: BodyID? = shellPreview != nil ? shellBodyID : nil
+        // …and a live delete-face heal.
+        let deleteFacePreviewSource: BodyID? =
+            deleteFacePreview != nil ? deleteFaceBodyID : nil
 
         // Isolate (spec §16.2): a transient override hides everything outside
         // the isolated set without touching persisted visibility.
@@ -481,6 +484,7 @@ final class EditorViewModel {
             && body.id != facePreviewSource
             && body.id != blendPreviewSource
             && body.id != shellPreviewSource
+            && body.id != deleteFacePreviewSource
             && (isolatedBodyIDs?.contains(body.id) ?? true) {
             var selectionState = SelectionStateNone.rawValue
             if selection.contains(body.id) {
@@ -545,6 +549,44 @@ final class EditorViewModel {
                 baseColor: SIMD4(0.72, 0.74, 0.78, 1),
                 selectionState: SelectionStateNone.rawValue
             ))
+        }
+
+        // Live delete-face preview: the healed body in place of the original.
+        if let preview = deleteFacePreview {
+            scene.bodies.append(BodyDrawable(
+                id: preview.id,
+                renderMesh: preview.render,
+                edges: preview.edges,
+                meshRevision: preview.meshRevision,
+                modelMatrix: preview.transform.matrixFloat,
+                baseColor: SIMD4(0.72, 0.74, 0.78, 1),
+                selectionState: SelectionStateNone.rawValue
+            ))
+        }
+
+        // Picked faces (Delete Face): red fills over what Apply will remove,
+        // drawn from the ORIGINAL mesh — the preview has already healed them
+        // away, so this is the only thing showing what is selected. Red, not
+        // the shell pick's blue: this one destroys geometry.
+        if case .pickingDeleteFaces = mode, let bodyID = deleteFaceBodyID,
+           let body = session.document.body(with: bodyID) {
+            let matrix = body.transform.matrixFloat
+            var triangles: [SIMD3<Float>] = []
+            for target in deleteFaceTargets {
+                for t in target.triangles where t < body.render.triangleCount {
+                    for k in 0..<3 {
+                        let index = Int(body.render.indices[t * 3 + k])
+                        let world = matrix * SIMD4(body.render.positions[index], 1)
+                        triangles.append(SIMD3(world.x, world.y, world.z))
+                    }
+                }
+            }
+            if !triangles.isEmpty {
+                scene.profileFills.append(SketchFillBatch(
+                    triangles: triangles,
+                    color: SIMD4(0.95, 0.26, 0.21, 0.65)
+                ))
+            }
         }
 
         // Picked open faces (Shell): vivid-blue fills over the faces the shell
@@ -2495,6 +2537,7 @@ final class EditorViewModel {
         cancelImagePlanePick()
         resetBlendState()
         resetShellState()
+        resetDeleteFaceState()
         resetSketchOffsetState()
         resetAxisState()
         pendingCreateTool = nil
@@ -3172,6 +3215,183 @@ final class EditorViewModel {
         session.save()
     }
 
+    // MARK: - Delete Face (direct modeling, spec §4.16)
+
+    /// The body the current Delete Face pick edits (single-body, like Shell).
+    var deleteFaceBodyID: BodyID?
+    /// Faces toggled for removal, in pick order.
+    var deleteFaceTargets: [DeleteFaceKit.Target] = []
+    /// Live healed result, rendered in place of the source (same swap as the
+    /// shell preview). Nil when the neighbours cannot close — Apply disables,
+    /// which is the honest answer: §4.16 says some deletions leave a sheet
+    /// body, and shipping one of those as a "solid" is worse than refusing.
+    var deleteFacePreview: Body?
+    private var deleteFacePreviewRevision: UInt64 = 0
+
+    /// Arm Delete Face from the Modify palette. The next taps toggle faces.
+    func beginDeleteFace() {
+        cancelTransientPicks()
+        cancelTool()
+        deleteFaceTargets = []
+        deleteFaceBodyID = selection.count == 1 ? selection.first : nil
+        deleteFacePreview = nil
+        mode = .pickingDeleteFaces
+    }
+
+    /// User-facing Cancel: drop the pick and restore the body selection.
+    func cancelDeleteFace() {
+        guard case .pickingDeleteFaces = mode else { return }
+        let body = deleteFaceBodyID
+        resetDeleteFaceState()
+        if let body, session.document.body(with: body) != nil {
+            mode = .selected(body)
+            selection = [body]
+        } else {
+            mode = .idle
+        }
+    }
+
+    /// Internal reset (delete / undo / arming another tool): clears the pick
+    /// WITHOUT touching `selection` (same contract as `resetShellState`).
+    private func resetDeleteFaceState() {
+        deleteFaceTargets = []
+        deleteFaceBodyID = nil
+        deleteFacePreview = nil
+        if case .pickingDeleteFaces = mode { mode = .idle }
+    }
+
+    /// Tap while Delete Face is armed: pick the body, toggle the tapped face.
+    /// Switching bodies restarts the pick on the new one.
+    private func handleDeleteFaceTap(ray: Ray) {
+        guard let hit = HitTester.pickBody(ray: ray, in: scene) else { return }
+        guard let body = session.document.body(with: hit.bodyID) else { return }
+        if deleteFaceBodyID != hit.bodyID {
+            deleteFaceBodyID = hit.bodyID
+            deleteFaceTargets = []
+            deleteFacePreview = nil
+        }
+        guard body.brep != nil else {
+            // Say why, once, instead of letting every tap do nothing.
+            showNotice("Delete Face needs an analytic body — this one is mesh-only.")
+            return
+        }
+        // The live preview stands in for the body in `scene`, so the hit's
+        // triangle index refers to the PREVIEW mesh. Re-pick against the
+        // ORIGINAL so the face comes from the mesh the heal recomputes from —
+        // this is also what lets a second tap un-pick a face that the preview
+        // has already removed (same trap as the shell pick).
+        let originalScene = ViewportScene(bodies: [BodyDrawable(
+            id: body.id,
+            renderMesh: body.render,
+            edges: body.edges,
+            meshRevision: body.meshRevision,
+            modelMatrix: body.transform.matrixFloat,
+            baseColor: SIMD4(0.72, 0.74, 0.78, 1),
+            selectionState: SelectionStateNone.rawValue
+        )])
+        guard let originalHit = HitTester.pickBody(ray: ray, in: originalScene),
+              let target = DeleteFaceKit.target(
+                  in: body.render, seedTriangle: originalHit.triangleIndex) else {
+            showNotice("That surface isn't a face this tool can remove.")
+            return
+        }
+        if let idx = deleteFaceTargets.firstIndex(of: target) {
+            deleteFaceTargets.remove(at: idx)
+        } else {
+            deleteFaceTargets.append(target)
+        }
+        updateDeleteFacePreview()
+    }
+
+    /// The healed solid for the current pick, or nil when OCCT cannot close
+    /// the gap. Shared by the preview and the commit so what you see is what
+    /// you get.
+    private func healedBody(source: Body, revision: UInt64) -> Body? {
+        guard let brep = source.brep, !deleteFaceTargets.isEmpty else { return nil }
+        guard let healed = OCCTKernel.removingFaces(
+            brep,
+            at: deleteFaceTargets.map(\.samplePoint),
+            tolerance: DeleteFaceKit.tolerance(for: source.render)) else { return nil }
+        var result = Body(
+            id: source.id, name: source.name, transform: source.transform,
+            primitive: nil, render: source.render, revision: revision)
+        guard result.adoptBRep(healed) else { return nil }
+        return result
+    }
+
+    private func updateDeleteFacePreview() {
+        guard case .pickingDeleteFaces = mode,
+              let bodyID = deleteFaceBodyID,
+              let source = session.document.body(with: bodyID)
+        else {
+            deleteFacePreview = nil
+            return
+        }
+        deleteFacePreviewRevision &+= 1
+        deleteFacePreview = healedBody(
+            source: source, revision: (1 << 57) | deleteFacePreviewRevision)
+    }
+
+    /// Whether the delete can be committed: a body, at least one face, and a
+    /// live healed result.
+    var canCommitDeleteFace: Bool {
+        if case .pickingDeleteFaces = mode {
+            return deleteFaceBodyID != nil && !deleteFaceTargets.isEmpty
+                && deleteFacePreview != nil
+        }
+        return false
+    }
+
+    /// Apply: replace the body with the healed solid and record a
+    /// `.deleteFace` node so it rebuilds parametrically.
+    func commitDeleteFace() {
+        guard case .pickingDeleteFaces = mode,
+              let bodyID = deleteFaceBodyID,
+              let source = session.document.body(with: bodyID),
+              !deleteFaceTargets.isEmpty
+        else { return }
+
+        // Reuse the live preview when current — it already carries the healed
+        // brep, and recomputing risks the two disagreeing.
+        let after: Body
+        if var preview = deleteFacePreview {
+            preview.meshRevision = 0 // assigned by the command
+            after = preview
+        } else if let computed = healedBody(source: source, revision: 0) {
+            after = computed
+        } else {
+            errorMessage = "The surrounding faces could not heal — "
+                + "try deleting fewer faces, or a different one."
+            return
+        }
+        let replace = ReplaceBodyCommand(title: "Delete Face", before: source, after: after)
+
+        // Parametric node only for a feature-owned body (same rule as blends
+        // and shell).
+        if let owner = featureNode(owning: bodyID) {
+            let bodyRef = BodyRef(producer: owner.id, bodyID: bodyID)
+            let faceRefs = deleteFaceTargets.map {
+                FaceRef(body: bodyRef, creator: owner.id,
+                        role: .derived(index: 0), signature: $0.signature)
+            }
+            let node = FeatureNode(
+                name: "Delete Face",
+                kind: .deleteFace(body: bodyRef, faces: faceRefs),
+                outputBodyIDs: [bodyID])
+            session.perform(CompositeCommand(
+                title: "Delete Face",
+                commands: [replace, AppendFeatureCommand(node: node)]))
+        } else {
+            session.perform(replace)
+        }
+        deleteFaceTargets = []
+        deleteFaceBodyID = nil
+        deleteFacePreview = nil
+        mode = .selected(source.id)
+        selection = [source.id]
+        session.save()
+    }
+
     /// A `FaceRef` pinning an open face by geometric signature in body-local
     /// space (mirrors `pushPullFaceRef`; role is only a resolve tiebreak).
     private static func shellFaceRef(
@@ -3689,6 +3909,7 @@ final class EditorViewModel {
         // A blend/shell/offset/axis pick references geometry that may have changed.
         resetBlendState()
         resetShellState()
+        resetDeleteFaceState()
         resetSketchOffsetState()
         resetAxisState()
         axisEntryPart = nil
@@ -4054,6 +4275,8 @@ final class EditorViewModel {
             handleBlendEdgeTap(ray: ray, kind: kind)
         case .pickingShellFaces:
             handleShellFaceTap(ray: ray)
+        case .pickingDeleteFaces:
+            handleDeleteFaceTap(ray: ray)
         case .pickingAxisReferences:
             handleAxisReferenceTap(ray: ray)
         }
@@ -9098,6 +9321,11 @@ final class EditorViewModel {
             return [
                 MeasurementRow(label: "Open Faces", value: "\(shellSelectedFaces.count)"),
             ]
+        case .pickingDeleteFaces:
+            guard !deleteFaceTargets.isEmpty else { return [] }
+            return [
+                MeasurementRow(label: "Faces", value: "\(deleteFaceTargets.count)"),
+            ]
         default:
             return []
         }
@@ -9668,6 +9896,32 @@ final class EditorViewModel {
                 body.brep = cut
                 body.render = RenderMesh(positions: m.positions, normals: m.normals, indices: m.indices)
                 body.edges = FeatureEdgeExtractor.edges(from: body.render)
+                body.material = BodyMaterialSpec.default
+                session.perform(AddBodyCommand(body: body))
+            }
+            return
+        }
+
+        // OS3D_DEBUG_SEED_HOLE: a box with a through-hole — the canonical
+        // Delete Face subject (§4.16), because the face worth deleting is the
+        // hole's CYLINDRICAL wall, and no other seed has one.
+        if ProcessInfo.processInfo.environment["OS3D_DEBUG_SEED_HOLE"] != nil,
+           session.document.bodies.isEmpty {
+            var seedDoc = session.document
+            let boxSpec = PrimitiveSpec.box(width: 10, depth: 10, height: 6)
+            let drillSpec = PrimitiveSpec.cylinder(radius: 2, height: 12)
+            // Below the box and taller than it, so it punches clean through
+            // and leaves exactly ONE cylindrical face.
+            let drillPlacement = Transform3D(translation: SIMD3(0, -3, 0))
+            var edrill = Euclid.Mesh.primitive(drillSpec)
+            edrill = edrill.transformed(by: drillPlacement.euclid)
+            let euclidResult = Euclid.Mesh.primitive(boxSpec).subtracting(edrill)
+            if let a = OCCTKernel.primitiveShape(boxSpec, placement: .identity),
+               let b = OCCTKernel.primitiveShape(drillSpec, placement: drillPlacement),
+               let drilled = OCCTKernel.boolean(a, b, op: 1) {
+                var body = Body(name: "Drilled", transform: .identity, primitive: nil,
+                                euclidMesh: euclidResult, revision: seedDoc.nextRevision())
+                body.adoptBRep(drilled)
                 body.material = BodyMaterialSpec.default
                 session.perform(AddBodyCommand(body: body))
             }

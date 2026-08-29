@@ -401,6 +401,41 @@ struct EditorView: View {
 
     /// Shell bar (Phase E, spec §4.4): pick prompt, wall-thickness field,
     /// Apply/Cancel. Zero picked faces is valid (enclosed hollow).
+    /// Delete Face bar (spec §4.16). No parameter to set — the whole control
+    /// is "which faces", so the bar reports the pick and why Apply is off.
+    private func deleteFaceBar(_ viewModel: EditorViewModel) -> some View {
+        AdaptiveBar(style: .capsule, spacing: 12) {
+            Image(systemName: "square.slash")
+            Text(deleteFaceHint(viewModel))
+                .font(.subheadline)
+                .fixedSize()
+        } actions: {
+            Button("Cancel") { viewModel.cancelDeleteFace() }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .keyboardShortcut(.cancelAction)
+                .accessibilityIdentifier("DeleteFaceCancel")
+            Button("Apply") { viewModel.commitDeleteFace() }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+                .disabled(!viewModel.canCommitDeleteFace)
+                .accessibilityIdentifier("DeleteFaceApply")
+        }
+    }
+
+    /// The bar's text. A picked face with NO preview means OCCT could not
+    /// close the gap — say that, rather than leaving a disabled Apply with no
+    /// explanation (§4.16: some deletions legitimately leave a sheet body).
+    private func deleteFaceHint(_ viewModel: EditorViewModel) -> String {
+        if viewModel.deleteFaceBodyID == nil { return "Tap a body to edit" }
+        let count = viewModel.deleteFaceTargets.count
+        if count == 0 { return "Tap the faces to delete" }
+        if viewModel.deleteFacePreview == nil {
+            return "The surrounding faces can't heal that"
+        }
+        return "\(count) face\(count == 1 ? "" : "s") to delete"
+    }
+
     private func shellBar(_ viewModel: EditorViewModel) -> some View {
         let value = settings.unit.binding(Binding(
             get: { viewModel.shellThickness },
@@ -884,6 +919,8 @@ struct EditorView: View {
                         blendBar(kind, viewModel)
                     } else if case .pickingShellFaces = viewModel.mode {
                         shellBar(viewModel)
+                    } else if case .pickingDeleteFaces = viewModel.mode {
+                        deleteFaceBar(viewModel)
                     } else if case .pickingAxisReferences = viewModel.mode {
                         axisBar(viewModel)
                     } else if viewModel.mode.sketchTool == .offset {
