@@ -7,9 +7,9 @@ Companions: `IMPLEMENTATION_PLAN.md` (original phase plan),
 `SHAPR3D_PARITY_SPEC.md` (feature spec), `PHASE_D_DESIGN.md` (feature-graph
 design).
 
-**Current test baseline, both suites green at the Delete Face commit
-(2026-08-29): 827 unit tests in 90s, full UI suite 97 executed, 2 skipped,
-0 failures, 42m45s** — 0 idle-timeouts, 0 field-clear retries, store pinned at
+**Current test baseline, both suites green at the Replace Face commit
+(2026-08-29): 839 unit tests in 93s, full UI suite 99 executed, 2 skipped,
+0 failures, 43m14s** — 0 idle-timeouts, 0 field-clear retries, store pinned at
 1 project. The skips are `CompactWidthBarUITests`, which skip by design on the
 iPad destination.
 
