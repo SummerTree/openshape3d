@@ -89,8 +89,7 @@ extension XCTestCase {
         let field = app.textFields["Distance"].firstMatch
         XCTAssertTrue(field.waitForExistence(timeout: 3),
                       "Extrude Distance field should be visible")
-        field.tap()
-        field.typeText("\(value)\n") // onSubmit commits the extrude
+        replaceText(field, with: value)   // onSubmit commits the extrude
     }
 
     /// Replace a text field's whole contents and submit.
@@ -110,14 +109,25 @@ extension XCTestCase {
     /// `value.count` characters always empties the field, whatever the
     /// selection did.
     func replaceText(_ field: XCUIElement, with text: String, submit: Bool = true) {
-        field.tap()
-        field.typeKey("a", modifierFlags: .command)   // select the old value
-        field.typeText(text)
-        if let landed = field.value as? String, landed != text {
-            field.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue,
-                                  count: landed.count))
+        func attempt() {
+            field.tap()
+            // Select-all THEN delete. Backspaces alone are not enough: the
+            // caret lands wherever the tap put it, and at position 0 they
+            // delete nothing — which is how "-3" typed into a field already
+            // holding "0" came out as "-30" (30 mm into a 4 mm box: refused,
+            // no command, and a failure 10 lines later blaming the commit).
+            field.typeKey("a", modifierFlags: .command)
+            field.typeText(XCUIKeyboardKey.delete.rawValue)
             field.typeText(text)
         }
+        attempt()
+        if (field.value as? String) != text {
+            NSLog("OS3D_BUG field held '\((field.value as? String) ?? "<nil>")' "
+                  + "after typing '\(text)'; retrying")
+            attempt()
+        }
+        XCTAssertEqual(field.value as? String, text,
+                       "the field should hold exactly what was typed before submitting")
         if submit { field.typeText("\n") }
     }
 }

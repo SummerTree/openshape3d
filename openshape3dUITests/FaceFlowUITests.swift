@@ -119,8 +119,11 @@ final class FaceFlowUITests: XCTestCase {
         pill.tap()
         let field = app.textFields["ExtrudeArrowField"]
         XCTAssertTrue(field.waitForExistence(timeout: 3))
-        field.tap()
-        field.typeText("-3\n")   // explicit negative → push inward
+        // The pill's field arrives holding the current value ("0"), so typing
+        // into it without clearing produced "0-3" (which evaluates to -3 and
+        // passed by luck) or "-30" (30 mm into a 4 mm box — refused, no
+        // command). `replaceText` clears first and verifies what landed.
+        replaceText(field, with: "-3")   // explicit negative → push inward
 
         // Wait for the COMMIT, not for a stopwatch. Submitting runs a CSG push
         // and ends the face selection, and a fixed sleep(1) is not enough on a
