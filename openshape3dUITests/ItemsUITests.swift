@@ -34,6 +34,7 @@ final class ItemsUITests: XCTestCase {
     func testItemsPanelVisibilityRenameAndDelete() throws {
         let app = XCUIApplication()
         app.launchEnvironment["OS3D_FRESH"] = "1"
+        app.launchEnvironment["OS3D_RESET_STORE"] = "1"
         app.launch()
 
         // Create a body: rect sketch + extrude.

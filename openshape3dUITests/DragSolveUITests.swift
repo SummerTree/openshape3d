@@ -29,6 +29,7 @@ final class DragSolveUITests: XCTestCase {
     func testDragTopCornerKeepsHorizontalEdgeAndCoalesces() throws {
         let app = XCUIApplication()
         app.launchEnvironment["OS3D_FRESH"] = "1"
+        app.launchEnvironment["OS3D_RESET_STORE"] = "1"
         app.launch()
         let window = app.windows.firstMatch
 

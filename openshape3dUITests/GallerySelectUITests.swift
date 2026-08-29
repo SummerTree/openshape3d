@@ -19,6 +19,7 @@ final class GallerySelectUITests: XCTestCase {
     func testSelectModeMultiDelete() throws {
         let app = XCUIApplication()
         app.launchEnvironment["OS3D_FRESH"] = "1"
+        app.launchEnvironment["OS3D_RESET_STORE"] = "1"
         app.launch()
         // OS3D_FRESH opens a fresh design; return to the gallery.
         XCTAssertTrue(app.buttons["SketchGroup"].waitForExistence(timeout: 10))
@@ -63,6 +64,7 @@ final class GallerySelectUITests: XCTestCase {
     func testSelectModeCancelKeepsDesigns() throws {
         let app = XCUIApplication()
         app.launchEnvironment["OS3D_FRESH"] = "1"
+        app.launchEnvironment["OS3D_RESET_STORE"] = "1"
         app.launch()
         XCTAssertTrue(app.buttons["SketchGroup"].waitForExistence(timeout: 10))
         app.navigationBars.buttons.firstMatch.tap()

@@ -19,6 +19,7 @@ final class ImageUITests: XCTestCase {
     private func launchWithSeededImage() -> XCUIApplication {
         let app = XCUIApplication()
         app.launchEnvironment["OS3D_FRESH"] = "1"
+        app.launchEnvironment["OS3D_RESET_STORE"] = "1"
         app.launchEnvironment["OS3D_DEBUG_SEED_IMAGE"] = "1"
         app.launch()
         return app

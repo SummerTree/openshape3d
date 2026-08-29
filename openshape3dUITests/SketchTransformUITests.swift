@@ -19,6 +19,7 @@ final class SketchTransformUITests: XCTestCase {
     func testSketchSelectionMoveHandleDragUndo() throws {
         let app = XCUIApplication()
         app.launchEnvironment["OS3D_FRESH"] = "1"
+        app.launchEnvironment["OS3D_RESET_STORE"] = "1"
         app.launch()
 
         let window = app.windows.firstMatch
@@ -80,6 +81,7 @@ final class SketchTransformUITests: XCTestCase {
     func testRotateAroundWorldAxisTypedAngleCommitUndo() throws {
         let app = XCUIApplication()
         app.launchEnvironment["OS3D_FRESH"] = "1"
+        app.launchEnvironment["OS3D_RESET_STORE"] = "1"
         app.launchEnvironment["OS3D_DEBUG_SEED"] = "1"
         app.launch()
         XCTAssertTrue(app.buttons["SketchGroup"].waitForExistence(timeout: 10))

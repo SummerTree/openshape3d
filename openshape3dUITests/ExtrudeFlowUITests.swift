@@ -36,6 +36,7 @@ final class ExtrudeFlowUITests: XCTestCase {
     func testTapProfileThenExtrudeButton() throws {
         let app = XCUIApplication()
         app.launchEnvironment["OS3D_FRESH"] = "1"
+        app.launchEnvironment["OS3D_RESET_STORE"] = "1"
         app.launch()
 
         drawRectangle(in: app)
@@ -59,6 +60,7 @@ final class ExtrudeFlowUITests: XCTestCase {
     func testSymmetricToggleCommitsExtrude() throws {
         let app = XCUIApplication()
         app.launchEnvironment["OS3D_FRESH"] = "1"
+        app.launchEnvironment["OS3D_RESET_STORE"] = "1"
         app.launch()
 
         drawRectangle(in: app)
@@ -92,6 +94,7 @@ final class ExtrudeFlowUITests: XCTestCase {
     func testBooleanBadgeNewBodyKeepsBothBodies() throws {
         let app = XCUIApplication()
         app.launchEnvironment["OS3D_FRESH"] = "1"
+        app.launchEnvironment["OS3D_RESET_STORE"] = "1"
         app.launch()
 
         let window = app.windows.firstMatch
@@ -152,6 +155,7 @@ final class ExtrudeFlowUITests: XCTestCase {
     func testPullProfileCreatesBodyOnRelease() throws {
         let app = XCUIApplication()
         app.launchEnvironment["OS3D_FRESH"] = "1"
+        app.launchEnvironment["OS3D_RESET_STORE"] = "1"
         app.launch()
 
         drawRectangle(in: app)

@@ -20,6 +20,7 @@ final class TextProjectUITests: XCTestCase {
     func testTextGlyphProfilesExtrudeIntoBody() throws {
         let app = XCUIApplication()
         app.launchEnvironment["OS3D_FRESH"] = "1"
+        app.launchEnvironment["OS3D_RESET_STORE"] = "1"
         app.launch()
 
         let window = app.windows.firstMatch
@@ -82,6 +83,7 @@ final class TextProjectUITests: XCTestCase {
     func testProjectBoxEdgesIntoGroundSketch() throws {
         let app = XCUIApplication()
         app.launchEnvironment["OS3D_FRESH"] = "1"
+        app.launchEnvironment["OS3D_RESET_STORE"] = "1"
         app.launchEnvironment["OS3D_DEBUG_SEED"] = "1"
         app.launch()
 
