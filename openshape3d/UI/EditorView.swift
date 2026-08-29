@@ -20,11 +20,22 @@ struct ExportDocument: FileDocument {
         ?? UTType(filenameExtension: "3mf") ?? .data
     static let glbType = UTType(filenameExtension: "glb") ?? .data
     static let dxfType = UTType(filenameExtension: "dxf") ?? .data
+    /// STEP AP214. iOS declares no UTI for STEP, so this resolves to a
+    /// DYNAMIC type (`dyn.…`) unless something on the device has declared
+    /// one. Good enough to STAMP an exported file, but a document picker
+    /// filtered to a dynamic type matches nothing — see
+    /// `ImportRequest.contentTypes`, which pairs it with `.data`.
+    /// Declaring the type properly needs an `UTImportedTypeDeclarations`
+    /// block, which needs the app off `GENERATE_INFOPLIST_FILE` (that setting
+    /// makes Xcode ignore `INFOPLIST_FILE` outright) — its own change.
+    static let stepType = UTType("org.iso.step")
+        ?? UTType(filenameExtension: "step") ?? .data
     static let usdzType = UTType.usdz
     /// The .os3d project archive (Phase F, spec §13).
     static let os3dType = UTType(filenameExtension: "os3d") ?? .data
     static var readableContentTypes: [UTType] {
-        [stlType, objType, threeMFType, glbType, dxfType, usdzType, os3dType, .png, .data]
+        [stlType, objType, threeMFType, glbType, dxfType, stepType,
+         usdzType, os3dType, .png, .data]
     }
 
     var data: Data
@@ -185,12 +196,34 @@ struct EditorView: View {
     /// stays the floor so nothing moves on iPad; a taller compact bar pushes
     /// them further up instead of being overlapped by them.
     private var bottomBarInset: CGFloat { max(96, bottomBarHeight + 16) }
+    /// Which file the Import menu asked for. There is exactly ONE
+    /// `.fileImporter` in this view because stacking several on one view
+    /// silently leaves only the LAST one live — the STL and DXF entries did
+    /// nothing at all for as long as they had importers ahead of the image
+    /// one in the chain (found 2026-08-29 while wiring STEP: "Image from
+    /// Files…" presented, the three above it did not).
+    private enum ImportRequest: Equatable {
+        case stl, dxf, step, image
+
+        var contentTypes: [UTType] {
+            switch self {
+            case .stl: [ExportDocument.stlType]
+            // STEP and DXF have no system-declared UTI, so these resolve to
+            // DYNAMIC types (`dyn.…`) that match no file in the picker.
+            // `.data` is what makes the files selectable — the same escape
+            // hatch the `.os3d` archive importer already uses.
+            case .dxf: [ExportDocument.dxfType, .data]
+            case .step: [ExportDocument.stepType, .data]
+            case .image: [.png, .jpeg, .image]
+            }
+        }
+    }
+    @State private var importRequest: ImportRequest = .stl
     @State private var showImporter = false
     @State private var showScreenshotOptions = false
     /// Insert Image (plan §B10): Photos picker + image file importer.
     @State private var showPhotoPicker = false
     @State private var photoPickerItem: PhotosPickerItem?
-    @State private var showImageImporter = false
     /// Screenshot captured by the options sheet; promoted to `exportDocument`
     /// once the sheet has dismissed (two presentations can't overlap).
     @State private var pendingScreenshot: Data?
@@ -209,8 +242,6 @@ struct EditorView: View {
     @State private var pendingExportItems: [ExportFileItem]?
     /// Per-body temp files currently offered by `.fileExporter(items:)`.
     @State private var exportItems: [ExportFileItem]?
-    /// DXF import (plan §B14): entities land in a ground-plane sketch.
-    @State private var showDXFImporter = false
 
     /// Draft name for the Make Symbol prompt (plan §B16).
     @State private var symbolNameDraft = ""
@@ -632,14 +663,24 @@ struct EditorView: View {
     private func importMenu(_ viewModel: EditorViewModel) -> some View {
         Menu {
             Button("STL File…") {
+                importRequest = .stl
                 showImporter = true
             }
+            .accessibilityIdentifier("ImportSTL")
             // DXF import (plan §B14): entities join a ground-plane
             // sketch as one undo step.
             Button("DXF File…") {
-                showDXFImporter = true
+                importRequest = .dxf
+                showImporter = true
             }
             .accessibilityIdentifier("ImportDXF")
+            // STEP import (spec §12.1): solids arrive analytic, so an imported
+            // part can be filleted/shelled/booleaned like a native one.
+            Button("STEP File…") {
+                importRequest = .step
+                showImporter = true
+            }
+            .accessibilityIdentifier("ImportSTEP")
             Divider()
             // Insert Image (plan §B10, spec §6.3): the picked
             // picture waits for a plane tap (ground by default).
@@ -648,7 +689,8 @@ struct EditorView: View {
             }
             .accessibilityIdentifier("InsertImagePhotos")
             Button("Image from Files…") {
-                showImageImporter = true
+                importRequest = .image
+                showImporter = true
             }
             .accessibilityIdentifier("InsertImageFiles")
         } label: {
@@ -710,6 +752,19 @@ struct EditorView: View {
                     )
                 }
             }
+            // STEP (spec §12.2): the only export here that stays EXACT — a
+            // cylinder opens as a cylinder in the receiving CAD, not as a
+            // prism. Mesh-only bodies are skipped, with a notice naming them.
+            Button("STEP") {
+                if let data = viewModel.exportSTEP() {
+                    exportDocument = ExportDocument(
+                        data: data,
+                        contentType: ExportDocument.stepType,
+                        fileExtension: "step"
+                    )
+                }
+            }
+            .accessibilityIdentifier("ExportSTEP")
             Divider()
             // Full-fidelity project archive: sketches, features, variables —
             // everything (Phase F, spec §13). Mesh exports above are geometry-
@@ -1322,46 +1377,44 @@ struct EditorView: View {
             }
     }
 
+    /// The one Import-menu completion handler; `importRequest` says which
+    /// entry opened the picker. Every kind needs the same security-scoped
+    /// read, so only the last line differs.
+    private func handleImport(
+        _ result: Result<URL, Error>, viewModel: EditorViewModel
+    ) {
+        guard case .success(let url) = result else {
+            viewModel.errorMessage = "Import failed — please try again."
+            return
+        }
+        let accessing = url.startAccessingSecurityScopedResource()
+        defer { if accessing { url.stopAccessingSecurityScopedResource() } }
+        guard let data = try? Data(contentsOf: url) else {
+            // Keep the image wording the image importer had before these were
+            // merged — "file" would be a small step backwards for that entry.
+            viewModel.errorMessage = importRequest == .image
+                ? "Couldn't read the selected image."
+                : "Couldn't read the selected file."
+            return
+        }
+        let name = url.lastPathComponent
+        switch importRequest {
+        case .stl: viewModel.importSTL(data: data, fileName: name)
+        case .dxf: viewModel.importDXF(data: data, fileName: name)
+        case .step: viewModel.importSTEP(data: data, fileName: name)
+        case .image: viewModel.beginInsertImage(data: data)
+        }
+    }
+
     @ViewBuilder
     private func editorContent(_ viewModel: EditorViewModel) -> some View {
         viewportChrome(viewModel)
+            // ONE importer for every Import-menu entry (see `ImportRequest`).
             .fileImporter(
                 isPresented: $showImporter,
-                allowedContentTypes: [ExportDocument.stlType]
+                allowedContentTypes: importRequest.contentTypes
             ) { result in
-                switch result {
-                case .success(let url):
-                    let accessing = url.startAccessingSecurityScopedResource()
-                    defer {
-                        if accessing { url.stopAccessingSecurityScopedResource() }
-                    }
-                    guard let data = try? Data(contentsOf: url) else {
-                        viewModel.errorMessage = "Couldn't read the selected file."
-                        return
-                    }
-                    viewModel.importSTL(data: data, fileName: url.lastPathComponent)
-                case .failure:
-                    viewModel.errorMessage = "Import failed — please try again."
-                }
-            }
-            .fileImporter(
-                isPresented: $showDXFImporter,
-                allowedContentTypes: [ExportDocument.dxfType]
-            ) { result in
-                switch result {
-                case .success(let url):
-                    let accessing = url.startAccessingSecurityScopedResource()
-                    defer {
-                        if accessing { url.stopAccessingSecurityScopedResource() }
-                    }
-                    guard let data = try? Data(contentsOf: url) else {
-                        viewModel.errorMessage = "Couldn't read the selected file."
-                        return
-                    }
-                    viewModel.importDXF(data: data, fileName: url.lastPathComponent)
-                case .failure:
-                    viewModel.errorMessage = "Import failed — please try again."
-                }
+                handleImport(result, viewModel: viewModel)
             }
             .photosPicker(
                 isPresented: $showPhotoPicker,
@@ -1377,25 +1430,6 @@ struct EditorView: View {
                     } else {
                         viewModel.errorMessage = "Couldn't read the selected image."
                     }
-                }
-            }
-            .fileImporter(
-                isPresented: $showImageImporter,
-                allowedContentTypes: [.png, .jpeg, .image]
-            ) { result in
-                switch result {
-                case .success(let url):
-                    let accessing = url.startAccessingSecurityScopedResource()
-                    defer {
-                        if accessing { url.stopAccessingSecurityScopedResource() }
-                    }
-                    guard let data = try? Data(contentsOf: url) else {
-                        viewModel.errorMessage = "Couldn't read the selected image."
-                        return
-                    }
-                    viewModel.beginInsertImage(data: data)
-                case .failure:
-                    viewModel.errorMessage = "Import failed — please try again."
                 }
             }
             .sheet(
