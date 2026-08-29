@@ -58,6 +58,7 @@ the code wins — fix them in the same commit.
 | **F (B-rep)** — OpenCASCADE port | ✅ largely landed — see §4 F for what is left |
 | **STEP interchange** — exact-B-rep import/export | ✅ done 2026-08-29 — `STEPKit`, §4.1b |
 | **Delete Face** — OCCT defeaturing, live | ✅ done 2026-08-29 — `DeleteFaceKit`, §4.1c |
+| **Replace Face** — extend/trim a face onto a plane | ✅ done 2026-08-29 — `FeatureKind.replaceFace`, §4.1d |
 
 **The kernel seam has moved (re-audited 2026-08-28).** OCCT is no longer a
 spike: when `OCCTKernel.useOCCTAsSourceOfTruth` is on and a body carries a
@@ -384,6 +385,7 @@ Notes:
 | `OS3D_DEBUG_SEED_CYLINDER` | Circle extrude via OCCT (a TRUE smooth cylinder), `brep` and all — it calls `adoptBRep` exactly like `evalExtrude` |
 | `OS3D_DEBUG_SEED_BOOLEAN` | Cylinder − cylinder, staying round through the brep path |
 | `OS3D_DEBUG_SEED_HOLE` | 10×10×6 box with a Ø4 through-hole (524.62 mm³) — the only seed with a CYLINDRICAL face, so the one Delete Face needs |
+| `OS3D_DEBUG_SEED_STEP` | Stepped block, low half to y=6 and high half to y=12 (1800 mm³) — two PARALLEL faces at different heights, which is the pair Replace Face needs and no single-box seed can offer |
 | `OS3D_DEBUG_SEED_PRIMBOOL` | Cylinder primitive − box primitive (mixed analytic boolean) |
 | `OS3D_DEBUG_SEED_IMAGE` | Reference image on the ground plane, left unselected |
 | `OS3D_GIZMO_DEBUG` | Print the gizmo part each drag grabs, its world delta, and the rotation pill's live value |
@@ -603,14 +605,7 @@ Several tested kernels are reachable only from tests. Each is a small UI
 tranche on top of code that already works:
 
 - ~~**STEP import/export**~~ — **DONE 2026-08-29**, see below.
-- ~~**Delete Face**~~ — **DONE 2026-08-29**, see §1c. **Replace Face** is
-  still open and is its own tranche, not a sibling gesture: `ReplaceFaceKit`
-  is fully built and tested, but there is no `FeatureKind.replaceFace`, so
-  wiring it means a new case through `FeatureGraph.evaluate`,
-  `referencedSketchIDs`, `ProjectMergeKit.remap`, the History icon and
-  `kindLabel` — plus a TWO-STAGE pick (source face, then target face) with a
-  Flip Alignment toggle, and an analytic path so a B-rep body does not
-  silently degrade to mesh (the kit is Euclid-only today).
+- ~~**Delete Face / Replace Face**~~ — **BOTH DONE 2026-08-29**, §1c and §1d.
 - **Command Search launcher** — the hotkey half landed in the 2026-08-26/27
   pass (`CommandShortcutsView` routes `CommandRegistry.routableChordedCommands`
   through `runCommand`). What is still missing is the *search* UI: the fuzzy
@@ -687,6 +682,50 @@ Verified on numbers, not screenshots: the `OS3D_DEBUG_SEED_HOLE` body is a
 takes it to **600.00 mm³ — exactly the full box** — and one undo puts it back.
 `DeleteFaceUITests` asserts both numbers; `DeleteFaceKitTests` proves the same
 heal at the kernel level (cylindrical faces 1 → 0, planar 6).
+
+### 1d. Replace Face — DONE (2026-08-29)
+
+`ReplaceFaceKit` was fully built and tested with no callers. It now has a
+`FeatureKind.replaceFace`, an `evalReplaceFace`, and a `.pickingReplaceFace`
+two-stage pick: tap the face to move, tap the face to move it onto, Flip if the
+side is ambiguous, Apply.
+
+- **The kit was Euclid-only, and that mattered.** Running an analytic body
+  through its mesh booleans hands back a body with no `brep` — the shape still
+  renders correctly and only degrades at the next save, which is exactly the
+  C4 failure from the 2026-08-25 review. `sweptBRep` / `applyBRep` build the
+  prism in OCCT and boolean it there; `sweptZRange` is shared with the Euclid
+  path so the two can never disagree about which side the material goes.
+- **The fuse leaves a seam, and the test caught it.** An extend meets the body
+  ON the replaced face, so `BRepAlgoAPI_Fuse` returns BOTH coplanar faces plus
+  the seam edge: a box extended by 6 mm came back with TEN planar faces instead
+  of six. Right shape, wrong topology — and those extra edges are selectable
+  and blendable by the user. Fixed with a new `OCCTKernel.unified` wrapping
+  `ShapeUpgrade_UnifySameDomain`, applied to the replace result. It is a
+  separate bridge call on purpose: folding it into `booleanOfShape` would
+  change every existing boolean.
+- **The target is a PLANE, not a `FaceRef`** — the v1 limitation worth knowing.
+  The replace is associative to the face it MOVES (that rebuilds with its body)
+  but not to the face it moves TO. `sweep` stores its spine the same way, for
+  the same reason: a ref needs an owning body, and the target is routinely on a
+  different one.
+- **Cross-body targets convert through both transforms.** `convertPlane`
+  rotates the normal and translates the origin separately; comparing a plane
+  from one body's local space against a face in another's is a mistake that
+  only shows up once two bodies are far apart.
+- **Refusals reach the bar verbatim.** "The target face isn't parallel to the
+  one being replaced" is a real geometric answer — the gap varies across the
+  face, so one prism would be wrong everywhere but a line. `FeatureGraph
+  .replaceRefusalText` is shared by replay and the live tool so both say it the
+  same way.
+
+Verified on numbers: `OS3D_DEBUG_SEED_STEP` is a stepped block (low half to
+y = 6, high half to y = 12) at 1800 mm³. Replacing the low step's top onto the
+high step's plane gives **2400.00 mm³, bounds 20 × 12 × 10** — one solid box —
+and undo restores the step. `ReplaceFaceUITests` asserts that and the
+not-parallel refusal; `ReplaceFaceBRepTests` and `ReplaceFaceEvalTests` pin the
+analytic face counts, the two paths agreeing with each other, and the FaceRef
+still resolving after an upstream edit.
 
 ### 2. B-rep follow-through (F below is the design doc)
 

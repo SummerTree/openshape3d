@@ -24,6 +24,7 @@
 #include <BRep_Builder.hxx>
 #include <BRepFilletAPI_MakeFillet.hxx>
 #include <BRepAlgoAPI_Defeaturing.hxx>
+#include <ShapeUpgrade_UnifySameDomain.hxx>
 #include <TopTools_ListOfShape.hxx>
 #include <BRepFilletAPI_MakeChamfer.hxx>
 #include <STEPControl_Writer.hxx>
@@ -435,6 +436,25 @@ static TopoDS_Wire PolyWire(NSData *loop, double z) {
         if (moved.IsNull()) return nil;
         OCCTShape *out = [OCCTShape new];
         out->_shape = moved;
+        return out;
+    } catch (...) {
+        return nil;
+    }
+}
+
++ (nullable OCCTShape *)unifiedShape:(OCCTShape *)shape {
+    if (shape == nil || shape->_shape.IsNull()) return nil;
+    try {
+        // (unifyEdges, unifyFaces, concatBSplines) — faces first, edges with
+        // them, but do NOT merge B-spline geometry: that would change analytic
+        // surfaces into something else, which is the opposite of the point.
+        ShapeUpgrade_UnifySameDomain unifier(
+            shape->_shape, Standard_True, Standard_True, Standard_False);
+        unifier.Build();
+        const TopoDS_Shape result = unifier.Shape();
+        if (result.IsNull()) return nil;
+        OCCTShape *out = [OCCTShape new];
+        out->_shape = result;
         return out;
     } catch (...) {
         return nil;
