@@ -145,6 +145,7 @@ struct HistoryPanelView: View {
         case .fillet: return "circle.circle"
         case .shell: return "cube.transparent"
         case .deleteFace: return "square.slash"
+        case .replaceFace: return "arrow.up.and.down.square"
         }
     }
 

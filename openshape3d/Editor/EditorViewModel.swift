@@ -476,6 +476,9 @@ final class EditorViewModel {
         // …and a live delete-face heal.
         let deleteFacePreviewSource: BodyID? =
             deleteFacePreview != nil ? deleteFaceBodyID : nil
+        // …and a live replace-face result.
+        let replaceFacePreviewSource: BodyID? =
+            replaceFacePreview != nil ? replaceFaceBodyID : nil
 
         // Isolate (spec §16.2): a transient override hides everything outside
         // the isolated set without touching persisted visibility.
@@ -485,6 +488,7 @@ final class EditorViewModel {
             && body.id != blendPreviewSource
             && body.id != shellPreviewSource
             && body.id != deleteFacePreviewSource
+            && body.id != replaceFacePreviewSource
             && (isolatedBodyIDs?.contains(body.id) ?? true) {
             var selectionState = SelectionStateNone.rawValue
             if selection.contains(body.id) {
@@ -562,6 +566,44 @@ final class EditorViewModel {
                 baseColor: SIMD4(0.72, 0.74, 0.78, 1),
                 selectionState: SelectionStateNone.rawValue
             ))
+        }
+
+        // Live replace-face preview: the extended/trimmed body in place of the
+        // original.
+        if let preview = replaceFacePreview {
+            scene.bodies.append(BodyDrawable(
+                id: preview.id,
+                renderMesh: preview.render,
+                edges: preview.edges,
+                meshRevision: preview.meshRevision,
+                modelMatrix: preview.transform.matrixFloat,
+                baseColor: SIMD4(0.72, 0.74, 0.78, 1),
+                selectionState: SelectionStateNone.rawValue
+            ))
+        }
+
+        // Replace Face picks: the face being MOVED in blue, drawn from the
+        // original mesh (the preview has already moved it). The target face is
+        // not filled — it is not being changed, and colouring it the same way
+        // would suggest it is.
+        if case .pickingReplaceFace = mode, let bodyID = replaceFaceBodyID,
+           let body = session.document.body(with: bodyID),
+           let face = replaceSourceFace {
+            let matrix = body.transform.matrixFloat
+            var triangles: [SIMD3<Float>] = []
+            for t in face.triangles where t < body.render.triangleCount {
+                for k in 0..<3 {
+                    let index = Int(body.render.indices[t * 3 + k])
+                    let world = matrix * SIMD4(body.render.positions[index], 1)
+                    triangles.append(SIMD3(world.x, world.y, world.z))
+                }
+            }
+            if !triangles.isEmpty {
+                scene.profileFills.append(SketchFillBatch(
+                    triangles: triangles,
+                    color: SIMD4(0.16, 0.55, 1.0, 0.72)
+                ))
+            }
         }
 
         // Picked faces (Delete Face): red fills over what Apply will remove,
@@ -2538,6 +2580,7 @@ final class EditorViewModel {
         resetBlendState()
         resetShellState()
         resetDeleteFaceState()
+        resetReplaceFaceState()
         resetSketchOffsetState()
         resetAxisState()
         pendingCreateTool = nil
@@ -3392,6 +3435,247 @@ final class EditorViewModel {
         session.save()
     }
 
+    // MARK: - Replace Face (direct modeling, spec §4.12)
+
+    /// The body whose face is being replaced.
+    var replaceFaceBodyID: BodyID?
+    /// Stage 1's pick: the planar face to move, in that body's LOCAL space.
+    var replaceSourceFace: PlanarFace?
+    /// Stage 2's pick: the plane to move it onto, converted into the SOURCE
+    /// body's local space — the target is routinely on a different body, and
+    /// comparing a plane from one local space against a face in another is the
+    /// kind of mistake that only shows up once two bodies are far apart.
+    var replaceTargetPlane: (origin: SIMD3<Double>, normal: SIMD3<Double>)?
+    /// Flip Alignment (§4.12): extend to the other side when both readings are
+    /// geometrically valid.
+    var replaceFaceFlip = false {
+        didSet { if replaceFaceFlip != oldValue { updateReplaceFacePreview() } }
+    }
+    /// Live result, swapped in for the source body. Nil when the kit refuses.
+    var replaceFacePreview: Body?
+    /// Why the current pick cannot be applied, shown in the bar. Nil = fine.
+    var replaceFaceRefusal: String?
+    private var replaceFacePreviewRevision: UInt64 = 0
+
+    /// Arm Replace Face: the next tap picks the face to move, the one after
+    /// it picks the face to move it onto.
+    func beginReplaceFace() {
+        cancelTransientPicks()
+        cancelTool()
+        replaceFaceBodyID = selection.count == 1 ? selection.first : nil
+        replaceSourceFace = nil
+        replaceTargetPlane = nil
+        replaceFaceFlip = false
+        replaceFacePreview = nil
+        replaceFaceRefusal = nil
+        mode = .pickingReplaceFace
+    }
+
+    func cancelReplaceFace() {
+        guard case .pickingReplaceFace = mode else { return }
+        let body = replaceFaceBodyID
+        resetReplaceFaceState()
+        if let body, session.document.body(with: body) != nil {
+            mode = .selected(body)
+            selection = [body]
+        } else {
+            mode = .idle
+        }
+    }
+
+    /// Internal reset — never touches `selection` (same contract as the other
+    /// picks).
+    private func resetReplaceFaceState() {
+        replaceFaceBodyID = nil
+        replaceSourceFace = nil
+        replaceTargetPlane = nil
+        replaceFacePreview = nil
+        replaceFaceRefusal = nil
+        if case .pickingReplaceFace = mode { mode = .idle }
+    }
+
+    /// Which stage the pick is in, for the bar.
+    var replaceFaceStage: Int { replaceSourceFace == nil ? 1 : 2 }
+
+    /// The planar face under a tap, picked against the body's ORIGINAL mesh so
+    /// the live preview standing in for it cannot skew the hit.
+    private func planarFaceUnderTap(ray: Ray, body: Body) -> PlanarFace? {
+        let originalScene = ViewportScene(bodies: [BodyDrawable(
+            id: body.id,
+            renderMesh: body.render,
+            edges: body.edges,
+            meshRevision: body.meshRevision,
+            modelMatrix: body.transform.matrixFloat,
+            baseColor: SIMD4(0.72, 0.74, 0.78, 1),
+            selectionState: SelectionStateNone.rawValue
+        )])
+        guard let hit = HitTester.pickBody(ray: ray, in: originalScene) else { return nil }
+        return FaceTopology.planarFace(in: body.render, seedTriangle: hit.triangleIndex)
+    }
+
+    /// Move a plane from `from`'s local space into `into`'s. Identity for the
+    /// usual case of two feature bodies, but not for a body the user moved.
+    private static func convertPlane(
+        origin: SIMD3<Double>, normal: SIMD3<Double>,
+        from source: Transform3D, into destination: Transform3D
+    ) -> (origin: SIMD3<Double>, normal: SIMD3<Double>) {
+        let toWorld = source.matrix
+        let fromWorld = simd_inverse(destination.matrix)
+        let worldOrigin = toWorld * SIMD4(origin, 1)
+        let localOrigin = fromWorld * worldOrigin
+        // A normal is a direction: rotate it, never translate it.
+        let worldNormal = toWorld * SIMD4(normal, 0)
+        let localNormal = fromWorld * SIMD4(worldNormal.x, worldNormal.y, worldNormal.z, 0)
+        let n = SIMD3<Double>(localNormal.x, localNormal.y, localNormal.z)
+        let len = simd_length(n)
+        return (SIMD3(localOrigin.x, localOrigin.y, localOrigin.z),
+                len > 1e-12 ? n / len : SIMD3<Double>(0, 1, 0))
+    }
+
+    private func handleReplaceFaceTap(ray: Ray) {
+        guard let hit = HitTester.pickBody(ray: ray, in: scene),
+              let body = session.document.body(with: hit.bodyID) else { return }
+
+        // Stage 1 — the face to move. It has to be planar: the kit resolves a
+        // replace into the prism between two PARALLEL planes, and a curved
+        // face has no single plane to be parallel to.
+        guard let source = replaceSourceFace, let sourceID = replaceFaceBodyID else {
+            guard let face = planarFaceUnderTap(ray: ray, body: body) else {
+                showNotice("Replace Face needs a flat face — tap a planar one.")
+                return
+            }
+            replaceFaceBodyID = body.id
+            replaceSourceFace = face
+            replaceTargetPlane = nil
+            replaceFacePreview = nil
+            replaceFaceRefusal = nil
+            return
+        }
+
+        // Stage 2 — the face to move it ONTO, which may be on another body.
+        guard let sourceBody = session.document.body(with: sourceID) else {
+            resetReplaceFaceState()
+            return
+        }
+        guard let target = planarFaceUnderTap(ray: ray, body: body) else {
+            showNotice("The target has to be a flat face too.")
+            return
+        }
+        let targetNormal = SIMD3<Double>(
+            Double(target.normal.x), Double(target.normal.y), Double(target.normal.z))
+        replaceTargetPlane = Self.convertPlane(
+            origin: target.origin, normal: targetNormal,
+            from: body.transform, into: sourceBody.transform)
+        _ = source
+        updateReplaceFacePreview()
+    }
+
+    /// The replaced body for the current pick, plus the refusal text when the
+    /// kit says no. Shared by preview and commit.
+    private func replacedBody(
+        source: Body, revision: UInt64
+    ) -> (body: Body?, refusal: String?) {
+        guard let face = replaceSourceFace, let target = replaceTargetPlane else {
+            return (nil, nil)
+        }
+        let plan: ReplaceFaceKit.Plan
+        do {
+            plan = try ReplaceFaceKit.plan(
+                face: face, targetOrigin: target.origin,
+                targetNormal: target.normal, flip: replaceFaceFlip)
+        } catch {
+            return (nil, FeatureGraph.replaceRefusalText(error))
+        }
+        if OCCTKernel.useOCCTAsSourceOfTruth, let brep = source.brep,
+           let replaced = ReplaceFaceKit.applyBRep(to: brep, face: face, plan: plan) {
+            var result = Body(
+                id: source.id, name: source.name, transform: source.transform,
+                primitive: nil, render: source.render, revision: revision)
+            guard result.adoptBRep(replaced) else {
+                return (nil, "the replaced solid could not be built")
+            }
+            return (result, nil)
+        }
+        guard let mesh = ReplaceFaceKit.apply(
+            to: source.euclidMesh(), face: face, plan: plan), !mesh.polygons.isEmpty else {
+            return (nil, "the replaced solid came out empty")
+        }
+        return (Body(id: source.id, name: source.name, transform: source.transform,
+                     primitive: nil, euclidMesh: mesh, revision: revision), nil)
+    }
+
+    private func updateReplaceFacePreview() {
+        guard case .pickingReplaceFace = mode,
+              let bodyID = replaceFaceBodyID,
+              let source = session.document.body(with: bodyID)
+        else {
+            replaceFacePreview = nil
+            return
+        }
+        replaceFacePreviewRevision &+= 1
+        let outcome = replacedBody(
+            source: source, revision: (1 << 56) | replaceFacePreviewRevision)
+        replaceFacePreview = outcome.body
+        replaceFaceRefusal = outcome.refusal
+    }
+
+    var canCommitReplaceFace: Bool {
+        if case .pickingReplaceFace = mode {
+            return replaceFacePreview != nil
+        }
+        return false
+    }
+
+    /// Apply the replace and record a `.replaceFace` node for a feature-owned
+    /// body so it rebuilds.
+    func commitReplaceFace() {
+        guard case .pickingReplaceFace = mode,
+              let bodyID = replaceFaceBodyID,
+              let source = session.document.body(with: bodyID),
+              let face = replaceSourceFace,
+              let target = replaceTargetPlane
+        else { return }
+
+        let after: Body
+        if var preview = replaceFacePreview {
+            preview.meshRevision = 0 // assigned by the command
+            after = preview
+        } else {
+            let outcome = replacedBody(source: source, revision: 0)
+            guard let computed = outcome.body else {
+                errorMessage = "Couldn't replace that face — "
+                    + (outcome.refusal ?? "the operation failed") + "."
+                return
+            }
+            after = computed
+        }
+        let replace = ReplaceBodyCommand(title: "Replace Face", before: source, after: after)
+
+        if let owner = featureNode(owning: bodyID) {
+            let bodyRef = BodyRef(producer: owner.id, bodyID: bodyID)
+            let faceRef = FaceRef(
+                body: bodyRef, creator: owner.id, role: .derived(index: 0),
+                signature: SignatureNaming.signature(planar: face))
+            let node = FeatureNode(
+                name: "Replace Face",
+                kind: .replaceFace(
+                    face: faceRef,
+                    targetOrigin: PointWrapper(target.origin),
+                    targetNormal: PointWrapper(target.normal),
+                    flip: replaceFaceFlip),
+                outputBodyIDs: [bodyID])
+            session.perform(CompositeCommand(
+                title: "Replace Face",
+                commands: [replace, AppendFeatureCommand(node: node)]))
+        } else {
+            session.perform(replace)
+        }
+        resetReplaceFaceState()
+        mode = .selected(source.id)
+        selection = [source.id]
+        session.save()
+    }
+
     /// A `FaceRef` pinning an open face by geometric signature in body-local
     /// space (mirrors `pushPullFaceRef`; role is only a resolve tiebreak).
     private static func shellFaceRef(
@@ -3910,6 +4194,7 @@ final class EditorViewModel {
         resetBlendState()
         resetShellState()
         resetDeleteFaceState()
+        resetReplaceFaceState()
         resetSketchOffsetState()
         resetAxisState()
         axisEntryPart = nil
@@ -4277,6 +4562,8 @@ final class EditorViewModel {
             handleShellFaceTap(ray: ray)
         case .pickingDeleteFaces:
             handleDeleteFaceTap(ray: ray)
+        case .pickingReplaceFace:
+            handleReplaceFaceTap(ray: ray)
         case .pickingAxisReferences:
             handleAxisReferenceTap(ray: ray)
         }
@@ -9326,6 +9613,14 @@ final class EditorViewModel {
             return [
                 MeasurementRow(label: "Faces", value: "\(deleteFaceTargets.count)"),
             ]
+        case .pickingReplaceFace:
+            guard let face = replaceSourceFace else { return [] }
+            var area = abs(Profile.signedArea(face.outline))
+            for hole in face.holes { area -= abs(Profile.signedArea(hole)) }
+            return [
+                MeasurementRow(label: "Face Area",
+                               value: Self.formatted(max(area, 0), unit: "mm²")),
+            ]
         default:
             return []
         }
@@ -9896,6 +10191,34 @@ final class EditorViewModel {
                 body.brep = cut
                 body.render = RenderMesh(positions: m.positions, normals: m.normals, indices: m.indices)
                 body.edges = FeatureEdgeExtractor.edges(from: body.render)
+                body.material = BodyMaterialSpec.default
+                session.perform(AddBodyCommand(body: body))
+            }
+            return
+        }
+
+        // OS3D_DEBUG_SEED_STEP: a stepped block — a low half (y ≤ 6) and a
+        // high half (y ≤ 12). The canonical Replace Face subject (§4.12):
+        // the low step's top face and the high step's top face are PARALLEL
+        // and at different heights, which is exactly the pair the tool needs
+        // and which no single-box seed can offer.
+        if ProcessInfo.processInfo.environment["OS3D_DEBUG_SEED_STEP"] != nil,
+           session.document.bodies.isEmpty {
+            var seedDoc = session.document
+            let lowSpec = PrimitiveSpec.box(width: 20, depth: 10, height: 6)
+            let highSpec = PrimitiveSpec.box(width: 10, depth: 10, height: 12)
+            let highPlacement = Transform3D(translation: SIMD3(5, 0, 0))
+            var ehigh = Euclid.Mesh.primitive(highSpec)
+            ehigh = ehigh.transformed(by: highPlacement.euclid)
+            let euclidResult = Euclid.Mesh.primitive(lowSpec).union(ehigh)
+            if let a = OCCTKernel.primitiveShape(lowSpec, placement: .identity),
+               let b = OCCTKernel.primitiveShape(highSpec, placement: highPlacement),
+               let fused = OCCTKernel.boolean(a, b, op: 0) {
+                var body = Body(name: "Step", transform: .identity, primitive: nil,
+                                euclidMesh: euclidResult, revision: seedDoc.nextRevision())
+                // Unify, or the fuse's coplanar seams leave the block with
+                // more faces than it has corners and the picks get confusing.
+                body.adoptBRep(OCCTKernel.unified(fused))
                 body.material = BodyMaterialSpec.default
                 session.perform(AddBodyCommand(body: body))
             }
@@ -10576,6 +10899,8 @@ final class EditorViewModel {
                 : "Shell \(fmt(thickness.value)) mm (\(openFaces.count) face\(openFaces.count == 1 ? "" : "s") open)"
         case let .deleteFace(_, faces):
             return "Delete Face (\(faces.count) face\(faces.count == 1 ? "" : "s"))"
+        case let .replaceFace(_, _, _, flip):
+            return flip ? "Replace Face (flipped)" : "Replace Face"
         }
     }
 

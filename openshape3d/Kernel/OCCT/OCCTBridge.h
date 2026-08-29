@@ -118,6 +118,14 @@ NS_ASSUME_NONNULL_BEGIN
 + (nullable OCCTShape *)transformedShape:(OCCTShape *)shape
                                   matrix:(NSData *)transform;
 
+/// Merge faces that lie on the SAME underlying surface, and the edges between
+/// them. A fuse of two solids meeting on a shared plane leaves both original
+/// faces plus the seam edge, so a box extended by a prism comes back with ten
+/// planar faces instead of six — geometrically right, topologically wrong, and
+/// the spurious edges are selectable and blendable. Nil on failure; callers
+/// keep the un-unified solid, which is still valid.
++ (nullable OCCTShape *)unifiedShape:(OCCTShape *)shape;
+
 /// Boolean of two world-space shapes. `op`: 0 = union (fuse), 1 = subtract
 /// (cut a from ... i.e. a − b), 2 = intersect (common). Nil on failure.
 + (nullable OCCTShape *)booleanOfShape:(OCCTShape *)a

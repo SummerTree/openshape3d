@@ -401,6 +401,49 @@ struct EditorView: View {
 
     /// Shell bar (Phase E, spec §4.4): pick prompt, wall-thickness field,
     /// Apply/Cancel. Zero picked faces is valid (enclosed hollow).
+    /// Replace Face bar (spec §4.12): a two-stage pick, so the bar's job is to
+    /// say which stage you are in and — when the kit refuses — why.
+    private func replaceFaceBar(_ viewModel: EditorViewModel) -> some View {
+        AdaptiveBar(style: .capsule, spacing: 12) {
+            Image(systemName: "arrow.up.and.down.square")
+            Text(replaceFaceHint(viewModel))
+                .font(.subheadline)
+                .fixedSize()
+            if viewModel.replaceSourceFace != nil {
+                Divider().frame(height: 20)
+                Toggle("Flip", isOn: Binding(
+                    get: { viewModel.replaceFaceFlip },
+                    set: { viewModel.replaceFaceFlip = $0 }))
+                    .toggleStyle(.button)
+                    .controlSize(.small)
+                    .accessibilityIdentifier("ReplaceFaceFlip")
+            }
+        } actions: {
+            Button("Cancel") { viewModel.cancelReplaceFace() }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .keyboardShortcut(.cancelAction)
+                .accessibilityIdentifier("ReplaceFaceCancel")
+            Button("Apply") { viewModel.commitReplaceFace() }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+                .disabled(!viewModel.canCommitReplaceFace)
+                .accessibilityIdentifier("ReplaceFaceApply")
+        }
+    }
+
+    /// Stage prompt, or the kit's refusal. A refusal is the interesting case:
+    /// "not parallel" is a real geometric answer, not a glitch, and saying it
+    /// beats a disabled Apply with no explanation.
+    private func replaceFaceHint(_ viewModel: EditorViewModel) -> String {
+        if let refusal = viewModel.replaceFaceRefusal {
+            return refusal.prefix(1).uppercased() + refusal.dropFirst()
+        }
+        if viewModel.replaceSourceFace == nil { return "Tap the face to replace" }
+        if viewModel.replaceTargetPlane == nil { return "Now tap the face to move it to" }
+        return "Ready — Apply to replace"
+    }
+
     /// Delete Face bar (spec §4.16). No parameter to set — the whole control
     /// is "which faces", so the bar reports the pick and why Apply is off.
     private func deleteFaceBar(_ viewModel: EditorViewModel) -> some View {
@@ -921,6 +964,8 @@ struct EditorView: View {
                         shellBar(viewModel)
                     } else if case .pickingDeleteFaces = viewModel.mode {
                         deleteFaceBar(viewModel)
+                    } else if case .pickingReplaceFace = viewModel.mode {
+                        replaceFaceBar(viewModel)
                     } else if case .pickingAxisReferences = viewModel.mode {
                         axisBar(viewModel)
                     } else if viewModel.mode.sketchTool == .offset {

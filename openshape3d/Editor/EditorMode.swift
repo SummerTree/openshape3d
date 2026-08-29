@@ -108,6 +108,10 @@ enum EditorMode: Equatable {
     /// neighbouring surfaces heal. B-rep only — a mesh has no surfaces to
     /// extend, so there is nothing to heal with.
     case pickingDeleteFaces
+    /// Replace Face armed (spec §4.12): the first tap picks the planar face to
+    /// move, the second picks the face whose plane it moves onto. Flip
+    /// Alignment chooses the side when both readings are valid.
+    case pickingReplaceFace
     /// Add Axis armed (spec §6.2): taps pick the references the axis is
     /// derived from — a linear edge, a cylindrical face, or one or two planar
     /// faces. See `EditorViewModel.axisPicks`.

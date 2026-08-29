@@ -125,4 +125,68 @@ nonisolated enum ReplaceFaceKit {
         case .trim: return mesh.subtracting(prism).makeWatertight()
         }
     }
+
+    // MARK: - The analytic path
+
+    /// How far the prism reaches in the face's own plane-local z, signed the
+    /// same way `sweptSolid` signs its Euclid extrude. Shared so the two paths
+    /// cannot disagree about which side of the face the material goes.
+    static func sweptZRange(face: PlanarFace, plan: Plan) -> (zMin: Double, zMax: Double) {
+        let basisNormal = simd_cross(face.basisX, face.basisY)
+        let outward = SIMD3<Double>(
+            Double(face.normal.x), Double(face.normal.y), Double(face.normal.z))
+        let sign: Double = simd_dot(basisNormal, outward) >= 0 ? 1 : -1
+        let direction: Double = {
+            switch plan {
+            case .extend: 1
+            case .trim: -1
+            }
+        }()
+        let d = plan.distance * sign * direction
+        return (min(0, d), max(0, d))
+    }
+
+    /// The swept prism as an OCCT solid.
+    ///
+    /// Without this a replace on an analytic body would run through the Euclid
+    /// booleans above and hand back a body with no `brep` — the exact silent
+    /// degradation the 2026-08-25 review called out (C4): the geometry still
+    /// LOOKS right, and then the next save writes the tessellation as if it
+    /// were the truth. Nil when OCCT cannot build it; callers fall back to the
+    /// mesh path, which is honest for a body that was never analytic anyway.
+    static func sweptBRep(face: PlanarFace, plan: Plan) -> BRepHandle? {
+        guard face.outline.count >= 3, plan.distance > 1e-9 else { return nil }
+        let z = sweptZRange(face: face, plan: plan)
+        return OCCTKernel.extrudeShape(
+            outerLoop: face.outline, isCircle: false,
+            circleCenter: .zero, circleRadius: 0,
+            holes: face.holes,
+            zMin: z.zMin, zMax: z.zMax,
+            origin: face.origin, xAxis: face.basisX,
+            yAxis: face.basisY,
+            normal: simd_cross(face.basisX, face.basisY))
+    }
+
+    /// Apply the replace analytically: fuse for an extend, cut for a trim,
+    /// staying in OCCT so curved neighbours keep their exact surfaces.
+    static func applyBRep(
+        to handle: BRepHandle, face: PlanarFace, plan: Plan
+    ) -> BRepHandle? {
+        guard let prism = sweptBRep(face: face, plan: plan) else { return nil }
+        // 0 = union, 1 = subtract.
+        guard let result = OCCTKernel.boolean(
+            handle, prism, op: plan.isExtend ? 0 : 1) else { return nil }
+        // The prism meets the body ON the replaced face, so the boolean always
+        // leaves a coplanar seam: without this a box extended by 6 mm comes
+        // back with TEN planar faces instead of six, and those extra edges are
+        // selectable and blendable by the user.
+        return OCCTKernel.unified(result)
+    }
+}
+
+nonisolated extension ReplaceFaceKit.Plan {
+    var isExtend: Bool {
+        if case .extend = self { return true }
+        return false
+    }
 }

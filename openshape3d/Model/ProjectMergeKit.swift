@@ -296,6 +296,14 @@ nonisolated enum ProjectMergeKit {
             case let .deleteFace(body, faces):
                 return .deleteFace(body: remap(body),
                                    faces: faces.map { remap($0, translation: t) })
+            case let .replaceFace(face, targetOrigin, targetNormal, flip):
+                // The target ORIGIN is a point and moves with the merge; the
+                // NORMAL is a direction and must not.
+                return .replaceFace(
+                    face: remap(face, translation: t),
+                    targetOrigin: PointWrapper(targetOrigin.point + t),
+                    targetNormal: targetNormal,
+                    flip: flip)
             }
         }
 

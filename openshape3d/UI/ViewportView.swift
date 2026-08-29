@@ -412,6 +412,11 @@ final class ViewportCoordinator: NSObject, ViewportGestureDelegate, ViewportCame
             return false
         }
 
+        // Replace Face pick: taps pick the two faces, drags orbit.
+        if case .pickingReplaceFace = viewModel.mode {
+            return false
+        }
+
         // Face selected: the normal-direction pull-arrow push/pulls the face
         // (checked first, unchanged). With Move armed, grabbing a gizmo handle
         // MOVES the face (shear); with Scale armed, grabbing a handle SCALES the

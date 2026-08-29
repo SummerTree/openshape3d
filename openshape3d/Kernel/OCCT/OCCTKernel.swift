@@ -196,6 +196,15 @@ nonisolated enum OCCTKernel {
         return boolean(a, b, op: booleanOp(kind))
     }
 
+    /// Merge faces sharing one underlying surface (and the seams between
+    /// them). A fuse against a coplanar face otherwise leaves BOTH faces and
+    /// the seam edge — right shape, wrong topology, and the extra edges are
+    /// selectable and blendable. Returns the input unchanged when OCCT
+    /// declines, since the un-unified solid is still valid.
+    static func unified(_ handle: BRepHandle) -> BRepHandle {
+        OCCTBridge.unifiedShape(handle.shape).map(BRepHandle.init) ?? handle
+    }
+
     static func boolean(_ a: BRepHandle, _ b: BRepHandle, op: Int) -> BRepHandle? {
         OCCTBridge.boolean(of: a.shape, with: b.shape, op: op).map(BRepHandle.init)
     }

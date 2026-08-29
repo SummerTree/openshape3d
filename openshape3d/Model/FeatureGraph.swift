@@ -139,6 +139,18 @@ nonisolated enum FeatureKind: Codable, Sendable {
     /// surfaces back together, deleting the feature (hole, pocket, boss) they
     /// belong to. B-rep only — a mesh has no surfaces to extend.
     case deleteFace(body: BodyRef, faces: [FaceRef])
+    /// Replace Face (spec §4.12): extend or trim `face` until it lies on the
+    /// plane given by `targetOrigin`/`targetNormal`, `flip` choosing which
+    /// side when both readings are valid.
+    ///
+    /// The target is stored as a PLANE, not a `FaceRef`. That is the v1
+    /// limitation to know about: the replace is associative to the face it
+    /// MOVES (which rebuilds with its body) but not to the face it moves TO —
+    /// if that one later shifts, this does not follow it. `sweep` stores its
+    /// spine the same way, for the same reason: a ref needs an owning body,
+    /// and the target is routinely on a different one.
+    case replaceFace(
+        face: FaceRef, targetOrigin: PointWrapper, targetNormal: PointWrapper, flip: Bool)
 }
 
 /// A node in the feature graph: stable identity, display name, its operation, a
@@ -195,7 +207,8 @@ nonisolated extension FeatureNode {
         case let .mirror(_, plane, _):
             addPlane(plane)
         case .primitive, .boolean, .transform, .pattern, .pushPull, .moveFace,
-             .scaleFace, .rotateFace, .chamfer, .fillet, .shell, .deleteFace:
+             .scaleFace, .rotateFace, .chamfer, .fillet, .shell, .deleteFace,
+             .replaceFace:
             break
         }
         return ids
@@ -351,6 +364,11 @@ nonisolated extension FeatureGraph {
         case let .deleteFace(body, faces):
             evalDeleteFace(
                 node, bodyRef: body, faceRefs: faces, into: &state, next: nextRevision)
+        case let .replaceFace(face, targetOrigin, targetNormal, flip):
+            evalReplaceFace(
+                node, faceRef: face, targetOrigin: targetOrigin.point,
+                targetNormal: targetNormal.point, flip: flip,
+                into: &state, next: nextRevision)
 
         // Defined but not evaluated yet — keep the graph total.
         case .transform:
@@ -1020,6 +1038,88 @@ nonisolated extension FeatureGraph {
         // Every remaining face may have been re-trimmed; relabel by geometry.
         let newTable = state.naming.faceTable(for: result, createdBy: node.id, scheme: .generic)
         state.put(result, table: newTable)
+    }
+
+    // MARK: Replace Face (direct modeling, spec §4.12)
+
+    /// Extend or trim the referenced face until it lies on the target plane.
+    ///
+    /// Unlike Delete Face this has a mesh fallback, because the operation is a
+    /// boolean with a prism and Euclid can do that honestly. But a body that
+    /// HAS a brep takes the analytic route: running it through the mesh path
+    /// would hand back a body with no `brep`, and the next save would write the
+    /// tessellation as if it were the truth (2026-08-25 review, C4).
+    private func evalReplaceFace(
+        _ node: FeatureNode,
+        faceRef: FaceRef,
+        targetOrigin: SIMD3<Double>,
+        targetNormal: SIMD3<Double>,
+        flip: Bool,
+        into state: inout EvalState,
+        next nextRevision: () -> UInt64
+    ) {
+        guard let body = state.bodies[faceRef.body.bodyID] else {
+            state.errors[node.id] = .brokenRef("replace-face body unresolved")
+            return
+        }
+        let table = state.faceTables[body.id]
+        guard let resolved = state.naming.resolve(faceRef, in: body, table: table),
+              let planar = resolved.planar else {
+            state.errors[node.id] = .brokenRef("replace-face target did not resolve")
+            return
+        }
+        let plan: ReplaceFaceKit.Plan
+        do {
+            plan = try ReplaceFaceKit.plan(
+                face: planar, targetOrigin: targetOrigin,
+                targetNormal: targetNormal, flip: flip)
+        } catch {
+            // A rebuild can move the face onto (or past) its own target — the
+            // refusals are the honest outcome, not a crash.
+            state.errors[node.id] = .kernelFailure(Self.replaceRefusalText(error))
+            return
+        }
+
+        var result: Body
+        if OCCTKernel.useOCCTAsSourceOfTruth, let brep = body.brep,
+           let replaced = ReplaceFaceKit.applyBRep(to: brep, face: planar, plan: plan) {
+            result = Body(
+                id: body.id, name: body.name, transform: .identity, primitive: nil,
+                render: body.render, revision: nextRevision())
+            guard result.adoptBRep(replaced) else {
+                state.errors[node.id] = .emptyGeometry
+                return
+            }
+        } else {
+            guard let mesh = ReplaceFaceKit.apply(
+                to: body.euclidMesh(), face: planar, plan: plan),
+                !mesh.polygons.isEmpty else {
+                state.errors[node.id] = .emptyGeometry
+                return
+            }
+            result = Body(
+                id: body.id, name: body.name, transform: .identity, primitive: nil,
+                euclidMesh: mesh, revision: nextRevision())
+        }
+        // The moved face and everything it cut through are re-trimmed, so the
+        // old labels no longer describe them — relabel by geometry.
+        let newTable = state.naming.faceTable(for: result, createdBy: node.id, scheme: .generic)
+        state.put(result, table: newTable)
+    }
+
+    /// User-facing text for a `ReplaceFaceKit.Refusal`, shared by replay and
+    /// the live tool so both say the same thing.
+    static func replaceRefusalText(_ error: Error) -> String {
+        switch error as? ReplaceFaceKit.Refusal {
+        case .targetNotParallel:
+            return "the target face isn't parallel to the one being replaced"
+        case .noChange:
+            return "the target plane passes through the face — nothing to replace"
+        case .degenerateFace:
+            return "that face has no usable outline"
+        case nil:
+            return "replace face failed"
+        }
     }
 
     /// A world point lying ON the resolved face — how OCCT is told which face
