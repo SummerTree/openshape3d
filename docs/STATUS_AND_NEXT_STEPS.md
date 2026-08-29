@@ -7,20 +7,14 @@ Companions: `IMPLEMENTATION_PLAN.md` (original phase plan),
 `SHAPR3D_PARITY_SPEC.md` (feature spec), `PHASE_D_DESIGN.md` (feature-graph
 design).
 
-**Current test baseline: 811 unit tests green, and the full UI suite CLEAN at
-`3cd0af1` (2026-08-28, 41m44s) — 95 executed, 2 skipped, 0 failures.** The
-skips are `CompactWidthBarUITests`, which skip by design on the iPad
-destination.
+**Current test baseline: 811 unit tests green, and the full UI suite CLEAN —
+95 executed, 2 skipped, 0 failures in 41m52s.** The skips are
+`CompactWidthBarUITests`, which skip by design on the iPad destination.
 
-Across the two earlier full runs that day, FOUR tests failed only inside the
-long serial run and passed in isolation —
-`FaceFlowUITests/testTypeNegativeIntoArrowPill`,
-`HistoryReorderUITests/testDragReorderTwoExtrudes`,
-`ParityWalkthroughUITests/testWalkthrough10ConstraintsAndStates`,
-`DragSolveUITests/testDragTopCornerKeepsHorizontalEdgeAndCoalesces`. All four
-passed in-suite on this run, so a red one of them is NOT automatically a
-regression: rerun it alone before you go looking. (A clean run is also not
-proof they are fixed — nothing was changed to fix them.)
+**The four long-serial-run flakes are fixed** (2026-08-28) — see "Flaky UI
+tests: what they actually were" below. They were bad tests, not bad app code,
+with one exception that was a real accessibility bug. Runs now also start from
+an empty store (`OS3D_RESET_STORE`), so the suite no longer degrades as it goes.
 
 Historical counts appear in the dated sections below — those are snapshots,
 not the baseline.
@@ -370,6 +364,7 @@ Notes:
 | `OS3D_DEBUG_SEED_PRIMBOOL` | Cylinder primitive − box primitive (mixed analytic boolean) |
 | `OS3D_DEBUG_SEED_IMAGE` | Reference image on the ground plane, left unselected |
 | `OS3D_GIZMO_DEBUG` | Print the gizmo part each drag grabs, its world delta, and the rotation pill's live value |
+| `OS3D_RESET_STORE` | **Destructive.** Delete the SwiftData store before it opens — the app starts with zero projects. Every UI test sets it (see below); do not put it in a shell profile or a scheme you also model in. |
 | `OS3D_AGENT` / `OS3D_AGENT_PORT` | Loopback control channel (`Agent/AgentServer.swift`). Answers `GET /v1/health` and nothing else so far, and the MCP client its header names is **not in this repo** — treat it as a stub. |
 
 To read `print()` output from a hook, launch through a console pty:
@@ -384,6 +379,71 @@ xcrun simctl launch --console-pty 69DB84F4-607C-46F2-9089-3E8C0770B4A9 \
 That loop — seed, drive the sim with taps/swipes, read the log — is how the
 "plane squares don't drag in their plane" report was diagnosed in minutes
 after a long stretch of theorising. Reach for it early.
+
+### Flaky UI tests: what they actually were (2026-08-28)
+
+Four tests failed only inside the 40-minute serial run and passed in isolation.
+None of them was a race in the app. Three were bad tests, one was a real
+accessibility bug, and the long run was only ever the thing that exposed them.
+
+- **The store grows all run.** Every test launches with `OS3D_FRESH`, which
+  creates a document and never removes it — the store was at **541 projects**,
+  climbing ~95 per full run. A bigger store slows launch and save, which shifts
+  focus and gesture timing. That is the mechanism behind "only in the long
+  run": the FaceFlow bug below went from a rare flake to 3-in-5 IN ISOLATION
+  once the store had filled up. `OS3D_RESET_STORE` (wired into all 66
+  `OS3D_FRESH` launch sites) pins it at 1 project. Costs one 83s wipe the first
+  time; per-test timing is unchanged.
+
+- **Numeric fields arrive PRE-FILLED, and nothing was clearing them.** The
+  extrude Distance field and the arrow pill both open holding the current
+  value. Typing "-3" into a field holding "0" gave "0-3" (which the expression
+  evaluator computes as -3 — right by luck) or "-30" (30 mm into a 4 mm box:
+  refused, no command), depending on where the tap put the caret. The failure
+  then surfaced ten lines later as "typing a negative should commit an inward
+  push", blaming the commit. `replaceText` now clears first and verifies what
+  landed. Every test that types a height went through the same trap — a "2"
+  landing as "20" extrudes 20 mm and still commits, so it would have PASSED
+  while building the wrong geometry.
+
+- **`HistoryRow-<name>` cannot tell two extrudes apart.** Both features are
+  named "Extrude", so the identifiers are identical and a reorder is invisible
+  to a test. The two extrudes are now given different heights and the row's own
+  distance field is read instead. The reorder is waited for and retried once;
+  when it silently did not happen, the Undo undid the previous EXTRUDE and the
+  test failed at the very end with "1 row" and no clue why.
+
+- **A container `accessibilityIdentifier` hid every sketch point marker** —
+  gotcha 2, in the wild. `SketchPointStateOverlay` had one, which collapses the
+  overlay into a single element, so no test could tell whether a stroke had
+  landed. Fixed with `accessibilityElement(children: .contain)`, the pattern
+  `HistoryPanelView`'s rows already use.
+
+- **Duplicate `Constraint_*` buttons.** The Constrain flyout and the Constrain
+  MENU both carry them, so a frame with both up makes the query ambiguous
+  ("Multiple matching elements found"). Drive-the-UI lookups in that test use
+  `.firstMatch`.
+
+#### Two traps when typing into a field from a UI test
+
+Both of these cost a full suite run to find, and neither fails in a way that
+points at itself:
+
+1. **Never `typeKey("a", modifierFlags: .command)`.** ⌘A is the app's own
+   Select All hotkey (`CommandRegistry` "edit.selectAll"), and shortcuts reach
+   the app whether or not a text field has focus — that is what
+   `CommandShortcutsView` is for. The app then never reports idle and XCTest
+   waits its full 60s for animations on EVERY field edit: the suite went from
+   41 to 78 minutes while still passing, one test going 66s → 847s. A green run
+   is not enough; check the wall clock.
+2. **Never `XCUIKeyboardKey.forwardDelete`.** iOS text input does not interpret
+   it — it is typed in as an invisible character, so the field holds
+   "2\u{F728}…" and you get `("2") is not equal to ("2")`.
+
+   What works: tap the field's TRAILING edge (`coordinate(withNormalizedOffset:
+   CGVector(dx: 0.95, dy: 0.5))`) so the caret lands after the last character,
+   then backspace it empty. `field.tap()` hits the centre, and at caret
+   position 0 backspaces delete nothing.
 
 ### Screenshotting a gesture MID-drag
 
