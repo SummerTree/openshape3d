@@ -7,13 +7,14 @@ Companions: `IMPLEMENTATION_PLAN.md` (original phase plan),
 `SHAPR3D_PARITY_SPEC.md` (feature spec), `PHASE_D_DESIGN.md` (feature-graph
 design).
 
-**Current test baseline: 811 unit tests green, and the full UI suite CLEAN
-TWICE IN A ROW at `76ba58d`** — 95 executed, 2 skipped, 0 failures, in 41m52s
-(2026-08-28) and 42m06s (2026-08-29). The skips are `CompactWidthBarUITests`,
-which skip by design on the iPad destination.
+**Current test baseline, both suites green at `d5e6470` (2026-08-29): 811 unit
+tests in 91s, and the full UI suite CLEAN TWICE IN A ROW** — 95 executed,
+2 skipped, 0 failures, in 41m52s (at `76ba58d`, 2026-08-28) and 42m06s. The
+skips are `CompactWidthBarUITests`, which skip by design on the iPad
+destination.
 
 Two runs, not one, is the point: the three runs before the fixes each surfaced
-a DIFFERENT pair of failures, so a single green run proved nothing. Three other
+a DIFFERENT pair of failures, so a single green run proved nothing. Four other
 numbers are worth reading alongside the pass count, because a green suite hid a
 regression once already (see the ⌘A trap below):
 
