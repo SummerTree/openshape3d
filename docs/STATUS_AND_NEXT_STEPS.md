@@ -1013,6 +1013,62 @@ NOT catch the sign error — under falsification the union is a no-op, so the bo
 is unchanged and that test passes. `testConcaveFilletFillsTheCorner` is what
 fails. The box test guards the opposite mistake, a tool escaping the notch.
 
+### 3b. Revolve / sweep / loft as B-rep — DONE (2026-08-30)
+
+These three were the last ops producing MESH-ONLY bodies, and the cost did not
+announce itself: a revolved body could not be exported to STEP at all, every
+blend on one ran the mesh path (~170× slower than OCCT, and the site of the
+over-radius crash), and a boolean against one went faceted. Pattern and mirror
+were fixed first (they are placements, so a pattern copy just shares the
+source's handle); these three needed real construction.
+
+All three build on the SAME profile face an extrude does — `OS3DProfileFace`,
+factored out of `extrudedShapeWithOuterLoop:` — so a circle revolved is a real
+torus rather than 48 flat strips. Sharing that face is the point: a circle that
+stayed round when extruded and went faceted when revolved would be exactly the
+inconsistency this work exists to remove.
+
+Three things to know before touching it:
+
+- **The graph stores revolve angles in DEGREES, OCCT wants RADIANS.**
+  `KernelOps.revolve` ends in `intersectWithWedge(solid, degrees:)`. Passing 360
+  straight through does NOT fail loudly — a 360-radian revolve still closes into
+  a full solid — so the mistake looks correct. The parameter is named
+  `angleRadians` for that reason.
+- **`RevolveAxis` is 2D in the SKETCH PLANE**, not a world axis; lift it through
+  the plane basis before handing it to OCCT.
+- **A loft section with HOLES has no ThruSections equivalent** (one wire per
+  section), so those keep the mesh result rather than silently losing the inner
+  loop. Pinned by a test.
+
+**The brep is ASSIGNED, not adopted, and that is deliberate.** Adopting would
+replace the render with OCCT's tessellation, which for a revolved circle is
+49,928 triangles against the Euclid mesh's 4,608 — measured. See the naming
+finding below for why that matters. Assigning still gets everything this work is
+for: STEP export, analytic fillets, OCCT booleans. Same split the box primitive
+already used.
+
+`RevolveSweepLoftBrepTests` (6), falsified by returning nil from all three
+builders: 5 fail, the survivor being the negative test that a holed loft STAYS
+mesh-only.
+
+#### Found while doing it: `SignatureNaming.faceTable` does not scale
+
+**`faceTable` takes ~65 SECONDS on a 4,608-triangle torus.** Measured, and
+PRE-EXISTING — that path is untouched by the B-rep work, which means revolving
+a circle has always been a ~65-second operation in the app. It is specific to
+bodies made of many non-planar facets: a 90° revolve of a rectangle completes
+in 0.13 s.
+
+This is why the brep is assigned rather than adopted; handing the same pass a
+49,928-triangle body took it from slow to unusable (still running after a
+minute when the probe was killed).
+
+It is a user-facing hang on a common operation and deserves its own mission.
+Anyone writing a graph-level test involving a curved revolve should route the
+assertion through `OCCTKernel` instead, as `testRevolvingACircleGivesAnAnalytic
+Torus` does, or pay the minute.
+
 ### 4. F — OpenCASCADE B-rep port (mostly landed; this is its design record)
 Behind the existing `KernelOps` facade (see `IMPLEMENTATION_PLAN.md` Phase E
 section for scope): OCCT compiled for iOS, solids become B-rep, Euclid stays

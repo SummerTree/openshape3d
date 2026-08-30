@@ -42,6 +42,10 @@
 
 #include <BRepPrimAPI_MakeBox.hxx>
 #include <BRepPrimAPI_MakePrism.hxx>
+#include <BRepPrimAPI_MakeRevol.hxx>
+#include <BRepOffsetAPI_ThruSections.hxx>
+#include <BRepOffsetAPI_MakePipe.hxx>
+#include <BRepBuilderAPI_MakePolygon.hxx>
 #include <BRepPrimAPI_MakeCylinder.hxx>
 #include <BRepPrimAPI_MakeSphere.hxx>
 #include <BRepAdaptor_Surface.hxx>
@@ -412,6 +416,72 @@ static TopoDS_Wire SegWire(NSData *segs, double z) {
     return mw.Wire();
 }
 
+/// Build the profile FACE that every profile-driven op starts from, on the
+/// plane z = `z` in profile-local space.
+///
+/// Factored out of `extrudedShapeWithOuterLoop:` so revolve, sweep and loft
+/// begin from EXACTLY the same wires an extrude does — the analytic conic, the
+/// exact arc segments, or the polyline, chosen in that order. Anything less
+/// would mean a circle staying round when extruded and going faceted when
+/// revolved, which is the sort of quiet inconsistency the B-rep work exists to
+/// remove. Returns a null face on any failure.
+static TopoDS_Face OS3DProfileFace(NSData *outerLoop,
+                                   NSData *outerConic,
+                                   NSArray<NSData *> *holes,
+                                   NSData *holeConics,
+                                   NSData *outerSegments,
+                                   NSArray<NSData *> *holeSegments,
+                                   double z) {
+    TopoDS_Wire outerWire;
+    if (outerConic != nil && outerConic.length >= 5 * sizeof(double)) {
+        outerWire = ConicWire((const double *)outerConic.bytes, z);
+    }
+    if (outerWire.IsNull() && outerSegments != nil && outerSegments.length > 0) {
+        outerWire = SegWire(outerSegments, z);
+    }
+    if (outerWire.IsNull()) {
+        if (outerLoop.length < 3 * 2 * (NSInteger)sizeof(double)) return TopoDS_Face();
+        outerWire = PolyWire(outerLoop, z);
+    }
+    if (outerWire.IsNull()) return TopoDS_Face();
+
+    BRepBuilderAPI_MakeFace mf(outerWire, Standard_True);
+    const double *conics = NULL;
+    NSUInteger conicCount = 0;
+    if (holeConics != nil) {
+        conics = (const double *)holeConics.bytes;
+        conicCount = holeConics.length / (5 * sizeof(double));
+    }
+    NSUInteger index = 0;
+    for (NSData *hole in holes) {
+        TopoDS_Wire hw;
+        if (index < conicCount) hw = ConicWire(conics + index * 5, z);
+        if (hw.IsNull()) {
+            NSData *hs = (holeSegments != nil && index < holeSegments.count)
+                ? holeSegments[index] : nil;
+            if (hs != nil && hs.length > 0) hw = SegWire(hs, z);
+        }
+        if (hw.IsNull()) {
+            if (hole.length < 3 * 2 * (NSInteger)sizeof(double)) { index++; continue; }
+            hw = PolyWire(hole, z);
+        }
+        hw.Reverse();  // inner boundary opposes the outer sense
+        mf.Add(hw);
+        index++;
+    }
+    if (!mf.IsDone()) return TopoDS_Face();
+    return mf.Face();
+}
+
+/// plane-local → world, from the basis columns.
+static gp_Trsf OS3DBasisTransform(OCCTPlaneBasis *basis) {
+    gp_Trsf t;
+    t.SetValues(basis->_x[0], basis->_y[0], basis->_n[0], basis->_o[0],
+                basis->_x[1], basis->_y[1], basis->_n[1], basis->_o[1],
+                basis->_x[2], basis->_y[2], basis->_n[2], basis->_o[2]);
+    return t;
+}
+
 + (nullable OCCTShape *)extrudedShapeWithOuterLoop:(NSData *)outerLoop
                                         outerConic:(nullable NSData *)outerConic
                                              holes:(NSArray<NSData *> *)holes
@@ -424,56 +494,15 @@ static TopoDS_Wire SegWire(NSData *segs, double z) {
     const double height = zMax - zMin;
     if (height <= 1e-9) return nil;
     try {
-        // Outer face on the z=zMin plane (analytic circle when applicable).
-        TopoDS_Wire outerWire;
-        if (outerConic != nil && outerConic.length >= 5 * sizeof(double)) {
-            outerWire = ConicWire((const double *)outerConic.bytes, zMin);
-        }
-        if (outerWire.IsNull() && outerSegments != nil && outerSegments.length > 0) {
-            outerWire = SegWire(outerSegments, zMin);
-        }
-        if (outerWire.IsNull()) {
-            if (outerLoop.length < 3 * 2 * (NSInteger)sizeof(double)) return nil;
-            outerWire = PolyWire(outerLoop, zMin);
-        }
-        BRepBuilderAPI_MakeFace mf(outerWire, Standard_True);
-        // Analytic circles for the holes that ARE circles, same treatment the
-        // outer loop has always had. `holeCircles` is 3 doubles per hole,
-        // parallel to `holes`; radius <= 0 falls back to the polyline.
-        const double *conics = NULL;
-        NSUInteger conicCount = 0;
-        if (holeConics != nil) {
-            conics = (const double *)holeConics.bytes;
-            conicCount = holeConics.length / (5 * sizeof(double));
-        }
-        NSUInteger index = 0;
-        for (NSData *hole in holes) {
-            TopoDS_Wire hw;
-            if (index < conicCount) hw = ConicWire(conics + index * 5, zMin);
-            if (hw.IsNull()) {
-                NSData *hs = (holeSegments != nil && index < holeSegments.count)
-                    ? holeSegments[index] : nil;
-                if (hs != nil && hs.length > 0) hw = SegWire(hs, zMin);
-            }
-            if (hw.IsNull()) {
-                if (hole.length < 3 * 2 * (NSInteger)sizeof(double)) { index++; continue; }
-                hw = PolyWire(hole, zMin);
-            }
-            hw.Reverse();  // inner boundary opposes the outer sense
-            mf.Add(hw);
-            index++;
-        }
-        if (!mf.IsDone()) return nil;
+        const TopoDS_Face face = OS3DProfileFace(outerLoop, outerConic, holes,
+                                                 holeConics, outerSegments,
+                                                 holeSegments, zMin);
+        if (face.IsNull()) return nil;
 
-        TopoDS_Shape solid = BRepPrimAPI_MakePrism(mf.Face(),
-                                                   gp_Vec(0.0, 0.0, height)).Shape();
-
-        // Map plane-local → world: columns of the rotation are the basis axes.
-        gp_Trsf t;
-        t.SetValues(basis->_x[0], basis->_y[0], basis->_n[0], basis->_o[0],
-                    basis->_x[1], basis->_y[1], basis->_n[1], basis->_o[1],
-                    basis->_x[2], basis->_y[2], basis->_n[2], basis->_o[2]);
-        TopoDS_Shape world = BRepBuilderAPI_Transform(solid, t, Standard_True).Shape();
+        TopoDS_Shape solid = BRepPrimAPI_MakePrism(
+            face, gp_Vec(0.0, 0.0, height)).Shape();
+        TopoDS_Shape world = BRepBuilderAPI_Transform(
+            solid, OS3DBasisTransform(basis), Standard_True).Shape();
 
         OCCTShape *out = [OCCTShape new];
         out->_shape = world;
@@ -515,6 +544,124 @@ static TopoDS_Wire SegWire(NSData *segs, double z) {
         }
         OCCTShape *out = [OCCTShape new];
         out->_shape = shape;
+        return out;
+    } catch (...) {
+        return nil;
+    }
+}
+
++ (nullable OCCTShape *)revolvedShapeWithOuterLoop:(NSData *)outerLoop
+                                        outerConic:(nullable NSData *)outerConic
+                                             holes:(NSArray<NSData *> *)holes
+                                        holeConics:(nullable NSData *)holeConics
+                                     outerSegments:(nullable NSData *)outerSegments
+                                      holeSegments:(nullable NSArray<NSData *> *)holeSegments
+                                             basis:(OCCTPlaneBasis *)basis
+                                              axis:(NSData *)axis
+                                             angle:(double)angle {
+    if (axis.length < 6 * sizeof(double)) return nil;
+    if (!(fabs(angle) > 1e-9)) return nil;
+    const double *a = (const double *)axis.bytes;
+    const double dl = sqrt(a[3]*a[3] + a[4]*a[4] + a[5]*a[5]);
+    if (!(dl > 1e-12)) return nil;
+    try {
+        const TopoDS_Face face = OS3DProfileFace(outerLoop, outerConic, holes,
+                                                 holeConics, outerSegments,
+                                                 holeSegments, 0.0);
+        if (face.IsNull()) return nil;
+        // Into world space first, because the axis is given in world space —
+        // cheaper and less error-prone than mapping the axis into the profile's
+        // own frame.
+        const TopoDS_Shape worldFace = BRepBuilderAPI_Transform(
+            face, OS3DBasisTransform(basis), Standard_True).Shape();
+        gp_Ax1 ax(gp_Pnt(a[0], a[1], a[2]), gp_Dir(a[3]/dl, a[4]/dl, a[5]/dl));
+        BRepPrimAPI_MakeRevol mk(worldFace, ax, angle);
+        mk.Build();
+        if (!mk.IsDone()) return nil;
+        const TopoDS_Shape solid = mk.Shape();
+        if (solid.IsNull()) return nil;
+        OCCTShape *out = [OCCTShape new];
+        out->_shape = solid;
+        return out;
+    } catch (...) {
+        // A profile that crosses or touches the axis is a legitimate user
+        // mistake; the mesh path reports it as empty geometry.
+        return nil;
+    }
+}
+
++ (nullable OCCTShape *)loftedShapeWithOuterLoops:(NSArray<NSData *> *)outerLoops
+                                      outerConics:(NSArray<NSData *> *)outerConics
+                                    outerSegments:(NSArray<NSData *> *)outerSegments
+                                           bases:(NSArray<OCCTPlaneBasis *> *)bases {
+    if (outerLoops.count < 2 || bases.count != outerLoops.count) return nil;
+    try {
+        BRepOffsetAPI_ThruSections mk(Standard_True /* solid */, Standard_False /* ruled */);
+        for (NSUInteger i = 0; i < outerLoops.count; ++i) {
+            NSData *conic = (i < outerConics.count && outerConics[i].length > 0)
+                ? outerConics[i] : nil;
+            NSData *segs = (i < outerSegments.count && outerSegments[i].length > 0)
+                ? outerSegments[i] : nil;
+            TopoDS_Wire wire;
+            if (conic != nil && conic.length >= 5 * sizeof(double)) {
+                wire = ConicWire((const double *)conic.bytes, 0.0);
+            }
+            if (wire.IsNull() && segs != nil) wire = SegWire(segs, 0.0);
+            if (wire.IsNull()) {
+                if (outerLoops[i].length < 3 * 2 * (NSInteger)sizeof(double)) return nil;
+                wire = PolyWire(outerLoops[i], 0.0);
+            }
+            if (wire.IsNull()) return nil;
+            const TopoDS_Shape placed = BRepBuilderAPI_Transform(
+                wire, OS3DBasisTransform(bases[i]), Standard_True).Shape();
+            mk.AddWire(TopoDS::Wire(placed));
+        }
+        mk.Build();
+        if (!mk.IsDone()) return nil;
+        const TopoDS_Shape solid = mk.Shape();
+        if (solid.IsNull()) return nil;
+        OCCTShape *out = [OCCTShape new];
+        out->_shape = solid;
+        return out;
+    } catch (...) {
+        return nil;
+    }
+}
+
++ (nullable OCCTShape *)sweptShapeWithOuterLoop:(NSData *)outerLoop
+                                     outerConic:(nullable NSData *)outerConic
+                                          holes:(NSArray<NSData *> *)holes
+                                     holeConics:(nullable NSData *)holeConics
+                                  outerSegments:(nullable NSData *)outerSegments
+                                   holeSegments:(nullable NSArray<NSData *> *)holeSegments
+                                          basis:(OCCTPlaneBasis *)basis
+                                          spine:(NSData *)spine {
+    const NSUInteger points = spine.length / (3 * sizeof(double));
+    if (points < 2) return nil;
+    const double *s = (const double *)spine.bytes;
+    try {
+        const TopoDS_Face face = OS3DProfileFace(outerLoop, outerConic, holes,
+                                                 holeConics, outerSegments,
+                                                 holeSegments, 0.0);
+        if (face.IsNull()) return nil;
+        const TopoDS_Shape worldFace = BRepBuilderAPI_Transform(
+            face, OS3DBasisTransform(basis), Standard_True).Shape();
+
+        BRepBuilderAPI_MakePolygon poly;
+        for (NSUInteger i = 0; i < points; ++i) {
+            poly.Add(gp_Pnt(s[3*i], s[3*i+1], s[3*i+2]));
+        }
+        if (!poly.IsDone()) return nil;
+        const TopoDS_Wire spineWire = poly.Wire();
+        if (spineWire.IsNull()) return nil;
+
+        BRepOffsetAPI_MakePipe mk(spineWire, worldFace);
+        mk.Build();
+        if (!mk.IsDone()) return nil;
+        const TopoDS_Shape solid = mk.Shape();
+        if (solid.IsNull()) return nil;
+        OCCTShape *out = [OCCTShape new];
+        out->_shape = solid;
         return out;
     } catch (...) {
         return nil;

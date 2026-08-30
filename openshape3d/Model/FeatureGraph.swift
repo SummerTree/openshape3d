@@ -1144,9 +1144,19 @@ nonisolated extension FeatureGraph {
     /// into an existing target. Unlike extrude's cut (which uses a padded overlap
     /// prism), revolve/sweep/loft merge the FULL solid: the tool is `mesh` wrapped
     /// in an identity `Body` and fed straight to `KernelOps.boolean`.
+    /// Emit a whole-solid feature's result.
+    ///
+    /// `brep` is the ANALYTIC solid when the op could build one. It is adopted
+    /// rather than merely stored, so the rendered mesh comes from OCCT's
+    /// tessellation of the exact shape — a revolved circle then renders as a
+    /// true torus instead of a 48-gon approximation, and every downstream
+    /// fillet, boolean and STEP export stays exact. Nil keeps the Euclid mesh
+    /// exactly as before, which is what a sweep along a path OCCT refuses, or
+    /// a loft with holes, still needs.
     private func emitFullSolid(
         _ node: FeatureNode,
         mesh: Euclid.Mesh,
+        brep: BRepHandle? = nil,
         boolean: BooleanIntent,
         scheme: FaceScheme,
         into state: inout EvalState,
@@ -1162,9 +1172,23 @@ nonisolated extension FeatureGraph {
                 state.errors[node.id] = .brokenRef("node has no output BodyID")
                 return
             }
-            let body = Body(
+            var body = Body(
                 id: id, name: node.name, transform: .identity, primitive: nil,
                 euclidMesh: mesh, revision: nextRevision())
+            if OCCTKernel.useOCCTAsSourceOfTruth, let brep {
+                // ASSIGN, do not adopt. Adopting would replace the render with
+                // OCCT's own tessellation, and for a revolved circle that is
+                // 49,928 triangles against the Euclid mesh's 4,608 — measured.
+                // The naming pass that follows scales badly in the triangle
+                // count (`faceTable` already takes ~65 s on the 4,608-triangle
+                // version), so adopting turns a slow step into an unusable one.
+                //
+                // Assigning gets what this work is actually for: the body
+                // carries an exact solid, so STEP export, analytic fillets and
+                // OCCT booleans all work on it. The render stays the mesh the
+                // user already saw. Same split the box primitive uses.
+                body.brep = brep
+            }
             let table = state.naming.faceTable(for: body, createdBy: node.id, scheme: scheme)
             state.put(body, table: table)
             return
@@ -1190,9 +1214,18 @@ nonisolated extension FeatureGraph {
             state.errors[node.id] = .emptyGeometry
             return
         }
-        let result = Body(
+        var result = Body(
             id: target.id, name: target.name, transform: .identity, primitive: nil,
             euclidMesh: resultMesh, revision: nextRevision())
+        // Compose the boolean in OCCT when BOTH sides are analytic, so a
+        // revolved boss cut into an analytic block leaves an analytic result.
+        // One brep-less side falls back to the mesh for the whole operation —
+        // a half-analytic result would be worse than an honest mesh one.
+        if OCCTKernel.useOCCTAsSourceOfTruth, let brep, let targetBrep = target.brep,
+           let composed = OCCTKernel.boolean(
+               targetBrep, brep, op: OCCTKernel.booleanOp(kind)) {
+            result.brep = composed
+        }
         let inputTables = [state.faceTables[target.id], toolTable].compactMap { $0 }
         let table = state.naming.propagate(inputs: inputTables, output: result, op: .boolean(kind))
         state.put(result, table: table)
@@ -1224,7 +1257,25 @@ nonisolated extension FeatureGraph {
         // onto the axis — emitFullSolid maps that to .emptyGeometry.
         let mesh = KernelOps.revolve(
             profile: outer, holes: holes, in: plane, axis: axis, angle: angle.value)
-        emitFullSolid(node, mesh: mesh, boolean: boolean, scheme: .revolve, into: &state, next: nextRevision)
+        // Analytic revolve: a revolved circle is a torus, not 48 flat strips —
+        // and until this landed, a revolve was the commonest way to end up with
+        // a brep-less body, which then took the slow mesh path for every fillet
+        // and could not be exported to STEP at all.
+        // `RevolveAxis` is 2D IN THE SKETCH PLANE, while OCCT wants a world
+        // axis — lift it through the plane's own basis rather than assuming
+        // the two agree.
+        let axisWorldOrigin = plane.origin
+            + plane.xAxis * axis.point.x + plane.yAxis * axis.point.y
+        let axisWorldDirection =
+            plane.xAxis * axis.direction.x + plane.yAxis * axis.direction.y
+        let brep = OCCTKernel.useOCCTAsSourceOfTruth
+            ? OCCTKernel.revolveSolid(
+                outer: outer, holes: holes, plane: plane,
+                axisOrigin: axisWorldOrigin, axisDirection: axisWorldDirection,
+                angleRadians: angle.value * .pi / 180)
+            : nil
+        emitFullSolid(node, mesh: mesh, brep: brep, boolean: boolean,
+                      scheme: .revolve, into: &state, next: nextRevision)
     }
 
     private func evalSweep(
@@ -1246,7 +1297,11 @@ nonisolated extension FeatureGraph {
         }
         let spinePts = spine.map(\.point)   // WORLD-space 3D points
         let mesh = SweepLoftKit.sweep(profile: outer, holes: holes, in: plane, alongPath: spinePts)
-        emitFullSolid(node, mesh: mesh, boolean: boolean, scheme: .generic, into: &state, next: nextRevision)
+        let brep = OCCTKernel.useOCCTAsSourceOfTruth
+            ? OCCTKernel.sweepSolid(outer: outer, holes: holes, plane: plane, spine: spinePts)
+            : nil
+        emitFullSolid(node, mesh: mesh, brep: brep, boolean: boolean,
+                      scheme: .generic, into: &state, next: nextRevision)
     }
 
     private func evalLoft(
@@ -1275,7 +1330,14 @@ nonisolated extension FeatureGraph {
             return
         }
         let mesh = SweepLoftKit.loft(profiles: sections)
-        emitFullSolid(node, mesh: mesh, boolean: boolean, scheme: .generic, into: &state, next: nextRevision)
+        // OCCT's ThruSections takes ONE wire per section, so a section with
+        // holes cannot be expressed; those keep the mesh result rather than
+        // silently losing their inner loops.
+        let brep = (OCCTKernel.useOCCTAsSourceOfTruth && sections.allSatisfy { $0.holes.isEmpty })
+            ? OCCTKernel.loftSolid(sections: sections.map { ($0.profile, $0.plane) })
+            : nil
+        emitFullSolid(node, mesh: mesh, brep: brep, boolean: boolean,
+                      scheme: .generic, into: &state, next: nextRevision)
     }
 
     // MARK: Mirror

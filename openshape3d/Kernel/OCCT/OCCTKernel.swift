@@ -238,6 +238,88 @@ nonisolated enum OCCTKernel {
         return solid
     }
 
+    /// One profile's packed arguments, shared by every profile-driven op so
+    /// they cannot drift apart. Extrude, revolve, sweep and loft must all start
+    /// from the SAME wires — a circle that stays round when extruded and goes
+    /// faceted when revolved is exactly the inconsistency this avoids.
+    private static func packedProfile(_ profile: Profile, holes: [Profile])
+        -> (loop: Data, conic: Data, holeLoops: [Data], holeConics: Data,
+            segments: Data, holeSegments: [Data]) {
+        let extrudeHoles = extrudeHoles(holes)
+        return (packLoop(profile.loop),
+                packConics([ConicSpec(profile.kind)]),
+                extrudeHoles.map { packLoop($0.loop) },
+                packConics(extrudeHoles.map(\.conic)),
+                packSegments(profile.segments),
+                extrudeHoles.map { packSegments($0.segments) })
+    }
+
+    private static func planeBasis(_ plane: SketchPlane) -> OCCTPlaneBasis {
+        let n = simd_normalize(simd_cross(plane.xAxis, plane.yAxis))
+        return OCCTPlaneBasis(
+            originX: plane.origin.x, originY: plane.origin.y, originZ: plane.origin.z,
+            xAxisX: plane.xAxis.x, xAxisY: plane.xAxis.y, xAxisZ: plane.xAxis.z,
+            yAxisX: plane.yAxis.x, yAxisY: plane.yAxis.y, yAxisZ: plane.yAxis.z,
+            normalX: n.x, normalY: n.y, normalZ: n.z)
+    }
+
+    /// Revolve a profile about a world-space axis. Nil when OCCT refuses —
+    /// most often a profile that crosses the axis, which is a real modelling
+    /// error and which the mesh path reports as empty geometry.
+    ///
+    /// `angleRadians` is named for its units on purpose: the feature graph
+    /// stores revolve angles in DEGREES (`KernelOps.revolve` ends with
+    /// `intersectWithWedge(solid, degrees:)`), while OCCT wants radians. Passing
+    /// 360 straight through would not fail loudly — a 360-radian revolve still
+    /// closes into a full solid — so the mistake would have looked correct.
+    static func revolveSolid(outer: Profile, holes: [Profile], plane: SketchPlane,
+                             axisOrigin: SIMD3<Double>, axisDirection: SIMD3<Double>,
+                             angleRadians: Double) -> BRepHandle? {
+        let p = packedProfile(outer, holes: holes)
+        var axis = [axisOrigin.x, axisOrigin.y, axisOrigin.z,
+                    axisDirection.x, axisDirection.y, axisDirection.z]
+        let axisData = axis.withUnsafeBytes { Data($0) }
+        return OCCTBridge.revolvedShape(
+            withOuterLoop: p.loop, outerConic: p.conic, holes: p.holeLoops,
+            holeConics: p.holeConics, outerSegments: p.segments,
+            holeSegments: p.holeSegments, basis: planeBasis(plane),
+            axis: axisData, angle: angleRadians).map(BRepHandle.init)
+    }
+
+    /// Loft through ordered sections. Holes are dropped: OCCT's ThruSections
+    /// takes ONE wire per section, so a section with inner loops cannot be
+    /// expressed here — callers must fall back to the mesh for those.
+    static func loftSolid(sections: [(profile: Profile, plane: SketchPlane)]) -> BRepHandle? {
+        guard sections.count >= 2 else { return nil }
+        var loops: [Data] = [], conics: [Data] = [], segments: [Data] = []
+        var bases: [OCCTPlaneBasis] = []
+        for section in sections {
+            let p = packedProfile(section.profile, holes: [])
+            loops.append(p.loop)
+            conics.append(p.conic)
+            segments.append(p.segments)
+            bases.append(planeBasis(section.plane))
+        }
+        return OCCTBridge.loftedShape(
+            withOuterLoops: loops, outerConics: conics,
+            outerSegments: segments, bases: bases).map(BRepHandle.init)
+    }
+
+    /// Sweep a profile along a world-space polyline spine.
+    static func sweepSolid(outer: Profile, holes: [Profile], plane: SketchPlane,
+                           spine: [SIMD3<Double>]) -> BRepHandle? {
+        guard spine.count >= 2 else { return nil }
+        let p = packedProfile(outer, holes: holes)
+        var flat = [Double](); flat.reserveCapacity(spine.count * 3)
+        for point in spine { flat.append(point.x); flat.append(point.y); flat.append(point.z) }
+        let spineData = flat.withUnsafeBytes { Data($0) }
+        return OCCTBridge.sweptShape(
+            withOuterLoop: p.loop, outerConic: p.conic, holes: p.holeLoops,
+            holeConics: p.holeConics, outerSegments: p.segments,
+            holeSegments: p.holeSegments, basis: planeBasis(plane),
+            spine: spineData).map(BRepHandle.init)
+    }
+
     /// Turn resolved profile holes into extrude boundaries, keeping the ones
     /// that are circles analytic. One place, because both the new-body and the
     /// boolean-into-target paths need it and they must not disagree.

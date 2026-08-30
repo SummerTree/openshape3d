@@ -120,6 +120,46 @@ NS_ASSUME_NONNULL_BEGIN
                                               zMax:(double)zMax
                                              basis:(OCCTPlaneBasis *)basis;
 
+/// Revolve a profile about a WORLD-space axis.
+///
+/// Profile arguments match `extrudedShapeWithOuterLoop:` exactly and are built
+/// into the same face, so a circle revolves as a torus rather than as a
+/// 48-sided approximation of one. `axis` is 6 packed doubles — origin xyz then
+/// direction xyz. `angle` is radians; a full turn is 2π.
++ (nullable OCCTShape *)revolvedShapeWithOuterLoop:(NSData *)outerLoop
+                                        outerConic:(nullable NSData *)outerConic
+                                             holes:(NSArray<NSData *> *)holes
+                                        holeConics:(nullable NSData *)holeConics
+                                     outerSegments:(nullable NSData *)outerSegments
+                                      holeSegments:(nullable NSArray<NSData *> *)holeSegments
+                                             basis:(OCCTPlaneBasis *)basis
+                                              axis:(NSData *)axis
+                                             angle:(double)angle;
+
+/// Loft through ordered section profiles, each on its own plane.
+///
+/// `sections` is one dictionary-free parallel set of arrays: every index i
+/// describes one section exactly as the extrude arguments describe a profile.
+/// Holes are not supported here (OCCT's ThruSections takes one wire per
+/// section); a section's inner loops are ignored, which the caller must know.
++ (nullable OCCTShape *)loftedShapeWithOuterLoops:(NSArray<NSData *> *)outerLoops
+                                      outerConics:(NSArray<NSData *> *)outerConics
+                                    outerSegments:(NSArray<NSData *> *)outerSegments
+                                           bases:(NSArray<OCCTPlaneBasis *> *)bases;
+
+/// Sweep a profile along a polyline spine.
+///
+/// `spine` is 3 doubles per point in WORLD space. The profile is built on its
+/// own plane and swept with `BRepOffsetAPI_MakePipe`.
++ (nullable OCCTShape *)sweptShapeWithOuterLoop:(NSData *)outerLoop
+                                     outerConic:(nullable NSData *)outerConic
+                                          holes:(NSArray<NSData *> *)holes
+                                     holeConics:(nullable NSData *)holeConics
+                                  outerSegments:(nullable NSData *)outerSegments
+                                   holeSegments:(nullable NSArray<NSData *> *)holeSegments
+                                          basis:(OCCTPlaneBasis *)basis
+                                          spine:(NSData *)spine;
+
 /// Build a primitive matching Euclid's conventions exactly (base sits on y=0;
 /// cylinder axis is +Y), so the B-rep coincides with the Euclid CSG mesh.
 /// `kind`: 0 = box (a=width, b=depth, c=height), 1 = cylinder (a=radius,
