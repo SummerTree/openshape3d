@@ -104,8 +104,11 @@ nonisolated struct CommandRegistry: Sendable {
     /// An empty query returns recents (spec), so the launcher is useful before
     /// the user types. `scope` narrows to a category when a selection implies
     /// one — the spec's "pre-selection scopes results".
-    func search(_ query: String, scope: AppCommand.Category? = nil) -> [AppCommand] {
-        let pool = scope.map { s in Self.all.filter { $0.category == s } } ?? Self.all
+    func search(
+        _ query: String, scope: AppCommand.Category? = nil,
+        in catalog: [AppCommand] = CommandRegistry.all
+    ) -> [AppCommand] {
+        let pool = scope.map { s in catalog.filter { $0.category == s } } ?? catalog
         let trimmed = query.trimmingCharacters(in: .whitespaces)
         guard !trimmed.isEmpty else {
             return recentIDs.compactMap { id in pool.first { $0.id == id } }

@@ -49,6 +49,18 @@ struct SettingsView: View {
                     Text("Put the tool palette on the right for left-handed sketching.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
+
+                    Picker("Single Key Action", selection: $settings.singleKeyAction) {
+                        Text("Hotkeys").tag(SingleKeyAction.hotkeys)
+                        Text("Command Search").tag(SingleKeyAction.commandSearch)
+                    }
+                    .pickerStyle(.segmented)
+                    .accessibilityIdentifier("SettingsSingleKeyAction")
+                    Text("What a single letter does on a hardware keyboard — "
+                         + "run its tool, or open Command Search typed with it. "
+                         + "⌘ shortcuts work either way.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
 
                 Section("Graphics") {

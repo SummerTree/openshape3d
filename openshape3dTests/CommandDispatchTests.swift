@@ -57,8 +57,8 @@ final class CommandDispatchTests: XCTestCase {
     /// deliberately — shrinking it is the goal.
     func testUnroutedChordsAreTheKnownGaps() {
         XCTAssertEqual(CommandRegistry.unroutedChordedCommands.map(\.id), [
-            "app.commandSearch",          // launcher UI not built
-            "app.commandSearchAlt",
+            // app.commandSearch / app.commandSearchAlt left this list on
+            // 2026-08-29 — the launcher exists now and X / ⌘F open it.
             "edit.selectAll",             // no select-all entry point yet
             "project.importAsNew",
             "project.importIntoCurrent",

@@ -35,12 +35,36 @@ import SwiftUI
 struct CommandShortcutsView: View {
     @Bindable var viewModel: EditorViewModel
 
+    /// Spec §8.4's Single Key Action. With Command Search chosen, a bare
+    /// letter is a keystroke for the LAUNCHER, so the bare-key hotkeys are not
+    /// registered at all and every letter opens the panel pre-typed instead.
+    /// Chorded shortcuts are untouched either way.
+    private var launcherOwnsBareKeys: Bool {
+        AppSettings.shared.singleKeyAction == .commandSearch
+    }
+
+    /// Registering a–z (rather than only the letters that happen to be
+    /// hotkeys) is what makes the setting mean what it says: ANY letter opens
+    /// the launcher. A focused text field still wins — the first responder is
+    /// consulted before these, which is why typing in a rename field is safe.
+    private static let letters = "abcdefghijklmnopqrstuvwxyz".map(String.init)
+
     var body: some View {
         ZStack {
             ForEach(CommandRegistry.routableChordedCommands) { command in
-                if let chord = command.chord, let key = chord.keyEquivalent {
+                if let chord = command.chord, let key = chord.keyEquivalent,
+                   !(launcherOwnsBareKeys && chord.isBareKey) {
                     Button { viewModel.runCommand(command.id) } label: { EmptyView() }
                         .keyboardShortcut(key, modifiers: chord.eventModifiers)
+                        .accessibilityHidden(true)
+                }
+            }
+            if launcherOwnsBareKeys {
+                ForEach(Self.letters, id: \.self) { letter in
+                    Button {
+                        viewModel.openCommandSearch(seed: letter)
+                    } label: { EmptyView() }
+                        .keyboardShortcut(KeyEquivalent(Character(letter)), modifiers: [])
                         .accessibilityHidden(true)
                 }
             }

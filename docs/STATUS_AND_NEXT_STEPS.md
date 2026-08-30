@@ -59,6 +59,7 @@ the code wins — fix them in the same commit.
 | **STEP interchange** — exact-B-rep import/export | ✅ done 2026-08-29 — `STEPKit`, §4.1b |
 | **Delete Face** — OCCT defeaturing, live | ✅ done 2026-08-29 — `DeleteFaceKit`, §4.1c |
 | **Replace Face** — extend/trim a face onto a plane | ✅ done 2026-08-29 — `FeatureKind.replaceFace`, §4.1d |
+| **Command Search** — fuzzy command launcher | ✅ done 2026-08-29 — `CommandSearchView`, §4.1e |
 
 **The kernel seam has moved (re-audited 2026-08-28).** OCCT is no longer a
 spike: when `OCCTKernel.useOCCTAsSourceOfTruth` is on and a body carries a
@@ -502,7 +503,15 @@ first differing frame is the one you want.
    `FeatureGraph.evaluate` (see `FeatureGraphEvalTests`) and UI tests.
 2. **a11y containers**: an `.accessibilityIdentifier` on a container HStack
    collapses it into ONE element and hides every child control from XCUITest.
-   Ids go on leaf buttons/fields only.
+   Ids go on leaf buttons/fields only — or put
+   `.accessibilityElement(children: .contain)` BEFORE the identifier when the
+   container itself needs one. This has bitten three times (the blend bar, then
+   `SketchPointStateOverlay`, then `CommandSearchView`), and it never looks
+   like an a11y problem: the symptom is a child query returning nothing while
+   the container answers to the child's TYPE — the search field came back as
+   `textFields["CommandSearchPanel"]`. If a leaf identifier "doesn't exist",
+   dump `app.textFields.allElementsBoundByIndex.map(\.identifier)` before
+   assuming the view is missing.
 3. **Bottom overlays**: `EditorView` has a single bottom `.overlay` VStack
    (info strip + input bar). Add bars INSIDE it (conditionally), never as a
    second `.overlay(alignment: .bottom)` — they cover each other.
@@ -599,18 +608,21 @@ first differing frame is the one you want.
 > `ShellUITests`), as did most of the B-rep port that F describes as a spike.
 > What remains is ranked here.
 
-### 1. Wire the backends that have no UI (highest value, smallest risk)
+### 1. Wire the backends that have no UI — ✅ COMPLETE (2026-08-29)
 
-Several tested kernels are reachable only from tests. Each is a small UI
-tranche on top of code that already works:
+Every item in this mission is done: STEP interchange (§1b), Delete Face (§1c),
+Replace Face (§1d) and the Command Search launcher (§1e). **Mission 2 is now
+the top of the list.**
+
+The pattern is worth keeping in mind for the next one: all four were tested
+kernels with no caller, and in all four cases wiring them up surfaced a bug in
+the surrounding UI rather than in the kernel — dead `.fileImporter`s, a hole
+wall that could not be selected, a fuse that left a seam, an a11y container
+that swallowed its children.
 
 - ~~**STEP import/export**~~ — **DONE 2026-08-29**, see below.
 - ~~**Delete Face / Replace Face**~~ — **BOTH DONE 2026-08-29**, §1c and §1d.
-- **Command Search launcher** — the hotkey half landed in the 2026-08-26/27
-  pass (`CommandShortcutsView` routes `CommandRegistry.routableChordedCommands`
-  through `runCommand`). What is still missing is the *search* UI: the fuzzy
-  matcher lives in `CommandRegistry`/`CommandDispatch` with no view that opens
-  it.
+- ~~**Command Search launcher**~~ — **DONE 2026-08-29**, see §1e.
 
 ### 1b. STEP interchange — DONE (2026-08-29)
 
@@ -726,6 +738,44 @@ and undo restores the step. `ReplaceFaceUITests` asserts that and the
 not-parallel refusal; `ReplaceFaceBRepTests` and `ReplaceFaceEvalTests` pin the
 analytic face counts, the two paths agreeing with each other, and the FaceRef
 still resolving after an upstream edit.
+
+### 1e. Command Search launcher — DONE (2026-08-29)
+
+`CommandRegistry` has carried the fuzzy matcher, the recents list and the
+Single Key Action flag since the hotkey pass, with no view that opened any of
+it. `CommandSearchView` + `EditorViewModel.commandSearchActive` do now: the
+toolbar's magnifier, `X`, or `⌘F` open a panel; type, Enter or tap runs.
+
+- **It only offers commands that can actually run.** The catalog names 61
+  commands; `runCommand` routes 39 of them. `CommandRegistry.launchableCommands`
+  is the intersection minus the launcher itself, and `CommandSearchTests` pins
+  it to `routableIDs` so a catalog entry can never appear in the launcher
+  without a route. A result that does nothing when chosen is the same silent
+  failure as a dead hotkey and harder to explain, because the user just read
+  the name off a list. `unroutedChordedCommands` still tracks the gap.
+- **A toolbar button, not only the chords.** X and ⌘F need a hardware
+  keyboard; most iPads do not have one, and a launcher nobody can open is not
+  a feature.
+- **A command that is real but not applicable keeps the panel open** and says
+  so in orange ("'Circle' isn't available right now" with no sketch open).
+  Closing on a keystroke that did nothing is what makes a launcher feel broken.
+- **Single Key Action is now real** (spec §8.4, `AppSettings.singleKeyAction`,
+  Settings ▸ Interface). On `.commandSearch`, `CommandShortcutsView` stops
+  registering bare-letter hotkeys and registers a–z instead, each opening the
+  launcher PRE-TYPED with that letter — registering the whole alphabet rather
+  than only the letters that happen to be hotkeys is what makes the setting
+  mean what it says. Chorded shortcuts are untouched either way. A focused text
+  field still wins, because the first responder is consulted first.
+- **Routed two commands while here**: `model.deleteFace` and
+  `model.replaceFace`, whose tools shipped earlier the same day. Without that
+  the launcher would list two tools visible in the Modify palette that it could
+  not start.
+
+Gotcha 2 bit for the THIRD time on the way in: `.accessibilityIdentifier` on
+the panel container collapsed it into one element, and the search field came
+back as `textFields["CommandSearchPanel"]` while `CommandSearchField` did not
+exist at all. `.accessibilityElement(children: .contain)` before the identifier
+is the fix, as it was for `SketchPointStateOverlay`.
 
 ### 2. B-rep follow-through (F below is the design doc)
 

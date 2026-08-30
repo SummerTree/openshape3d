@@ -10626,6 +10626,46 @@ final class EditorViewModel {
     /// chords and `runCommand(_:)` (CommandDispatch.swift) performs them.
     var commandRegistry = CommandRegistry()
 
+    // MARK: - Command Search (spec §8.4)
+
+    /// Whether the launcher panel is up. Set by `app.commandSearch` (X) and
+    /// `app.commandSearchAlt` (⌘F) through `runCommand`.
+    var commandSearchActive = false
+    /// Seeds the launcher's field. Non-empty when a bare letter opened it
+    /// under Single Key Action — the keystroke that opened the panel is also
+    /// the first thing typed into it, which is the whole point of the setting.
+    var commandSearchSeed = ""
+
+    /// Fuzzy results for the launcher, drawn ONLY from commands `runCommand`
+    /// can actually perform (see `CommandRegistry.launchableCommands`).
+    func commandSearchResults(for query: String) -> [AppCommand] {
+        commandRegistry.search(query, in: CommandRegistry.launchableCommands)
+    }
+
+    /// Open the launcher, optionally pre-typed with `seed`.
+    func openCommandSearch(seed: String = "") {
+        commandSearchSeed = seed
+        commandSearchActive = true
+    }
+
+    func closeCommandSearch() {
+        commandSearchActive = false
+        commandSearchSeed = ""
+    }
+
+    /// Run a command chosen from the launcher.
+    ///
+    /// Returns false when the command is real but not applicable right now (a
+    /// sketch tool with no sketch open, a boolean with nothing selected) — the
+    /// launcher stays up and says so, rather than closing on a keystroke that
+    /// did nothing.
+    @discardableResult
+    func runCommandFromSearch(_ id: String) -> Bool {
+        guard runCommand(id) else { return false }
+        closeCommandSearch()
+        return true
+    }
+
     /// The ordered history rows, derived from the graph + last eval errors.
     var historyRows: [FeatureRow] {
         _ = session.changeCount // re-derive when the document changes

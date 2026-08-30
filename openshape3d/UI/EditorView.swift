@@ -939,6 +939,14 @@ struct EditorView: View {
                 // CommandShortcutsView for why the shortcuts ride on buttons.
                 CommandShortcutsView(viewModel: viewModel)
             }
+            .overlay {
+                // Command Search (spec §8.4). An overlay rather than a sheet:
+                // it must be openable from anywhere, and two sheets cannot be
+                // up at once.
+                if viewModel.commandSearchActive {
+                    CommandSearchView(viewModel: viewModel)
+                }
+            }
             .overlay(alignment: settings.paletteOnRight ? .trailing : .leading) {
                 ToolPaletteView(viewModel: viewModel)
                     // Interface side (spec §17): palette flips to the right
@@ -1445,6 +1453,16 @@ struct EditorView: View {
                     importMenu(viewModel)
 
                     exportMenu(viewModel)
+
+                    // Command Search (spec §8.4). A toolbar button, not just
+                    // the X / ⌘F chords: without one the launcher would be
+                    // unreachable on a touch-only iPad, which is most of them.
+                    Button {
+                        viewModel.openCommandSearch()
+                    } label: {
+                        Label("Command Search", systemImage: "magnifyingglass")
+                    }
+                    .accessibilityIdentifier("CommandSearchButton")
 
                     Button {
                         showSettings = true

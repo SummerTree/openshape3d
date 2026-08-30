@@ -109,6 +109,7 @@ final class AppSettings {
         static let theme = "os3d.theme"
         static let paletteOnRight = "os3d.paletteOnRight"
         static let antiAliasing = "os3d.antiAliasing"
+        static let singleKeyAction = "os3d.singleKeyAction"
     }
 
     var unit: DisplayUnit {
@@ -127,6 +128,12 @@ final class AppSettings {
     var antiAliasing: Int {
         didSet { defaults.set(antiAliasing, forKey: Key.antiAliasing) }
     }
+    /// What a BARE letter does on a hardware keyboard (spec §8.4): fire the
+    /// hotkey it is bound to, or open Command Search pre-typed with it.
+    /// Chorded shortcuts (⌘Z, ⇧⌘I…) are unaffected either way.
+    var singleKeyAction: SingleKeyAction {
+        didSet { defaults.set(singleKeyAction.rawValue, forKey: Key.singleKeyAction) }
+    }
 
     /// The sample count pipelines were actually built with this launch.
     static func launchSampleCount(defaults: UserDefaults = .standard) -> Int {
@@ -142,6 +149,8 @@ final class AppSettings {
         theme = defaults.string(forKey: Key.theme).flatMap(AppTheme.init) ?? .system
         paletteOnRight = defaults.bool(forKey: Key.paletteOnRight)
         antiAliasing = Self.launchSampleCount(defaults: defaults)
+        singleKeyAction = defaults.string(forKey: Key.singleKeyAction)
+            .flatMap(SingleKeyAction.init) ?? .hotkeys
     }
 
     // Under `SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor`, this class is
