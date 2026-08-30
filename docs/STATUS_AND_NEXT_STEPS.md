@@ -916,7 +916,7 @@ line/arc chains and ellipses all reach OCCT as the curves they were drawn as.
 Splines never become profiles at all, so there is nothing left to convert
 here — the next inexactness lives elsewhere.
 
-### 3. Blend polish (E5) — item 1 was already built, item 2 done 2026-08-30
+### 3. Blend polish (E5) — COMPLETE 2026-08-30 (item 1 was already built)
 
 **The ranking argument this section used to make was wrong, and it is worth
 knowing why.** It said these items "only buy anything for brep-less bodies",
@@ -934,13 +934,54 @@ their own (which is the better long-term fix, and a mission in its own right).
   mitred tool rather than piling up per-segment wedges. `KernelBlendTests`
   covers both halves. Nothing to do here.
 - ~~**Concave edges**~~ — **DONE 2026-08-30**, see below.
-- **History edge re-pick**: "edit edges of an existing blend feature" (spec:
-  additive edit-mode selection) — needs a History row action that re-enters
-  `.pickingBlendEdges` seeded from the node's EdgeRefs. Design note: the body
-  to re-pick against is the PRE-blend one, which `FeatureGraph.evaluate`
-  already yields if you evaluate a copy of the graph with `rollbackIndex` set
-  to the node's own index; commit through `session.editFeature` rather than
-  appending a node.
+- ~~**History edge re-pick**~~ — **DONE 2026-08-30**, see below.
+
+Mission 3 is complete.
+
+#### History edge re-pick — DONE (2026-08-30)
+
+"Edit Edges" on a chamfer/fillet row re-enters `.pickingBlendEdges` with the
+feature's existing edges already selected, and applying EDITS the node
+(`session.editFeature`) instead of replacing the body and appending a second
+blend on top of the first.
+
+The one real difficulty is that a blend replaces its body IN PLACE. By the time
+the user asks to edit the feature, the body under that `BodyID` already carries
+the blend, so re-picking against it would offer the rounded rim rather than the
+sharp edges the feature names, and the preview would blend an already-blended
+body. `DocumentSession.inputBody(for:bodyID:)` recovers the input by replaying
+a copy of the graph with `rollbackIndex` set to the node's own index. It feeds
+that replay a LOCAL revision counter: the result is a transient preview source
+and must not consume revisions the real document will hand out later.
+
+Three traps, none of them visible to a geometry assertion:
+
+- **`resetBlendState` must clear the edit state.** `commitBlend` branches on
+  `blendEditingFeature`, so a CANCELLED edit that left it set would make the
+  next fresh blend silently overwrite the edges of the last feature opened from
+  the panel.
+- **The tap handler must pick against the recovered body**, not the document's.
+- **Deselecting every edge must preview the UN-blended body.** Falling through
+  to a nil preview shows the document's copy, which still has the old blend on
+  it, so clearing the selection would look like it did nothing.
+
+Testing, and its limits, measured rather than assumed:
+
+- `BlendEditEvalTests` (6) covers the MECHANISM as pure values — truncation
+  recovers the sharp box, stored EdgeRefs resolve against it, two disjoint
+  edges remove exactly twice one (proving each replay starts from the sharp
+  box rather than compounding). It does NOT cover the wiring.
+- `BlendEditUITests` (1) covers the wiring, and the assertion that matters is
+  the ROW COUNT: two 1 mm fillets of one edge look much like one, so
+  "edit versus append" is invisible to geometry and shows up only as a second
+  History row. Falsified — forcing the append path fails it.
+- **A gap worth knowing**: `BodyRef.producer` is never read anywhere (eval
+  resolves bodies by `bodyID` alone), so nothing tests it and nothing can. It
+  is provenance metadata only. Do not assume a wrong `producer` will surface.
+
+Caution for whoever writes the next History UI test: `HistoryButton` TOGGLES.
+Tapping it when the panel is already open closes it, and the row query then
+returns zero — which reads exactly like the feature having been destroyed.
 
 #### Concave edges — DONE (2026-08-30)
 

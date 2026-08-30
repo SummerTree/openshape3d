@@ -40,6 +40,9 @@ struct HistoryPanelView: View {
                         onZoom: { viewModel.zoomToFeature(row.id) },
                         onDelete: { viewModel.deleteFeature(row.id) },
                         onRollbackHere: { viewModel.rollbackToFeature(row.id) },
+                        onEditEdges: viewModel.isBlendFeature(row.id)
+                            ? { viewModel.beginBlendEdit(row.id) }
+                            : nil,
                         onEditDistance: { viewModel.editFeatureDistance(row.id, $0) },
                         onEditPatternCount: { viewModel.editPatternCount(row.id, $0) },
                         onEditPatternSpacing: { viewModel.editPatternSpacing(row.id, $0) },
@@ -179,6 +182,8 @@ private struct HistoryRowView: View {
     let onZoom: () -> Void
     let onDelete: () -> Void
     let onRollbackHere: () -> Void
+    /// Non-nil for chamfer / fillet: offers "Edit Edges".
+    let onEditEdges: (() -> Void)?
     let onEditDistance: (Double) -> Void
     let onEditPatternCount: (Int) -> Void
     let onEditPatternSpacing: (Double) -> Void
@@ -386,6 +391,14 @@ private struct HistoryRowView: View {
                 Label("Roll Back to Here", systemImage: "arrow.uturn.backward")
             }
             .accessibilityIdentifier("RollbackHere-\(row.name)")
+            if let onEditEdges {
+                Button {
+                    onEditEdges()
+                } label: {
+                    Label("Edit Edges", systemImage: "scribble")
+                }
+                .accessibilityIdentifier("EditEdges-\(row.name)")
+            }
             Button(role: .destructive) {
                 onDelete()
             } label: {

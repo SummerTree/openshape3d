@@ -162,6 +162,32 @@ final class DocumentSession {
     /// The `id` names the edited node for callers/telemetry; the replay itself is
     /// whole-graph (tranche 1 has no partial/rollback replay). Any evaluation
     /// errors are stored in `lastEvalErrors`; the good bodies are still applied.
+    /// The body a feature CONSUMES, as it was before that feature ran.
+    ///
+    /// Read-only: replays a copy of the graph truncated just before `featureID`
+    /// and hands back the requested body from that state. Nothing is committed
+    /// and the document's revision counter is untouched — a local counter feeds
+    /// the replay, because the result is a transient source for a preview and
+    /// must not consume revisions the real document will hand out later.
+    ///
+    /// Needed because a blend REPLACES its body in place: by the time the user
+    /// asks to edit the feature, the body under that `BodyID` already has the
+    /// blend on it, and re-picking edges against it would pick the edges of the
+    /// result rather than of the input.
+    func inputBody(for featureID: FeatureID, bodyID: BodyID) -> Body? {
+        var graph = document.features
+        guard let index = graph.index(of: featureID) else { return nil }
+        graph.rollbackIndex = index
+        var counter: UInt64 = 1
+        let result = graph.evaluate(
+            sketches: document.sketches,
+            planes: document.planes,
+            naming: naming,
+            nextRevision: { counter &+= 1; return counter }
+        )
+        return result.bodies.first { $0.id == bodyID }
+    }
+
     func rebuildFrom(_ id: FeatureID, edit: EditFeatureCommand? = nil) {
         // Graph with the pending parameter edit applied, so replay sees the new
         // parameters without mutating the live document yet.

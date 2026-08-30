@@ -2825,6 +2825,92 @@ final class EditorViewModel {
         mode = .pickingBlendEdges(kind)
     }
 
+    /// The feature being re-edited, when the pick was entered from a History
+    /// row rather than from the Modify palette. Nil for a fresh blend.
+    private(set) var blendEditingFeature: FeatureID?
+
+    /// The body reference the edited feature already names.
+    ///
+    /// Kept rather than rebuilt at commit time: its `producer` is the UPSTREAM
+    /// feature that made the body, not the blend itself. Reconstructing it from
+    /// the blend's own id yields a self-referential ref that cannot resolve.
+    private var blendEditBodyRef: BodyRef?
+
+    /// The PRE-blend body, held for the duration of an edit.
+    ///
+    /// A blend replaces its body in place, so the document's copy already has
+    /// the blend on it; previewing and committing against that would blend the
+    /// result a second time. Recovered once, when the edit begins.
+    private var blendEditSource: Body?
+
+    /// The body the current pick blends: the pre-blend one while editing an
+    /// existing feature, otherwise the document's own.
+    private var blendSource: Body? {
+        if let editSource = blendEditSource { return editSource }
+        guard let id = blendBodyID else { return nil }
+        return session.document.body(with: id)
+    }
+
+    /// Re-enter edge picking for an existing chamfer/fillet, seeded with the
+    /// edges and size it already has (spec: additive edit-mode selection).
+    ///
+    /// The edges are resolved against the body the feature CONSUMED, not the
+    /// one it produced — see `DocumentSession.inputBody(for:bodyID:)`.
+    /// Returns false when the feature is not a blend, or when its input can no
+    /// longer be replayed.
+    @discardableResult
+    func beginBlendEdit(_ id: FeatureID) -> Bool {
+        guard let node = session.document.features.node(id) else { return false }
+        let kind: BlendKind
+        let refs: [EdgeRef]
+        let amount: Double
+        let bodyRef: BodyRef
+        switch node.kind {
+        case let .fillet(body, edges, radius):
+            kind = .fillet; refs = edges; amount = radius.value; bodyRef = body
+        case let .chamfer(body, edges, setback):
+            kind = .chamfer; refs = edges; amount = setback.value; bodyRef = body
+        default:
+            return false
+        }
+        guard let source = session.inputBody(for: id, bodyID: bodyRef.bodyID) else {
+            errorMessage = "Couldn't rebuild the shape this blend started from."
+            return false
+        }
+
+        cancelTransientPicks()
+        cancelTool()
+
+        // Resolve each stored EdgeRef back to a live edge. Unresolvable ones are
+        // dropped rather than failing the whole edit: an upstream change may
+        // have removed one edge of a chain, and re-picking is exactly how the
+        // user fixes that.
+        let aabb = source.render.localAABB
+        let scale = Double(simd_length(aabb.max - aabb.min))
+        let available = EdgeTopology.selectableEdges(from: source.render)
+        blendSelectedEdges = refs.compactMap {
+            EdgeTopology.resolve($0.signature, in: available, sizeScale: scale)
+        }
+
+        blendEditingFeature = id
+        blendEditBodyRef = bodyRef
+        blendEditSource = source
+        blendBodyID = bodyRef.bodyID
+        blendValue = amount
+        blendPreview = nil
+        mode = .pickingBlendEdges(kind)
+        updateBlendPreview()
+        return true
+    }
+
+    /// Whether a History row offers "Edit Edges".
+    func isBlendFeature(_ id: FeatureID) -> Bool {
+        switch session.document.features.node(id)?.kind {
+        case .fillet, .chamfer: return true
+        default: return false
+        }
+    }
+
     /// User-facing Cancel: drop the pick and restore the body selection.
     func cancelBlend() {
         guard case .pickingBlendEdges = mode else { return }
@@ -2845,6 +2931,13 @@ final class EditorViewModel {
         blendSelectedEdges = []
         blendBodyID = nil
         blendPreview = nil
+        // Clearing the EDIT state here is what stops a cancelled edit leaking
+        // into the next blend: `commitBlend` branches on `blendEditingFeature`,
+        // so a stale one would make a fresh pick silently overwrite the edges
+        // of whatever feature was last opened from the History panel.
+        blendEditingFeature = nil
+        blendEditBodyRef = nil
+        blendEditSource = nil
         if case .pickingBlendEdges = mode { mode = .idle }
     }
 
@@ -2898,13 +2991,21 @@ final class EditorViewModel {
 
     /// Recompute the live blend preview (edge toggles and size edits call this).
     private func updateBlendPreview() {
-        guard case .pickingBlendEdges(let kind) = mode,
-              let bodyID = blendBodyID,
-              let source = session.document.body(with: bodyID),
-              !blendSelectedEdges.isEmpty,
-              blendValue > 1e-6
-        else {
+        guard case .pickingBlendEdges(let kind) = mode, let source = blendSource else {
             blendPreview = nil
+            return
+        }
+        guard !blendSelectedEdges.isEmpty, blendValue > 1e-6 else {
+            // While EDITING, an empty pick still has something to show: the
+            // body without the blend. Falling through to nil would display the
+            // document's copy, which still has the old blend on it — so
+            // deselecting every edge would look like it did nothing.
+            blendPreview = blendEditSource.map {
+                var body = $0
+                blendPreviewRevision &+= 1
+                body.meshRevision = (1 << 62) | blendPreviewRevision
+                return body
+            }
             return
         }
         blendPreviewRevision &+= 1
@@ -2948,9 +3049,19 @@ final class EditorViewModel {
     /// the tap, and toggle it in the selection. Tapping a second body restarts
     /// the pick on that body (a blend stays single-body).
     private func handleBlendEdgeTap(ray: Ray, kind: BlendKind) {
-        guard let hit = HitTester.pickBody(ray: ray, in: scene),
-              let body = session.document.body(with: hit.bodyID)
+        guard let hit = HitTester.pickBody(ray: ray, in: scene) else { return }
+        // While editing, edges must come from the body the feature CONSUMED —
+        // the document's copy already carries the blend, so its edges are the
+        // rounded ones, which are not what the feature names.
+        let editing = blendEditingFeature != nil
+        guard let body = (editing && hit.bodyID == blendBodyID)
+                ? blendEditSource
+                : session.document.body(with: hit.bodyID)
         else { return }
+
+        // An edit stays on its own body: tapping elsewhere would have to
+        // re-target the feature, which is not what "edit these edges" means.
+        if editing && hit.bodyID != blendBodyID { return }
 
         if blendBodyID != hit.bodyID {
             blendBodyID = hit.bodyID
@@ -3002,10 +3113,30 @@ final class EditorViewModel {
     func commitBlend() {
         guard case .pickingBlendEdges(let kind) = mode,
               let bodyID = blendBodyID,
-              let source = session.document.body(with: bodyID),
+              let source = blendSource,
               !blendSelectedEdges.isEmpty,
               blendValue > 1e-6   // a zero-size node would error on replay
         else { return }
+
+        // Editing an existing feature: change the node and let the rebuild
+        // produce the geometry, exactly as `editFeatureDistance` does. The
+        // live-preview path below would instead REPLACE the body and append a
+        // SECOND blend node on top of the first.
+        if let featureID = blendEditingFeature, let bodyRef = blendEditBodyRef {
+            let edgeRefs = blendSelectedEdges.map {
+                EdgeRef(body: bodyRef, signature: EdgeTopology.signature(of: $0))
+            }
+            let after: FeatureKind = kind == .fillet
+                ? .fillet(body: bodyRef, edges: edgeRefs, radius: Expr(value: blendValue))
+                : .chamfer(body: bodyRef, edges: edgeRefs, setback: Expr(value: blendValue))
+            prepareForHistoryChange()
+            resetBlendState()
+            session.editFeature(featureID, to: after)
+            session.save()
+            mode = .selected(bodyID)
+            selection = [bodyID]
+            return
+        }
 
         // Reuse the live preview when it's current (it already carries the
         // OCCT brep for analytic bodies — C4); else compute fresh.
