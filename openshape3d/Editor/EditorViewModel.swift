@@ -2855,7 +2855,8 @@ final class EditorViewModel {
         let specs = blendSelectedEdges.map {
             BlendEdgeSpec(
                 p0: d3($0.start), p1: d3($0.end),
-                normalA: d3($0.normalA), normalB: d3($0.normalB))
+                normalA: d3($0.normalA), normalB: d3($0.normalB),
+                isConvex: $0.isConvex)
         }
         return KernelOps.blendEdges(
             mesh: source.euclidMesh(), edges: specs,
@@ -2960,7 +2961,13 @@ final class EditorViewModel {
         let local4 = inverse * SIMD4(hit.worldPoint, 1)
         let localPoint = SIMD3<Float>(local4.x, local4.y, local4.z)
 
-        let edges = EdgeTopology.selectableEdges(from: body.render).filter { $0.isConvex }
+        // Concave edges are pickable too: a blend there FILLS the corner
+        // instead of cutting it away (`KernelOps.blendEdges`). They used to be
+        // filtered out here, which made an internal corner simply unpickable —
+        // the tap found the nearest CONVEX edge somewhere else on the body and
+        // selected that instead, so it read as a mis-hit rather than as a
+        // missing feature.
+        let edges = EdgeTopology.selectableEdges(from: body.render)
         guard let nearest = edges.min(by: {
             Self.pointSegmentDistance(localPoint, $0.start, $0.end)
                 < Self.pointSegmentDistance(localPoint, $1.start, $1.end)

@@ -916,20 +916,61 @@ line/arc chains and ellipses all reach OCCT as the curves they were drawn as.
 Splines never become profiles at all, so there is nothing left to convert
 here — the next inexactness lives elsewhere.
 
-### 3. Blend polish (E5) — mesh path only, so rank it against mission 2
+### 3. Blend polish (E5) — item 1 was already built, item 2 done 2026-08-30
 
-The first two items are things OCCT already does for a body with a `brep`
-(FeatureGraph ~L833: the OCCT fillet "propagates along tangent chains for
-free"). They only buy anything for brep-less bodies — which is an argument for
-doing mission 2 instead, and letting these two die with the mesh path.
+**The ranking argument this section used to make was wrong, and it is worth
+knowing why.** It said these items "only buy anything for brep-less bodies",
+implying the mesh path was about to die. But `evalRevolve`, `evalSweep`,
+`evalLoft`, `evalPattern` and `evalMirror` do not produce a `brep` at all —
+checked one at a time, not inferred. A revolved body is one of the commonest
+things a user makes, and every blend on one runs on the mesh path. The mesh
+blend is load-bearing and will stay so until those five ops get OCCT paths of
+their own (which is the better long-term fix, and a mission in its own right).
 
-- **Tangent-chain propagation**: group `SelectableEdge`s whose endpoints touch
-  and whose directions are near-parallel at the join; a tap selects the chain.
-- **Concave edges**: additive corner fill (union the wedge instead of
-  subtracting) — `isConvex` already classifies.
+- ~~**Tangent-chain propagation**~~ — **ALREADY BUILT**, and was when this list
+  was written. `EditorViewModel.handleBlendEdgeTap` expands a tap through
+  `EdgeTopology.smoothChain` to the whole tangent-continuous chain and toggles
+  it as a unit; `KernelOps.blendEdges` then sweeps a multi-segment chain as ONE
+  mitred tool rather than piling up per-segment wedges. `KernelBlendTests`
+  covers both halves. Nothing to do here.
+- ~~**Concave edges**~~ — **DONE 2026-08-30**, see below.
 - **History edge re-pick**: "edit edges of an existing blend feature" (spec:
   additive edit-mode selection) — needs a History row action that re-enters
-  `.pickingBlendEdges` seeded from the node's EdgeRefs.
+  `.pickingBlendEdges` seeded from the node's EdgeRefs. Design note: the body
+  to re-pick against is the PRE-blend one, which `FeatureGraph.evaluate`
+  already yields if you evaluate a copy of the graph with `rollbackIndex` set
+  to the node's own index; commit through `session.editFeature` rather than
+  appending a node.
+
+#### Concave edges — DONE (2026-08-30)
+
+A concave blend FILLS the internal corner instead of cutting it away, so the
+tool is unioned rather than subtracted. Concave edges were classified from the
+start (`SelectableEdge.isConvex`) and then discarded twice — once in the tap
+handler, once in replay — so an inside corner was not merely unsupported, it
+was UNPICKABLE: the tap fell through to the nearest convex edge elsewhere on
+the body, which reads as a mis-hit rather than a missing feature.
+
+Three things to know:
+
+- **One sign carries the whole difference.** The tangent test that orients the
+  wedge (`dot(tA, nB) > 0`) is calibrated for convex edges and inverts for
+  concave ones. Measured failure mode, by running the new tests against the old
+  rule: the wedge lands entirely INSIDE the solid, so the union is a silent
+  no-op — the blend does nothing and the volume does not move. It does not
+  produce wrong geometry, it produces no geometry.
+- **A unioned tool must not overshoot the edge ends.** A subtracted one
+  deliberately does (the cut runs clean past the edge); the same overshoot on a
+  union stands proud of the end faces as two small tabs.
+- **Convex and concave edges are chained separately** in `blendEdges`. They are
+  never continuations of one another even when they meet end to end, and a
+  mixed chain would be swept as one solid and then applied one way for both.
+
+`ConcaveBlendTests` (8) on an L-beam with exactly one inside corner. Note one
+honest limit recorded in the file: `testFillingDoesNotGrowTheBoundingBox` does
+NOT catch the sign error — under falsification the union is a no-op, so the box
+is unchanged and that test passes. `testConcaveFilletFillsTheCorner` is what
+fails. The box test guards the opposite mistake, a tool escaping the notch.
 
 ### 4. F — OpenCASCADE B-rep port (mostly landed; this is its design record)
 Behind the existing `KernelOps` facade (see `IMPLEMENTATION_PLAN.md` Phase E
