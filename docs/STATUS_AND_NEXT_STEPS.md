@@ -7,14 +7,14 @@ Companions: `IMPLEMENTATION_PLAN.md` (original phase plan),
 `SHAPR3D_PARITY_SPEC.md` (feature spec), `PHASE_D_DESIGN.md` (feature-graph
 design).
 
-**Current test baseline, both suites green at the analytic-holes commit
-(2026-08-30): 856 unit tests in 95s, full UI suite 103 executed, 2 skipped,
-0 failures, 44m10s** — 0 idle-timeouts, 0 field-clear retries, store pinned at
+**Current test baseline, both suites green at the analytic-ellipses commit
+(2026-08-30): 877 unit tests in 94s, full UI suite 103 executed, 2 skipped,
+0 failures, 44m28s** — 0 idle-timeouts, 0 field-clear retries, store pinned at
 1 project. The skips are `CompactWidthBarUITests`, which skip by design on the
 iPad destination.
 
-UI wall clock is flat against the previous run (44m18s): mission 2 added
-8 unit tests and no UI tests. The run before THAT was 43m14s, and the minute
+UI wall clock is flat across the whole of mission 2 (44m18s → 44m10s →
+44m28s): it added 29 unit tests and no UI tests. The run before THAT was 43m14s, and the minute
 it gained was the four `CommandSearchUITests` (~41s in isolation) — worth
 checking rather than assuming, since that commit registers keyboard shortcuts,
 and a keyboard change is what once took a suite from 41 to 78 minutes while
