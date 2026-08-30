@@ -126,10 +126,15 @@ nonisolated enum OCCTKernel {
     nonisolated struct ExtrudeHole: Sendable {
         var loop: [SIMD2<Double>]
         var circle: CircleSpec?
+        /// Exact boundary when the hole is neither a circle nor all-straight —
+        /// a slot punched through a plate. See `Profile.Segment`.
+        var segments: [Profile.Segment]
 
-        init(loop: [SIMD2<Double>], circle: CircleSpec? = nil) {
+        init(loop: [SIMD2<Double>], circle: CircleSpec? = nil,
+             segments: [Profile.Segment] = []) {
             self.loop = loop
             self.circle = circle
+            self.segments = segments
         }
     }
 
@@ -138,7 +143,8 @@ nonisolated enum OCCTKernel {
         circleCenter: SIMD2<Double>, circleRadius: Double,
         holes: [ExtrudeHole], zMin: Double, zMax: Double,
         origin: SIMD3<Double>, xAxis: SIMD3<Double>,
-        yAxis: SIMD3<Double>, normal: SIMD3<Double>
+        yAxis: SIMD3<Double>, normal: SIMD3<Double>,
+        outerSegments: [Profile.Segment] = []
     ) -> BRepHandle? {
         let basis = OCCTPlaneBasis(
             originX: origin.x, originY: origin.y, originZ: origin.z,
@@ -160,6 +166,8 @@ nonisolated enum OCCTKernel {
             circleCenterX: circleCenter.x, circleCenterY: circleCenter.y,
             circleRadius: circleRadius, holes: holes.map { packLoop($0.loop) },
             holeCircles: circleData,
+            outerSegments: packSegments(outerSegments),
+            holeSegments: holes.map { packSegments($0.segments) },
             zMin: zMin, zMax: zMax, basis: basis) else { return nil }
         return BRepHandle(shape)
     }
@@ -201,7 +209,8 @@ nonisolated enum OCCTKernel {
                 outerLoop: profile.loop, isCircle: isCircle,
                 circleCenter: center, circleRadius: radius,
                 holes: extrudeHoles(profileHoles), zMin: zMin, zMax: zMax,
-                origin: origin, xAxis: xAxis, yAxis: yAxis, normal: normal)
+                origin: origin, xAxis: xAxis, yAxis: yAxis, normal: normal,
+                outerSegments: profile.segments)
         }
         guard var solid = prism(outer, holes) else { return nil }
         for extra in extras {
@@ -224,7 +233,7 @@ nonisolated enum OCCTKernel {
                 return ExtrudeHole(loop: profile.loop,
                                    circle: CircleSpec(center: center, radius: radius))
             }
-            return ExtrudeHole(loop: profile.loop)
+            return ExtrudeHole(loop: profile.loop, segments: profile.segments)
         }
     }
 
@@ -426,6 +435,21 @@ nonisolated enum OCCTKernel {
             normals.append(SIMD3<Float>(nn[3*v], nn[3*v+1], nn[3*v+2]))
         }
         return (positions, normals, indices)
+    }
+
+    /// 7 doubles per edge — `isArc, x1, y1, x2, y2, midX, midY` — matching
+    /// `SegWire` in the bridge. Empty in, empty out: an all-straight loop has
+    /// nothing to say here that its polyline does not already say exactly.
+    private static func packSegments(_ segments: [Profile.Segment]) -> Data {
+        guard !segments.isEmpty else { return Data() }
+        var flat = [Double](); flat.reserveCapacity(segments.count * 7)
+        for s in segments {
+            flat.append(s.mid == nil ? 0 : 1)
+            flat.append(s.start.x); flat.append(s.start.y)
+            flat.append(s.end.x); flat.append(s.end.y)
+            flat.append(s.mid?.x ?? 0); flat.append(s.mid?.y ?? 0)
+        }
+        return flat.withUnsafeBytes { Data($0) }
     }
 
     private static func packLoop(_ pts: [SIMD2<Double>]) -> Data {

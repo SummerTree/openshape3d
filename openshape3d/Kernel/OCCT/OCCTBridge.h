@@ -96,6 +96,14 @@ NS_ASSUME_NONNULL_BEGIN
 /// polyline". A hole that IS a circle becomes an analytic cylindrical wall
 /// instead of the tessellation it was drawn with — without this a plate with a
 /// Ø8 hole comes back with a 64-sided bore that only looks round.
+/// `outerSegments` / `holeSegments` describe a boundary EXACTLY, for loops
+/// that contain an arc: 7 packed doubles per edge —
+/// `isArc, x1, y1, x2, y2, midX, midY` — where `isArc` > 0.5 means a circular
+/// arc from (x1,y1) to (x2,y2) passing through (midX,midY), and anything else
+/// is a straight line (the mid pair is then ignored). Nil or empty falls back
+/// to the polyline, which is already exact for an all-straight loop. A circle
+/// still wins over both: `isCircle` and a positive hole radius are checked
+/// first.
 + (nullable OCCTShape *)extrudedShapeWithOuterLoop:(NSData *)outerLoop
                                           isCircle:(BOOL)isCircle
                                      circleCenterX:(double)ccx
@@ -103,6 +111,8 @@ NS_ASSUME_NONNULL_BEGIN
                                       circleRadius:(double)cr
                                              holes:(NSArray<NSData *> *)holes
                                        holeCircles:(nullable NSData *)holeCircles
+                                     outerSegments:(nullable NSData *)outerSegments
+                                      holeSegments:(nullable NSArray<NSData *> *)holeSegments
                                               zMin:(double)zMin
                                               zMax:(double)zMax
                                              basis:(OCCTPlaneBasis *)basis;

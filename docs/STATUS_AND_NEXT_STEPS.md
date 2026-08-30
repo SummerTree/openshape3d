@@ -619,9 +619,10 @@ first differing frame is the one you want.
 
 Every item in this mission is done: STEP interchange (§1b), Delete Face (§1c),
 Replace Face (§1d) and the Command Search launcher (§1e). Mission 2 followed
-on 2026-08-30 and is done bar arcs, so **mission 3 (blend polish) and the arc
-tranche are now the top of the list** — and §2 argues the blend items should
-be weighed against letting the mesh path die instead.
+on 2026-08-30, arcs included, so **mission 3 (blend polish) is now the top of
+the list** — but read its own text before starting: two of its three items buy
+nothing for a body with a `brep`, and §2 is the argument for letting them die
+with the mesh path rather than building them.
 
 The pattern is worth keeping in mind for the next one: all four were tested
 kernels with no caller, and in all four cases wiring them up surfaced a bug in
@@ -786,7 +787,7 @@ back as `textFields["CommandSearchPanel"]` while `CommandSearchField` did not
 exist at all. `.accessibilityElement(children: .contain)` before the identifier
 is the fix, as it was for `SketchPointStateOverlay`.
 
-### 2. B-rep follow-through — DONE except arcs (2026-08-30)
+### 2. B-rep follow-through — DONE (2026-08-30)
 
 The description this section carried was two-thirds stale, which is worth
 recording as its own lesson: **polygonal profiles** and **extrude-into-target
@@ -818,14 +819,51 @@ disabled, five of them fail with exactly the numbers above. `testAWasherIs
 TwoCylinders` is the sharpest of them — a washer had an analytic outer wall
 and a 64-facet bore, so the shape was half-exact and looked entirely round.
 
-**Still open: arcs.** `ProfileDetector.lineLoops` explodes arcs via
-`SketchEntity.arcPoints` before a `Profile` exists, so a slot or a rounded
-rectangle reaches the kernel as tessellated points with a `.polygonal` kind —
-there is no arc left to be analytic about. Fixing it means `Profile` carrying
-per-segment curve data, which ripples through `ProfileDetector`,
-`KernelOps.extrude`, area/centroid/contains and face signatures, with the mesh
-path still consuming the same type. That is its own tranche, not a finishing
-touch on this one.
+**Arcs — DONE 2026-08-30, and cheaper than this section predicted.** The
+paragraph that used to sit here said `Profile` would have to carry per-segment
+curve data, rippling through `ProfileDetector`, `KernelOps.extrude`,
+area/centroid/contains and face signatures. That was the wrong shape of fix.
+`loop` is left EXACTLY as it was — still the tessellated truth every mesh-side
+consumer reads — and the exact boundary rides alongside it in
+`Profile.segments`, which only the B-rep path consults. Nothing downstream of
+the sketch changed representation, so no consumer had to be revisited.
+
+Three details worth keeping:
+
+- **An arc is stored as three points, not a centre and an angle pair.** The
+  face traversal walks a chain in whichever direction the loop needs, and an
+  orientation convention is precisely the thing that silently sign-flips when
+  it does. `GC_MakeArcOfCircle(start, mid, end)` takes the points in traversal
+  order and reconstructs the circle itself, so there is no winding flag to get
+  backwards. The mid point is an interior SAMPLE from `arcPoints`, which is on
+  the true arc by construction.
+- **Only loops that contain an arc get segments.** A polygon is already exact
+  as a polyline — OCCT builds the same wire either way — so filling this in
+  for one would be a second description of identical geometry and a second
+  thing to keep in step.
+- **Every fallback is per-wire, not per-solid.** Bad segments fall back to the
+  polyline for that boundary alone (`SegWire` returns a null wire), and a
+  circle still wins over both.
+
+`AnalyticArcTests` (11), falsified by forcing the bridge's arc branch off:
+9 fail, a slot reporting 0 cylindrical faces and 6 planar instead of 2 and 4.
+That run also caught a test of my own that was weaker than it looked —
+`testReversedSketchOrderGivesTheSameSolid` compared the two solids only to
+each OTHER, so it passed while both were faceted; it now pins both counts to 2.
+
+**Consequence worth knowing before opening an old document**: a slot wall that
+used to be ~20 planar facets is now one cylindrical face, so a `FaceRef` minted
+against one of those facets resolves against a cylinder on the next rebuild.
+This is the same swap the hole fix made (64 facets → 1 cylinder) and
+`SignatureNaming` handles cylinders as first-class, but it IS a geometry change
+to bodies that already exist.
+
+**Still open: ellipses**, and they are the last of it — `detectProfiles`
+tessellates `.ellipse` to `.polygonal`, while circles, rects, polygons, and now
+line/arc chains all reach OCCT exactly (splines never become profiles at all).
+An ellipse cannot use this side-channel as it stands: three points determine a
+circle, not an ellipse, so it needs its own descriptor over `gp_Elips`. Small
+and self-contained, but a different shape of change.
 
 ### 3. Blend polish (E5) — mesh path only, so rank it against mission 2
 
