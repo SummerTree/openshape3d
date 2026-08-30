@@ -1052,22 +1052,37 @@ already used.
 builders: 5 fail, the survivor being the negative test that a holed loft STAYS
 mesh-only.
 
-#### Found while doing it: `SignatureNaming.faceTable` does not scale
+#### Face enumeration was O(n²) — FIXED (2026-08-30)
 
-**`faceTable` takes ~65 SECONDS on a 4,608-triangle torus.** Measured, and
-PRE-EXISTING — that path is untouched by the B-rep work, which means revolving
-a circle has always been a ~65-second operation in the app. It is specific to
-bodies made of many non-planar facets: a 90° revolve of a rectangle completes
-in 0.13 s.
+`faceTable` took **~65 SECONDS** on a 4,608-triangle torus, so revolving a
+circle was a minute-long hang on a completely ordinary operation. Found while
+giving revolve a B-rep, but entirely pre-existing: the mesh path had always done
+this. Now **96 ms**, a 680× improvement, with the face GROUPING unchanged.
 
-This is why the brep is assigned rather than adopted; handing the same pass a
-49,928-triangle body took it from slow to unusable (still running after a
-minute when the probe was killed).
+Two compounding causes, and the first fix alone was not enough:
 
-It is a user-facing hang on a common operation and deserves its own mission.
-Anyone writing a graph-level test involving a curved revolve should route the
-assertion through `OCCTKernel` instead, as `testRevolvingACircleGivesAnAnalytic
-Torus` does, or pay the minute.
+- `planarFace`, `smoothRegion` and `cylindricalFace` each rebuilt the whole
+  edge→triangle map, while `enumerateFaces` calls them once per unclaimed
+  triangle. Sharing one map: 65 s → **41 s**.
+- `cylindricalFace` floods the entire SMOOTH COMPONENT before deciding whether a
+  cylinder fits. A torus is one smooth component of 4,608 triangles that no
+  cylinder fits, so the old code flooded all of them once per seed — 2,304 times
+  over. The verdict cannot differ between seeds inside one component, so one
+  refusal now settles it for the whole component: 41 s → **96 ms**.
+
+**Why the grouping assertion in the test matters more than the timing one.**
+Face enumeration feeds topological naming. Had this refactor changed WHICH
+triangles group into a face, every stored `FaceRef` in every saved document
+would resolve differently — a silent, unbounded regression that no timing test
+would catch. `FaceEnumerationScalingTests` pins the torus entry count (2304),
+the box (6 planar), and the cylinder (2 planar + 1 cylindrical) for that reason.
+
+The per-seed entry points still build their own map when none is shared, so the
+~30 external callers are unaffected.
+
+Still slow, and NOT this: three `DeleteFaceEvalTests` cases sit at ~14 s each.
+That is a different cost (OCCT defeaturing), unmoved by this fix, and it is what
+makes the suite occasionally trip its per-test timeout.
 
 ### 4. F — OpenCASCADE B-rep port (mostly landed; this is its design record)
 Behind the existing `KernelOps` facade (see `IMPLEMENTATION_PLAN.md` Phase E

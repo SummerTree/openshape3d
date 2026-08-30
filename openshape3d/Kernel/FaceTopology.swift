@@ -94,6 +94,11 @@ nonisolated enum FaceTopology {
     /// Extract the planar face containing `seedTriangle`, or nil when the
     /// surface there isn't planar (curved regions can't be push/pulled).
     static func planarFace(in mesh: RenderMesh, seedTriangle: Int) -> PlanarFace? {
+        planarFace(in: mesh, seedTriangle: seedTriangle, adjacency: nil)
+    }
+
+    private static func planarFace(in mesh: RenderMesh, seedTriangle: Int,
+                                   adjacency: [EdgeKey: [Int]]?) -> PlanarFace? {
         guard seedTriangle >= 0, seedTriangle < mesh.triangleCount else { return nil }
 
         func triangleVertices(_ t: Int) -> (SIMD3<Float>, SIMD3<Float>, SIMD3<Float>) {
@@ -126,13 +131,7 @@ nonisolated enum FaceTopology {
         }
 
         // Edge → triangles adjacency (welded positions).
-        var edgeTriangles = [EdgeKey: [Int]]()
-        for t in 0..<mesh.triangleCount {
-            let (a, b, c) = triangleVertices(t)
-            edgeTriangles[EdgeKey(a, b), default: []].append(t)
-            edgeTriangles[EdgeKey(b, c), default: []].append(t)
-            edgeTriangles[EdgeKey(c, a), default: []].append(t)
-        }
+        let edgeTriangles = adjacency ?? Self.edgeAdjacency(in: mesh)
 
         // Flood fill coplanar connected triangles.
         var faceTriangles = Set<Int>()
@@ -322,6 +321,12 @@ nonisolated enum FaceTopology {
     static func smoothRegion(
         in mesh: RenderMesh, seedTriangle: Int
     ) -> (triangles: [Int], isCurved: Bool)? {
+        smoothRegion(in: mesh, seedTriangle: seedTriangle, adjacency: nil)
+    }
+
+    private static func smoothRegion(
+        in mesh: RenderMesh, seedTriangle: Int, adjacency: [EdgeKey: [Int]]?
+    ) -> (triangles: [Int], isCurved: Bool)? {
         guard seedTriangle >= 0, seedTriangle < mesh.triangleCount else { return nil }
 
         func tri(_ t: Int) -> (SIMD3<Float>, SIMD3<Float>, SIMD3<Float>) {
@@ -337,13 +342,7 @@ nonisolated enum FaceTopology {
         }
         guard let seedN = normal(seedTriangle) else { return nil }
 
-        var edgeTriangles = [EdgeKey: [Int]]()
-        for t in 0..<mesh.triangleCount {
-            let (a, b, c) = tri(t)
-            edgeTriangles[EdgeKey(a, b), default: []].append(t)
-            edgeTriangles[EdgeKey(b, c), default: []].append(t)
-            edgeTriangles[EdgeKey(c, a), default: []].append(t)
-        }
+        let edgeTriangles = adjacency ?? Self.edgeAdjacency(in: mesh)
 
         var surface = Set<Int>()
         var queue = [seedTriangle]
@@ -368,6 +367,11 @@ nonisolated enum FaceTopology {
     /// Recognize the curved cylindrical surface under `seedTriangle`, or nil if
     /// the region is planar or not a clean cylinder.
     static func cylindricalFace(in mesh: RenderMesh, seedTriangle: Int) -> CylindricalFace? {
+        cylindricalFace(in: mesh, seedTriangle: seedTriangle, adjacency: nil)
+    }
+
+    private static func cylindricalFace(in mesh: RenderMesh, seedTriangle: Int,
+                                        adjacency: [EdgeKey: [Int]]?) -> CylindricalFace? {
         guard seedTriangle >= 0, seedTriangle < mesh.triangleCount else { return nil }
 
         func tri(_ t: Int) -> (SIMD3<Float>, SIMD3<Float>, SIMD3<Float>) {
@@ -383,13 +387,7 @@ nonisolated enum FaceTopology {
         }
         guard let seedN = normal(seedTriangle) else { return nil }
 
-        var edgeTriangles = [EdgeKey: [Int]]()
-        for t in 0..<mesh.triangleCount {
-            let (a, b, c) = tri(t)
-            edgeTriangles[EdgeKey(a, b), default: []].append(t)
-            edgeTriangles[EdgeKey(b, c), default: []].append(t)
-            edgeTriangles[EdgeKey(c, a), default: []].append(t)
-        }
+        let edgeTriangles = adjacency ?? Self.edgeAdjacency(in: mesh)
 
         // Flood-fill the smooth surface: neighbours join across soft edges.
         var surface = Set<Int>()
@@ -533,6 +531,83 @@ nonisolated enum FaceTopology {
     /// with no orphaned triangles. Because faces meet at hard edges, only the
     /// seed's own unclaimed region is ever claimed, and every seed advances the
     /// frontier, so the loop covers all triangles in one pass.
+    /// Edge → triangles, built ONCE per mesh.
+    ///
+    /// `planarFace`, `smoothRegion` and `cylindricalFace` each used to build
+    /// this for themselves, and `enumerateFaces` calls them once per unclaimed
+    /// triangle — so the enumeration was O(n²) in the triangle count, hashing
+    /// three edge keys per triangle every time. It only bit on surfaces where
+    /// seeds keep FAILING to claim anything: a torus has no planar faces and
+    /// fits no cylinder, so all 4,608 of its triangles paid a full rebuild
+    /// each and `faceTable` took ~65 SECONDS. A revolved circle was therefore
+    /// a minute-long hang on a completely ordinary operation.
+    private static func edgeAdjacency(in mesh: RenderMesh) -> [EdgeKey: [Int]] {
+        var edgeTriangles = [EdgeKey: [Int]]()
+        edgeTriangles.reserveCapacity(mesh.triangleCount * 3)
+        for t in 0..<mesh.triangleCount {
+            let a = mesh.positions[Int(mesh.indices[t * 3])]
+            let b = mesh.positions[Int(mesh.indices[t * 3 + 1])]
+            let c = mesh.positions[Int(mesh.indices[t * 3 + 2])]
+            edgeTriangles[EdgeKey(a, b), default: []].append(t)
+            edgeTriangles[EdgeKey(b, c), default: []].append(t)
+            edgeTriangles[EdgeKey(c, a), default: []].append(t)
+        }
+        return edgeTriangles
+    }
+
+    /// Partition triangles into SMOOTH-connected components, once.
+    ///
+    /// `cylindricalFace` floods exactly this component from its seed before it
+    /// attempts a cylinder fit, and the flood depends only on the mesh — not on
+    /// which triangle inside it started. So when the fit fails, it will fail
+    /// for every other seed in the same component too, and re-flooding for each
+    /// of them is pure waste.
+    ///
+    /// That waste was the rest of the torus hang. Sharing the edge map took
+    /// `faceTable` from ~65 s to ~41 s; it is this that takes it to well under
+    /// a second, because a torus is ONE smooth component of 4,608 triangles
+    /// that no cylinder fits — so the old code flooded all 4,608 triangles once
+    /// per seed, 2,304 times over.
+    ///
+    /// Returns a component id per triangle (-1 for a degenerate triangle).
+    private static func smoothComponents(in mesh: RenderMesh,
+                                         adjacency: [EdgeKey: [Int]]) -> [Int] {
+        let count = mesh.triangleCount
+        var component = [Int](repeating: -2, count: count)   // -2 = unvisited
+        func tri(_ t: Int) -> (SIMD3<Float>, SIMD3<Float>, SIMD3<Float>) {
+            (mesh.positions[Int(mesh.indices[t * 3])],
+             mesh.positions[Int(mesh.indices[t * 3 + 1])],
+             mesh.positions[Int(mesh.indices[t * 3 + 2])])
+        }
+        func normal(_ t: Int) -> SIMD3<Float>? {
+            let (a, b, c) = tri(t)
+            let x = simd_cross(b - a, c - a)
+            let len = simd_length(x)
+            return len > 1e-12 ? x / len : nil
+        }
+        var next = 0
+        for seed in 0..<count where component[seed] == -2 {
+            guard normal(seed) != nil else { component[seed] = -1; continue }
+            let id = next; next += 1
+            var queue = [seed]
+            component[seed] = id
+            while let t = queue.popLast() {
+                guard let nt = normal(t) else { continue }
+                let (a, b, c) = tri(t)
+                for edge in [EdgeKey(a, b), EdgeKey(b, c), EdgeKey(c, a)] {
+                    for nb in adjacency[edge] ?? [] where component[nb] == -2 {
+                        guard let nn = normal(nb) else { continue }
+                        if simd_dot(nn, nt) > smoothDihedralCos {
+                            component[nb] = id
+                            queue.append(nb)
+                        }
+                    }
+                }
+            }
+        }
+        return component
+    }
+
     static func enumerateFaces(in mesh: RenderMesh) -> (planar: [PlanarFace], cylindrical: [CylindricalFace]) {
         var planar: [PlanarFace] = []
         var cylindrical: [CylindricalFace] = []
@@ -540,22 +615,38 @@ nonisolated enum FaceTopology {
         guard count > 0 else { return (planar, cylindrical) }
 
         var claimed = [Bool](repeating: false, count: count)
+        // Both built once and shared: see `edgeAdjacency` / `smoothComponents`.
+        let adjacency = edgeAdjacency(in: mesh)
+        let component = smoothComponents(in: mesh, adjacency: adjacency)
+        // Components whose cylinder fit already failed. The fit floods the
+        // whole component before deciding, and the verdict cannot differ
+        // between seeds inside one component, so one refusal settles it for all
+        // of them.
+        var cylinderRefused = Set<Int>()
 
         for seed in 0..<count where !claimed[seed] {
             // Cylindrical first: a smooth run of facets fitting a cylinder.
-            if let cyl = cylindricalFace(in: mesh, seedTriangle: seed) {
-                let fresh = cyl.triangles.filter { $0 >= 0 && $0 < count && !claimed[$0] }
-                if fresh.contains(seed), fresh.count >= 6 {
-                    for t in fresh { claimed[t] = true }
-                    var face = cyl
-                    face.triangles = fresh.sorted()
-                    cylindrical.append(face)
-                    continue
+            let region = component[seed]
+            if !cylinderRefused.contains(region) {
+                if let cyl = cylindricalFace(in: mesh, seedTriangle: seed, adjacency: adjacency) {
+                    let fresh = cyl.triangles.filter { $0 >= 0 && $0 < count && !claimed[$0] }
+                    if fresh.contains(seed), fresh.count >= 6 {
+                        for t in fresh { claimed[t] = true }
+                        var face = cyl
+                        face.triangles = fresh.sorted()
+                        cylindrical.append(face)
+                        continue
+                    }
+                } else if region >= 0 {
+                    // The FIT itself refused, which is a property of the
+                    // component, not of this seed. Do not re-flood it 2,303
+                    // more times.
+                    cylinderRefused.insert(region)
                 }
             }
 
             // Planar coplanar patch.
-            if let flat = planarFace(in: mesh, seedTriangle: seed) {
+            if let flat = planarFace(in: mesh, seedTriangle: seed, adjacency: adjacency) {
                 let fresh = flat.triangles.filter { $0 >= 0 && $0 < count && !claimed[$0] }
                 if fresh.contains(seed) {
                     for t in fresh { claimed[t] = true }
