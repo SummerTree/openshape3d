@@ -33,6 +33,8 @@
 #include <BRepOffsetAPI_MakeThickSolid.hxx>
 #include <TopTools_IndexedDataMapOfShapeListOfShape.hxx>
 #include <BRepAdaptor_Curve.hxx>
+#include <GeomAPI_ProjectPointOnCurve.hxx>
+#include <Geom_Curve.hxx>
 #include <TopExp.hxx>
 #include <TopTools_IndexedMapOfShape.hxx>
 
@@ -749,14 +751,35 @@ static std::set<Standard_Integer> OS3DNearestEdges(
         BRepAdaptor_Curve curve(edge);
         const double first = curve.FirstParameter();
         const double last = curve.LastParameter();
-        const int samples = 16;
-        for (int s = 0; s <= samples; ++s) {
-            const gp_Pnt q = curve.Value(first + (last - first) * (double)s / (double)samples);
-            for (NSUInteger k = 0; k < count; ++k) {
-                const gp_Pnt target(pts[3*k], pts[3*k+1], pts[3*k+2]);
-                const double d = q.Distance(target);
-                if (d < bestDistance[k]) { bestDistance[k] = d; bestEdge[k] = i; }
+
+        // The TRUE distance to the curve, by projection — not the distance to
+        // the nearest of a handful of samples.
+        //
+        // This used to sample 16 points along the parameter range, which is
+        // ample for a straight edge and badly wrong for a circle: on a Ø10 rim
+        // the samples sit ~2 mm apart, so a point ON the rim can measure up to
+        // ~1 mm from the nearest one. Tolerance is 1% of the body diagonal —
+        // 0.185 mm there — so most taps on a cylinder's rim were rejected as
+        // "no edge near here" and the fillet silently did nothing. Measured:
+        // of the first 8 rim segments only 2 resolved; at a 1 mm tolerance 7
+        // did, which is the sampling gap showing through.
+        Standard_Real curveFirst = 0, curveLast = 0;
+        Handle(Geom_Curve) geom = BRep_Tool::Curve(edge, curveFirst, curveLast);
+        for (NSUInteger k = 0; k < count; ++k) {
+            const gp_Pnt target(pts[3*k], pts[3*k+1], pts[3*k+2]);
+            // Endpoints first: a projection can legitimately find nothing when
+            // the nearest point on the trimmed curve is an end.
+            double d = std::min(curve.Value(first).Distance(target),
+                                curve.Value(last).Distance(target));
+            if (!geom.IsNull()) {
+                try {
+                    GeomAPI_ProjectPointOnCurve proj(target, geom, curveFirst, curveLast);
+                    if (proj.NbPoints() > 0) d = std::min(d, (double)proj.LowerDistance());
+                } catch (...) {
+                    // Fall back to the endpoint distance already computed.
+                }
             }
+            if (d < bestDistance[k]) { bestDistance[k] = d; bestEdge[k] = i; }
         }
     }
 

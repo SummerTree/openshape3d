@@ -3000,6 +3000,31 @@ final class EditorViewModel {
             primitive: nil, euclidMesh: mesh, revision: revision)
     }
 
+    /// Wall time the last preview recompute took, and when it finished.
+    ///
+    /// The preview runs the CSG synchronously on the main actor, so a slow one
+    /// blocks input for its whole duration. On the mesh path a cylinder-rim
+    /// fillet costs ~450 ms; a drag sets `blendValue` on every touch-move, so
+    /// without a gate the main thread is saturated and the app reads as frozen
+    /// (and a long enough hang is its own crash risk).
+    private var lastPreviewDuration: TimeInterval = 0
+    private var lastPreviewFinished: TimeInterval = 0
+    /// True only between `beginBlendDrag` and `endBlendDrag`.
+    private var isDraggingBlendSize = false
+
+    /// Skip this recompute if the previous one is still "paying off".
+    ///
+    /// Self-tuning rather than a fixed interval: the gate is the last
+    /// recompute's OWN duration, so the work never occupies more than about
+    /// half the wall clock. An OCCT preview (~9 ms) is never throttled at all,
+    /// while a 450 ms mesh preview drops to roughly two a second and leaves the
+    /// main thread free to track the finger in between. Only drags are gated —
+    /// a tap or a typed size always recomputes immediately.
+    private var shouldSkipPreviewDuringDrag: Bool {
+        guard isDraggingBlendSize, lastPreviewDuration > 0.05 else { return false }
+        return ProcessInfo.processInfo.systemUptime - lastPreviewFinished < lastPreviewDuration
+    }
+
     /// Recompute the live blend preview (edge toggles and size edits call this).
     private func updateBlendPreview() {
         guard case .pickingBlendEdges(let kind) = mode, let source = blendSource else {
@@ -3019,11 +3044,15 @@ final class EditorViewModel {
             }
             return
         }
+        guard !shouldSkipPreviewDuringDrag else { return }
         blendPreviewRevision &+= 1
         // High-bit revision space so preview revisions never collide with
         // the document's own mesh revisions in the GPU cache.
+        let started = ProcessInfo.processInfo.systemUptime
         blendPreview = blendedBody(
             kind, source: source, revision: (1 << 62) | blendPreviewRevision)
+        lastPreviewFinished = ProcessInfo.processInfo.systemUptime
+        lastPreviewDuration = lastPreviewFinished - started
     }
 
     /// Whether the blend can be committed (edges picked on one body, a positive
@@ -3043,6 +3072,7 @@ final class EditorViewModel {
     func beginBlendDrag() -> Bool {
         guard case .pickingBlendEdges = mode, !blendSelectedEdges.isEmpty else { return false }
         blendDragStartValue = blendValue
+        isDraggingBlendSize = true
         return true
     }
 
@@ -3054,6 +3084,10 @@ final class EditorViewModel {
 
     func endBlendDrag() {
         blendDragStartValue = nil
+        // The gate may have skipped the last few frames, so the preview can be
+        // one size behind the finger. Settle it before the user can commit.
+        isDraggingBlendSize = false
+        updateBlendPreview()
     }
 
     /// Tap while a blend is armed: pick the body, find the nearest convex edge to
