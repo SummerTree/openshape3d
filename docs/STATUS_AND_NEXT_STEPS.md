@@ -7,11 +7,17 @@ Companions: `IMPLEMENTATION_PLAN.md` (original phase plan),
 `SHAPR3D_PARITY_SPEC.md` (feature spec), `PHASE_D_DESIGN.md` (feature-graph
 design).
 
-**Current test baseline, both suites green at the Replace Face commit
-(2026-08-29): 839 unit tests in 93s, full UI suite 99 executed, 2 skipped,
-0 failures, 43m14s** — 0 idle-timeouts, 0 field-clear retries, store pinned at
+**Current test baseline, both suites green at the Command Search commit
+(2026-08-29): 848 unit tests in 92s, full UI suite 103 executed, 2 skipped,
+0 failures, 44m18s** — 0 idle-timeouts, 0 field-clear retries, store pinned at
 1 project. The skips are `CompactWidthBarUITests`, which skip by design on the
 iPad destination.
+
+The minute added over the previous run (43m14s) is the four new
+`CommandSearchUITests`, which take ~41s in isolation. Worth checking rather
+than assuming, because that commit registers keyboard shortcuts and a keyboard
+change is what once took a suite from 41 to 78 minutes while still reporting
+green (the ⌘A trap below).
 
 The STEP-interchange commit before it ran the UI suite CLEAN TWICE IN A ROW
 (96 executed, 42m29s each). Two runs, not one, was the point there: run 1's
