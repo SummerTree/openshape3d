@@ -292,6 +292,21 @@ nonisolated enum OCCTKernel {
         return OCCTBridge.transformedShape(handle.shape, matrix: data).map(BRepHandle.init)
     }
 
+    /// Reflect a solid in the plane through `origin` with `normal`.
+    ///
+    /// Deliberately not routed through `transformed(_:by:)`: `Transform3D` is
+    /// translation + rotation + a single uniform scale and cannot represent a
+    /// plane reflection at all. (A negative uniform scale is a point
+    /// reflection — a different transform, and not what Mirror means.)
+    static func mirrored(_ handle: BRepHandle,
+                         origin: SIMD3<Double>, normal: SIMD3<Double>) -> BRepHandle? {
+        OCCTBridge.mirroredShape(
+            handle.shape,
+            originX: origin.x, originY: origin.y, originZ: origin.z,
+            normalX: normal.x, normalY: normal.y, normalZ: normal.z
+        ).map(BRepHandle.init)
+    }
+
     /// OCCT boolean of two solids. op: 0 = union, 1 = subtract (a − b), 2 = intersect.
     /// Map a `BooleanKind` to `OCCTBridge`'s op code (0 union, 1 subtract,
     /// 2 intersect).

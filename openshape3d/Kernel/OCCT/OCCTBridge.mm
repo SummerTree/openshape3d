@@ -519,6 +519,32 @@ static TopoDS_Wire SegWire(NSData *segs, double z) {
     }
 }
 
++ (nullable OCCTShape *)mirroredShape:(OCCTShape *)shape
+                              originX:(double)ox
+                              originY:(double)oy
+                              originZ:(double)oz
+                              normalX:(double)nx
+                              normalY:(double)ny
+                              normalZ:(double)nz {
+    if (shape == nil) return nil;
+    const double len = sqrt(nx * nx + ny * ny + nz * nz);
+    if (!(len > 1e-12)) return nil;
+    try {
+        // gp_Ax2's main direction is the plane NORMAL; SetMirror reflects in
+        // the plane that system spans, which is what a mirror feature means.
+        gp_Ax2 ax(gp_Pnt(ox, oy, oz), gp_Dir(nx / len, ny / len, nz / len));
+        gp_Trsf t;
+        t.SetMirror(ax);
+        TopoDS_Shape out = BRepBuilderAPI_Transform(shape->_shape, t, Standard_True).Shape();
+        if (out.IsNull()) return nil;
+        OCCTShape *result = [OCCTShape new];
+        result->_shape = out;
+        return result;
+    } catch (...) {
+        return nil;
+    }
+}
+
 + (nullable OCCTShape *)transformedShape:(OCCTShape *)shape
                                   matrix:(NSData *)transform {
     if (shape == nil || transform.length < 12 * sizeof(double)) return nil;

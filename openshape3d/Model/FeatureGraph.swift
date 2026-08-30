@@ -1310,9 +1310,20 @@ nonisolated extension FeatureGraph {
         }
         // keepOriginal is effectively true in v1: the mirror node only ADDS its own
         // output body; the source stays put (never removed here).
-        let body = Body(
+        var body = Body(
             id: id, name: node.name, transform: .identity, primitive: nil,
             euclidMesh: mirrored, revision: nextRevision())
+        // Reflect the solid alongside the mesh. The mirrored body's transform
+        // is identity, so its local space IS world space — the source's own
+        // transform is baked in first, exactly as the mesh above does it.
+        // `brep` is assigned rather than adopted so the render mesh stays the
+        // Euclid mirror that existing coverage measures; the brep is what
+        // downstream fillets, booleans and STEP will read.
+        if OCCTKernel.useOCCTAsSourceOfTruth, let sourceBrep = input.brep,
+           let placed = OCCTKernel.transformed(sourceBrep, by: input.transform) {
+            body.brep = OCCTKernel.mirrored(
+                placed, origin: plane.origin, normal: simd_normalize(plane.normal))
+        }
         let table = state.naming.faceTable(for: body, createdBy: node.id, scheme: .generic)
         state.put(body, table: table)
     }
@@ -1355,13 +1366,21 @@ nonisolated extension FeatureGraph {
         for i in 1..<transforms.count {
             let idIndex = i - 1
             guard idIndex < node.outputBodyIDs.count else { break } // never mint ids in eval
-            let copy = Body(
+            var copy = Body(
                 id: node.outputBodyIDs[idIndex],
                 name: node.name,
                 transform: Self.composePatternTransform(transforms[i], base: source.transform),
                 primitive: nil,
                 euclidMesh: localMesh,
                 revision: nextRevision())
+            // A pattern copy is the SAME body-local geometry at a different
+            // placement, and `brep` — like `render` — is body-local with the
+            // placement held in `transform`. So the copy shares the source's
+            // solid outright: no OCCT call, and no reason for patterning to be
+            // the step that costs a part its analytic geometry. (`BRepHandle`
+            // is a reference type and nothing mutates one in place; every
+            // kernel op returns a new handle.)
+            copy.brep = source.brep
             let table = state.naming.faceTable(for: copy, createdBy: node.id, scheme: .generic)
             state.put(copy, table: table)
         }

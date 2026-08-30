@@ -2736,13 +2736,24 @@ final class EditorViewModel {
             var transform = Transform3D.identity
             transform.translation = pivot
             let localMesh = mirrored.translated(by: Vector(-pivot.x, -pivot.y, -pivot.z))
-            let copy = Body(
+            var copy = Body(
                 name: document.uniqueBodyName(base: body.name),
                 transform: transform,
                 primitive: nil,
                 euclidMesh: localMesh,
                 revision: body.meshRevision
             )
+            // Reflect the solid the same way the mesh was: bake the source's
+            // transform in, mirror in world space, then bring it back into the
+            // copy's own local space — the copy's placement is the reflected
+            // pivot, so the brep must not carry that translation itself.
+            if OCCTKernel.useOCCTAsSourceOfTruth, let sourceBrep = body.brep,
+               let placed = OCCTKernel.transformed(sourceBrep, by: body.transform),
+               let reflected = OCCTKernel.mirrored(placed, origin: plane.origin, normal: n) {
+                var toLocal = Transform3D.identity
+                toLocal.translation = -pivot
+                copy.brep = OCCTKernel.transformed(reflected, by: toLocal)
+            }
             document.bodies.append(copy) // keeps the next name unique
             commands.append(AddBodyCommand(body: copy, title: "Mirror"))
             // Phase D: record a `.mirror` history node for a feature-owned source
@@ -4151,6 +4162,12 @@ final class EditorViewModel {
                 revision: document.nextRevision()
             )
             copy.euclid = body.euclid
+            // Same reasoning as `FeatureGraph.evalPattern`: a copy is the same
+            // body-local solid at a different placement, so it shares the
+            // source's brep. Without this the LIVE pattern silently dropped
+            // analytic geometry on every copy while replay kept it — the two
+            // paths must agree, or a rebuild would change the model.
+            copy.brep = body.brep
             document.bodies.append(copy) // keeps the next name unique
             commands.append(AddBodyCommand(body: copy, title: "Pattern"))
             ids.insert(copy.id)

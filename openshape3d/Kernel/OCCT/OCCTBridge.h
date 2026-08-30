@@ -134,6 +134,21 @@ NS_ASSUME_NONNULL_BEGIN
 /// Apply a rigid placement to a solid. `transform` is 12 packed doubles
 /// (row-major 3×4). Needed because a `Body` carries its own transform, which
 /// must be baked in before two solids can be booleaned in a common space.
+/// Reflect a shape in the PLANE through `origin` with the given `normal`.
+///
+/// Separate from `transformedShape:` because a reflection cannot be expressed
+/// as a `Transform3D` at all — that type is translation + a rotation
+/// quaternion + a single uniform scale, and a plane mirror is none of those
+/// (a negative uniform scale is a POINT reflection, which is a different
+/// transform). `gp_Trsf::SetMirror(gp_Ax2)` does it properly.
++ (nullable OCCTShape *)mirroredShape:(OCCTShape *)shape
+                              originX:(double)ox
+                              originY:(double)oy
+                              originZ:(double)oz
+                              normalX:(double)nx
+                              normalY:(double)ny
+                              normalZ:(double)nz;
+
 + (nullable OCCTShape *)transformedShape:(OCCTShape *)shape
                                   matrix:(NSData *)transform;
 
