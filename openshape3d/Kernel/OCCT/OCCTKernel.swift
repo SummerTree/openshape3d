@@ -106,10 +106,37 @@ nonisolated enum OCCTKernel {
     /// Build a world-space OCCT solid for an extruded profile. `outerLoop` is the
     /// plane-local boundary; when `isCircle` an analytic circle is used (true
     /// cylinder). `holes` are polygonal inner boundaries. Returns nil on failure.
+    /// A true circle, in plane-local coordinates.
+    nonisolated struct CircleSpec: Sendable, Equatable {
+        var center: SIMD2<Double>
+        var radius: Double
+
+        init(center: SIMD2<Double>, radius: Double) {
+            self.center = center
+            self.radius = radius
+        }
+    }
+
+    /// One inner boundary of an extrude profile.
+    ///
+    /// `circle` present = an analytic cylindrical wall; absent = the polyline
+    /// it was drawn as. Carrying this per HOLE (rather than the single
+    /// outer-loop `isCircle` flag the port shipped with) is what stops a plate
+    /// with a Ø8 hole coming back with a 64-sided bore.
+    nonisolated struct ExtrudeHole: Sendable {
+        var loop: [SIMD2<Double>]
+        var circle: CircleSpec?
+
+        init(loop: [SIMD2<Double>], circle: CircleSpec? = nil) {
+            self.loop = loop
+            self.circle = circle
+        }
+    }
+
     static func extrudeShape(
         outerLoop: [SIMD2<Double>], isCircle: Bool,
         circleCenter: SIMD2<Double>, circleRadius: Double,
-        holes: [[SIMD2<Double>]], zMin: Double, zMax: Double,
+        holes: [ExtrudeHole], zMin: Double, zMax: Double,
         origin: SIMD3<Double>, xAxis: SIMD3<Double>,
         yAxis: SIMD3<Double>, normal: SIMD3<Double>
     ) -> BRepHandle? {
@@ -118,12 +145,87 @@ nonisolated enum OCCTKernel {
             xAxisX: xAxis.x, xAxisY: xAxis.y, xAxisZ: xAxis.z,
             yAxisX: yAxis.x, yAxisY: yAxis.y, yAxisZ: yAxis.z,
             normalX: normal.x, normalY: normal.y, normalZ: normal.z)
+        // 3 doubles per hole, parallel to `holes`; radius 0 = "use the
+        // polyline". Packed rather than passed as objects to keep the Obj-C
+        // surface to plain data, like every other loop here.
+        var circles = [Double](); circles.reserveCapacity(holes.count * 3)
+        for hole in holes {
+            circles.append(hole.circle?.center.x ?? 0)
+            circles.append(hole.circle?.center.y ?? 0)
+            circles.append(hole.circle?.radius ?? 0)
+        }
+        let circleData = circles.withUnsafeBytes { Data($0) }
         guard let shape = OCCTBridge.extrudedShape(
             withOuterLoop: packLoop(outerLoop), isCircle: isCircle,
             circleCenterX: circleCenter.x, circleCenterY: circleCenter.y,
-            circleRadius: circleRadius, holes: holes.map(packLoop),
+            circleRadius: circleRadius, holes: holes.map { packLoop($0.loop) },
+            holeCircles: circleData,
             zMin: zMin, zMax: zMax, basis: basis) else { return nil }
         return BRepHandle(shape)
+    }
+
+    /// Plain polyline boundaries, for callers with no analytic information
+    /// about their holes — `ReplaceFaceKit`'s swept prism takes its
+    /// boundaries from a tessellated `PlanarFace`, which has no idea which of
+    /// them were circles. Deliberately a NAMED helper rather than an overload
+    /// of `extrudeShape`: an overload makes the common `holes: []` ambiguous.
+    static func polylineHoles(_ loops: [[SIMD2<Double>]]) -> [ExtrudeHole] {
+        loops.map { ExtrudeHole(loop: $0) }
+    }
+
+    /// The analytic solid for a whole extrude: the outer profile plus any
+    /// EXTRA profiles fused into it.
+    ///
+    /// Multi-profile extrudes used to skip the B-rep path entirely (the call
+    /// sites read `extras.isEmpty`), so selecting two regions and pulling them
+    /// produced a mesh-only body — no analytic fillets, no exact STEP, and a
+    /// silent degrade the moment a second region joined the selection. A union
+    /// of prisms is just a union of prisms; there was no reason for it to be a
+    /// cliff.
+    ///
+    /// Nil when any piece fails to build, so callers fall back to Euclid as a
+    /// whole rather than shipping a partial solid.
+    static func extrudeSolid(
+        outer: Profile, holes: [Profile],
+        extras: [(profile: Profile, holes: [Profile])],
+        zMin: Double, zMax: Double,
+        origin: SIMD3<Double>, xAxis: SIMD3<Double>,
+        yAxis: SIMD3<Double>, normal: SIMD3<Double>
+    ) -> BRepHandle? {
+        func prism(_ profile: Profile, _ profileHoles: [Profile]) -> BRepHandle? {
+            var isCircle = false
+            var center = SIMD2<Double>.zero
+            var radius = 0.0
+            if case let .circle(c, r) = profile.kind { isCircle = true; center = c; radius = r }
+            return extrudeShape(
+                outerLoop: profile.loop, isCircle: isCircle,
+                circleCenter: center, circleRadius: radius,
+                holes: extrudeHoles(profileHoles), zMin: zMin, zMax: zMax,
+                origin: origin, xAxis: xAxis, yAxis: yAxis, normal: normal)
+        }
+        guard var solid = prism(outer, holes) else { return nil }
+        for extra in extras {
+            guard let piece = prism(extra.profile, extra.holes),
+                  let fused = boolean(solid, piece, op: 0) else { return nil }
+            // Touching regions meet on shared faces; without this the fuse
+            // leaves both of them plus a seam edge (same trap Replace Face
+            // hit — see `unified`).
+            solid = unified(fused)
+        }
+        return solid
+    }
+
+    /// Turn resolved profile holes into extrude boundaries, keeping the ones
+    /// that are circles analytic. One place, because both the new-body and the
+    /// boolean-into-target paths need it and they must not disagree.
+    static func extrudeHoles(_ profiles: [Profile]) -> [ExtrudeHole] {
+        profiles.map { profile in
+            if case let .circle(center, radius) = profile.kind {
+                return ExtrudeHole(loop: profile.loop,
+                                   circle: CircleSpec(center: center, radius: radius))
+            }
+            return ExtrudeHole(loop: profile.loop)
+        }
     }
 
     /// Build the analytic OCCT solid for a primitive, matching Euclid's placement

@@ -91,12 +91,18 @@ NS_ASSUME_NONNULL_BEGIN
 /// circle edge is used instead (→ a true cylinder). `holes` are inner boundary
 /// loops (packed doubles). The solid spans plane-local z ∈ [`zMin`,`zMax`], then
 /// is mapped to world by `basis`. Returns nil if the profile is degenerate.
+/// `holeCircles`, when present, is 3 doubles PER HOLE (centre x, centre y,
+/// radius) parallel to `holes`; a radius <= 0 means "not a circle, use the
+/// polyline". A hole that IS a circle becomes an analytic cylindrical wall
+/// instead of the tessellation it was drawn with — without this a plate with a
+/// Ø8 hole comes back with a 64-sided bore that only looks round.
 + (nullable OCCTShape *)extrudedShapeWithOuterLoop:(NSData *)outerLoop
                                           isCircle:(BOOL)isCircle
                                      circleCenterX:(double)ccx
                                      circleCenterY:(double)ccy
                                       circleRadius:(double)cr
                                              holes:(NSArray<NSData *> *)holes
+                                       holeCircles:(nullable NSData *)holeCircles
                                               zMin:(double)zMin
                                               zMax:(double)zMax
                                              basis:(OCCTPlaneBasis *)basis;

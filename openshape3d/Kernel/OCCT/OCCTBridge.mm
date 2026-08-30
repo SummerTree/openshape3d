@@ -342,6 +342,7 @@ static TopoDS_Wire PolyWire(NSData *loop, double z) {
                                      circleCenterY:(double)ccy
                                       circleRadius:(double)cr
                                              holes:(NSArray<NSData *> *)holes
+                                       holeCircles:(nullable NSData *)holeCircles
                                               zMin:(double)zMin
                                               zMax:(double)zMax
                                              basis:(OCCTPlaneBasis *)basis {
@@ -359,11 +360,31 @@ static TopoDS_Wire PolyWire(NSData *loop, double z) {
             outerWire = PolyWire(outerLoop, zMin);
         }
         BRepBuilderAPI_MakeFace mf(outerWire, Standard_True);
+        // Analytic circles for the holes that ARE circles, same treatment the
+        // outer loop has always had. `holeCircles` is 3 doubles per hole,
+        // parallel to `holes`; radius <= 0 falls back to the polyline.
+        const double *circles = NULL;
+        NSUInteger circleCount = 0;
+        if (holeCircles != nil) {
+            circles = (const double *)holeCircles.bytes;
+            circleCount = holeCircles.length / (3 * sizeof(double));
+        }
+        NSUInteger index = 0;
         for (NSData *hole in holes) {
-            if (hole.length < 3 * 2 * (NSInteger)sizeof(double)) continue;
-            TopoDS_Wire hw = PolyWire(hole, zMin);
+            TopoDS_Wire hw;
+            const bool analytic = index < circleCount && circles[index * 3 + 2] > 1e-12;
+            if (analytic) {
+                gp_Ax2 hax(gp_Pnt(circles[index * 3], circles[index * 3 + 1], zMin),
+                           gp_Dir(0.0, 0.0, 1.0));
+                hw = BRepBuilderAPI_MakeWire(
+                    BRepBuilderAPI_MakeEdge(gp_Circ(hax, circles[index * 3 + 2])).Edge()).Wire();
+            } else {
+                if (hole.length < 3 * 2 * (NSInteger)sizeof(double)) { index++; continue; }
+                hw = PolyWire(hole, zMin);
+            }
             hw.Reverse();  // inner boundary opposes the outer sense
             mf.Add(hw);
+            index++;
         }
         if (!mf.IsDone()) return nil;
 

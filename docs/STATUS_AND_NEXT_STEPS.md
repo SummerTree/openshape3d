@@ -7,17 +7,18 @@ Companions: `IMPLEMENTATION_PLAN.md` (original phase plan),
 `SHAPR3D_PARITY_SPEC.md` (feature spec), `PHASE_D_DESIGN.md` (feature-graph
 design).
 
-**Current test baseline, both suites green at the Command Search commit
-(2026-08-29): 848 unit tests in 92s, full UI suite 103 executed, 2 skipped,
-0 failures, 44m18s** — 0 idle-timeouts, 0 field-clear retries, store pinned at
+**Current test baseline, both suites green at the analytic-holes commit
+(2026-08-30): 856 unit tests in 95s, full UI suite 103 executed, 2 skipped,
+0 failures, 44m10s** — 0 idle-timeouts, 0 field-clear retries, store pinned at
 1 project. The skips are `CompactWidthBarUITests`, which skip by design on the
 iPad destination.
 
-The minute added over the previous run (43m14s) is the four new
-`CommandSearchUITests`, which take ~41s in isolation. Worth checking rather
-than assuming, because that commit registers keyboard shortcuts and a keyboard
-change is what once took a suite from 41 to 78 minutes while still reporting
-green (the ⌘A trap below).
+UI wall clock is flat against the previous run (44m18s): mission 2 added
+8 unit tests and no UI tests. The run before THAT was 43m14s, and the minute
+it gained was the four `CommandSearchUITests` (~41s in isolation) — worth
+checking rather than assuming, since that commit registers keyboard shortcuts,
+and a keyboard change is what once took a suite from 41 to 78 minutes while
+still reporting green (the ⌘A trap below).
 
 The STEP-interchange commit before it ran the UI suite CLEAN TWICE IN A ROW
 (96 executed, 42m29s each). Two runs, not one, was the point there: run 1's
@@ -617,8 +618,10 @@ first differing frame is the one you want.
 ### 1. Wire the backends that have no UI — ✅ COMPLETE (2026-08-29)
 
 Every item in this mission is done: STEP interchange (§1b), Delete Face (§1c),
-Replace Face (§1d) and the Command Search launcher (§1e). **Mission 2 is now
-the top of the list.**
+Replace Face (§1d) and the Command Search launcher (§1e). Mission 2 followed
+on 2026-08-30 and is done bar arcs, so **mission 3 (blend polish) and the arc
+tranche are now the top of the list** — and §2 argues the blend items should
+be weighed against letting the mesh path die instead.
 
 The pattern is worth keeping in mind for the next one: all four were tested
 kernels with no caller, and in all four cases wiring them up surfaced a bug in
@@ -783,12 +786,46 @@ back as `textFields["CommandSearchPanel"]` while `CommandSearchField` did not
 exist at all. `.accessibilityElement(children: .contain)` before the identifier
 is the fix, as it was for `SketchPointStateOverlay`.
 
-### 2. B-rep follow-through (F below is the design doc)
+### 2. B-rep follow-through — DONE except arcs (2026-08-30)
 
-General (polygonal/arc) profiles as B-rep source, analytic holes, and
-extrude-into-target boolean are the remaining Euclid-first paths — each one
-still forces a body down the mesh route, which is where the blend fallback and
-its known gaps live.
+The description this section carried was two-thirds stale, which is worth
+recording as its own lesson: **polygonal profiles** and **extrude-into-target
+boolean** were already analytic — the first since the port (`extrudeShape`
+builds a `PolyWire` prism for any outer loop), the second wherever the target
+body has a `brep` (`evalExtrude` composes the cut/fuse in OCCT). Reading the
+doc would have had you rewrite two working paths. Testing first found the two
+that were genuinely mesh-bound.
+
+**Analytic holes.** `extrudeShape` took `isCircle` for the OUTER loop only;
+every hole went through `PolyWire`. A 20×20 plate with a Ø8 hole came back
+with **0 cylindrical faces and 70 planar** — 64 of them the faceted bore. It
+looks round and is not: a fillet around the rim has 64 segments to chase, and
+STEP exports 64 planes. The bridge now takes `holeCircles:` (3 doubles per
+hole — cx, cy, r; **r ≤ 0 means "this one is a polyline"**, which is how one
+array carries both kinds), `OCCTKernel.ExtrudeHole`/`CircleSpec` wrap it, and
+`extrudeHoles(_:)` maps a `Profile`'s inner loops. Both `evalExtrude` brep
+branches feed it.
+
+**Multi-profile extrudes.** Both call sites guarded on `extras.isEmpty`, so
+selecting a SECOND region and pulling silently produced a mesh-only body —
+a cliff with no reason behind it, since a union of prisms is just a union of
+prisms. `OCCTKernel.extrudeSolid(outer:holes:extras:…)` fuses them and applies
+`unified()`, because touching regions leave the same coplanar seam Replace
+Face hit (§1d).
+
+Verified in `AnalyticHoleTests` (8), and falsified: with the circle branch
+disabled, five of them fail with exactly the numbers above. `testAWasherIs
+TwoCylinders` is the sharpest of them — a washer had an analytic outer wall
+and a 64-facet bore, so the shape was half-exact and looked entirely round.
+
+**Still open: arcs.** `ProfileDetector.lineLoops` explodes arcs via
+`SketchEntity.arcPoints` before a `Profile` exists, so a slot or a rounded
+rectangle reaches the kernel as tessellated points with a `.polygonal` kind —
+there is no arc left to be analytic about. Fixing it means `Profile` carrying
+per-segment curve data, which ripples through `ProfileDetector`,
+`KernelOps.extrude`, area/centroid/contains and face signatures, with the mesh
+path still consuming the same type. That is its own tranche, not a finishing
+touch on this one.
 
 ### 3. Blend polish (E5) — mesh path only, so rank it against mission 2
 
