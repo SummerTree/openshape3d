@@ -50,6 +50,12 @@ extension CommandRegistry {
         // Transform.
         "model.move", "transform.scaleUniform", "transform.pattern",
 
+        // Direct modeling — the face tools shipped 2026-08-29.
+        "model.deleteFace", "model.replaceFace",
+
+        // The launcher itself: X and Cmd+F open Command Search.
+        "app.commandSearch", "app.commandSearchAlt",
+
         // Edit.
         "edit.undo", "edit.redo", "edit.delete",
 
@@ -72,6 +78,22 @@ extension CommandRegistry {
     static var routableChordedCommands: [AppCommand] {
         all.filter { $0.chord != nil && routableIDs.contains($0.id) }
     }
+
+    /// What Command Search is allowed to offer: commands `runCommand` can
+    /// actually perform, minus the launcher itself.
+    ///
+    /// The catalog is deliberately WIDER than this — it also names commands
+    /// whose editor entry points do not exist yet, and `unroutedChordedCommands`
+    /// keeps that gap visible. A launcher must not show them: a result that
+    /// does nothing when chosen is the same silent failure as a hotkey that
+    /// does nothing, and harder to explain because the user just read the name
+    /// off a list. `CommandSearchTests` pins the two sets together.
+    static var launchableCommands: [AppCommand] {
+        all.filter {
+            routableIDs.contains($0.id)
+                && $0.id != "app.commandSearch" && $0.id != "app.commandSearchAlt"
+        }
+    }
 }
 
 // MARK: - Running one
@@ -89,12 +111,18 @@ extension EditorViewModel {
     func runCommand(_ id: String) -> Bool {
         guard let command = CommandRegistry.command(inCatalog: id) else { return false }
 
-        // Honour the spec's Single Key Action setting: with the launcher
-        // preference on, a bare letter is a keystroke for Command Search, not
-        // a hotkey. (The launcher UI itself is not built yet, so the default
-        // `.hotkeys` is what ships.)
-        if command.chord?.isBareKey == true, commandRegistry.singleKeyAction == .commandSearch {
-            return false
+        // Honour the spec's Single Key Action setting. The registry is a pure
+        // value and does not observe preferences, so sync its copy here rather
+        // than keeping a second source of truth.
+        commandRegistry.singleKeyAction = AppSettings.shared.singleKeyAction
+        // With the launcher preference on, a bare letter is a keystroke for
+        // Command Search: open it pre-typed instead of firing the hotkey.
+        // (`CommandShortcutsView` also stops registering bare-key hotkeys in
+        // that mode, so this is the belt to its braces.)
+        if command.chord?.isBareKey == true,
+           commandRegistry.singleKeyAction == .commandSearch {
+            openCommandSearch(seed: command.chord?.key ?? "")
+            return true
         }
 
         guard perform(command) else { return false }
@@ -134,6 +162,21 @@ extension EditorViewModel {
         case "model.shell":
             guard !session.document.bodies.isEmpty else { return false }
             beginShell()
+            return true
+
+        // MARK: Direct-modeling face tools (spec §4.12 / §4.16)
+        case "model.deleteFace":
+            guard !session.document.bodies.isEmpty else { return false }
+            beginDeleteFace()
+            return true
+        case "model.replaceFace":
+            guard !session.document.bodies.isEmpty else { return false }
+            beginReplaceFace()
+            return true
+
+        // MARK: The launcher itself
+        case "app.commandSearch", "app.commandSearchAlt":
+            commandSearchActive = true
             return true
 
         // MARK: Booleans — arm against exactly one selected body
