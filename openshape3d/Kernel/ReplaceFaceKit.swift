@@ -160,7 +160,7 @@ nonisolated enum ReplaceFaceKit {
         return OCCTKernel.extrudeShape(
             outerLoop: face.outline, isCircle: false,
             circleCenter: .zero, circleRadius: 0,
-            holes: face.holes,
+            holes: OCCTKernel.polylineHoles(face.holes),
             zMin: z.zMin, zMax: z.zMax,
             origin: face.origin, xAxis: face.basisX,
             yAxis: face.basisY,

@@ -475,19 +475,16 @@ nonisolated extension FeatureGraph {
             var body = Body(
                 id: id, name: node.name, transform: .identity, primitive: nil,
                 euclidMesh: solid, revision: nextRevision())
-            // B-rep source of truth for EVERY extrude: circles become an analytic
-            // cylinder (round), other profiles an exact polygonal prism. Either
-            // way the body carries a brep, so downstream booleans stay analytic.
-            if OCCTKernel.useOCCTAsSourceOfTruth, extras.isEmpty {
-                var isCircle = false
-                var center = SIMD2<Double>.zero
-                var radius = 0.0
-                if case let .circle(c, r) = outer.kind { isCircle = true; center = c; radius = r }
+            // B-rep source of truth for EVERY extrude: circles become an
+            // analytic cylinder (round), circular HOLES an analytic bore, other
+            // profiles an exact polygonal prism, and extra regions fuse in.
+            // Either way the body carries a brep, so downstream booleans stay
+            // analytic.
+            if OCCTKernel.useOCCTAsSourceOfTruth {
                 let z = OCCTKernel.extrudeZRange(distance: distance.value, symmetric: symmetric)
-                if let handle = OCCTKernel.extrudeShape(
-                    outerLoop: outer.loop, isCircle: isCircle,
-                    circleCenter: center, circleRadius: radius,
-                    holes: holes.map(\.loop), zMin: z.zMin, zMax: z.zMax,
+                if let handle = OCCTKernel.extrudeSolid(
+                    outer: outer, holes: holes, extras: extras,
+                    zMin: z.zMin, zMax: z.zMax,
                     origin: plane.origin, xAxis: plane.xAxis,
                     yAxis: plane.yAxis, normal: plane.normal) {
                     body.adoptBRep(handle)
@@ -539,18 +536,13 @@ nonisolated extension FeatureGraph {
         // PERMANENT smooth→faceted degrade (2026-08-25 review, C4). The OCCT
         // tool is the EXACT prism (no overlap padding — analytic booleans
         // merge coincident faces robustly without it).
-        if OCCTKernel.useOCCTAsSourceOfTruth, extras.isEmpty,
+        if OCCTKernel.useOCCTAsSourceOfTruth,
            let targetBrep = target.brep,
            let a = OCCTKernel.transformed(targetBrep, by: target.transform) {
-            var isCircle = false
-            var center = SIMD2<Double>.zero
-            var radius = 0.0
-            if case let .circle(c, r) = outer.kind { isCircle = true; center = c; radius = r }
             let z = OCCTKernel.extrudeZRange(distance: distance.value, symmetric: symmetric)
-            if let toolBrep = OCCTKernel.extrudeShape(
-                   outerLoop: outer.loop, isCircle: isCircle,
-                   circleCenter: center, circleRadius: radius,
-                   holes: holes.map(\.loop), zMin: z.zMin, zMax: z.zMax,
+            if let toolBrep = OCCTKernel.extrudeSolid(
+                   outer: outer, holes: holes, extras: extras,
+                   zMin: z.zMin, zMax: z.zMax,
                    origin: plane.origin, xAxis: plane.xAxis,
                    yAxis: plane.yAxis, normal: plane.normal),
                let resultBrep = OCCTKernel.boolean(
