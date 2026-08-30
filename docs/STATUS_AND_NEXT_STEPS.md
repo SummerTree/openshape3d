@@ -7,9 +7,10 @@ Companions: `IMPLEMENTATION_PLAN.md` (original phase plan),
 `SHAPR3D_PARITY_SPEC.md` (feature spec), `PHASE_D_DESIGN.md` (feature-graph
 design).
 
-**Current test baseline, both suites green at the analytic-ellipses commit
-(2026-08-30): 877 unit tests in 94s, full UI suite 103 executed, 2 skipped,
-0 failures, 44m28s** — 0 idle-timeouts, 0 field-clear retries, store pinned at
+**Current test baseline (2026-08-30): 920 unit tests in 18s** — down from
+~100 s after booleans stopped running both kernels (see §3b). Full UI suite last
+measured at the analytic-ellipses commit: 103 executed, 2 skipped, 0 failures,
+44m28s — 0 idle-timeouts, 0 field-clear retries, store pinned at
 1 project. The skips are `CompactWidthBarUITests`, which skip by design on the
 iPad destination.
 
@@ -1080,9 +1081,39 @@ the box (6 planar), and the cylinder (2 planar + 1 cylindrical) for that reason.
 The per-seed entry points still build their own map when none is shared, so the
 ~30 external callers are unaffected.
 
-Still slow, and NOT this: three `DeleteFaceEvalTests` cases sit at ~14 s each.
-That is a different cost (OCCT defeaturing), unmoved by this fix, and it is what
-makes the suite occasionally trip its per-test timeout.
+#### Booleans ran BOTH kernels and threw one away — FIXED (2026-08-30)
+
+Chased down from "three `DeleteFaceEvalTests` cases sit at ~14 s each". It was
+never delete-face: the tell was `testEmptyFaceListIsRejected`, which asserts an
+error and does no geometry, taking 6.8 s. The cost was in the shared FIXTURE.
+
+`evalBoolean` ran the Euclid mesh CSG first and the OCCT boolean second — and
+`adoptBRep` replaces render, edges AND euclid from OCCT's tessellation, so the
+mesh result was computed in full and discarded whenever both operands were
+analytic. Measured on a 10 mm box minus a Ø4 cylinder:
+
+| stage | time |
+|---|---|
+| whole graph evaluate | 7028 ms |
+| OCCT boolean | **1 ms** |
+| tessellate | 10 ms |
+| faceTable | 7 ms |
+| **Euclid CSG subtract** | **4877 ms** |
+
+Trying OCCT first and falling back only when it declines: **7028 ms → 74 ms**.
+The body is byte-identical (648 triangles, 6 planar + 1 cylindrical).
+
+This was never a test-only problem — every boolean on analytic bodies in the
+app paid it, and booleans are core modelling. Knock-on effect on the suite:
+
+**Full unit suite 100.6 s → 18.3 s.** The slowest `DeleteFaceEvalTests` case
+went 14.19 s → 0.46 s. That is also the likeliest explanation for the
+intermittent runner deaths recorded under gotcha 16 — those tests sat close
+enough to the per-test timeout to trip it on a loaded machine.
+
+`BooleanKernelChoiceTests` pins the geometry (exact volume and face counts),
+the timing ceiling, and that a genuinely mesh-only operand still booleans
+through Euclid.
 
 ### 4. F — OpenCASCADE B-rep port (mostly landed; this is its design record)
 Behind the existing `KernelOps` facade (see `IMPLEMENTATION_PLAN.md` Phase E
