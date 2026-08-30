@@ -7,7 +7,7 @@
 //  into for the mesh path.
 //
 //  The outer loop has had that treatment since the port — `extrudeShape` takes
-//  `isCircle` and builds a `gp_Circ` — but every hole went through `PolyWire`,
+//  a conic spec and builds a `gp_Circ` — but every hole went through `PolyWire`,
 //  so a plate with a Ø8 hole came out with a 64-sided hole. It looks round and
 //  is not: a fillet around the rim has 64 segments to chase, STEP exports 64
 //  planes, and "OCCT is the source of truth" quietly stops being true at the
@@ -35,11 +35,10 @@ final class AnalyticHoleTests: XCTestCase {
     /// A 20 × 20 × 5 plate with a Ø8 hole through it.
     private func plateWithHole(holeRadius: Double = 4) -> BRepHandle? {
         OCCTKernel.extrudeShape(
-            outerLoop: squareLoop(side: 20), isCircle: false,
-            circleCenter: .zero, circleRadius: 0,
+            outerLoop: squareLoop(side: 20),
             holes: [OCCTKernel.ExtrudeHole(
                 loop: circleLoop(radius: holeRadius),
-                circle: OCCTKernel.CircleSpec(center: .zero, radius: holeRadius))],
+                conic: OCCTKernel.ConicSpec(center: .zero, radius: holeRadius))],
             zMin: 0, zMax: 5,
             origin: .zero, xAxis: SIMD3(1, 0, 0),
             yAxis: SIMD3(0, 1, 0), normal: SIMD3(0, 0, 1))
@@ -79,8 +78,7 @@ final class AnalyticHoleTests: XCTestCase {
     /// drawn as. The analytic path must not become the only path.
     func testAPolygonalHoleStillPunchesThrough() throws {
         let plate = try XCTUnwrap(OCCTKernel.extrudeShape(
-            outerLoop: squareLoop(side: 20), isCircle: false,
-            circleCenter: .zero, circleRadius: 0,
+            outerLoop: squareLoop(side: 20),
             holes: [OCCTKernel.ExtrudeHole(loop: squareLoop(side: 6))],
             zMin: 0, zMax: 5,
             origin: .zero, xAxis: SIMD3(1, 0, 0),
@@ -94,15 +92,14 @@ final class AnalyticHoleTests: XCTestCase {
     /// not a single special case.
     func testTwoCircularHolesGiveTwoCylinders() throws {
         let plate = try XCTUnwrap(OCCTKernel.extrudeShape(
-            outerLoop: squareLoop(side: 30), isCircle: false,
-            circleCenter: .zero, circleRadius: 0,
+            outerLoop: squareLoop(side: 30),
             holes: [
                 OCCTKernel.ExtrudeHole(
                     loop: circleLoop(radius: 3).map { $0 + SIMD2(-8, 0) },
-                    circle: OCCTKernel.CircleSpec(center: SIMD2(-8, 0), radius: 3)),
+                    conic: OCCTKernel.ConicSpec(center: SIMD2(-8, 0), radius: 3)),
                 OCCTKernel.ExtrudeHole(
                     loop: circleLoop(radius: 3).map { $0 + SIMD2(8, 0) },
-                    circle: OCCTKernel.CircleSpec(center: SIMD2(8, 0), radius: 3)),
+                    conic: OCCTKernel.ConicSpec(center: SIMD2(8, 0), radius: 3)),
             ],
             zMin: 0, zMax: 4,
             origin: .zero, xAxis: SIMD3(1, 0, 0),
@@ -262,11 +259,11 @@ final class AnalyticHoleTests: XCTestCase {
     /// cylinders and two annular caps.
     func testAWasherIsTwoCylinders() throws {
         let washer = try XCTUnwrap(OCCTKernel.extrudeShape(
-            outerLoop: circleLoop(radius: 10), isCircle: true,
-            circleCenter: .zero, circleRadius: 10,
+            outerLoop: circleLoop(radius: 10),
+            outerConic: OCCTKernel.ConicSpec(center: .zero, radius: 10),
             holes: [OCCTKernel.ExtrudeHole(
                 loop: circleLoop(radius: 4),
-                circle: OCCTKernel.CircleSpec(center: .zero, radius: 4))],
+                conic: OCCTKernel.ConicSpec(center: .zero, radius: 4))],
             zMin: 0, zMax: 2,
             origin: .zero, xAxis: SIMD3(1, 0, 0),
             yAxis: SIMD3(0, 1, 0), normal: SIMD3(0, 0, 1)))

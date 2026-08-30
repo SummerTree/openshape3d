@@ -59,8 +59,7 @@ final class AnalyticArcTests: XCTestCase {
     private func prism(_ profile: Profile, holes: [OCCTKernel.ExtrudeHole] = [])
         throws -> BRepHandle {
         try XCTUnwrap(OCCTKernel.extrudeShape(
-            outerLoop: profile.loop, isCircle: false,
-            circleCenter: .zero, circleRadius: 0,
+            outerLoop: profile.loop,
             holes: holes, zMin: 0, zMax: thickness,
             origin: .zero, xAxis: SIMD3(1, 0, 0),
             yAxis: SIMD3(0, 1, 0), normal: SIMD3(0, 0, 1),
@@ -163,7 +162,6 @@ final class AnalyticArcTests: XCTestCase {
                         SIMD2(plateSide / 2, -plateSide / 2),
                         SIMD2(plateSide / 2, plateSide / 2),
                         SIMD2(-plateSide / 2, plateSide / 2)],
-            isCircle: false, circleCenter: .zero, circleRadius: 0,
             holes: [OCCTKernel.ExtrudeHole(loop: profile.loop, segments: profile.segments)],
             zMin: 0, zMax: thickness,
             origin: .zero, xAxis: SIMD3(1, 0, 0),

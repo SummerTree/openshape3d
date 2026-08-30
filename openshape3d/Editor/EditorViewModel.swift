@@ -10116,8 +10116,8 @@ final class EditorViewModel {
             // behaved differently under the seed than in the app, which is
             // the one thing a debug seed must never do.
             if let handle = OCCTKernel.extrudeShape(
-                outerLoop: profile.loop, isCircle: true,
-                circleCenter: .zero, circleRadius: radius,
+                outerLoop: profile.loop,
+                outerConic: OCCTKernel.ConicSpec(center: .zero, radius: radius),
                 holes: [], zMin: z.zMin, zMax: z.zMax,
                 origin: plane.origin, xAxis: plane.xAxis,
                 yAxis: plane.yAxis, normal: plane.normal) {
@@ -10151,11 +10151,13 @@ final class EditorViewModel {
                                               distance: 6, symmetric: false)
             let euclidResult = euclidBig.subtracting(euclidCut)
             if let a = OCCTKernel.extrudeShape(
-                   outerLoop: bigProfile.loop, isCircle: true, circleCenter: .zero, circleRadius: 3,
+                   outerLoop: bigProfile.loop,
+                   outerConic: OCCTKernel.ConicSpec(center: .zero, radius: 3),
                    holes: [], zMin: za.zMin, zMax: za.zMax, origin: plane.origin,
                    xAxis: plane.xAxis, yAxis: plane.yAxis, normal: plane.normal),
                let b = OCCTKernel.extrudeShape(
-                   outerLoop: cutProfile.loop, isCircle: true, circleCenter: SIMD2(2, 0), circleRadius: 1.5,
+                   outerLoop: cutProfile.loop,
+                   outerConic: OCCTKernel.ConicSpec(center: SIMD2(2, 0), radius: 1.5),
                    holes: [], zMin: -0.5, zMax: 6, origin: plane.origin,
                    xAxis: plane.xAxis, yAxis: plane.yAxis, normal: plane.normal),
                let cut = OCCTKernel.boolean(a, b, op: 1) {

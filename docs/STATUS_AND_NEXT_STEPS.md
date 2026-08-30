@@ -618,11 +618,14 @@ first differing frame is the one you want.
 ### 1. Wire the backends that have no UI — ✅ COMPLETE (2026-08-29)
 
 Every item in this mission is done: STEP interchange (§1b), Delete Face (§1c),
-Replace Face (§1d) and the Command Search launcher (§1e). Mission 2 followed
-on 2026-08-30, arcs included, so **mission 3 (blend polish) is now the top of
-the list** — but read its own text before starting: two of its three items buy
-nothing for a body with a `brep`, and §2 is the argument for letting them die
-with the mesh path rather than building them.
+Replace Face (§1d) and the Command Search launcher (§1e). Mission 2 followed on
+2026-08-30, arcs and ellipses included, so sketch profiles now reach the kernel
+exactly.
+
+That makes **mission 3 (blend polish) the top of the list** — but read its own
+text before starting. Two of its three items buy nothing for a body with a
+`brep`, and §2 is the argument for letting them die with the mesh path rather
+than building them.
 
 The pattern is worth keeping in mind for the next one: all four were tested
 kernels with no caller, and in all four cases wiring them up surfaced a bug in
@@ -858,12 +861,49 @@ This is the same swap the hole fix made (64 facets → 1 cylinder) and
 `SignatureNaming` handles cylinders as first-class, but it IS a geometry change
 to bodies that already exist.
 
-**Still open: ellipses**, and they are the last of it — `detectProfiles`
-tessellates `.ellipse` to `.polygonal`, while circles, rects, polygons, and now
-line/arc chains all reach OCCT exactly (splines never become profiles at all).
-An ellipse cannot use this side-channel as it stands: three points determine a
-circle, not an ellipse, so it needs its own descriptor over `gp_Elips`. Small
-and self-contained, but a different shape of change.
+**Ellipses — DONE 2026-08-30, and they closed the list.** `detectProfiles`
+flattened `.ellipse` to 48 straight segments and emitted `.polygonal`, which
+threw the semi-axes away at the very first step; the profile then reached OCCT
+as a 48-sided prism, about 0.27% under the true area — small enough to look
+right and wrong everywhere it matters.
+
+An ellipse cannot use the arc side-channel, because three points determine a
+circle and not an ellipse. So `CircleSpec` became **`ConicSpec`** — centre,
+two semi-axes, rotation — and a circle is now the case where the semi-axes are
+equal. One concept rather than two: to every caller these are the same thing,
+"this whole loop is a curve OCCT can build exactly, so ignore the polyline".
+`extrudeShape` lost `isCircle` / `circleCenter` / `circleRadius` in the swap
+and takes one optional `outerConic` instead, which is why most call sites got
+three arguments shorter.
+
+Two traps, both encoded in tests:
+
+- **`gp_Elips` demands its MAJOR radius first** and refuses major < minor,
+  while a sketch's semi-axes are in no particular order — a tall ellipse is as
+  ordinary as a wide one. The bridge picks the larger and turns the reference
+  direction a quarter turn when that is the y semi-axis
+  (`testATallEllipseIsBuiltAsReadilyAsAWideOne`).
+- **Equal semi-axes must build a `gp_Circ`**, not a degenerate `gp_Elips` —
+  and that is also what keeps a round hole reporting as a cylindrical face
+  rather than a surface of extrusion.
+
+Note for anyone reading face counts: an extruded ellipse is a surface of
+LINEAR EXTRUSION, so `faceTypeCounts` reports it under `other`, not
+`cylindrical`. Only a true cylinder is cylindrical.
+
+`AnalyticEllipseTests` (10), falsified by emitting `.polygonal` again: 8 fail,
+the faceted solid measuring 375.92 mm³ against the exact 376.99. That number
+is also where the tolerance comes from — the render mesh is a tessellation of
+the exact solid and sits ~0.04% under it, while a 48-gon sits ~0.27% under, so
+the assertions use a tolerance BETWEEN the two. A tighter one would only be
+measuring the tessellator. The same run caught
+`testRotationIsCarriedThrough` passing while faceted (a rotated 48-gon has
+nearly the same bounding box); it now pins the exact wall too.
+
+**Profile geometry is now exact end to end**: circles, rects, polygons,
+line/arc chains and ellipses all reach OCCT as the curves they were drawn as.
+Splines never become profiles at all, so there is nothing left to convert
+here — the next inexactness lives elsewhere.
 
 ### 3. Blend polish (E5) — mesh path only, so rank it against mission 2
 

@@ -107,13 +107,41 @@ nonisolated enum OCCTKernel {
     /// plane-local boundary; when `isCircle` an analytic circle is used (true
     /// cylinder). `holes` are polygonal inner boundaries. Returns nil on failure.
     /// A true circle, in plane-local coordinates.
-    nonisolated struct CircleSpec: Sendable, Equatable {
+    /// An exact conic boundary: a circle or an ellipse.
+    ///
+    /// One type rather than two, because to every caller these are the same
+    /// thing — "this whole loop is a curve OCCT can build exactly, so ignore
+    /// the polyline". A circle is just the case where the semi-axes are equal,
+    /// and the bridge picks `gp_Circ` or `gp_Elips` from that.
+    nonisolated struct ConicSpec: Sendable, Equatable {
         var center: SIMD2<Double>
-        var radius: Double
+        /// Semi-axes BEFORE `rotation`; either may be the larger one.
+        var radiusX: Double
+        var radiusY: Double
+        var rotation: Double
+
+        init(center: SIMD2<Double>, radiusX: Double, radiusY: Double, rotation: Double) {
+            self.center = center
+            self.radiusX = radiusX
+            self.radiusY = radiusY
+            self.rotation = rotation
+        }
 
         init(center: SIMD2<Double>, radius: Double) {
-            self.center = center
-            self.radius = radius
+            self.init(center: center, radiusX: radius, radiusY: radius, rotation: 0)
+        }
+
+        /// The conic a profile names, if it names one.
+        init?(_ kind: Profile.Kind) {
+            switch kind {
+            case .polygonal:
+                return nil
+            case let .circle(center, radius):
+                self.init(center: center, radius: radius)
+            case let .ellipse(center, radiusX, radiusY, rotation):
+                self.init(center: center, radiusX: radiusX,
+                          radiusY: radiusY, rotation: rotation)
+            }
         }
     }
 
@@ -125,22 +153,22 @@ nonisolated enum OCCTKernel {
     /// with a Ø8 hole coming back with a 64-sided bore.
     nonisolated struct ExtrudeHole: Sendable {
         var loop: [SIMD2<Double>]
-        var circle: CircleSpec?
-        /// Exact boundary when the hole is neither a circle nor all-straight —
+        /// The whole boundary as one exact curve, when it is one.
+        var conic: ConicSpec?
+        /// Exact boundary when the hole is neither a conic nor all-straight —
         /// a slot punched through a plate. See `Profile.Segment`.
         var segments: [Profile.Segment]
 
-        init(loop: [SIMD2<Double>], circle: CircleSpec? = nil,
+        init(loop: [SIMD2<Double>], conic: ConicSpec? = nil,
              segments: [Profile.Segment] = []) {
             self.loop = loop
-            self.circle = circle
+            self.conic = conic
             self.segments = segments
         }
     }
 
     static func extrudeShape(
-        outerLoop: [SIMD2<Double>], isCircle: Bool,
-        circleCenter: SIMD2<Double>, circleRadius: Double,
+        outerLoop: [SIMD2<Double>], outerConic: ConicSpec? = nil,
         holes: [ExtrudeHole], zMin: Double, zMax: Double,
         origin: SIMD3<Double>, xAxis: SIMD3<Double>,
         yAxis: SIMD3<Double>, normal: SIMD3<Double>,
@@ -151,21 +179,12 @@ nonisolated enum OCCTKernel {
             xAxisX: xAxis.x, xAxisY: xAxis.y, xAxisZ: xAxis.z,
             yAxisX: yAxis.x, yAxisY: yAxis.y, yAxisZ: yAxis.z,
             normalX: normal.x, normalY: normal.y, normalZ: normal.z)
-        // 3 doubles per hole, parallel to `holes`; radius 0 = "use the
-        // polyline". Packed rather than passed as objects to keep the Obj-C
-        // surface to plain data, like every other loop here.
-        var circles = [Double](); circles.reserveCapacity(holes.count * 3)
-        for hole in holes {
-            circles.append(hole.circle?.center.x ?? 0)
-            circles.append(hole.circle?.center.y ?? 0)
-            circles.append(hole.circle?.radius ?? 0)
-        }
-        let circleData = circles.withUnsafeBytes { Data($0) }
+        let conicData = packConics(holes.map(\.conic))
         guard let shape = OCCTBridge.extrudedShape(
-            withOuterLoop: packLoop(outerLoop), isCircle: isCircle,
-            circleCenterX: circleCenter.x, circleCenterY: circleCenter.y,
-            circleRadius: circleRadius, holes: holes.map { packLoop($0.loop) },
-            holeCircles: circleData,
+            withOuterLoop: packLoop(outerLoop),
+            outerConic: packConics([outerConic]),
+            holes: holes.map { packLoop($0.loop) },
+            holeConics: conicData,
             outerSegments: packSegments(outerSegments),
             holeSegments: holes.map { packSegments($0.segments) },
             zMin: zMin, zMax: zMax, basis: basis) else { return nil }
@@ -201,13 +220,8 @@ nonisolated enum OCCTKernel {
         yAxis: SIMD3<Double>, normal: SIMD3<Double>
     ) -> BRepHandle? {
         func prism(_ profile: Profile, _ profileHoles: [Profile]) -> BRepHandle? {
-            var isCircle = false
-            var center = SIMD2<Double>.zero
-            var radius = 0.0
-            if case let .circle(c, r) = profile.kind { isCircle = true; center = c; radius = r }
-            return extrudeShape(
-                outerLoop: profile.loop, isCircle: isCircle,
-                circleCenter: center, circleRadius: radius,
+            extrudeShape(
+                outerLoop: profile.loop, outerConic: ConicSpec(profile.kind),
                 holes: extrudeHoles(profileHoles), zMin: zMin, zMax: zMax,
                 origin: origin, xAxis: xAxis, yAxis: yAxis, normal: normal,
                 outerSegments: profile.segments)
@@ -229,9 +243,8 @@ nonisolated enum OCCTKernel {
     /// boolean-into-target paths need it and they must not disagree.
     static func extrudeHoles(_ profiles: [Profile]) -> [ExtrudeHole] {
         profiles.map { profile in
-            if case let .circle(center, radius) = profile.kind {
-                return ExtrudeHole(loop: profile.loop,
-                                   circle: CircleSpec(center: center, radius: radius))
+            if let conic = ConicSpec(profile.kind) {
+                return ExtrudeHole(loop: profile.loop, conic: conic)
             }
             return ExtrudeHole(loop: profile.loop, segments: profile.segments)
         }
@@ -440,6 +453,21 @@ nonisolated enum OCCTKernel {
     /// 7 doubles per edge — `isArc, x1, y1, x2, y2, midX, midY` — matching
     /// `SegWire` in the bridge. Empty in, empty out: an all-straight loop has
     /// nothing to say here that its polyline does not already say exactly.
+    /// 5 doubles per entry — `cx, cy, rx, ry, rotation` — parallel to the
+    /// loops they describe. A non-positive `rx` means "no conic here, use the
+    /// polyline", which is how one flat array carries the absent case too.
+    private static func packConics(_ conics: [ConicSpec?]) -> Data {
+        var flat = [Double](); flat.reserveCapacity(conics.count * 5)
+        for conic in conics {
+            flat.append(conic?.center.x ?? 0)
+            flat.append(conic?.center.y ?? 0)
+            flat.append(conic?.radiusX ?? 0)
+            flat.append(conic?.radiusY ?? 0)
+            flat.append(conic?.rotation ?? 0)
+        }
+        return flat.withUnsafeBytes { Data($0) }
+    }
+
     private static func packSegments(_ segments: [Profile.Segment]) -> Data {
         guard !segments.isEmpty else { return Data() }
         var flat = [Double](); flat.reserveCapacity(segments.count * 7)

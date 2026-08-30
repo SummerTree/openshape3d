@@ -15,6 +15,11 @@ nonisolated struct Profile: Identifiable {
     enum Kind {
         case polygonal
         case circle(center: SIMD2<Double>, radius: Double)
+        /// `radiusX`/`radiusY` are the semi-axes BEFORE `rotation` is applied,
+        /// matching `SketchEntity.ellipsePoints` — which of them is the major
+        /// axis is not fixed, so a consumer must not assume `radiusX >= radiusY`.
+        case ellipse(center: SIMD2<Double>, radiusX: Double, radiusY: Double,
+                     rotation: Double)
     }
 
     /// One boundary edge, for callers that can use an EXACT curve.
@@ -135,7 +140,11 @@ nonisolated enum ProfileDetector {
                     center: center, radiusX: radiusX, radiusY: radiusY,
                     rotation: rotation, segments: circleSegments
                 )
-                profiles.append(Profile(loop: loop, kind: .polygonal, sourceEntityIDs: [id]))
+                profiles.append(Profile(
+                    loop: loop,
+                    kind: .ellipse(center: center, radiusX: radiusX,
+                                   radiusY: radiusY, rotation: rotation),
+                    sourceEntityIDs: [id]))
             case let .polygon(id, center, radius, sides, rotation)
                 where radius > 1e-6 && sides >= 3:
                 let loop = SketchEntity.polygonPoints(
