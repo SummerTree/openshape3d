@@ -120,6 +120,46 @@ NS_ASSUME_NONNULL_BEGIN
                                               zMax:(double)zMax
                                              basis:(OCCTPlaneBasis *)basis;
 
+/// Revolve a profile about a WORLD-space axis.
+///
+/// Profile arguments match `extrudedShapeWithOuterLoop:` exactly and are built
+/// into the same face, so a circle revolves as a torus rather than as a
+/// 48-sided approximation of one. `axis` is 6 packed doubles — origin xyz then
+/// direction xyz. `angle` is radians; a full turn is 2π.
++ (nullable OCCTShape *)revolvedShapeWithOuterLoop:(NSData *)outerLoop
+                                        outerConic:(nullable NSData *)outerConic
+                                             holes:(NSArray<NSData *> *)holes
+                                        holeConics:(nullable NSData *)holeConics
+                                     outerSegments:(nullable NSData *)outerSegments
+                                      holeSegments:(nullable NSArray<NSData *> *)holeSegments
+                                             basis:(OCCTPlaneBasis *)basis
+                                              axis:(NSData *)axis
+                                             angle:(double)angle;
+
+/// Loft through ordered section profiles, each on its own plane.
+///
+/// `sections` is one dictionary-free parallel set of arrays: every index i
+/// describes one section exactly as the extrude arguments describe a profile.
+/// Holes are not supported here (OCCT's ThruSections takes one wire per
+/// section); a section's inner loops are ignored, which the caller must know.
++ (nullable OCCTShape *)loftedShapeWithOuterLoops:(NSArray<NSData *> *)outerLoops
+                                      outerConics:(NSArray<NSData *> *)outerConics
+                                    outerSegments:(NSArray<NSData *> *)outerSegments
+                                           bases:(NSArray<OCCTPlaneBasis *> *)bases;
+
+/// Sweep a profile along a polyline spine.
+///
+/// `spine` is 3 doubles per point in WORLD space. The profile is built on its
+/// own plane and swept with `BRepOffsetAPI_MakePipe`.
++ (nullable OCCTShape *)sweptShapeWithOuterLoop:(NSData *)outerLoop
+                                     outerConic:(nullable NSData *)outerConic
+                                          holes:(NSArray<NSData *> *)holes
+                                     holeConics:(nullable NSData *)holeConics
+                                  outerSegments:(nullable NSData *)outerSegments
+                                   holeSegments:(nullable NSArray<NSData *> *)holeSegments
+                                          basis:(OCCTPlaneBasis *)basis
+                                          spine:(NSData *)spine;
+
 /// Build a primitive matching Euclid's conventions exactly (base sits on y=0;
 /// cylinder axis is +Y), so the B-rep coincides with the Euclid CSG mesh.
 /// `kind`: 0 = box (a=width, b=depth, c=height), 1 = cylinder (a=radius,
@@ -134,6 +174,21 @@ NS_ASSUME_NONNULL_BEGIN
 /// Apply a rigid placement to a solid. `transform` is 12 packed doubles
 /// (row-major 3×4). Needed because a `Body` carries its own transform, which
 /// must be baked in before two solids can be booleaned in a common space.
+/// Reflect a shape in the PLANE through `origin` with the given `normal`.
+///
+/// Separate from `transformedShape:` because a reflection cannot be expressed
+/// as a `Transform3D` at all — that type is translation + a rotation
+/// quaternion + a single uniform scale, and a plane mirror is none of those
+/// (a negative uniform scale is a POINT reflection, which is a different
+/// transform). `gp_Trsf::SetMirror(gp_Ax2)` does it properly.
++ (nullable OCCTShape *)mirroredShape:(OCCTShape *)shape
+                              originX:(double)ox
+                              originY:(double)oy
+                              originZ:(double)oz
+                              normalX:(double)nx
+                              normalY:(double)ny
+                              normalZ:(double)nz;
+
 + (nullable OCCTShape *)transformedShape:(OCCTShape *)shape
                                   matrix:(NSData *)transform;
 

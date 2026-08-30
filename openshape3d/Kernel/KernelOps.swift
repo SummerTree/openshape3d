@@ -444,6 +444,20 @@ nonisolated extension KernelOps {
                         setback: amount, round: isFillet ? amount : nil,
                         isConvex: convex)
                 } else {
+                    // A blend bigger than the curve it sits on cannot be built,
+                    // and handing the attempt to Euclid CRASHES rather than
+                    // failing: the lofted tool self-intersects and the BSP
+                    // clipper trips an assertion (SIGTRAP inside
+                    // `Polygon.clip`). Measured on a Ø10 cylinder rim — 3 mm
+                    // builds, 6 mm killed the process. Refuse first.
+                    guard chainAllowsBlend(chain, amount: amount) else {
+                        // Empty, not "unchanged": callers treat an empty mesh
+                        // as failure and show the blend as invalid, which is
+                        // what OCCT already does for the same request (it
+                        // returns nil). Silently returning the untouched mesh
+                        // would let the user commit a blend that did nothing.
+                        return Euclid.Mesh([])
+                    }
                     tool = sweptBlendTool(chain: chain, amount: amount, isFillet: isFillet)
                 }
                 guard let tool, !tool.polygons.isEmpty else { continue }
@@ -464,6 +478,66 @@ nonisolated extension KernelOps {
     private struct BlendChain {
         var segments: [BlendEdgeSpec]   // oriented: segments[i].p1 == segments[i+1].p0
         var closed: Bool
+    }
+
+    // NOTE — a rim blend is SLOW (~1.6 s for a Ø10 cylinder: 989 ms in
+    // `subtracting`, 572 ms in `makeWatertight`, only 37 ms building the tool),
+    // because the sweep emits a cross-section at every one of the body's 158
+    // rim facets and the tool ends up five times the size of the body it cuts.
+    //
+    // Decimating those sections to what the CURVE needs was tried and WITHDRAWN
+    // (2026-08-30). It did work — 1595 ms → 455 ms, error bounded to 2% of the
+    // blend radius — but it moved the tool's apex line off the body surface,
+    // and the near-tangential contact that produced tripped an assertion inside
+    // Euclid's `makeWatertight` (`capPolygons` → `Polygon.init(unchecked:)`).
+    // Measured against the identical radius sweep: decimated died on iteration
+    // 17, undecimated was still going at 55. A faster blend that crashes is not
+    // a faster blend.
+    //
+    // Safe directions, in preference order: give revolve/sweep/loft a B-rep so
+    // this path stops carrying real work (the same fillet costs 9 ms in OCCT,
+    // ~50× faster); move the preview off the main actor (S1); or coarsen only
+    // the tool's ARC steps, which leaves the apex line and the flat contact
+    // faces exactly where they are.
+
+    /// Whether `amount` is small enough to blend along this chain.
+    ///
+    /// The blend tool reaches `amount / sin(halfAngle)` along the inward
+    /// bisector at each vertex. Where the chain CURVES, that reach is bounded
+    /// by the local radius of curvature: past it the cross-sections cross the
+    /// centre of curvature, the swept solid folds through itself, and the CSG
+    /// that follows dies on an assertion instead of returning a bad answer.
+    ///
+    /// Curvature is measured as the circumradius of each three consecutive
+    /// vertices, so a straight run reports no limit (collinear points have an
+    /// infinite circumradius) and only genuinely curved chains are restricted.
+    private static func chainAllowsBlend(_ chain: BlendChain, amount: Double) -> Bool {
+        let segs = chain.segments
+        guard segs.count >= 2, amount > 0 else { return true }
+
+        // Chain vertices, in order.
+        var points = segs.map(\.p0)
+        if let last = segs.last { points.append(last.p1) }
+
+        for i in 1..<(points.count - 1) {
+            let a = points[i - 1], b = points[i], c = points[i + 1]
+            let ab = simd_length(b - a), bc = simd_length(c - b), ca = simd_length(a - c)
+            guard ab > 1e-12, bc > 1e-12, ca > 1e-12 else { continue }
+            // Circumradius = abc / 4·area; area via the cross product.
+            let area = simd_length(simd_cross(b - a, c - a)) / 2
+            guard area > 1e-12 else { continue }   // collinear: no curvature limit
+            let circumradius = (ab * bc * ca) / (4 * area)
+
+            // Half the angle between the two faces at this vertex, from the
+            // same construction the tool uses.
+            let nA = simd_normalize(segs[i - 1].normalA)
+            let nB = simd_normalize(segs[i - 1].normalB)
+            let cosFull = max(-0.999, min(0.999, simd_dot(nA, nB)))
+            let sinHalf = max(sin((Double.pi - acos(cosFull)) / 2), 1e-3)
+
+            guard amount / sinHalf < circumradius else { return false }
+        }
+        return true
     }
 
     /// Group loose edge specs into tangent-continuous chains, mirroring
