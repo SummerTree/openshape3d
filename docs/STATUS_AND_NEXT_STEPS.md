@@ -604,6 +604,17 @@ first differing frame is the one you want.
    which needs the app off `GENERATE_INFOPLIST_FILE` first: with that setting
    on, Xcode ignores `INFOPLIST_FILE` outright and the keys never reach the
    built bundle (tried it — the declaration was simply absent).
+16. **One simulator, one `xcodebuild` at a time.** Running a second
+   `xcodebuild test` (or a plain `build`, which reinstalls the app) against a
+   destination that already has a suite running corrupts BOTH. Measured
+   2026-08-30, cost one 44-minute UI run: the interference showed up in the
+   second run's output as `Error getting main window Unknown kAXError value
+   -25218` with element queries returning `(null)`, and in the UI suite as a
+   lone `FaceFlowUITests.testSelectFaceAndPull` failure that reads exactly
+   like a real regression. Kill and re-run on a quiet simulator; do not try to
+   interpret the results. Note the failure did NOT look like a crash, which is
+   what makes it expensive — and do not use the `kAXErrorServerNotFound`
+   count as the tell, since a healthy run emits those too.
 
 ---
 
