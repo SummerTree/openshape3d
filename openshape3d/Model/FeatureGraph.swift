@@ -826,11 +826,12 @@ nonisolated extension FeatureGraph {
         var specs = [BlendEdgeSpec]()
         for ref in edgeRefs {
             guard let edge = EdgeTopology.resolve(
-                ref.signature, in: available, sizeScale: scale), edge.isConvex
+                ref.signature, in: available, sizeScale: scale)
             else { continue }
             specs.append(BlendEdgeSpec(
                 p0: d3(edge.start), p1: d3(edge.end),
-                normalA: d3(edge.normalA), normalB: d3(edge.normalB)))
+                normalA: d3(edge.normalA), normalB: d3(edge.normalB),
+                isConvex: edge.isConvex))
         }
         guard !specs.isEmpty else {
             state.errors[node.id] = .brokenRef("no blend edge resolved")

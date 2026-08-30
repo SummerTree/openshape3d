@@ -916,20 +916,102 @@ line/arc chains and ellipses all reach OCCT as the curves they were drawn as.
 Splines never become profiles at all, so there is nothing left to convert
 here — the next inexactness lives elsewhere.
 
-### 3. Blend polish (E5) — mesh path only, so rank it against mission 2
+### 3. Blend polish (E5) — COMPLETE 2026-08-30 (item 1 was already built)
 
-The first two items are things OCCT already does for a body with a `brep`
-(FeatureGraph ~L833: the OCCT fillet "propagates along tangent chains for
-free"). They only buy anything for brep-less bodies — which is an argument for
-doing mission 2 instead, and letting these two die with the mesh path.
+**The ranking argument this section used to make was wrong, and it is worth
+knowing why.** It said these items "only buy anything for brep-less bodies",
+implying the mesh path was about to die. But `evalRevolve`, `evalSweep`,
+`evalLoft`, `evalPattern` and `evalMirror` do not produce a `brep` at all —
+checked one at a time, not inferred. A revolved body is one of the commonest
+things a user makes, and every blend on one runs on the mesh path. The mesh
+blend is load-bearing and will stay so until those five ops get OCCT paths of
+their own (which is the better long-term fix, and a mission in its own right).
 
-- **Tangent-chain propagation**: group `SelectableEdge`s whose endpoints touch
-  and whose directions are near-parallel at the join; a tap selects the chain.
-- **Concave edges**: additive corner fill (union the wedge instead of
-  subtracting) — `isConvex` already classifies.
-- **History edge re-pick**: "edit edges of an existing blend feature" (spec:
-  additive edit-mode selection) — needs a History row action that re-enters
-  `.pickingBlendEdges` seeded from the node's EdgeRefs.
+- ~~**Tangent-chain propagation**~~ — **ALREADY BUILT**, and was when this list
+  was written. `EditorViewModel.handleBlendEdgeTap` expands a tap through
+  `EdgeTopology.smoothChain` to the whole tangent-continuous chain and toggles
+  it as a unit; `KernelOps.blendEdges` then sweeps a multi-segment chain as ONE
+  mitred tool rather than piling up per-segment wedges. `KernelBlendTests`
+  covers both halves. Nothing to do here.
+- ~~**Concave edges**~~ — **DONE 2026-08-30**, see below.
+- ~~**History edge re-pick**~~ — **DONE 2026-08-30**, see below.
+
+Mission 3 is complete.
+
+#### History edge re-pick — DONE (2026-08-30)
+
+"Edit Edges" on a chamfer/fillet row re-enters `.pickingBlendEdges` with the
+feature's existing edges already selected, and applying EDITS the node
+(`session.editFeature`) instead of replacing the body and appending a second
+blend on top of the first.
+
+The one real difficulty is that a blend replaces its body IN PLACE. By the time
+the user asks to edit the feature, the body under that `BodyID` already carries
+the blend, so re-picking against it would offer the rounded rim rather than the
+sharp edges the feature names, and the preview would blend an already-blended
+body. `DocumentSession.inputBody(for:bodyID:)` recovers the input by replaying
+a copy of the graph with `rollbackIndex` set to the node's own index. It feeds
+that replay a LOCAL revision counter: the result is a transient preview source
+and must not consume revisions the real document will hand out later.
+
+Three traps, none of them visible to a geometry assertion:
+
+- **`resetBlendState` must clear the edit state.** `commitBlend` branches on
+  `blendEditingFeature`, so a CANCELLED edit that left it set would make the
+  next fresh blend silently overwrite the edges of the last feature opened from
+  the panel.
+- **The tap handler must pick against the recovered body**, not the document's.
+- **Deselecting every edge must preview the UN-blended body.** Falling through
+  to a nil preview shows the document's copy, which still has the old blend on
+  it, so clearing the selection would look like it did nothing.
+
+Testing, and its limits, measured rather than assumed:
+
+- `BlendEditEvalTests` (6) covers the MECHANISM as pure values — truncation
+  recovers the sharp box, stored EdgeRefs resolve against it, two disjoint
+  edges remove exactly twice one (proving each replay starts from the sharp
+  box rather than compounding). It does NOT cover the wiring.
+- `BlendEditUITests` (1) covers the wiring, and the assertion that matters is
+  the ROW COUNT: two 1 mm fillets of one edge look much like one, so
+  "edit versus append" is invisible to geometry and shows up only as a second
+  History row. Falsified — forcing the append path fails it.
+- **A gap worth knowing**: `BodyRef.producer` is never read anywhere (eval
+  resolves bodies by `bodyID` alone), so nothing tests it and nothing can. It
+  is provenance metadata only. Do not assume a wrong `producer` will surface.
+
+Caution for whoever writes the next History UI test: `HistoryButton` TOGGLES.
+Tapping it when the panel is already open closes it, and the row query then
+returns zero — which reads exactly like the feature having been destroyed.
+
+#### Concave edges — DONE (2026-08-30)
+
+A concave blend FILLS the internal corner instead of cutting it away, so the
+tool is unioned rather than subtracted. Concave edges were classified from the
+start (`SelectableEdge.isConvex`) and then discarded twice — once in the tap
+handler, once in replay — so an inside corner was not merely unsupported, it
+was UNPICKABLE: the tap fell through to the nearest convex edge elsewhere on
+the body, which reads as a mis-hit rather than a missing feature.
+
+Three things to know:
+
+- **One sign carries the whole difference.** The tangent test that orients the
+  wedge (`dot(tA, nB) > 0`) is calibrated for convex edges and inverts for
+  concave ones. Measured failure mode, by running the new tests against the old
+  rule: the wedge lands entirely INSIDE the solid, so the union is a silent
+  no-op — the blend does nothing and the volume does not move. It does not
+  produce wrong geometry, it produces no geometry.
+- **A unioned tool must not overshoot the edge ends.** A subtracted one
+  deliberately does (the cut runs clean past the edge); the same overshoot on a
+  union stands proud of the end faces as two small tabs.
+- **Convex and concave edges are chained separately** in `blendEdges`. They are
+  never continuations of one another even when they meet end to end, and a
+  mixed chain would be swept as one solid and then applied one way for both.
+
+`ConcaveBlendTests` (8) on an L-beam with exactly one inside corner. Note one
+honest limit recorded in the file: `testFillingDoesNotGrowTheBoundingBox` does
+NOT catch the sign error — under falsification the union is a no-op, so the box
+is unchanged and that test passes. `testConcaveFilletFillsTheCorner` is what
+fails. The box test guards the opposite mistake, a tool escaping the notch.
 
 ### 4. F — OpenCASCADE B-rep port (mostly landed; this is its design record)
 Behind the existing `KernelOps` facade (see `IMPLEMENTATION_PLAN.md` Phase E

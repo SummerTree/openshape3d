@@ -338,6 +338,34 @@ nonisolated struct BlendEdgeSpec: Sendable {
     var p1: SIMD3<Double>
     var normalA: SIMD3<Double>
     var normalB: SIMD3<Double>
+    /// True when the solid fills the wedge between the faces (an external
+    /// edge). A convex blend REMOVES the corner; a concave one FILLS it, so
+    /// this decides whether the tool is subtracted or unioned — see
+    /// `blendEdges`.
+    var isConvex: Bool
+
+    init(p0: SIMD3<Double>, p1: SIMD3<Double>,
+         normalA: SIMD3<Double>, normalB: SIMD3<Double>, isConvex: Bool = true) {
+        self.p0 = p0
+        self.p1 = p1
+        self.normalA = normalA
+        self.normalB = normalB
+        self.isConvex = isConvex
+    }
+
+    /// Same edge walked the other way. A helper rather than a re-init at each
+    /// site, so a field added later cannot be silently dropped while the chain
+    /// is being oriented.
+    func reversed() -> BlendEdgeSpec {
+        BlendEdgeSpec(p0: p1, p1: p0, normalA: normalA, normalB: normalB,
+                      isConvex: isConvex)
+    }
+
+    /// Same edge with the A and B faces exchanged.
+    func swappingFaces() -> BlendEdgeSpec {
+        BlendEdgeSpec(p0: p0, p1: p1, normalA: normalB, normalB: normalA,
+                      isConvex: isConvex)
+    }
 }
 
 nonisolated extension KernelOps {
@@ -399,18 +427,31 @@ nonisolated extension KernelOps {
     ) -> Euclid.Mesh {
         guard amount > 1e-6 else { return mesh }
         var result = mesh
-        for chain in chainedSpecs(edges) {
-            let tool: Euclid.Mesh?
-            if chain.segments.count == 1 {
-                let s = chain.segments[0]
-                tool = cornerWedge(
-                    p0: s.p0, p1: s.p1, normalA: s.normalA, normalB: s.normalB,
-                    setback: amount, round: isFillet ? amount : nil)
-            } else {
-                tool = sweptBlendTool(chain: chain, amount: amount, isFillet: isFillet)
-            }
-            if let tool, !tool.polygons.isEmpty {
-                result = result.subtracting(tool).makeWatertight()
+        // Convex and concave edges are chained SEPARATELY. They are never
+        // continuations of one another even when they meet end to end and run
+        // parallel — the tool for one is subtracted and the tool for the other
+        // unioned — and a chain that mixed them would be swept as a single
+        // solid and then applied one way for both.
+        for convex in [true, false] {
+            let group = edges.filter { $0.isConvex == convex }
+            guard !group.isEmpty else { continue }
+            for chain in chainedSpecs(group) {
+                let tool: Euclid.Mesh?
+                if chain.segments.count == 1 {
+                    let s = chain.segments[0]
+                    tool = cornerWedge(
+                        p0: s.p0, p1: s.p1, normalA: s.normalA, normalB: s.normalB,
+                        setback: amount, round: isFillet ? amount : nil,
+                        isConvex: convex)
+                } else {
+                    tool = sweptBlendTool(chain: chain, amount: amount, isFillet: isFillet)
+                }
+                guard let tool, !tool.polygons.isEmpty else { continue }
+                // The whole point of the convex/concave split: a convex blend
+                // takes the corner AWAY, a concave one FILLS it in.
+                result = convex
+                    ? result.subtracting(tool).makeWatertight()
+                    : result.union(tool).makeWatertight()
             }
         }
         return result
@@ -498,8 +539,7 @@ nonisolated extension KernelOps {
             var used: Set<Int> = [first]
             var seg = specs[first]
             if degree[key(seg.p1)] == 1 {   // orient so the open end trails
-                seg = BlendEdgeSpec(p0: seg.p1, p1: seg.p0,
-                                    normalA: seg.normalA, normalB: seg.normalB)
+                seg = seg.reversed()
             }
             var ordered = [seg]
             while ordered.count < component.count {
@@ -510,8 +550,7 @@ nonisolated extension KernelOps {
                 used.insert(nextIndex)
                 var next = specs[nextIndex]
                 if key(next.p0) != tailKey {
-                    next = BlendEdgeSpec(p0: next.p1, p1: next.p0,
-                                         normalA: next.normalA, normalB: next.normalB)
+                    next = next.reversed()
                 }
                 // Keep the A/B faces consistent along the sweep.
                 let prev = ordered[ordered.count - 1]
@@ -520,8 +559,7 @@ nonisolated extension KernelOps {
                 let swapped = simd_dot(prev.normalA, next.normalB)
                     + simd_dot(prev.normalB, next.normalA)
                 if swapped > direct {
-                    next = BlendEdgeSpec(p0: next.p0, p1: next.p1,
-                                         normalA: next.normalB, normalB: next.normalA)
+                    next = next.swappingFaces()
                 }
                 ordered.append(next)
             }
@@ -561,8 +599,11 @@ nonisolated extension KernelOps {
             let lA = simd_length(tA), lB = simd_length(tB)
             guard lA > 1e-6, lB > 1e-6 else { return nil }
             tA /= lA; tB /= lB
-            if simd_dot(tA, nB) > 0 { tA = -tA }
-            if simd_dot(tB, nA) > 0 { tB = -tB }
+            // Sign flips with convexity — see `cornerWedge`. The chain is all
+            // one or all the other, so `segs[0]` speaks for it.
+            let want: Double = s.isConvex ? -1 : 1
+            if simd_dot(tA, nB) * want < 0 { tA = -tA }
+            if simd_dot(tB, nA) * want < 0 { tB = -tB }
             frames.append(Frame(e: e, tA: tA, tB: tB))
         }
 
@@ -577,11 +618,13 @@ nonisolated extension KernelOps {
             let bl = simd_length(bis)
             guard bl > 1e-6 else { return nil }
             bis /= bl
-            // Nudge the apex OUTWARD (−bis) so the tool's flat faces sit just
-            // proud of the body's faces: the removed region is unchanged (the
-            // extra sliver lies outside the solid), but every contact becomes
-            // transversal instead of exactly coplanar — the case Euclid's CSG
-            // healer is flakiest about.
+            // Nudge the apex back along −bis so the tool's flat faces sit just
+            // proud of the body's faces, making every contact transversal
+            // rather than exactly coplanar — the case Euclid's CSG healer is
+            // flakiest about. One formula serves both senses: on a convex edge
+            // −bis leaves the solid (the sliver is outside it, so the removed
+            // region is unchanged), and on a concave one it enters the solid,
+            // which is the overlap a union wants anyway.
             let apexOut = apex - bis * max(amount * 0.02, 1e-4)
             guard isFillet else { return [apexOut, sa, sb] }
             // Center on the inward bisector at r/sin(h), h = half the angle
@@ -703,7 +746,8 @@ nonisolated extension KernelOps {
         normalA: SIMD3<Double>,
         normalB: SIMD3<Double>,
         setback: Double,
-        round: Double?
+        round: Double?,
+        isConvex: Bool = true
     ) -> Euclid.Mesh? {
         guard setback > 1e-6 else { return nil }
         let axis = p1 - p0
@@ -716,19 +760,36 @@ nonisolated extension KernelOps {
 
         // Tangents into each face, perpendicular to the edge, oriented so each
         // points INTO its face and away from the other face.
+        //
+        // The SIGN of that test flips with convexity, and this is the whole
+        // geometric difference between the two cases. On a convex edge the
+        // faces fall away from each other, so "into face A" points away from
+        // B's outward normal; on a concave edge they close toward each other
+        // and it points along it.
+        //
+        // Getting it wrong does not fail loudly. Measured, by running the
+        // concave tests against the convex-only rule: the wedge is built on
+        // the far side of the edge, which for a concave edge puts it entirely
+        // INSIDE the solid, so the union is a silent no-op — the blend simply
+        // does nothing and the volume does not move.
         var tA = simd_cross(nA, e)
         var tB = simd_cross(nB, e)
         let lA = simd_length(tA), lB = simd_length(tB)
         guard lA > 1e-6, lB > 1e-6 else { return nil }
         tA /= lA; tB /= lB
-        if simd_dot(tA, nB) > 0 { tA = -tA }
-        if simd_dot(tB, nA) > 0 { tB = -tB }
+        let want: Double = isConvex ? -1 : 1
+        if simd_dot(tA, nB) * want < 0 { tA = -tA }
+        if simd_dot(tB, nA) * want < 0 { tB = -tB }
 
         let apex = (p0 + p1) / 2
         let sa = apex + tA * setback
         let sb = apex + tB * setback
+        // A subtracted tool overshoots both ends so the cut runs clean past the
+        // edge. A UNIONED one must not: the overshoot would be material added
+        // beyond where the edge stops, left standing proud of the end faces as
+        // a pair of small tabs.
         let overlap = max(edgeLen * 0.02, 1e-3)
-        let depth = edgeLen + 2 * overlap
+        let depth = isConvex ? edgeLen + 2 * overlap : edgeLen
 
         // Cross-section in the plane perpendicular to the edge. A chamfer removes
         // the triangle (apex, sa, sb) — the sharp corner behind the flat. A
