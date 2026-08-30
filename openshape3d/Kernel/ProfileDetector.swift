@@ -15,6 +15,36 @@ nonisolated struct Profile: Identifiable {
     enum Kind {
         case polygonal
         case circle(center: SIMD2<Double>, radius: Double)
+        /// `radiusX`/`radiusY` are the semi-axes BEFORE `rotation` is applied,
+        /// matching `SketchEntity.ellipsePoints` — which of them is the major
+        /// axis is not fixed, so a consumer must not assume `radiusX >= radiusY`.
+        case ellipse(center: SIMD2<Double>, radiusX: Double, radiusY: Double,
+                     rotation: Double)
+    }
+
+    /// One boundary edge, for callers that can use an EXACT curve.
+    ///
+    /// `loop` is the tessellated truth every mesh-side consumer reads, and it
+    /// stays that way — area, centroid, `contains` and the face signatures all
+    /// keep working untouched. This is a side-channel the B-rep path consults
+    /// instead, which is why a slot could become analytic without the sketch →
+    /// profile → kernel chain changing representation.
+    ///
+    /// `mid` present = a circular arc THROUGH that point; absent = a straight
+    /// line. Three points on a circle determine it uniquely and say which way
+    /// round the arc goes, so no centre, radius, angle pair or winding flag is
+    /// carried here — those are exactly the things that get sign-flipped on a
+    /// reversed traversal.
+    struct Segment: Equatable {
+        var start: SIMD2<Double>
+        var end: SIMD2<Double>
+        var mid: SIMD2<Double>?
+
+        init(start: SIMD2<Double>, end: SIMD2<Double>, mid: SIMD2<Double>? = nil) {
+            self.start = start
+            self.end = end
+            self.mid = mid
+        }
     }
 
     let id = UUID()
@@ -22,6 +52,13 @@ nonisolated struct Profile: Identifiable {
     var loop: [SIMD2<Double>]
     var kind: Kind
     var sourceEntityIDs: Set<UUID>
+    /// Exact boundary, in `loop` order — EMPTY when there is nothing to gain.
+    ///
+    /// Only populated for loops that actually contain an arc. A polygon is
+    /// already exact as a polyline (OCCT builds the same wire either way), so
+    /// filling this in for one would add a second description of identical
+    /// geometry and a second thing to keep in step.
+    var segments: [Segment] = []
 
     /// Signed area (positive for CCW).
     var area: Double {
@@ -103,7 +140,11 @@ nonisolated enum ProfileDetector {
                     center: center, radiusX: radiusX, radiusY: radiusY,
                     rotation: rotation, segments: circleSegments
                 )
-                profiles.append(Profile(loop: loop, kind: .polygonal, sourceEntityIDs: [id]))
+                profiles.append(Profile(
+                    loop: loop,
+                    kind: .ellipse(center: center, radiusX: radiusX,
+                                   radiusY: radiusY, rotation: rotation),
+                    sourceEntityIDs: [id]))
             case let .polygon(id, center, radius, sides, rotation)
                 where radius > 1e-6 && sides >= 3:
                 let loop = SketchEntity.polygonPoints(
@@ -153,13 +194,17 @@ nonisolated enum ProfileDetector {
         struct Chain {
             let entityID: UUID
             let points: [SIMD2<Double>]
+            /// True when `points` is a TESSELLATION of a real curve, so the
+            /// analytic boundary should describe it as an arc rather than as
+            /// the polyline standing in for it.
+            let isArc: Bool
         }
 
         var chains: [Chain] = []
         for entity in sketch.regularEntities {
             switch entity {
             case let .line(id, a, b) where simd_length(b - a) > 1e-9:
-                chains.append(Chain(entityID: id, points: [a, b]))
+                chains.append(Chain(entityID: id, points: [a, b], isArc: false))
             case let .arc(id, center, radius, startAngle, endAngle):
                 let points = SketchEntity.arcPoints(
                     center: center, radius: radius,
@@ -167,7 +212,7 @@ nonisolated enum ProfileDetector {
                     segmentsPerTurn: circleSegments
                 )
                 if points.count >= 2 {
-                    chains.append(Chain(entityID: id, points: points))
+                    chains.append(Chain(entityID: id, points: points, isArc: true))
                 }
             default:
                 break
@@ -244,15 +289,28 @@ nonisolated enum ProfileDetector {
 
             var loop: [SIMD2<Double>] = []
             var chainIDs: [Int] = []
+            var segments: [Profile.Segment] = []
+            var sawArc = false
             var spur = false
             for index in cycle {
                 let half = halfEdges[index]
                 if chainIDs.contains(half.chain) { spur = true; break }
                 chainIDs.append(half.chain)
-                let pts = chains[half.chain].points
-                loop.append(contentsOf: half.forward
-                            ? Array(pts.dropLast())
-                            : Array(pts.reversed().dropLast()))
+                let chain = chains[half.chain]
+                let pts = half.forward ? chain.points : Array(chain.points.reversed())
+                loop.append(contentsOf: pts.dropLast())
+                // The chain occupies one contiguous run of `loop`, so its
+                // exact boundary is one segment spanning the same ground.
+                // An interior SAMPLE serves as the arc's third point: it is on
+                // the true arc by construction, whichever way the face
+                // traversal happened to walk this chain.
+                if chain.isArc, pts.count >= 3 {
+                    sawArc = true
+                    segments.append(Profile.Segment(
+                        start: pts[0], end: pts[pts.count - 1], mid: pts[pts.count / 2]))
+                } else if let first = pts.first, let last = pts.last {
+                    segments.append(Profile.Segment(start: first, end: last))
+                }
             }
             // A dangling edge is walked out and back inside the same face,
             // producing a zero-width slit. Legal as a region, but the mesh
@@ -268,7 +326,9 @@ nonisolated enum ProfileDetector {
             profiles.append(Profile(
                 loop: loop,
                 kind: .polygonal,
-                sourceEntityIDs: Set(chainIDs.map { chains[$0].entityID })
+                sourceEntityIDs: Set(chainIDs.map { chains[$0].entityID }),
+                // Nothing to gain on an all-straight loop; see `segments`.
+                segments: sawArc ? segments : []
             ))
         }
         return profiles

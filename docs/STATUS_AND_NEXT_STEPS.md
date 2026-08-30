@@ -7,14 +7,14 @@ Companions: `IMPLEMENTATION_PLAN.md` (original phase plan),
 `SHAPR3D_PARITY_SPEC.md` (feature spec), `PHASE_D_DESIGN.md` (feature-graph
 design).
 
-**Current test baseline, both suites green at the analytic-holes commit
-(2026-08-30): 856 unit tests in 95s, full UI suite 103 executed, 2 skipped,
-0 failures, 44m10s** — 0 idle-timeouts, 0 field-clear retries, store pinned at
+**Current test baseline, both suites green at the analytic-ellipses commit
+(2026-08-30): 877 unit tests in 94s, full UI suite 103 executed, 2 skipped,
+0 failures, 44m28s** — 0 idle-timeouts, 0 field-clear retries, store pinned at
 1 project. The skips are `CompactWidthBarUITests`, which skip by design on the
 iPad destination.
 
-UI wall clock is flat against the previous run (44m18s): mission 2 added
-8 unit tests and no UI tests. The run before THAT was 43m14s, and the minute
+UI wall clock is flat across the whole of mission 2 (44m18s → 44m10s →
+44m28s): it added 29 unit tests and no UI tests. The run before THAT was 43m14s, and the minute
 it gained was the four `CommandSearchUITests` (~41s in isolation) — worth
 checking rather than assuming, since that commit registers keyboard shortcuts,
 and a keyboard change is what once took a suite from 41 to 78 minutes while
@@ -604,6 +604,17 @@ first differing frame is the one you want.
    which needs the app off `GENERATE_INFOPLIST_FILE` first: with that setting
    on, Xcode ignores `INFOPLIST_FILE` outright and the keys never reach the
    built bundle (tried it — the declaration was simply absent).
+16. **One simulator, one `xcodebuild` at a time.** Running a second
+   `xcodebuild test` (or a plain `build`, which reinstalls the app) against a
+   destination that already has a suite running corrupts BOTH. Measured
+   2026-08-30, cost one 44-minute UI run: the interference showed up in the
+   second run's output as `Error getting main window Unknown kAXError value
+   -25218` with element queries returning `(null)`, and in the UI suite as a
+   lone `FaceFlowUITests.testSelectFaceAndPull` failure that reads exactly
+   like a real regression. Kill and re-run on a quiet simulator; do not try to
+   interpret the results. Note the failure did NOT look like a crash, which is
+   what makes it expensive — and do not use the `kAXErrorServerNotFound`
+   count as the tell, since a healthy run emits those too.
 
 ---
 
@@ -618,10 +629,14 @@ first differing frame is the one you want.
 ### 1. Wire the backends that have no UI — ✅ COMPLETE (2026-08-29)
 
 Every item in this mission is done: STEP interchange (§1b), Delete Face (§1c),
-Replace Face (§1d) and the Command Search launcher (§1e). Mission 2 followed
-on 2026-08-30 and is done bar arcs, so **mission 3 (blend polish) and the arc
-tranche are now the top of the list** — and §2 argues the blend items should
-be weighed against letting the mesh path die instead.
+Replace Face (§1d) and the Command Search launcher (§1e). Mission 2 followed on
+2026-08-30, arcs and ellipses included, so sketch profiles now reach the kernel
+exactly.
+
+That makes **mission 3 (blend polish) the top of the list** — but read its own
+text before starting. Two of its three items buy nothing for a body with a
+`brep`, and §2 is the argument for letting them die with the mesh path rather
+than building them.
 
 The pattern is worth keeping in mind for the next one: all four were tested
 kernels with no caller, and in all four cases wiring them up surfaced a bug in
@@ -786,7 +801,7 @@ back as `textFields["CommandSearchPanel"]` while `CommandSearchField` did not
 exist at all. `.accessibilityElement(children: .contain)` before the identifier
 is the fix, as it was for `SketchPointStateOverlay`.
 
-### 2. B-rep follow-through — DONE except arcs (2026-08-30)
+### 2. B-rep follow-through — DONE (2026-08-30)
 
 The description this section carried was two-thirds stale, which is worth
 recording as its own lesson: **polygonal profiles** and **extrude-into-target
@@ -818,14 +833,88 @@ disabled, five of them fail with exactly the numbers above. `testAWasherIs
 TwoCylinders` is the sharpest of them — a washer had an analytic outer wall
 and a 64-facet bore, so the shape was half-exact and looked entirely round.
 
-**Still open: arcs.** `ProfileDetector.lineLoops` explodes arcs via
-`SketchEntity.arcPoints` before a `Profile` exists, so a slot or a rounded
-rectangle reaches the kernel as tessellated points with a `.polygonal` kind —
-there is no arc left to be analytic about. Fixing it means `Profile` carrying
-per-segment curve data, which ripples through `ProfileDetector`,
-`KernelOps.extrude`, area/centroid/contains and face signatures, with the mesh
-path still consuming the same type. That is its own tranche, not a finishing
-touch on this one.
+**Arcs — DONE 2026-08-30, and cheaper than this section predicted.** The
+paragraph that used to sit here said `Profile` would have to carry per-segment
+curve data, rippling through `ProfileDetector`, `KernelOps.extrude`,
+area/centroid/contains and face signatures. That was the wrong shape of fix.
+`loop` is left EXACTLY as it was — still the tessellated truth every mesh-side
+consumer reads — and the exact boundary rides alongside it in
+`Profile.segments`, which only the B-rep path consults. Nothing downstream of
+the sketch changed representation, so no consumer had to be revisited.
+
+Three details worth keeping:
+
+- **An arc is stored as three points, not a centre and an angle pair.** The
+  face traversal walks a chain in whichever direction the loop needs, and an
+  orientation convention is precisely the thing that silently sign-flips when
+  it does. `GC_MakeArcOfCircle(start, mid, end)` takes the points in traversal
+  order and reconstructs the circle itself, so there is no winding flag to get
+  backwards. The mid point is an interior SAMPLE from `arcPoints`, which is on
+  the true arc by construction.
+- **Only loops that contain an arc get segments.** A polygon is already exact
+  as a polyline — OCCT builds the same wire either way — so filling this in
+  for one would be a second description of identical geometry and a second
+  thing to keep in step.
+- **Every fallback is per-wire, not per-solid.** Bad segments fall back to the
+  polyline for that boundary alone (`SegWire` returns a null wire), and a
+  circle still wins over both.
+
+`AnalyticArcTests` (11), falsified by forcing the bridge's arc branch off:
+9 fail, a slot reporting 0 cylindrical faces and 6 planar instead of 2 and 4.
+That run also caught a test of my own that was weaker than it looked —
+`testReversedSketchOrderGivesTheSameSolid` compared the two solids only to
+each OTHER, so it passed while both were faceted; it now pins both counts to 2.
+
+**Consequence worth knowing before opening an old document**: a slot wall that
+used to be ~20 planar facets is now one cylindrical face, so a `FaceRef` minted
+against one of those facets resolves against a cylinder on the next rebuild.
+This is the same swap the hole fix made (64 facets → 1 cylinder) and
+`SignatureNaming` handles cylinders as first-class, but it IS a geometry change
+to bodies that already exist.
+
+**Ellipses — DONE 2026-08-30, and they closed the list.** `detectProfiles`
+flattened `.ellipse` to 48 straight segments and emitted `.polygonal`, which
+threw the semi-axes away at the very first step; the profile then reached OCCT
+as a 48-sided prism, about 0.27% under the true area — small enough to look
+right and wrong everywhere it matters.
+
+An ellipse cannot use the arc side-channel, because three points determine a
+circle and not an ellipse. So `CircleSpec` became **`ConicSpec`** — centre,
+two semi-axes, rotation — and a circle is now the case where the semi-axes are
+equal. One concept rather than two: to every caller these are the same thing,
+"this whole loop is a curve OCCT can build exactly, so ignore the polyline".
+`extrudeShape` lost `isCircle` / `circleCenter` / `circleRadius` in the swap
+and takes one optional `outerConic` instead, which is why most call sites got
+three arguments shorter.
+
+Two traps, both encoded in tests:
+
+- **`gp_Elips` demands its MAJOR radius first** and refuses major < minor,
+  while a sketch's semi-axes are in no particular order — a tall ellipse is as
+  ordinary as a wide one. The bridge picks the larger and turns the reference
+  direction a quarter turn when that is the y semi-axis
+  (`testATallEllipseIsBuiltAsReadilyAsAWideOne`).
+- **Equal semi-axes must build a `gp_Circ`**, not a degenerate `gp_Elips` —
+  and that is also what keeps a round hole reporting as a cylindrical face
+  rather than a surface of extrusion.
+
+Note for anyone reading face counts: an extruded ellipse is a surface of
+LINEAR EXTRUSION, so `faceTypeCounts` reports it under `other`, not
+`cylindrical`. Only a true cylinder is cylindrical.
+
+`AnalyticEllipseTests` (10), falsified by emitting `.polygonal` again: 8 fail,
+the faceted solid measuring 375.92 mm³ against the exact 376.99. That number
+is also where the tolerance comes from — the render mesh is a tessellation of
+the exact solid and sits ~0.04% under it, while a 48-gon sits ~0.27% under, so
+the assertions use a tolerance BETWEEN the two. A tighter one would only be
+measuring the tessellator. The same run caught
+`testRotationIsCarriedThrough` passing while faceted (a rotated 48-gon has
+nearly the same bounding box); it now pins the exact wall too.
+
+**Profile geometry is now exact end to end**: circles, rects, polygons,
+line/arc chains and ellipses all reach OCCT as the curves they were drawn as.
+Splines never become profiles at all, so there is nothing left to convert
+here — the next inexactness lives elsewhere.
 
 ### 3. Blend polish (E5) — mesh path only, so rank it against mission 2
 

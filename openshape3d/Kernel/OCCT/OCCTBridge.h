@@ -96,13 +96,26 @@ NS_ASSUME_NONNULL_BEGIN
 /// polyline". A hole that IS a circle becomes an analytic cylindrical wall
 /// instead of the tessellation it was drawn with — without this a plate with a
 /// Ø8 hole comes back with a 64-sided bore that only looks round.
+/// `outerConic` / `holeConics` describe a boundary that is one exact curve:
+/// 5 packed doubles — `cx, cy, rx, ry, rotation` — where `rx`/`ry` are the
+/// semi-axes in either order and a non-positive `rx` means "no conic here".
+/// Equal semi-axes build a `gp_Circ`, unequal a `gp_Elips`. `holeConics` is
+/// one such entry per hole, parallel to `holes`.
+///
+/// `outerSegments` / `holeSegments` describe a boundary EXACTLY, for loops
+/// that contain an arc: 7 packed doubles per edge —
+/// `isArc, x1, y1, x2, y2, midX, midY` — where `isArc` > 0.5 means a circular
+/// arc from (x1,y1) to (x2,y2) passing through (midX,midY), and anything else
+/// is a straight line (the mid pair is then ignored). Nil or empty falls back
+/// to the polyline, which is already exact for an all-straight loop. A conic
+/// wins over both, and every fallback is per-wire: one unusable boundary uses
+/// its polyline without affecting the others.
 + (nullable OCCTShape *)extrudedShapeWithOuterLoop:(NSData *)outerLoop
-                                          isCircle:(BOOL)isCircle
-                                     circleCenterX:(double)ccx
-                                     circleCenterY:(double)ccy
-                                      circleRadius:(double)cr
+                                        outerConic:(nullable NSData *)outerConic
                                              holes:(NSArray<NSData *> *)holes
-                                       holeCircles:(nullable NSData *)holeCircles
+                                        holeConics:(nullable NSData *)holeConics
+                                     outerSegments:(nullable NSData *)outerSegments
+                                      holeSegments:(nullable NSArray<NSData *> *)holeSegments
                                               zMin:(double)zMin
                                               zMax:(double)zMax
                                              basis:(OCCTPlaneBasis *)basis;

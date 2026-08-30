@@ -65,6 +65,9 @@
 #include <TopoDS_Shape.hxx>
 #include <gp_Ax2.hxx>
 #include <gp_Circ.hxx>
+#include <gp_Elips.hxx>
+#include <GC_MakeArcOfCircle.hxx>
+#include <Geom_TrimmedCurve.hxx>
 #include <gp_Dir.hxx>
 #include <gp_Pnt.hxx>
 #include <gp_Vec.hxx>
@@ -336,13 +339,83 @@ static TopoDS_Wire PolyWire(NSData *loop, double z) {
     return poly.Wire();
 }
 
+// Build a closed wire from one packed conic: `cx, cy, rx, ry, rotation`
+// (see OCCTBridge.h). Null wire when `rx` is not positive — the caller then
+// falls back to the polyline.
+//
+// `gp_Elips` REQUIRES its major radius first and refuses major < minor, and
+// the sketch's own semi-axes are in no particular order, so the larger one is
+// chosen here and the reference direction turned a quarter turn when that is
+// the y semi-axis. Equal radii would make `gp_Elips` degenerate, so a circle
+// is built as a circle — which is also what keeps a drilled hole reporting as
+// a cylindrical face rather than a surface of extrusion.
+static TopoDS_Wire ConicWire(const double *c, double z) {
+    const double cx = c[0], cy = c[1], rx = c[2], ry = c[3], rot = c[4];
+    if (!(rx > 1e-12) || !(ry > 1e-12)) return TopoDS_Wire();
+    const gp_Pnt centre(cx, cy, z);
+    const gp_Dir up(0.0, 0.0, 1.0);
+    if (fabs(rx - ry) <= 1e-9 * fmax(rx, ry)) {
+        gp_Ax2 ax(centre, up);
+        BRepBuilderAPI_MakeEdge me{gp_Circ(ax, rx)};
+        if (!me.IsDone()) return TopoDS_Wire();
+        return BRepBuilderAPI_MakeWire(me.Edge()).Wire();
+    }
+    const bool xIsMajor = rx > ry;
+    const double angle = xIsMajor ? rot : rot + M_PI_2;
+    gp_Ax2 ax(centre, up, gp_Dir(cos(angle), sin(angle), 0.0));
+    BRepBuilderAPI_MakeEdge me{
+        gp_Elips(ax, xIsMajor ? rx : ry, xIsMajor ? ry : rx)};
+    if (!me.IsDone()) return TopoDS_Wire();
+    return BRepBuilderAPI_MakeWire(me.Edge()).Wire();
+}
+
+// Build a wire on the plane z=`z` from packed edges: 7 doubles each,
+// `isArc, x1, y1, x2, y2, midX, midY` (see OCCTBridge.h).
+//
+// A tessellated arc reaches OCCT as a polyline and stays one forever after: a
+// fillet on the rim then has one segment per facet, and STEP exports every
+// one of them as a plane. Three points reconstruct the circle exactly, and
+// GC_MakeArcOfCircle takes them in traversal order, so a chain walked
+// backwards needs no sign flip anywhere.
+//
+// Returns a null wire on any bad edge; the caller falls back to the polyline
+// rather than building half a boundary.
+static TopoDS_Wire SegWire(NSData *segs, double z) {
+    const NSUInteger stride = 7;
+    const double *p = (const double *)segs.bytes;
+    NSUInteger n = segs.length / (stride * sizeof(double));
+    if (n < 2) return TopoDS_Wire();
+    BRepBuilderAPI_MakeWire mw;
+    for (NSUInteger i = 0; i < n; ++i) {
+        const double *e = p + i * stride;
+        gp_Pnt a(e[1], e[2], z), b(e[3], e[4], z);
+        if (a.IsEqual(b, 1e-12)) return TopoDS_Wire();
+        if (e[0] > 0.5) {
+            gp_Pnt m(e[5], e[6], z);
+            GC_MakeArcOfCircle mk(a, m, b);
+            // Collinear samples have no circle through them; a "flat arc" is
+            // a straight line and is built as one rather than failing.
+            if (mk.IsDone()) {
+                BRepBuilderAPI_MakeEdge me(mk.Value());
+                if (!me.IsDone()) return TopoDS_Wire();
+                mw.Add(me.Edge());
+                continue;
+            }
+        }
+        BRepBuilderAPI_MakeEdge me(a, b);
+        if (!me.IsDone()) return TopoDS_Wire();
+        mw.Add(me.Edge());
+    }
+    if (!mw.IsDone()) return TopoDS_Wire();
+    return mw.Wire();
+}
+
 + (nullable OCCTShape *)extrudedShapeWithOuterLoop:(NSData *)outerLoop
-                                          isCircle:(BOOL)isCircle
-                                     circleCenterX:(double)ccx
-                                     circleCenterY:(double)ccy
-                                      circleRadius:(double)cr
+                                        outerConic:(nullable NSData *)outerConic
                                              holes:(NSArray<NSData *> *)holes
-                                       holeCircles:(nullable NSData *)holeCircles
+                                        holeConics:(nullable NSData *)holeConics
+                                     outerSegments:(nullable NSData *)outerSegments
+                                      holeSegments:(nullable NSArray<NSData *> *)holeSegments
                                               zMin:(double)zMin
                                               zMax:(double)zMax
                                              basis:(OCCTPlaneBasis *)basis {
@@ -351,11 +424,13 @@ static TopoDS_Wire PolyWire(NSData *loop, double z) {
     try {
         // Outer face on the z=zMin plane (analytic circle when applicable).
         TopoDS_Wire outerWire;
-        if (isCircle) {
-            gp_Ax2 ax(gp_Pnt(ccx, ccy, zMin), gp_Dir(0.0, 0.0, 1.0));
-            outerWire = BRepBuilderAPI_MakeWire(
-                BRepBuilderAPI_MakeEdge(gp_Circ(ax, cr)).Edge()).Wire();
-        } else {
+        if (outerConic != nil && outerConic.length >= 5 * sizeof(double)) {
+            outerWire = ConicWire((const double *)outerConic.bytes, zMin);
+        }
+        if (outerWire.IsNull() && outerSegments != nil && outerSegments.length > 0) {
+            outerWire = SegWire(outerSegments, zMin);
+        }
+        if (outerWire.IsNull()) {
             if (outerLoop.length < 3 * 2 * (NSInteger)sizeof(double)) return nil;
             outerWire = PolyWire(outerLoop, zMin);
         }
@@ -363,22 +438,22 @@ static TopoDS_Wire PolyWire(NSData *loop, double z) {
         // Analytic circles for the holes that ARE circles, same treatment the
         // outer loop has always had. `holeCircles` is 3 doubles per hole,
         // parallel to `holes`; radius <= 0 falls back to the polyline.
-        const double *circles = NULL;
-        NSUInteger circleCount = 0;
-        if (holeCircles != nil) {
-            circles = (const double *)holeCircles.bytes;
-            circleCount = holeCircles.length / (3 * sizeof(double));
+        const double *conics = NULL;
+        NSUInteger conicCount = 0;
+        if (holeConics != nil) {
+            conics = (const double *)holeConics.bytes;
+            conicCount = holeConics.length / (5 * sizeof(double));
         }
         NSUInteger index = 0;
         for (NSData *hole in holes) {
             TopoDS_Wire hw;
-            const bool analytic = index < circleCount && circles[index * 3 + 2] > 1e-12;
-            if (analytic) {
-                gp_Ax2 hax(gp_Pnt(circles[index * 3], circles[index * 3 + 1], zMin),
-                           gp_Dir(0.0, 0.0, 1.0));
-                hw = BRepBuilderAPI_MakeWire(
-                    BRepBuilderAPI_MakeEdge(gp_Circ(hax, circles[index * 3 + 2])).Edge()).Wire();
-            } else {
+            if (index < conicCount) hw = ConicWire(conics + index * 5, zMin);
+            if (hw.IsNull()) {
+                NSData *hs = (holeSegments != nil && index < holeSegments.count)
+                    ? holeSegments[index] : nil;
+                if (hs != nil && hs.length > 0) hw = SegWire(hs, zMin);
+            }
+            if (hw.IsNull()) {
                 if (hole.length < 3 * 2 * (NSInteger)sizeof(double)) { index++; continue; }
                 hw = PolyWire(hole, zMin);
             }

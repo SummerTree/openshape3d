@@ -158,8 +158,7 @@ nonisolated enum ReplaceFaceKit {
         guard face.outline.count >= 3, plan.distance > 1e-9 else { return nil }
         let z = sweptZRange(face: face, plan: plan)
         return OCCTKernel.extrudeShape(
-            outerLoop: face.outline, isCircle: false,
-            circleCenter: .zero, circleRadius: 0,
+            outerLoop: face.outline,
             holes: OCCTKernel.polylineHoles(face.holes),
             zMin: z.zMin, zMax: z.zMax,
             origin: face.origin, xAxis: face.basisX,
