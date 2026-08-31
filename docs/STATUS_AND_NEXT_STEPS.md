@@ -1236,6 +1236,58 @@ These record what a review covered and what it deliberately left. Anything
 still open from them is promoted into §4 above; read these for the reasoning,
 not for a task list.
 
+### Agent exec endpoint + Shapr3D recipe extraction (2026-08-31)
+
+`POST /v1/exec` (`openshape3d/Agent/AgentExec.swift`), the parameterized half
+`/v1/command` could not provide: one request carries an operation AND its
+numbers. Ops: `sketch.create`, `sketch.addEntities`, and
+`feature.extrude/revolve/pattern/mirror/boolean`. Protocol reference is
+`docs/AGENT_CONTROL.md`.
+
+It goes to `DocumentCommand` + `FeatureKind`, NOT the interactive tool state
+machine, so an exec'd model replays through the same graph as a hand-built one.
+Profiles resolve by SEED POINT via `ProfileDetector` — callers never enumerate
+loop entity ids. Parsing is pure and unit-tested (23 tests); only the main-actor
+hop is in `AgentBridge`, per gotcha 1.
+
+**Three traps this pass hit, all worth remembering:**
+
+1. **`FeatureKind.revolve`'s `Expr` is in DEGREES.** `FeatureGraph` converts to
+   radians once at the OCCT boundary (`angle.value * .pi / 180`). Converting on
+   the way in as well gave a 6.28-DEGREE revolve that rendered as a completely
+   plausible solid. Caught only because a Pappus hand-check disagreed by 60x.
+   Cross-check a new solid's VOLUME against an independent estimate; "it looks
+   right" does not discriminate here.
+2. **A boolean adds no body** — it replaces its target in place. Judging success
+   by "did a new body id appear" reports a working subtract as a no-op.
+3. **`rebuildFrom` bumps `meshRevision` on nodes it did not semantically
+   touch**, so revision-diffing cannot tell you a feature failed either. The
+   reliable signal is `lastEvalErrors[node.id]`.
+
+**Shapr3D `.shapr` is readable** — see the `shapr-file-format` memory. ZIP →
+SQLite. Bodies are Parasolid XT (OCCT cannot read it, and no open converter
+exists), but `SketchCurves.Data` is plain JSON and `HistoryTreeNodes` type 2 is
+the feature graph, with type-3 literals decoding as `<uint32 tag><payload>`
+where tag 3 + 8 bytes is a double in METRES. An extractor lives in the session
+scratchpad (`shapr_extract.py`), not in the repo.
+
+Of the 8 tutorial models, only 4 carry sketches + history (Frame, Block casting,
+Motorcycle cover, 4 motorcycle wheel); Rod clamp / Piston / Piston rod are
+frozen imported solids with no history at all, and Motorcycle ships as a
+Parasolid TEXT `.x_t`. Block casting is unreachable regardless — 7 of its 27
+steps are `MaterializeImportedBodies`.
+
+**Rebuilt from its extracted recipe:** the 4-motorcycle-wheel revolve (34,775,356
+mm3, vs a 36.4M straight-line Pappus estimate — correctly lower because the
+profile's large arc bulges inward), then a 63.5 mm cutter, circular-patterned 5x
+about the axle and subtracted. Still NOT done on that model: the recipe's Mirror
+and second Boolean, and the smaller 12.7 mm bolt-hole circle.
+
+**What exec still cannot do:** fillet, chamfer, shell and the face ops all take
+`EdgeRef`/`FaceRef` — topological signatures, not numbers — so they need a way
+to NAME an edge or face over the wire. That is a design question, not a
+mechanical addition. `Align` has no `FeatureKind` at all.
+
 ### Shapr3D UI parity review (2026-07-23)
 
 A pass over the sketch and solid-modeling UI against Shapr3D, driving the app

@@ -152,6 +152,70 @@ key presses another one; an agent told only "false" retries forever. So:
 The first two 400s are decided without ever reaching the main actor, because
 `CommandRegistry.all` and `routableIDs` are pure statics.
 
+### `POST /v1/exec`
+
+Body `{"op":"feature.extrude","args":{…}}`. The parameterized half: one request
+carries the operation AND its numbers, so a model can be built without a
+gesture. Returns the full state plus what the op produced.
+
+This does NOT puppet the interactive tools (`beginCreate` → drag →
+`commitTool`). It goes to the seams the architecture already mandates —
+`DocumentCommand` for mutations, `FeatureKind` for parametric intent — so an
+exec'd model is byte-identical to a hand-built one, replays through the same
+graph, and shows up in History like any other feature.
+
+| op | required args |
+|---|---|
+| `sketch.create` | none (defaults to the ground plane); `origin`, `xAxis`, `yAxis`, `name` |
+| `sketch.addEntities` | `sketchID`, `entities[]`; optional `construction` (indices) |
+| `feature.extrude` | `sketchID`, `seedPoint`, `distance`; optional `symmetric`, `boolean`, `booleanTargets` |
+| `feature.revolve` | `sketchID`, `seedPoint`, `axisPoint`, `axisDirection`; optional `angleDegrees` (360), `boolean`, `booleanTargets` |
+| `feature.pattern` | `bodyID`, `count`; optional `kind` (circular), `axis`, `center`, `spacing`, `totalAngleDegrees`, `rotateInstances` |
+| `feature.mirror` | `bodyID`, `planeOrigin`, `planeNormal`; optional `keepOriginal` |
+| `feature.boolean` | `kind` (union/subtract/intersect), `targetBodyID`, `toolBodyIDs[]` |
+
+Entity kinds are `line` (`a`,`b`), `circle` (`center`,`radius`), `arc`
+(`center`,`radius`,`startAngle`,`endAngle`) and `spline` (`points[]`,`closed`) —
+the four the Shapr3D sketch format uses. `SketchEntity` also has
+rect/ellipse/polygon; they are simply not wired yet and say so
+(`unknown_entity_kind`).
+
+**Profiles are found by seed point.** `seedPoint` is a point INSIDE the closed
+region you want, in sketch-local mm; `ProfileDetector` resolves the innermost
+enclosing loop. There is no need to enumerate the loop's entity ids.
+
+**UNITS: millimetres and degrees.** Note that `FeatureKind.revolve` stores
+DEGREES and `FeatureGraph` converts to radians once at the OCCT boundary
+(`angle.value * .pi / 180`). Converting on the way in as well yields a
+6.28-degree revolve that renders as an entirely plausible solid rather than
+failing — the worst way for a unit bug to behave, and the reason the wire
+format is degrees end to end.
+
+Failures are named rather than lumped into one code, because an agent cannot
+see a disabled button and will otherwise retry the wrong thing forever:
+`unknown_op`, `missing_op`, `unknown_entity_kind` (named by index),
+`degenerate_line` / `bad_radius` / `bad_spline`, `zero_distance`,
+`missing_boolean_targets`, `degenerate_axis`, `degenerate_plane`,
+`angle_out_of_range`, `bad_count`, `self_boolean`, `bad_uuid`,
+`unknown_sketch` / `unknown_body` (404).
+
+Two behaviours worth knowing:
+
+- A feature exec lands as **two undo steps** (the append, then the rebuild that
+  evaluates it), reported as `undoSteps`. `performRebuild` is private to
+  `DocumentSession`, and bundling them would mean changing production code to
+  suit a debug channel.
+- Every reply carries `producedBodyIDs`, `changedBodyIDs` and `removedBodyIDs`.
+  All three are needed, because a BOOLEAN adds no body — it replaces its target
+  in place, so judging success by "did a new body appear" reports a subtract
+  that just removed 4.5 million mm3 as having done nothing.
+- If THIS node failed to build, the reply carries `"failed": true` and a
+  `message` naming the reason, alongside `evalErrors` keyed by feature id.
+  That flag is the reliable signal: `rebuildFrom` re-emits bodies and bumps
+  `meshRevision` on nodes it did not semantically touch, so a failed feature
+  can still appear to have changed something. The silent no-op is exactly what
+  this endpoint exists to make visible.
+
 ### `GET /v1/screenshot?w=&h=`
 
 PNG bytes, rendered by the app itself — so it works identically on Catalyst and
@@ -181,14 +245,19 @@ an unexplained failure.
 
 ## What this cannot do yet
 
-`runCommand` **arms** tools; it does not parameterize them. `model.extrude` puts
-the editor in extrude mode — the distance and the commit are separate
-interactions with no endpoint. So an agent can navigate, inspect, seed, undo,
-set views, and capture, but cannot yet say "extrude this profile to 12 mm".
+`/v1/exec` covers sketching plus extrude, revolve, pattern, mirror and boolean —
+enough to build a real parametric model end to end. What is still missing:
 
-Closing that means a `POST /v1/exec` with a small typed verb set
-(`{"op":"extrude","distance":12}`, `{"op":"commit"}`) over VM methods that
-already exist. It is the only remaining piece that needs new judgment about
-which of ~200 `begin*`/`update*`/`commit*` methods to expose, which is why it is
-not in this pass. Until then, finish parameterized operations by driving the
-simulator UI and read the result over the bridge.
+- **Fillet, chamfer, shell and the face ops** (`deleteFace`, `offsetFace`,
+  `replaceFace`). These take `EdgeRef`/`FaceRef`, which are topological
+  signatures rather than plain numbers, so exposing them needs a way to NAME an
+  edge or face over the wire. That is a genuine design question, not a
+  mechanical addition.
+- **Align**, which has no `FeatureKind` at all.
+- **Importing a body.** Several of the Shapr3D tutorial models lean on
+  `MaterializeImportedBodies`, and those bodies are Parasolid, which OCCT cannot
+  read at any price.
+
+`runCommand` still only ARMS the interactive tools; `/v1/exec` is the way to
+perform a parameterized operation, not a replacement for driving the UI when you
+specifically want to test the UI.
