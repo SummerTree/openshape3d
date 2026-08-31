@@ -1,7 +1,22 @@
 # Kernel-history element naming — design (to land as its own mission)
 
-Status: **STEP 1 LANDED** (2026-08-31); steps 2–5 remain design. Landed as
-two slices, both zero-behavior-change and fully gated:
+Status: **STEPS 1–2 LANDED** (2026-08-31); steps 3–5 remain design. Step 2
+(`ElementName` + creation-op naming) shipped in two slices on top of step 1:
+`Model/ElementNaming.swift` (the Codable value + `extrudeNames`/`attach`/
+`namePrimitiveEntries`), `Profile.edgeEntityIDs`/`segmentEntityIDs` +
+`boundaryIdentity` (ordered per-edge sketch-entity identity, refusing to
+guess on any mismatch), `FaceTable.Entry.elementName`, and the FeatureGraph
+wiring: `evalPrimitive` names by role, `evalExtrude`'s new-body branch mints
+from real ancestry and attaches by channel majority vote (single-profile,
+adopted-render bodies only; extras and mesh-path bodies stay unnamed by
+design). Names are still CONSUMED by nothing — resolution is untouched until
+step 4 — so behavior is frozen while the identity layer bakes.
+`ElementNamingTests` (9) covers derivation, refusal cases, attachment, and
+the end-to-end eval. Revolve naming is DEFERRED with reason: `emitFullSolid`
+assigns rather than adopts the OCCT tessellation, so the channel substrate
+doesn't exist there yet.
+
+Step 1 landed as two slices, both zero-behavior-change and fully gated:
 
 - **1a** — per-triangle OCCT face channel on `OCCTRenderMesh`
   (`faceIndices`, `OCCTKernel.renderMeshFaceChannel`), 1-based indexed-map

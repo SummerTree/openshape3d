@@ -150,6 +150,71 @@ final class ElementNamingTests: XCTestCase {
         XCTAssertNil(named.entries[1].elementName, ".derived carries no identity")
     }
 
+    // MARK: - Graph wiring: names reach the eval result
+
+    func testAnExtrudeEvalNamesItsWholeFaceTable() throws {
+        let sketchID = SketchID()
+        let rectEntity = UUID()
+        let extrudeFeature = FeatureID()
+        let bodyID = BodyID()
+        let graph = FeatureGraph(nodes: [
+            FeatureNode(
+                id: extrudeFeature, name: "Extrude",
+                kind: .extrude(
+                    profile: ProfileRef(sketchID: sketchID,
+                                        entityIDs: [rectEntity],
+                                        holeEntityIDs: [], seedPoint: .zero),
+                    plane: PlaneRef(source: .sketch(sketchID)),
+                    distance: Expr(value: 5), symmetric: false,
+                    boolean: BooleanIntent(op: .newBody, resolvedTargets: []),
+                    extraProfiles: []),
+                outputBodyIDs: [bodyID]),
+        ])
+        let sketch = Sketch(id: sketchID, name: "S", plane: .ground, entities: [
+            .rect(id: rectEntity, min: SIMD2(-2, -2), max: SIMD2(2, 2)),
+        ])
+        var revision: UInt64 = 0
+        let result = graph.evaluate(sketches: [sketch], planes: [],
+                                    naming: SignatureNaming(),
+                                    nextRevision: { revision += 1; return revision })
+        XCTAssertTrue(result.errors.isEmpty, "\(result.errors)")
+        let table = try XCTUnwrap(result.faceTables[bodyID])
+        XCTAssertEqual(table.entries.count, 6)
+        let names = table.entries.compactMap(\.elementName)
+        XCTAssertEqual(names.count, 6, "every extrude face carries a name")
+        XCTAssertTrue(names.allSatisfy { $0.creator == extrudeFeature })
+        let sources = Set(names.map(\.source))
+        XCTAssertTrue(sources.contains(.profileCap(end: false)))
+        XCTAssertTrue(sources.contains(.profileCap(end: true)))
+        // The rect is ONE entity owning four walls, split by occurrence.
+        for occurrence in 0...3 {
+            XCTAssertTrue(sources.contains(
+                .profileWall(entity: rectEntity, occurrence: occurrence)),
+                "missing wall occurrence \(occurrence): \(sources)")
+        }
+    }
+
+    func testAPrimitiveEvalNamesItsFaces() throws {
+        let feature = FeatureID()
+        let bodyID = BodyID()
+        let graph = FeatureGraph(nodes: [
+            FeatureNode(id: feature, name: "Cyl",
+                        kind: .primitive(spec: .cylinder(radius: 4, height: 6),
+                                         placement: .identity),
+                        outputBodyIDs: [bodyID]),
+        ])
+        var revision: UInt64 = 0
+        let result = graph.evaluate(sketches: [], planes: [],
+                                    naming: SignatureNaming(),
+                                    nextRevision: { revision += 1; return revision })
+        XCTAssertTrue(result.errors.isEmpty)
+        let table = try XCTUnwrap(result.faceTables[bodyID])
+        let sources = Set(table.entries.compactMap(\.elementName?.source))
+        XCTAssertTrue(sources.contains(.primitiveFace(.cylinderSide)))
+        XCTAssertTrue(sources.contains(.primitiveFace(.cylinderCap(top: true))))
+        XCTAssertTrue(sources.contains(.primitiveFace(.cylinderCap(top: false))))
+    }
+
     // MARK: - Detector identity arrays
 
     func testTheDetectorEmitsEdgeEntitiesInLoopOrder() throws {

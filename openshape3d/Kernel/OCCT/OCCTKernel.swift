@@ -267,16 +267,23 @@ nonisolated enum OCCTKernel {
         extras: [(profile: Profile, holes: [Profile])],
         zMin: Double, zMax: Double,
         origin: SIMD3<Double>, xAxis: SIMD3<Double>,
-        yAxis: SIMD3<Double>, normal: SIMD3<Double>
+        yAxis: SIMD3<Double>, normal: SIMD3<Double>,
+        history: OCCTShapeHistory? = nil
     ) -> BRepHandle? {
-        func prism(_ profile: Profile, _ profileHoles: [Profile]) -> BRepHandle? {
+        func prism(_ profile: Profile, _ profileHoles: [Profile],
+                   history: OCCTShapeHistory? = nil) -> BRepHandle? {
             extrudeShape(
                 outerLoop: profile.loop, outerConic: ConicSpec(profile.kind),
                 holes: extrudeHoles(profileHoles), zMin: zMin, zMax: zMax,
                 origin: origin, xAxis: xAxis, yAxis: yAxis, normal: normal,
-                outerSegments: profile.segments)
+                outerSegments: profile.segments, history: history)
         }
-        guard var solid = prism(outer, holes) else { return nil }
+        // Ancestry only for the single-profile case: fusing extras rebuilds
+        // the face set, and un-composed rows would name the WRONG faces —
+        // exactly what element naming must never do.
+        guard var solid = prism(outer, holes,
+                                history: extras.isEmpty ? history : nil)
+        else { return nil }
         for extra in extras {
             guard let piece = prism(extra.profile, extra.holes),
                   let fused = boolean(solid, piece, op: 0) else { return nil }

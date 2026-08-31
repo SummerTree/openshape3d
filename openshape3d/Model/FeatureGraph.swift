@@ -419,7 +419,13 @@ nonisolated extension FeatureGraph {
                 body.brep = handle
             }
         }
-        let table = state.naming.faceTable(for: body, createdBy: node.id, scheme: .primitive(spec))
+        // A primitive's role IS its identity, so its entries are named
+        // outright — no kernel channel needed, which also covers the box's
+        // deliberately-Euclid render (TOPO_NAMING_HISTORY_DESIGN step 2).
+        let table = ElementNaming.namePrimitiveEntries(
+            state.naming.faceTable(for: body, createdBy: node.id,
+                                   scheme: .primitive(spec)),
+            creator: node.id)
         state.put(body, table: table)
     }
 
@@ -480,17 +486,30 @@ nonisolated extension FeatureGraph {
             // profiles an exact polygonal prism, and extra regions fuse in.
             // Either way the body carries a brep, so downstream booleans stay
             // analytic.
+            var names: [Int: ElementName] = [:]
+            var channel: [UInt32] = []
             if OCCTKernel.useOCCTAsSourceOfTruth {
                 let z = OCCTKernel.extrudeZRange(distance: distance.value, symmetric: symmetric)
+                let history: OCCTShapeHistory? = extras.isEmpty ? OCCTShapeHistory() : nil
                 if let handle = OCCTKernel.extrudeSolid(
                     outer: outer, holes: holes, extras: extras,
                     zMin: z.zMin, zMax: z.zMax,
                     origin: plane.origin, xAxis: plane.xAxis,
-                    yAxis: plane.yAxis, normal: plane.normal) {
-                    body.adoptBRep(handle)
+                    yAxis: plane.yAxis, normal: plane.normal,
+                    history: history) {
+                    // Names attach through the per-triangle channel, which
+                    // only aligns when the OCCT tessellation IS the render —
+                    // so only when adoption succeeded (step 2 wiring).
+                    if body.adoptBRep(handle), let history {
+                        names = ElementNaming.extrudeNames(
+                            creator: node.id, ancestry: ShapeAncestry(history),
+                            outer: outer, holes: holes)
+                        channel = OCCTKernel.renderMeshFaceChannel(from: handle)
+                    }
                 }
             }
-            let table = state.naming.faceTable(for: body, createdBy: node.id, scheme: .extrude(outer))
+            var table = state.naming.faceTable(for: body, createdBy: node.id, scheme: .extrude(outer))
+            table = ElementNaming.attach(names, to: table, channel: channel)
             state.put(body, table: table)
             return
         }
