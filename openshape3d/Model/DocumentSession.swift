@@ -112,11 +112,16 @@ final class DocumentSession {
 
     func undo() {
         undoStack.undo(on: &document)
+        // A rebuild's errors were computed for the state being undone;
+        // recompute for the restored state so badges track the document
+        // rather than the last live edit (review S6 residual).
+        refreshEvalErrors()
         didChange()
     }
 
     func redo() {
         undoStack.redo(on: &document)
+        refreshEvalErrors()
         didChange()
     }
 
@@ -597,12 +602,18 @@ final class DocumentSession {
             }
             guard !dimCommands.isEmpty else { continue }
 
-            let (solvedEntities, _) = SketchSolverBridge.solve(
+            let outcome = SketchSolverBridge.solveOutcome(
                 proposed, movingEntity: nil, dragTarget: nil)
             var commands = dimCommands
-            for (before, after) in zip(sketch.entities, solvedEntities) where before != after {
-                commands.append(UpdateSketchEntityCommand(
-                    sketchID: sketch.id, before: before, after: after))
+            // Same gate as the drag path (R2-3): if the new dimension values
+            // make the system CONFLICTING, the dimensions still update (they
+            // are what the user's variable edit means) but the solver's
+            // best-fit compromise is NOT written over the geometry.
+            if outcome.structuralResidual <= 1e-3 {
+                for (before, after) in zip(sketch.entities, outcome.entities) where before != after {
+                    commands.append(UpdateSketchEntityCommand(
+                        sketchID: sketch.id, before: before, after: after))
+                }
             }
             perform(CompositeCommand(title: "Variables", commands: commands))
             rebuildForSketchChange(sketch.id)
@@ -756,7 +767,32 @@ final class DocumentSession {
             }
             loadWarning = parts.isEmpty ? nil : parts.joined(separator: "\n\n")
         }
+        // A document saved with broken refs used to reopen with NO badges,
+        // because errors only existed after the first live rebuild (review
+        // R4-N6). Surface them now, before the user edits anything.
+        refreshEvalErrors()
         changeCount += 1
+    }
+
+    /// Recompute `lastEvalErrors` WITHOUT touching any body: replay the
+    /// feature graph against a scratch revision counter and keep only the
+    /// error map. Bodies are discarded, so the replay can't disturb the
+    /// live document (nothing is applied — the C4 path-dependence caveat
+    /// doesn't bite). Called on load and after undo/redo, the two paths
+    /// that used to leave stale or missing badges (R4-N6 / S6).
+    private func refreshEvalErrors() {
+        guard !document.features.nodes.isEmpty else {
+            lastEvalErrors = [:]
+            return
+        }
+        var counter: UInt64 = 1
+        let result = document.features.evaluate(
+            sketches: document.sketches,
+            planes: document.planes,
+            naming: naming,
+            nextRevision: { counter &+= 1; return counter }
+        )
+        lastEvalErrors = result.errors
     }
 
     private func scheduleAutosave() {

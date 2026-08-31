@@ -1,13 +1,18 @@
 # Status & Next Steps — Handoff Notes
 
-Last updated: 2026-08-28 (move-gizmo parity pass; §1/§4 re-audited against the
-code). This is the living handoff document: what is DONE, how the newest
+Last updated: 2026-08-31 (FreeCAD-reference hardening tranches; see §4 mission
+0). This is the living handoff document: what is DONE, how the newest
 subsystems work, the dev workflow, and the prioritized next missions.
 Companions: `IMPLEMENTATION_PLAN.md` (original phase plan),
 `SHAPR3D_PARITY_SPEC.md` (feature spec), `PHASE_D_DESIGN.md` (feature-graph
-design).
+design), and — new — `FREECAD_PLAYBOOK.md` (the FreeCAD-derived hardening
+ledger: every OCCT defensive pattern mined from the reference checkout at
+`~/projects/reference/FreeCAD`, its licensing rules, and where each landed).
 
-**Current test baseline (2026-08-30): 920 unit tests in 18s** — down from
+**Current test baseline (2026-08-31): 1013 unit tests in ~18s** — the
+FreeCAD-hardening tranches added 42 geometry-value tests (typed blend
+diagnostics, boolean normalization, exact-volume oracles, constraint
+lifecycle). Previous baseline (2026-08-30): 920 unit tests in 18s — down from
 ~100 s after booleans stopped running both kernels (see §3b). Full UI suite last
 measured at the analytic-ellipses commit: 103 executed, 2 skipped, 0 failures,
 44m28s — 0 idle-timeouts, 0 field-clear retries, store pinned at
@@ -632,6 +637,61 @@ first differing frame is the one you want.
 > `shellThickness` UI, `KernelShellTests` / `FeatureShellEvalTests` /
 > `ShellUITests`), as did most of the B-rep port that F describes as a spike.
 > What remains is ranked here.
+
+### 0. FreeCAD-reference hardening — ✅ TRANCHES 1+2 DONE (2026-08-31)
+
+FreeCAD (the largest open-source OCCT consumer) is now a local reference
+checkout; `docs/FREECAD_PLAYBOOK.md` is the ledger — pattern, FreeCAD source
+ref, licensing classification (reference-not-copy; FreeCAD is LGPL, we are
+MIT), the change here, the defect closed, the pinning test. Landed:
+
+- **Typed kernel diagnostics** (`OCCTOpStatus`/`OCCTOpError`): every mutating
+  bridge op says WHY it failed; `Result` variants beside the old `?` shims.
+- **Fillet/chamfer** (the top user pain): edge pre-qualification (seam/
+  degenerate/tangent picks refused with the reason), `NbFaultyContours` +
+  per-edge `Generated()` checks — a partial build is DISCARDED (R4-O4), the
+  Ø10-rim r=6 crash is a typed error, and the drag is clamped to a
+  kernel-derived max radius (bisection over real checked builds) shown in the
+  blend bar.
+- **Booleans**: analyzer pre-check on operands (+1 heal), non-destructive
+  builder, auto-fuzzy from combined extent (one 10× retry), single-solid
+  unwrap + `UnifySameDomain` + validation before storing (R4-O3); a
+  body-splitting cut is REPORTED (`solidCount`); OCCT-owned failures surface
+  as node errors instead of silently degrading to the Euclid mesh.
+- **Closed-hollow shell actually works now** (offset+cut — `BySimple` never
+  worked and the mesh fallback was covering for it); shell validates and
+  must REMOVE material; brep bodies error rather than degrade to the
+  clamping mesh inset (R3-E).
+- **Tolerances** (S5): `OCCTKernel.matchTolerance` — deflection-derived +
+  per-shape `ShapeAnalysis_ShapeTolerance`, replacing all four AABB-scaled
+  sites (the thin-plate mistargeting class).
+- **Face targeting** (R4-O2): exact `BRepExtrema_DistShapeShape` to the
+  trimmed face; the 5×5 UV-bbox grid is gone.
+- **Hang containment** (H1): mesher/read deadline via a progress indicator,
+  heal-and-validate at the STEP and blob trust boundaries, finite-bounds
+  gates at op entries. **Persistence** (R4-O5): brep blobs written without
+  triangulation at pinned `TopTools_FormatVersion_VERSION_2`.
+- **Sketch integrity** (R2-2/R2-3): solver writeback gated on the structural
+  residual (conflicts spring back + red "Constraints conflict" chip; the
+  variable-driven solve keeps prior geometry); delete cascades constraints/
+  dimensions in the same undo step; trim re-anchors onto surviving fragments
+  and visibly drops the rest; `Sketch.validateConstraintRefs()` for tests.
+- **Badges on load/undo** (R4-N6/S6): `DocumentSession.refreshEvalErrors()` —
+  an errors-only replay after `load()`/`undo()`/`redo()`.
+- **Naming prerequisites** (R4-N1/N4): deterministic face basis (outer loop
+  by area, canonical start vertex — kills "moves replay rotated after
+  relaunch") and `resolve` now hard-vetoes surface-kind mismatches.
+- **Oracle tests** (R3-D): `GeometryOracleTests` — exact analytic volumes
+  (incl. a Pappus-derived rim fillet) so wrong-but-non-empty can't pass.
+
+**Next mission from this line of work:** kernel-history topological naming —
+design agreed and written up in `docs/TOPO_NAMING_HISTORY_DESIGN.md`
+(element maps from OCCT's own `Modified()/Generated()` history layered UNDER
+`SignatureNaming`, zero persisted-format change, identity-based blend-edge
+targeting). Its prerequisites (boolean normalization, S4 determinism) are
+now in. Smaller follow-ups: residual attribution → red per-constraint
+glyphs, then rank-based add-time conflict diagnosis; trim re-anchor for
+arc/circle fragments beyond the point-weld rule.
 
 ### 1. Wire the backends that have no UI — ✅ COMPLETE (2026-08-29)
 

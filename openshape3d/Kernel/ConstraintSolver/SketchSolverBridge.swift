@@ -37,19 +37,40 @@ nonisolated enum SketchSolverBridge {
 
     // MARK: - Public API
 
+    /// Everything a caller needs to decide whether the solved geometry may
+    /// be WRITTEN BACK. The solver always produces its best fit — for a
+    /// conflicting system that best fit is a compromise satisfying nobody,
+    /// and writing it into the document every drag frame was review finding
+    /// R2-3. planegcs gates its geometry update on solve status
+    /// (docs/FREECAD_PLAYBOOK.md S1); this is the same gate.
+    struct Outcome {
+        var entities: [SketchEntity]
+        var dof: Int
+        /// LM converged on the system it was given (INCLUDING any transient
+        /// drag pull — a stretched drag legitimately leaves this false).
+        var converged: Bool
+        /// Norm of the STRUCTURAL residuals (constraints + dimensions only,
+        /// no drag) at the solved state. Above tolerance = the constraint
+        /// system itself is conflicting; hold the baseline, don't write.
+        var structuralResidual: Double
+    }
+
     /// Solve the sketch. When `movingEntity`/`dragTarget` are supplied, the
     /// moved entity's point NEAREST the drag target is pulled toward it with a
     /// transient `FixedPointConstraint` (drag-to-solve), while the rest of the
-    /// geometry follows. Returns new entities (same IDs) and the sketch's
-    /// STRUCTURAL degrees of freedom (0 = fully defined), independent of any
-    /// transient drag constraint.
-    static func solve(
+    /// geometry follows. Returns new entities (same IDs), the sketch's
+    /// STRUCTURAL degrees of freedom (0 = fully defined), and the state a
+    /// caller needs to gate writeback.
+    static func solveOutcome(
         _ sketch: Sketch,
         movingEntity: UUID?,
         dragTarget: SIMD2<Double>?
-    ) -> (entities: [SketchEntity], dof: Int) {
+    ) -> Outcome {
         let sys = buildSystem(from: sketch, movingEntity: movingEntity, dragTarget: dragTarget)
-        guard !sys.initial.isEmpty else { return (sketch.entities, 0) }
+        guard !sys.initial.isEmpty else {
+            return Outcome(entities: sketch.entities, dof: 0,
+                           converged: true, structuralResidual: 0)
+        }
 
         let result = ConstraintSolver.solve(
             initial: sys.initial,
@@ -59,7 +80,23 @@ nonisolated enum SketchSolverBridge {
         let solved = result.variables
         let analysis = nullSpaceAnalysis(sys, at: solved)
         let newEntities = writeBack(sketch.entities, sys: sys, vars: solved)
-        return (newEntities, analysis.dof)
+        // Structural residuals evaluated AT the solution (no second solve).
+        var sumSquares = 0.0
+        for constraint in sys.structural {
+            for r in constraint.residuals(solved) { sumSquares += r * r }
+        }
+        return Outcome(entities: newEntities, dof: analysis.dof,
+                       converged: result.converged,
+                       structuralResidual: sumSquares.squareRoot())
+    }
+
+    static func solve(
+        _ sketch: Sketch,
+        movingEntity: UUID?,
+        dragTarget: SIMD2<Double>?
+    ) -> (entities: [SketchEntity], dof: Int) {
+        let outcome = solveOutcome(sketch, movingEntity: movingEntity, dragTarget: dragTarget)
+        return (outcome.entities, outcome.dof)
     }
 
     /// Residual norm of the sketch's structural constraint/dimension system at

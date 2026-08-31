@@ -433,23 +433,55 @@ struct UpdateSketchEntitiesCommand: DocumentCommand {
     }
 }
 
+/// The 2D position a `ConstraintRef` role names on an entity, for re-anchoring
+/// constraints across trim. Nil for roles the entity doesn't have (and for
+/// `.whole`, which is not a point).
+private nonisolated func sketchPoint(_ entity: SketchEntity, role: PointRole) -> SIMD2<Double>? {
+    switch (entity, role) {
+    case let (.line(_, a, _), .endpointA): return a
+    case let (.line(_, _, b), .endpointB): return b
+    case let (.circle(_, c, _), .center): return c
+    case let (.arc(_, c, r, sa, _), .endpointA): return c + r * SIMD2(cos(sa), sin(sa))
+    case let (.arc(_, c, r, _, ea), .endpointB): return c + r * SIMD2(cos(ea), sin(ea))
+    case let (.arc(_, c, _, _, _), .center): return c
+    case let (.polygon(_, c, _, _, _), .center): return c
+    default: return nil
+    }
+}
+
 struct RemoveSketchEntitiesCommand: DocumentCommand {
     let title = "Delete"
     let sketchID: SketchID
     /// Snapshots with original array indices so undo restores ordering.
     let removed: [(index: Int, entity: SketchEntity)]
+    /// Constraints/dimensions that referenced a removed entity — deleted in
+    /// the SAME command, restored by the same undo. Leaving them behind was
+    /// review R2-2: the solver silently dropped the dangling residuals, so a
+    /// driving dimension kept displaying its value while driving nothing.
+    let removedConstraints: [(index: Int, constraint: SketchConstraint)]
+    let removedDimensions: [(index: Int, dimension: SketchDimension)]
 
     init(ids: Set<UUID>, sketch: Sketch) {
         sketchID = sketch.id
         removed = sketch.entities.enumerated()
             .filter { ids.contains($0.element.id) }
             .map { (index: $0.offset, entity: $0.element) }
+        removedConstraints = sketch.constraints.enumerated()
+            .filter { $0.element.refs.contains { ids.contains($0.entityID) } }
+            .map { (index: $0.offset, constraint: $0.element) }
+        removedDimensions = sketch.dimensions.enumerated()
+            .filter { $0.element.refs.contains { ids.contains($0.entityID) } }
+            .map { (index: $0.offset, dimension: $0.element) }
     }
 
     func apply(to document: inout DesignDocument) {
         guard let index = document.sketches.firstIndex(where: { $0.id == sketchID }) else { return }
         let ids = Set(removed.map(\.entity.id))
         document.sketches[index].entities.removeAll { ids.contains($0.id) }
+        let constraintIDs = Set(removedConstraints.map(\.constraint.id))
+        document.sketches[index].constraints.removeAll { constraintIDs.contains($0.id) }
+        let dimensionIDs = Set(removedDimensions.map(\.dimension.id))
+        document.sketches[index].dimensions.removeAll { dimensionIDs.contains($0.id) }
     }
 
     func revert(in document: inout DesignDocument) {
@@ -458,23 +490,130 @@ struct RemoveSketchEntitiesCommand: DocumentCommand {
             let at = min(entry.index, document.sketches[index].entities.count)
             document.sketches[index].entities.insert(entry.entity, at: at)
         }
+        for entry in removedConstraints.sorted(by: { $0.index < $1.index }) {
+            let at = min(entry.index, document.sketches[index].constraints.count)
+            document.sketches[index].constraints.insert(entry.constraint, at: at)
+        }
+        for entry in removedDimensions.sorted(by: { $0.index < $1.index }) {
+            let at = min(entry.index, document.sketches[index].dimensions.count)
+            document.sketches[index].dimensions.insert(entry.dimension, at: at)
+        }
     }
 }
 
 /// Trim: replace one entity with the fragments left after deleting a span
 /// (may be empty — the whole entity goes away).
+///
+/// Constraints and dimensions on the trimmed entity are handled in the SAME
+/// command (review R2-2): a point-role ref re-anchors to whichever fragment
+/// has a point at the same position; a `.whole` ref transfers when exactly
+/// one fragment survives; anything that can't transfer is dropped (and
+/// restored by undo) rather than left dangling with a displayed value that
+/// drives nothing.
 struct TrimCommand: DocumentCommand {
     let title = "Trim"
     let sketchID: SketchID
     let index: Int
     let removed: SketchEntity
     let fragments: [SketchEntity]
+    let retargetedConstraints: [(index: Int, before: SketchConstraint, after: SketchConstraint)]
+    let retargetedDimensions: [(index: Int, before: SketchDimension, after: SketchDimension)]
+    let droppedConstraints: [(index: Int, constraint: SketchConstraint)]
+    let droppedDimensions: [(index: Int, dimension: SketchDimension)]
+
+    /// Legacy form with no constraint context (tests, callers that manage
+    /// constraints themselves): geometry only.
+    init(sketchID: SketchID, index: Int, removed: SketchEntity, fragments: [SketchEntity]) {
+        self.sketchID = sketchID
+        self.index = index
+        self.removed = removed
+        self.fragments = fragments
+        retargetedConstraints = []
+        retargetedDimensions = []
+        droppedConstraints = []
+        droppedDimensions = []
+    }
+
+    init(sketch: Sketch, index: Int, removed: SketchEntity, fragments: [SketchEntity]) {
+        self.sketchID = sketch.id
+        self.index = index
+        self.removed = removed
+        self.fragments = fragments
+
+        /// Rewrite one ref off the trimmed entity, or nil when it can't move.
+        func retarget(_ ref: ConstraintRef) -> ConstraintRef? {
+            guard ref.entityID == removed.id else { return ref }
+            if ref.role == .whole {
+                // "The line is horizontal" transfers cleanly to a single
+                // surviving piece; with two pieces the statement is ambiguous.
+                return fragments.count == 1
+                    ? ConstraintRef(entityID: fragments[0].id, role: .whole) : nil
+            }
+            guard let oldPoint = sketchPoint(removed, role: ref.role) else { return nil }
+            for fragment in fragments {
+                for role in [PointRole.endpointA, .endpointB, .center] {
+                    if let p = sketchPoint(fragment, role: role),
+                       simd_length(p - oldPoint) < 1e-6 {
+                        return ConstraintRef(entityID: fragment.id, role: role)
+                    }
+                }
+            }
+            return nil  // the constrained point was on the span trimmed away
+        }
+
+        var retargetedC: [(Int, SketchConstraint, SketchConstraint)] = []
+        var droppedC: [(Int, SketchConstraint)] = []
+        for (i, constraint) in sketch.constraints.enumerated()
+        where constraint.refs.contains(where: { $0.entityID == removed.id }) {
+            let newRefs = constraint.refs.compactMap(retarget)
+            if newRefs.count == constraint.refs.count {
+                var after = constraint
+                after.refs = newRefs
+                retargetedC.append((i, constraint, after))
+            } else {
+                droppedC.append((i, constraint))
+            }
+        }
+        var retargetedD: [(Int, SketchDimension, SketchDimension)] = []
+        var droppedD: [(Int, SketchDimension)] = []
+        for (i, dimension) in sketch.dimensions.enumerated()
+        where dimension.refs.contains(where: { $0.entityID == removed.id }) {
+            let newRefs = dimension.refs.compactMap(retarget)
+            if newRefs.count == dimension.refs.count {
+                var after = dimension
+                after.refs = newRefs
+                retargetedD.append((i, dimension, after))
+            } else {
+                droppedD.append((i, dimension))
+            }
+        }
+        retargetedConstraints = retargetedC.map { (index: $0.0, before: $0.1, after: $0.2) }
+        retargetedDimensions = retargetedD.map { (index: $0.0, before: $0.1, after: $0.2) }
+        droppedConstraints = droppedC.map { (index: $0.0, constraint: $0.1) }
+        droppedDimensions = droppedD.map { (index: $0.0, dimension: $0.1) }
+    }
 
     func apply(to document: inout DesignDocument) {
         guard let sketchIndex = document.sketches.firstIndex(where: { $0.id == sketchID }) else { return }
         document.sketches[sketchIndex].entities.removeAll { $0.id == removed.id }
         let at = min(index, document.sketches[sketchIndex].entities.count)
         document.sketches[sketchIndex].entities.insert(contentsOf: fragments, at: at)
+        for entry in retargetedConstraints {
+            if let i = document.sketches[sketchIndex].constraints
+                .firstIndex(where: { $0.id == entry.before.id }) {
+                document.sketches[sketchIndex].constraints[i] = entry.after
+            }
+        }
+        for entry in retargetedDimensions {
+            if let i = document.sketches[sketchIndex].dimensions
+                .firstIndex(where: { $0.id == entry.before.id }) {
+                document.sketches[sketchIndex].dimensions[i] = entry.after
+            }
+        }
+        let droppedC = Set(droppedConstraints.map(\.constraint.id))
+        document.sketches[sketchIndex].constraints.removeAll { droppedC.contains($0.id) }
+        let droppedD = Set(droppedDimensions.map(\.dimension.id))
+        document.sketches[sketchIndex].dimensions.removeAll { droppedD.contains($0.id) }
     }
 
     func revert(in document: inout DesignDocument) {
@@ -483,6 +622,26 @@ struct TrimCommand: DocumentCommand {
         document.sketches[sketchIndex].entities.removeAll { ids.contains($0.id) }
         let at = min(index, document.sketches[sketchIndex].entities.count)
         document.sketches[sketchIndex].entities.insert(removed, at: at)
+        for entry in retargetedConstraints {
+            if let i = document.sketches[sketchIndex].constraints
+                .firstIndex(where: { $0.id == entry.after.id }) {
+                document.sketches[sketchIndex].constraints[i] = entry.before
+            }
+        }
+        for entry in retargetedDimensions {
+            if let i = document.sketches[sketchIndex].dimensions
+                .firstIndex(where: { $0.id == entry.after.id }) {
+                document.sketches[sketchIndex].dimensions[i] = entry.before
+            }
+        }
+        for entry in droppedConstraints.sorted(by: { $0.index < $1.index }) {
+            let at = min(entry.index, document.sketches[sketchIndex].constraints.count)
+            document.sketches[sketchIndex].constraints.insert(entry.constraint, at: at)
+        }
+        for entry in droppedDimensions.sorted(by: { $0.index < $1.index }) {
+            let at = min(entry.index, document.sketches[sketchIndex].dimensions.count)
+            document.sketches[sketchIndex].dimensions.insert(entry.dimension, at: at)
+        }
     }
 }
 

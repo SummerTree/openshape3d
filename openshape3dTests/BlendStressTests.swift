@@ -53,10 +53,14 @@ final class BlendStressTests: XCTestCase {
     private func point(_ e: SelectableEdge) -> SIMD3<Double> {
         SIMD3(Double(e.midpoint.x), Double(e.midpoint.y), Double(e.midpoint.z))
     }
-    /// The tolerance the app uses: 1% of the body's AABB diagonal.
+    /// The tolerance the app uses: deflection-derived via
+    /// `OCCTKernel.matchTolerance` (docs/FREECAD_PLAYBOOK.md T1), no longer a
+    /// fraction of the body's AABB diagonal.
     private func appTolerance(_ body: Body) -> Double {
-        let aabb = body.render.localAABB
-        return max(Double(simd_length(aabb.max - aabb.min)) * 0.01, 1e-6)
+        guard let brep = body.brep else {
+            return 4 * OCCTKernel.renderLinearDeflection
+        }
+        return OCCTKernel.matchTolerance(for: brep)
     }
 
     // MARK: - 1. The crash
@@ -201,5 +205,36 @@ final class BlendStressTests: XCTestCase {
                                  tolerance: appTolerance(body)) == nil { unresolved += 1 }
         }
         XCTAssertEqual(unresolved, 0, "all 12 cube edges must still resolve")
+    }
+
+    // MARK: - 4. Kernel-derived max radius (docs/FREECAD_PLAYBOOK.md F3)
+
+    /// On the Ø10 rim the true limit sits just under the cylinder's own
+    /// radius, and — the actual contract — whatever the probe reports must
+    /// BUILD, because the clamp uses the same checks as Apply.
+    func testMaxFilletRadiusOnTheRimIsBuildable() throws {
+        let brep = try cylinderBrep()
+        let rim = SIMD3<Double>(cylRadius, cylHeight, 0)
+        let tolerance = 4 * OCCTKernel.renderLinearDeflection
+        let cap = OCCTKernel.maxFilletRadius(brep, at: [rim], tolerance: tolerance)
+        XCTAssertGreaterThan(cap, 3.0, "a Ø10 rim takes far more than 3 mm")
+        XCTAssertLessThanOrEqual(cap, cylRadius + 0.01,
+                                 "…but never more than the wall it eats into")
+        XCTAssertNotNil(
+            try? OCCTKernel.filletResult(brep, at: [rim], radius: cap,
+                                         tolerance: tolerance).get(),
+            "the reported max must actually build — that is the whole point")
+    }
+
+    /// On a 100×100×1 plate the limit is the 1 mm thickness, not the
+    /// ~141 mm diagonal the old mesh heuristic scaled by.
+    func testMaxFilletRadiusOnAThinPlateIsBoundedByThickness() throws {
+        let plate = try XCTUnwrap(OCCTKernel.primitiveShape(
+            .box(width: 100, depth: 100, height: 1), placement: .identity))
+        let rimMid = SIMD3<Double>(50, 1, 0)
+        let cap = OCCTKernel.maxFilletRadius(
+            plate, at: [rimMid], tolerance: 4 * OCCTKernel.renderLinearDeflection)
+        XCTAssertGreaterThan(cap, 0, "some fillet always fits a clean rim")
+        XCTAssertLessThan(cap, 1.5, "bounded by the 1 mm wall, not the diagonal")
     }
 }

@@ -209,4 +209,38 @@ final class SignatureNamingTests: XCTestCase {
         XCTAssertGreaterThan(planar.normal.y, 0.99, "still the top face despite the hole")
         XCTAssertEqual(planar.holes.count, 1, "the resolved face carries the bore hole")
     }
+
+    // MARK: - Surface kind is a hard veto (review R4-N4)
+
+    /// A CYLINDRICAL ref must never resolve to a planar face, however well
+    /// the centroid and area line up. `FaceSignature.kind` was written by
+    /// every minting path and read by none — this pins that `resolve` now
+    /// honours it.
+    func testCylindricalRefCannotBindAPlanarFace() {
+        // Cylinder r=4 h=8: wall area 2π·4·8 ≈ 201. Craft a cylindrical ref
+        // whose OTHER terms describe the TOP CAP perfectly (centroid on the
+        // cap, normal +Y, cap-ish area): without the kind veto, cap alignment
+        // 1.0 → base score ≥ wNormal alone clears nothing, but with centroid
+        // and area agreeing it crosses the resolve threshold.
+        let cyl = Body(
+            name: "Cyl",
+            euclidMesh: .primitive(.cylinder(radius: 4, height: 8)),
+            revision: 0
+        )
+        let capLikeButCylindrical = FaceSignature(
+            kind: .cylindrical(radius: 4),
+            normal: SIMD3(0, 1, 0),
+            centroid: SIMD3(0, 8, 0),
+            area: .pi * 16,
+            planeOffset: 8
+        )
+        let ref = faceRef(.derived(index: 0), capLikeButCylindrical, on: cyl)
+        if let resolved = naming.resolve(ref, in: cyl, table: nil) {
+            XCTAssertNil(resolved.planar,
+                         "a cylindrical ref bound a planar cap — the R4-N4 bug")
+            XCTAssertNotNil(resolved.cylinder)
+        }
+        // Resolving to nil is equally acceptable: the ref describes no real
+        // cylindrical face. Binding the CAP is the one wrong answer.
+    }
 }
