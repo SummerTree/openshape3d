@@ -220,7 +220,8 @@ nonisolated enum OCCTKernel {
         holes: [ExtrudeHole], zMin: Double, zMax: Double,
         origin: SIMD3<Double>, xAxis: SIMD3<Double>,
         yAxis: SIMD3<Double>, normal: SIMD3<Double>,
-        outerSegments: [Profile.Segment] = []
+        outerSegments: [Profile.Segment] = [],
+        history: OCCTShapeHistory? = nil
     ) -> BRepHandle? {
         let basis = OCCTPlaneBasis(
             originX: origin.x, originY: origin.y, originZ: origin.z,
@@ -235,7 +236,8 @@ nonisolated enum OCCTKernel {
             holeConics: conicData,
             outerSegments: packSegments(outerSegments),
             holeSegments: holes.map { packSegments($0.segments) },
-            zMin: zMin, zMax: zMax, basis: basis) else { return nil }
+            zMin: zMin, zMax: zMax, basis: basis,
+            history: history) else { return nil }
         return BRepHandle(shape)
     }
 

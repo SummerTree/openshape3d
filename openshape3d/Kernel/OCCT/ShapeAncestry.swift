@@ -77,6 +77,27 @@ nonisolated struct ShapeAncestry: Sendable, Equatable {
 }
 
 nonisolated extension OCCTKernel {
+
+    /// `extrudeShape` that also reports each result face's ancestry.
+    /// Extrude convention (see `OCCTBridge.h`): `inputOrdinal` = loop
+    /// (0 outer, 1…N holes); walls are `(.edge, wireEdgeOrdinal, .generated)`,
+    /// caps `(.face, 1 = start / 2 = end, .modified)`.
+    static func extrudeShapeWithAncestry(
+        outerLoop: [SIMD2<Double>], outerConic: ConicSpec? = nil,
+        holes: [ExtrudeHole], zMin: Double, zMax: Double,
+        origin: SIMD3<Double>, xAxis: SIMD3<Double>,
+        yAxis: SIMD3<Double>, normal: SIMD3<Double>,
+        outerSegments: [Profile.Segment] = []
+    ) -> (handle: BRepHandle, ancestry: ShapeAncestry)? {
+        let history = OCCTShapeHistory()
+        guard let handle = extrudeShape(
+            outerLoop: outerLoop, outerConic: outerConic, holes: holes,
+            zMin: zMin, zMax: zMax, origin: origin, xAxis: xAxis,
+            yAxis: yAxis, normal: normal, outerSegments: outerSegments,
+            history: history) else { return nil }
+        return (handle, ShapeAncestry(history))
+    }
+
     /// `booleanResult` that also reports each result face's kernel-history
     /// ancestry (input ordinal 0 = `a`, 1 = `b`). Identical geometry to
     /// `booleanResult` for identical inputs — ancestry is observation only.

@@ -115,6 +115,108 @@ final class ShapeAncestryTests: XCTestCase {
         XCTAssertEqual(singleParent.count, 2, "the bottom and top caps")
     }
 
+    // MARK: - Extrude ancestry
+
+    private func rectAncestry() throws
+        -> (handle: BRepHandle, ancestry: ShapeAncestry) {
+        try XCTUnwrap(OCCTKernel.extrudeShapeWithAncestry(
+            outerLoop: [SIMD2(0, 0), SIMD2(10, 0), SIMD2(10, 6), SIMD2(0, 6)],
+            holes: [], zMin: -4, zMax: 4,
+            origin: .zero, xAxis: SIMD3(1, 0, 0), yAxis: SIMD3(0, 1, 0),
+            normal: SIMD3(0, 0, 1)))
+    }
+
+    func testARectExtrudeNamesEveryFaceOnce() throws {
+        let (handle, ancestry) = try rectAncestry()
+        XCTAssertEqual(faceCount(handle), 6)
+        XCTAssertTrue(ancestry.unknownFaces(resultFaceCount: 6).isEmpty,
+                      "every extrude face must carry ancestry: \(ancestry.rows)")
+        // Exactly one row per face: 2 caps + 4 walls, no double-claims.
+        XCTAssertEqual(ancestry.rows.count, 6)
+        let caps = ancestry.rows.filter { $0.inputKind == .face }
+        XCTAssertEqual(Set(caps.map(\.inputSubshape)), [1, 2])
+        XCTAssertTrue(caps.allSatisfy { $0.relation == .modified })
+        let walls = ancestry.rows.filter { $0.inputKind == .edge }
+        XCTAssertEqual(Set(walls.map(\.inputSubshape)), [1, 2, 3, 4])
+        XCTAssertTrue(walls.allSatisfy {
+            $0.relation == .generated && $0.inputOrdinal == 0
+        })
+    }
+
+    /// The convention's load-bearing claims, checked against GEOMETRY via the
+    /// face channel: cap subIndex 1 is the zMin face, and wall edge ordinal i
+    /// is the wall through loop points i-1 → i (wire order = construction
+    /// order). If OCCT's wire iteration ever stops matching construction
+    /// order, this is the test that says so.
+    func testExtrudeRowsPointAtTheGeometricallyRightFaces() throws {
+        let loop = [SIMD2<Double>(0, 0), SIMD2<Double>(10, 0),
+                    SIMD2<Double>(10, 6), SIMD2<Double>(0, 6)]
+        let (handle, ancestry) = try rectAncestry()
+        let channel = OCCTKernel.renderMeshFaceChannel(from: handle)
+        let mesh = OCCTKernel.renderMesh(from: handle)
+
+        // Vertex positions of every triangle labelled with a face index.
+        func vertices(ofFace face: Int) -> [SIMD3<Float>] {
+            var out: [SIMD3<Float>] = []
+            for (triangle, label) in channel.enumerated() where label == face {
+                for corner in 0..<3 {
+                    out.append(mesh.positions[Int(mesh.indices[3 * triangle + corner])])
+                }
+            }
+            return out
+        }
+        func spansZ(_ face: Int, at z: Float) -> Bool {
+            let zs = vertices(ofFace: face).map(\.z)
+            return !zs.isEmpty && zs.allSatisfy { abs($0 - z) < 1e-4 }
+        }
+        func containsColumn(_ face: Int, at p: SIMD2<Double>) -> Bool {
+            vertices(ofFace: face).contains {
+                abs(Double($0.x) - p.x) < 1e-4 && abs(Double($0.y) - p.y) < 1e-4
+            }
+        }
+
+        for row in ancestry.rows where row.inputKind == .face {
+            let z: Float = row.inputSubshape == 1 ? -4 : 4
+            XCTAssertTrue(spansZ(row.resultFace, at: z),
+                          "cap subIndex \(row.inputSubshape) must lie at z=\(z)")
+        }
+        for row in ancestry.rows where row.inputKind == .edge {
+            let a = loop[row.inputSubshape - 1]
+            let b = loop[row.inputSubshape % loop.count]
+            XCTAssertTrue(containsColumn(row.resultFace, at: a)
+                          && containsColumn(row.resultFace, at: b),
+                          "wall edge \(row.inputSubshape) must span "
+                          + "\(a) → \(b), face \(row.resultFace)")
+        }
+    }
+
+    /// A circle extrudes to one analytic wall from ONE wire edge, and a hole
+    /// loop's wall carries the hole's ordinal — the outer/hole split element
+    /// naming keys on.
+    func testAHoledCircleExtrudeSeparatesLoopOrdinals() throws {
+        let outerRadius = 6.0, holeRadius = 2.0
+        let circle = { (r: Double) -> [SIMD2<Double>] in
+            (0..<32).map { i -> SIMD2<Double> in
+                let a = Double(i) / 32 * 2 * .pi
+                return SIMD2(r * cos(a), r * sin(a))
+            }
+        }
+        let (handle, ancestry) = try XCTUnwrap(OCCTKernel.extrudeShapeWithAncestry(
+            outerLoop: circle(outerRadius),
+            outerConic: .init(center: .zero, radius: outerRadius),
+            holes: [.init(loop: circle(holeRadius),
+                          conic: .init(center: .zero, radius: holeRadius))],
+            zMin: 0, zMax: 5,
+            origin: .zero, xAxis: SIMD3(1, 0, 0), yAxis: SIMD3(0, 1, 0),
+            normal: SIMD3(0, 0, 1)))
+        XCTAssertEqual(faceCount(handle), 4)  // 2 caps + 2 cylindrical walls
+        XCTAssertTrue(ancestry.unknownFaces(resultFaceCount: 4).isEmpty)
+        let walls = ancestry.rows.filter { $0.inputKind == .edge }
+        XCTAssertEqual(walls.count, 2)
+        XCTAssertEqual(Set(walls.map(\.inputOrdinal)), [0, 1],
+                       "outer wall is loop 0, the hole's wall loop 1")
+    }
+
     // MARK: - Same-face survival
 
     /// A cut far from a face leaves it untouched — relation `.same`, the

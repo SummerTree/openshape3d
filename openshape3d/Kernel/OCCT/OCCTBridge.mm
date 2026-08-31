@@ -654,6 +654,24 @@ static gp_Trsf OS3DBasisTransform(OCCTPlaneBasis *basis) {
                                               zMin:(double)zMin
                                               zMax:(double)zMax
                                              basis:(OCCTPlaneBasis *)basis {
+    return [self extrudedShapeWithOuterLoop:outerLoop outerConic:outerConic
+                                      holes:holes holeConics:holeConics
+                              outerSegments:outerSegments
+                               holeSegments:holeSegments
+                                       zMin:zMin zMax:zMax basis:basis
+                                    history:nil];
+}
+
++ (nullable OCCTShape *)extrudedShapeWithOuterLoop:(NSData *)outerLoop
+                                        outerConic:(nullable NSData *)outerConic
+                                             holes:(NSArray<NSData *> *)holes
+                                        holeConics:(nullable NSData *)holeConics
+                                     outerSegments:(nullable NSData *)outerSegments
+                                      holeSegments:(nullable NSArray<NSData *> *)holeSegments
+                                              zMin:(double)zMin
+                                              zMax:(double)zMax
+                                             basis:(OCCTPlaneBasis *)basis
+                                           history:(nullable OCCTShapeHistory *)history {
     const double height = zMax - zMin;
     if (height <= 1e-9) return nil;
     try {
@@ -662,10 +680,77 @@ static gp_Trsf OS3DBasisTransform(OCCTPlaneBasis *basis) {
                                                  holeSegments, zMin);
         if (face.IsNull()) return nil;
 
-        TopoDS_Shape solid = BRepPrimAPI_MakePrism(
-            face, gp_Vec(0.0, 0.0, height)).Shape();
-        TopoDS_Shape world = BRepBuilderAPI_Transform(
-            solid, OS3DBasisTransform(basis), Standard_True).Shape();
+        BRepPrimAPI_MakePrism prism(face, gp_Vec(0.0, 0.0, height));
+        TopoDS_Shape solid = prism.Shape();
+        // Copy=true: the transform COPIES every sub-shape, so prism faces are
+        // NOT IsSame with world faces — ancestry must ride ModifiedShape().
+        BRepBuilderAPI_Transform placer(solid, OS3DBasisTransform(basis),
+                                        Standard_True);
+        TopoDS_Shape world = placer.Shape();
+
+        if (history != nil && !world.IsNull()) {
+            TopTools_IndexedMapOfShape worldFaces;
+            TopExp::MapShapes(world, TopAbs_FACE, worldFaces);
+            std::set<std::array<int32_t, 5>> rowSet;
+
+            // A prism-output face's index in the FINAL world shape: hop 2 is
+            // the copying transform, and the in-result gate still applies.
+            auto worldIndexOf = [&](const TopoDS_Shape &prismFace) -> int32_t {
+                try {
+                    const TopoDS_Shape placed = placer.ModifiedShape(prismFace);
+                    if (!placed.IsNull()) {
+                        const int32_t index = worldFaces.FindIndex(placed);
+                        if (index > 0) return index;
+                    }
+                } catch (...) {}
+                return (int32_t)worldFaces.FindIndex(prismFace);
+            };
+            auto emit = [&](const TopoDS_Shape &prismShape, int32_t ordinal,
+                            int32_t kind, int32_t subIndex, int32_t relation) {
+                if (prismShape.IsNull()) return;
+                if (prismShape.ShapeType() != TopAbs_FACE) return;
+                const int32_t index = worldIndexOf(prismShape);
+                if (index <= 0) return;
+                if (rowSet.size() >= kOS3DMaxHistoryRows) return;
+                rowSet.insert({index, ordinal, kind, subIndex, relation});
+            };
+
+            // Caps: FirstShape is the base (the profile face's own image at
+            // zMin), LastShape the top.
+            try { emit(prism.FirstShape(), 0, 0, 1, 1); } catch (...) {}
+            try { emit(prism.LastShape(), 0, 0, 2, 1); } catch (...) {}
+
+            // Walls: one row per profile wire edge, per loop, in wire
+            // construction order — the ordinal/subIndex convention the
+            // header documents. Generated() on a prism edge is one of the
+            // reliable OCCT histories; the phantom gate still guards it.
+            int32_t ordinal = 0;
+            for (TopExp_Explorer wires(face, TopAbs_WIRE); wires.More();
+                 wires.Next(), ++ordinal) {
+                int32_t subIndex = 1;
+                for (TopExp_Explorer edges(wires.Current(), TopAbs_EDGE);
+                     edges.More(); edges.Next(), ++subIndex) {
+                    try {
+                        const TopTools_ListOfShape &generated =
+                            prism.Generated(edges.Current());
+                        for (TopTools_ListIteratorOfListOfShape it(generated);
+                             it.More(); it.Next()) {
+                            emit(it.Value(), ordinal, 1, subIndex, 2);
+                        }
+                    } catch (...) {}
+                }
+            }
+
+            std::vector<int32_t> packed;
+            packed.reserve(rowSet.size() * 5);
+            for (const auto &row : rowSet) {
+                packed.insert(packed.end(), row.begin(), row.end());
+            }
+            history.rowCount = (NSInteger)rowSet.size();
+            history.rows = [NSData dataWithBytes:packed.data()
+                                          length:packed.size() * sizeof(int32_t)];
+            history.truncatedByHeal = NO;
+        }
 
         OCCTShape *out = [OCCTShape new];
         out->_shape = world;

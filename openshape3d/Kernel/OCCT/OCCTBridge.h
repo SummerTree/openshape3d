@@ -188,6 +188,30 @@ typedef NS_ENUM(NSInteger, OCCTOpCode) {
                                               zMax:(double)zMax
                                              basis:(OCCTPlaneBasis *)basis;
 
+/// `extrudedShapeWithOuterLoop:` that also reports per-face ancestry.
+/// Identical result for identical inputs — `history` is fill-only.
+///
+/// Extrude row convention (documented here because the packed format is
+/// shared with the boolean): `inputOrdinal` is the LOOP — 0 = outer,
+/// 1…N = holes in argument order. Wall faces: `inputKind` 1 (edge),
+/// `inputSubshapeIndex` = 1-based edge ordinal within that loop's wire in
+/// construction order (polyline point-pair order / segment order / 1 for a
+/// conic), relation 2 (generated). Cap faces: `inputOrdinal` 0, `inputKind`
+/// 0 (face), `inputSubshapeIndex` 1 = start cap (at zMin) and 2 = end cap,
+/// relation 1 (the profile face's own images). Composed across the
+/// plane-local → world transform hop; every row validated against the final
+/// shape.
++ (nullable OCCTShape *)extrudedShapeWithOuterLoop:(NSData *)outerLoop
+                                        outerConic:(nullable NSData *)outerConic
+                                             holes:(NSArray<NSData *> *)holes
+                                        holeConics:(nullable NSData *)holeConics
+                                     outerSegments:(nullable NSData *)outerSegments
+                                      holeSegments:(nullable NSArray<NSData *> *)holeSegments
+                                              zMin:(double)zMin
+                                              zMax:(double)zMax
+                                             basis:(OCCTPlaneBasis *)basis
+                                           history:(nullable OCCTShapeHistory *)history;
+
 /// Revolve a profile about a WORLD-space axis.
 ///
 /// Profile arguments match `extrudedShapeWithOuterLoop:` exactly and are built
