@@ -11,7 +11,11 @@ DerivedData/
 # macOS
 .DS_Store
 
-.claude/
+.claude/*
+# …except the project skill, which is part of the repo: it documents the agent
+# bridge in `openshape3d/Agent/` and is useless to a teammate who cannot see it.
+# Personal settings and settings.local.json stay ignored by the line above.
+!.claude/skills/
 
 # OCCT B-rep port: the prebuilt OCCT.xcframework is committed via Git LFS (its
 # two static libs are tracked by .gitattributes) so a fresh checkout builds

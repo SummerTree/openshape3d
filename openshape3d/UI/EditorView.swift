@@ -261,12 +261,22 @@ struct EditorView: View {
                 viewModel = EditorViewModel(project: project, modelContext: modelContext)
                 viewModel?.debugSeedIfRequested()
             }
+            #if DEBUG
+            // Hand the live editor to the agent bridge. Costs nothing unless
+            // OS3D_AGENT is set — until something asks, this is one weak
+            // reference. Deliberately outside the `viewModel == nil` guard so
+            // returning to an already-built document re-attaches too.
+            if let viewModel { AgentBridge.shared.register(viewModel, documentName: project.name) }
+            #endif
         }
         .navigationTitle(project.name)
         .navigationBarTitleDisplayMode(.inline)
         .onDisappear {
             viewModel?.saveThumbnail()
             viewModel?.session.save()
+            #if DEBUG
+            if let viewModel { AgentBridge.shared.unregister(viewModel) }
+            #endif
         }
         .onChange(of: scenePhase) { _, phase in
             if phase == .background || phase == .inactive {

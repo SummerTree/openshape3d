@@ -3,7 +3,10 @@
 //  openshape3d
 //
 //  DEBUG-ONLY control channel: a loopback HTTP listener that lets an external
-//  agent (the MCP server in `scripts/mcp_openshape3d.py`) drive the app.
+//  agent drive the app. Two clients ship with it, both talking this same HTTP:
+//  `.claude/skills/drive-openshape3d/SKILL.md` (Claude Code, via curl) and
+//  `scripts/mcp_openshape3d.py` (Claude Desktop, via MCP). See
+//  `docs/AGENT_CONTROL.md`.
 //
 //  Compiled out of Release entirely — and the matching sandbox entitlement
 //  (`ENABLE_INCOMING_NETWORK_CONNECTIONS`) is set on the Debug configuration
@@ -14,9 +17,14 @@
 //  `SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor` — without it these types would
 //  be implicitly main-actor and could not run on the listener queue.
 //
-//  STATUS: step 1 of the plan — proves a sandboxed Catalyst app can bind a
-//  listening socket. Answers GET /v1/health and nothing else; the request and
-//  dispatch layers land next.
+//  This file is now only the socket. The parts worth testing live next door:
+//  framing in `AgentHTTP`, routing and error shaping in `AgentRouter`, and the
+//  hop onto the editor in `AgentBridge`.
+//
+//  STATUS: serving. Health, command catalog, editor state, command dispatch and
+//  a viewport PNG. What is NOT here is parameterisation: `runCommand` arms a
+//  tool, it does not set a distance or commit — see the closing section of
+//  `docs/AGENT_CONTROL.md`.
 //
 //  TWO THINGS THAT COST AN HOUR, both of which fail SILENTLY:
 //
@@ -45,8 +53,12 @@ import Network
 nonisolated final class AgentServer: @unchecked Sendable {
     static let shared = AgentServer()
 
+    /// Bumped when a response shape changes incompatibly. Clients check it in
+    /// `/v1/health` and refuse rather than misread a newer app.
+    static let protocolVersion = 1
+
     /// Default port; `OS3D_AGENT_PORT` overrides. Fixed-by-default means the
-    /// MCP server has something to talk to even with no discovery file.
+    /// clients have something to talk to with no discovery file.
     static let defaultPort: UInt16 = 8787
 
     /// All mutable state below is confined to this queue.
@@ -96,7 +108,8 @@ nonisolated final class AgentServer: @unchecked Sendable {
                 // distinction is what hid the CLOSED-socket bug above.
                 let actual = self?.listener?.port?.rawValue ?? 0
                 self?.boundPort = actual
-                NSLog("[agent] listening on http://127.0.0.1:\(actual)")
+                NSLog("[agent] listening on http://127.0.0.1:\(actual) "
+                      + "(\(AgentRouter.platformName), protocol \(Self.protocolVersion))")
             case .failed(let error):
                 // The expected sandbox failure mode is POSIX EPERM on bind.
                 NSLog("[agent] listener FAILED: \(error) — if this is EPERM the "
@@ -137,9 +150,9 @@ nonisolated final class AgentServer: @unchecked Sendable {
         }
     }
 
-    /// Reads until the headers are complete. The spike only needs the request
-    /// line, so it does not yet handle a body — `AgentHTTP` (next step) becomes
-    /// a proper incremental parser that can be unit-tested without sockets.
+    /// Accumulate until `AgentHTTP` says the request is whole — which, unlike
+    /// the original header-only read, includes waiting for a `Content-Length`
+    /// body that arrived in a second packet.
     private func receive(on connection: NWConnection, buffer: Data) {
         connection.receive(minimumIncompleteLength: 1, maximumLength: 64 * 1024) {
             [weak self] chunk, _, isComplete, error in
@@ -152,53 +165,65 @@ nonisolated final class AgentServer: @unchecked Sendable {
                 connection.cancel()
                 return
             }
-            guard let headerEnd = Self.headerTerminator(in: buffer) else {
+
+            switch AgentHTTP.parse(buffer) {
+            case .incomplete:
+                // A half-sent request with the peer already gone is a dead
+                // connection, not a slow one.
                 if isComplete { connection.cancel(); return }
                 self.receive(on: connection, buffer: buffer)
-                return
+
+            case .complete(let request):
+                self.dispatch(request, on: connection)
+
+            case .malformed(let reason):
+                NSLog("[agent] malformed request: \(reason)")
+                self.send(.failure(400, "Bad Request", error: "malformed_request",
+                                   message: reason), on: connection)
+
+            case .tooLarge:
+                self.send(.failure(413, "Payload Too Large", error: "body_too_large",
+                                   message: "Bodies are capped at \(AgentHTTP.maxBodyBytes) bytes."),
+                          on: connection)
             }
-
-            let head = String(decoding: buffer[..<headerEnd], as: UTF8.self)
-            let requestLine = head.split(separator: "\r\n", maxSplits: 1).first.map(String.init) ?? ""
-            self.respond(to: requestLine, on: connection)
         }
     }
 
-    private static func headerTerminator(in data: Data) -> Data.Index? {
-        let marker = Data("\r\n\r\n".utf8)
-        return data.range(of: marker)?.lowerBound
-    }
+    private func dispatch(_ request: AgentRequest, on connection: NWConnection) {
+        let route = AgentRouter.route(request)
 
-    private func respond(to requestLine: String, on connection: NWConnection) {
-        let fields = requestLine.split(separator: " ")
-        let method = fields.first.map(String.init) ?? ""
-        let path = fields.count > 1 ? String(fields[1]) : ""
-
-        let status: String
-        let body: Data
-        if method == "GET", path == "/v1/health" {
-            status = "200 OK"
-            let payload: [String: Any] = [
-                "ok": true,
-                "protocol": 1,
-                "app": "openshape3d",
-                "port": boundPort ?? 0,
-                "pid": ProcessInfo.processInfo.processIdentifier,
-            ]
-            body = (try? JSONSerialization.data(withJSONObject: payload))
-                ?? Data(#"{"ok":true}"#.utf8)
-        } else {
-            status = "404 Not Found"
-            body = Data(#"{"ok":false,"error":"unknown path"}"#.utf8)
+        // Anything the editor is not needed for is answered right here on the
+        // listener queue — including /v1/health, which must still respond when
+        // the main actor is wedged, since that is the condition it exists to
+        // report.
+        if let decided = AgentRouter.response(for: route) {
+            send(decided, on: connection)
+            return
+        }
+        guard route.needsEditor else {
+            switch route {
+            case .health:   send(AgentRouter.healthResponse(port: boundPort ?? 0), on: connection)
+            case .commands: send(AgentRouter.commandsResponse(), on: connection)
+            default:        send(.failure(500, "Internal Server Error", error: "unhandled_route",
+                                          message: "No handler for \(request.path)."), on: connection)
+            }
+            return
         }
 
-        var response = Data("HTTP/1.1 \(status)\r\n".utf8)
-        response.append(Data("Content-Type: application/json\r\n".utf8))
-        response.append(Data("Content-Length: \(body.count)\r\n".utf8))
-        response.append(Data("Connection: close\r\n\r\n".utf8))
-        response.append(body)
+        Task { @MainActor [weak self] in
+            let response = AgentBridge.shared.handle(route)
+            self?.send(response, on: connection)
+        }
+    }
 
-        connection.send(content: response, completion: .contentProcessed { _ in
+    private func send(_ response: AgentResponse, on connection: NWConnection) {
+        var out = Data("HTTP/1.1 \(response.status) \(response.reason)\r\n".utf8)
+        out.append(Data("Content-Type: \(response.contentType)\r\n".utf8))
+        out.append(Data("Content-Length: \(response.body.count)\r\n".utf8))
+        out.append(Data("Connection: close\r\n\r\n".utf8))
+        out.append(response.body)
+
+        connection.send(content: out, completion: .contentProcessed { _ in
             connection.cancel()
         })
     }

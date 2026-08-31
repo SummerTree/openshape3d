@@ -399,7 +399,7 @@ Notes:
 | `OS3D_DEBUG_SEED_IMAGE` | Reference image on the ground plane, left unselected |
 | `OS3D_GIZMO_DEBUG` | Print the gizmo part each drag grabs, its world delta, and the rotation pill's live value |
 | `OS3D_RESET_STORE` | **Destructive.** Delete the SwiftData store before it opens — the app starts with zero projects. Every UI test sets it (see below); do not put it in a shell profile or a scheme you also model in. |
-| `OS3D_AGENT` / `OS3D_AGENT_PORT` | Loopback control channel (`Agent/AgentServer.swift`). Answers `GET /v1/health` and nothing else so far, and the MCP client its header names is **not in this repo** — treat it as a stub. |
+| `OS3D_AGENT` / `OS3D_AGENT_PORT` | Loopback control channel for driving the app from Claude (`Agent/`). Health, command catalog, editor state, `POST /v1/command`, and a PNG of the viewport. Clients: `.claude/skills/drive-openshape3d/` (Claude Code, via curl) and `scripts/mcp_openshape3d.py` (Claude Desktop). Protocol: **`docs/AGENT_CONTROL.md`**. |
 
 To read `print()` output from a hook, launch through a console pty:
 
@@ -413,6 +413,12 @@ xcrun simctl launch --console-pty 69DB84F4-607C-46F2-9089-3E8C0770B4A9 \
 That loop — seed, drive the sim with taps/swipes, read the log — is how the
 "plane squares don't drag in their plane" report was diagnosed in minutes
 after a long stretch of theorising. Reach for it early.
+
+Do NOT background a `--console-pty` launch from inside an agent tool call: the
+call's process group is killed when it returns, the pty closes, and the app dies
+with it — presenting a minute later as an inexplicable "connection refused" from
+the agent bridge. Plain `simctl launch` survives indefinitely (verified: 80s+
+idle, repeated requests). Interactively it is fine; the pty outlives your shell.
 
 ### Flaky UI tests: what they actually were (2026-08-28)
 
