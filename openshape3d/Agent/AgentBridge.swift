@@ -250,15 +250,31 @@ final class AgentBridge {
     /// the "silent no-op" failure this bridge exists to make visible.
     private func record(_ node: FeatureNode, on viewModel: EditorViewModel) -> AgentResponse {
         let session = viewModel.session
-        let bodiesBefore = Set(session.document.bodies.map(\.id))
+        // Revisions, not just ids. A boolean REPLACES its target in place, so it
+        // adds no new body — reporting "produced nothing" on a subtract that had
+        // just removed 4.5 million mm3 was the first thing this endpoint got
+        // wrong in real use. What matters is whether the document moved at all.
+        var before: [BodyID: UInt64] = [:]
+        for body in session.document.bodies { before[body.id] = body.meshRevision }
         session.record(node)
         session.rebuildFrom(node.id)
-        let produced = session.document.bodies.map(\.id).filter { !bodiesBefore.contains($0) }
+
+        var produced: [BodyID] = []
+        var changed: [BodyID] = []
+        var surviving = Set<BodyID>()
+        for body in session.document.bodies {
+            surviving.insert(body.id)
+            guard let was = before[body.id] else { produced.append(body.id); continue }
+            if was != body.meshRevision { changed.append(body.id) }
+        }
+        let removed = before.keys.filter { !surviving.contains($0) }
 
         var payload: [String: Any] = [
             "featureID": node.id.raw.uuidString,
             "feature": node.name,
             "producedBodyIDs": produced.map(\.raw.uuidString),
+            "changedBodyIDs": changed.map(\.raw.uuidString),
+            "removedBodyIDs": removed.map(\.raw.uuidString),
             "undoSteps": 2,
         ]
         // Keyed by feature id, so an agent can tell ITS node failing from an
@@ -268,9 +284,19 @@ final class AgentBridge {
             payload["evalErrors"] = Dictionary(uniqueKeysWithValues:
                 errors.map { ($0.key.raw.uuidString, String(describing: $0.value)) })
         }
-        if produced.isEmpty {
-            payload["warning"] = "The feature was recorded but produced no geometry. "
-                + "Check the seed point lies inside a closed profile."
+
+        // THIS node failing is the signal that matters, and it has to be
+        // unmissable. `changed` alone cannot carry it: `rebuildFrom` re-emits
+        // bodies and bumps `meshRevision` on nodes it did not semantically
+        // touch, so a failed feature can still look like it moved something.
+        if let mine = errors[node.id] {
+            payload["failed"] = true
+            payload["message"] = "\(node.name) was recorded but did not build: \(mine). "
+                + "For a profile feature the usual cause is a seed point outside any closed region."
+        } else if produced.isEmpty && changed.isEmpty && removed.isEmpty {
+            payload["warning"] = "The feature was recorded but changed nothing — no body was "
+                + "added, modified or removed. For a boolean, check the tools actually "
+                + "intersect the target."
         }
         return execOK(viewModel, payload)
     }

@@ -205,9 +205,16 @@ Two behaviours worth knowing:
   evaluates it), reported as `undoSteps`. `performRebuild` is private to
   `DocumentSession`, and bundling them would mean changing production code to
   suit a debug channel.
-- A feature that records but produces nothing comes back `ok` with a
-  `warning` and any `evalErrors` keyed by feature id — the silent no-op is
-  exactly what this endpoint exists to make visible.
+- Every reply carries `producedBodyIDs`, `changedBodyIDs` and `removedBodyIDs`.
+  All three are needed, because a BOOLEAN adds no body — it replaces its target
+  in place, so judging success by "did a new body appear" reports a subtract
+  that just removed 4.5 million mm3 as having done nothing.
+- If THIS node failed to build, the reply carries `"failed": true` and a
+  `message` naming the reason, alongside `evalErrors` keyed by feature id.
+  That flag is the reliable signal: `rebuildFrom` re-emits bodies and bumps
+  `meshRevision` on nodes it did not semantically touch, so a failed feature
+  can still appear to have changed something. The silent no-op is exactly what
+  this endpoint exists to make visible.
 
 ### `GET /v1/screenshot?w=&h=`
 
