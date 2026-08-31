@@ -50,9 +50,62 @@ nonisolated struct ElementName: Codable, Hashable, Sendable {
     var source: Source
 }
 
+/// The identity of one EDGE: the unordered pair of its adjacent faces'
+/// names plus an occurrence ordinal separating multiple edges that share
+/// the same pair (a cap and a wall can meet more than once). "The crease
+/// between the top cap and wall X" survives rebuilds exactly as long as
+/// its two faces do — which is the whole idea (step 4b).
+nonisolated struct EdgeName: Codable, Hashable, Sendable {
+    var faceA: ElementName
+    var faceB: ElementName
+    var occurrence: Int
+
+    /// Order-insensitive over the pair: (A,B) names the same edge as (B,A).
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        guard lhs.occurrence == rhs.occurrence else { return false }
+        return (lhs.faceA == rhs.faceA && lhs.faceB == rhs.faceB)
+            || (lhs.faceA == rhs.faceB && lhs.faceB == rhs.faceA)
+    }
+    func hash(into hasher: inout Hasher) {
+        hasher.combine(occurrence)
+        // Commutative combine, so hashing agrees with the unordered ==.
+        hasher.combine(faceA.hashValue ^ faceB.hashValue)
+    }
+}
+
 /// Derivation + attachment. Pure functions over values — the FeatureGraph
 /// wiring comes separately, so these are unit-testable without a document.
 nonisolated enum ElementNaming {
+
+    /// Edge identities for a shape: for every adjacency triple whose BOTH
+    /// faces carry names, the unordered pair plus its occurrence ordinal —
+    /// the position among same-pair edges in ascending edge order, derived
+    /// identically at mint and at resolve so the two always agree. Edges
+    /// flanked by any unnamed face stay unaddressable, honestly.
+    static func edgeNames(adjacency: [(edge: Int, faceA: Int, faceB: Int)],
+                          names: [Int: ElementName]) -> [Int: EdgeName] {
+        var seen: [EdgeName: Int] = [:]
+        var out: [Int: EdgeName] = [:]
+        for triple in adjacency.sorted(by: { $0.edge < $1.edge }) {
+            guard let a = names[triple.faceA],
+                  let b = names[triple.faceB] else { continue }
+            let pair = EdgeName(faceA: a, faceB: b, occurrence: 0)
+            let occurrence = seen[pair, default: 0]
+            seen[pair] = occurrence + 1
+            out[triple.edge] = EdgeName(faceA: a, faceB: b,
+                                        occurrence: occurrence)
+        }
+        return out
+    }
+
+    /// The edge index carrying `name` on a shape — the resolve-side
+    /// inverse of `edgeNames`. Nil when the named crease no longer exists.
+    static func edgeIndex(named name: EdgeName,
+                          adjacency: [(edge: Int, faceA: Int, faceB: Int)],
+                          names: [Int: ElementName]) -> Int? {
+        edgeNames(adjacency: adjacency, names: names)
+            .first { $0.value == name }?.key
+    }
 
     /// Per-OCCT-face names for an extrude result: caps from the profile-face
     /// rows, walls from the generated-edge rows resolved through the

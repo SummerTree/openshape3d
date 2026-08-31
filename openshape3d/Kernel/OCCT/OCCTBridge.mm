@@ -1591,6 +1591,154 @@ static OCCTShape *OS3DFinishBlend(BRepFilletAPI_LocalOperation &mk,
     return out;
 }
 
+// Qualify → build → finish for one validated edge-index set — shared by the
+// point-matched entries and the identity-addressed ones, so both make
+// IDENTICAL kernel decisions (pre-qualification, per-edge Generated check,
+// single-solid, heal-and-validate). MakeChamfer has no NbFaultyContours;
+// the per-edge Generated() check in OS3DFinishBlend is its signal.
+static OCCTShape *OS3DBlendEdgeSet(const TopoDS_Shape &shape,
+                                   const TopTools_IndexedMapOfShape &edgeMap,
+                                   const std::set<Standard_Integer> &chosen,
+                                   double amount, bool isFillet,
+                                   OCCTOpStatus *status) {
+    NSString *reason = nil;
+    const std::set<Standard_Integer> qualified =
+        OS3DBlendableEdges(shape, edgeMap, chosen, &reason);
+    if (qualified.empty()) {
+        OS3DSetStatus(status, OCCTOpCodeNoTargetMatched, reason);
+        return nil;
+    }
+    if (isFillet) {
+        BRepFilletAPI_MakeFillet mk(shape);
+        for (Standard_Integer i : qualified) {
+            mk.Add(amount, TopoDS::Edge(edgeMap(i)));
+        }
+        mk.Build();
+        return OS3DFinishBlend(mk, edgeMap, qualified,
+                               mk.IsDone() ? mk.NbFaultyContours() : -1,
+                               status);
+    }
+    BRepFilletAPI_MakeChamfer mk(shape);
+    for (Standard_Integer i : qualified) {
+        // Symmetric chamfer: equal setback on both adjacent faces.
+        mk.Add(amount, TopoDS::Edge(edgeMap(i)));
+    }
+    mk.Build();
+    return OS3DFinishBlend(mk, edgeMap, qualified, -1, status);
+}
+
+// Shared entry for the identity-addressed blends: 1-based edge indices into
+// the shape's indexed edge map (the numbering edgeFaceAdjacencyOfShape:
+// reports). An out-of-range index fails the WHOLE op — identity addressing
+// that silently blended a subset would be worse than failing.
+static OCCTShape *OS3DBlendByIndices(OCCTShape *shape, NSData *edgeIndices,
+                                     double amount, bool isFillet,
+                                     OCCTOpStatus *status) {
+    OS3DSetStatus(status, OCCTOpCodeKernelRefused, @"no input");
+    if (shape == nil || amount <= 0.0) return nil;
+    const NSUInteger count = edgeIndices.length / sizeof(int32_t);
+    if (count == 0) return nil;
+    try {
+        if (!OS3DFiniteBounds(shape->_shape)) {
+            OS3DSetStatus(status, OCCTOpCodeKernelRefused,
+                          @"the body has empty or non-finite geometry");
+            return nil;
+        }
+        TopTools_IndexedMapOfShape edgeMap;
+        TopExp::MapShapes(shape->_shape, TopAbs_EDGE, edgeMap);
+        const int32_t *indices = (const int32_t *)edgeIndices.bytes;
+        std::set<Standard_Integer> chosen;
+        for (NSUInteger i = 0; i < count; ++i) {
+            if (indices[i] < 1 || indices[i] > edgeMap.Extent()) {
+                OS3DSetStatus(status, OCCTOpCodeNoTargetMatched,
+                              @"an edge index is out of range for this body");
+                return nil;
+            }
+            chosen.insert((Standard_Integer)indices[i]);
+        }
+        return OS3DBlendEdgeSet(shape->_shape, edgeMap, chosen,
+                                amount, isFillet, status);
+    } catch (Standard_Failure &e) {
+        OS3DSetStatus(status, OCCTOpCodeKernelRefused,
+                      [NSString stringWithFormat:@"%s", e.GetMessageString()]);
+        return nil;
+    } catch (...) {
+        OS3DSetStatus(status, OCCTOpCodeKernelRefused, @"kernel exception");
+        return nil;
+    }
+}
+
++ (nullable OCCTShape *)filletedShape:(OCCTShape *)shape
+                          edgeIndices:(NSData *)edgeIndices
+                               radius:(double)radius
+                               status:(nullable OCCTOpStatus *)status {
+    return OS3DBlendByIndices(shape, edgeIndices, radius, true, status);
+}
+
++ (nullable OCCTShape *)chamferedShape:(OCCTShape *)shape
+                           edgeIndices:(NSData *)edgeIndices
+                              distance:(double)distance
+                                status:(nullable OCCTOpStatus *)status {
+    return OS3DBlendByIndices(shape, edgeIndices, distance, false, status);
+}
+
++ (nullable NSData *)edgeFaceAdjacencyOfShape:(OCCTShape *)shape {
+    if (shape == nil || shape->_shape.IsNull()) return nil;
+    try {
+        TopTools_IndexedMapOfShape faceMap, edgeMap;
+        TopExp::MapShapes(shape->_shape, TopAbs_FACE, faceMap);
+        TopExp::MapShapes(shape->_shape, TopAbs_EDGE, edgeMap);
+        TopTools_IndexedDataMapOfShapeListOfShape edgeFaces;
+        TopExp::MapShapesAndAncestors(shape->_shape, TopAbs_EDGE, TopAbs_FACE,
+                                      edgeFaces);
+        std::vector<int32_t> rows;
+        // Keyed explicitly through edgeMap so the numbering here is BY
+        // CONSTRUCTION the one every other per-shape query uses — never an
+        // assumption about two maps agreeing.
+        for (Standard_Integer e = 1; e <= edgeMap.Extent(); ++e) {
+            const TopoDS_Shape &edge = edgeMap(e);
+            if (!edgeFaces.Contains(edge)) continue;
+            std::set<int32_t> faces;
+            for (TopTools_ListOfShape::Iterator it(edgeFaces.FindFromKey(edge));
+                 it.More(); it.Next()) {
+                const int32_t f = (int32_t)faceMap.FindIndex(it.Value());
+                if (f > 0) faces.insert(f);
+            }
+            // Seams and borders have one distinct face (or none) — they
+            // carry no PAIR identity and are unaddressable here on purpose:
+            // they are also exactly the edges the blend pre-qualifier vetoes.
+            if (faces.size() != 2) continue;
+            auto it = faces.begin();
+            const int32_t a = *it++;
+            const int32_t b = *it;
+            rows.push_back((int32_t)e);
+            rows.push_back(a);
+            rows.push_back(b);
+        }
+        return [NSData dataWithBytes:rows.data()
+                              length:rows.size() * sizeof(int32_t)];
+    } catch (...) {
+        return nil;
+    }
+}
+
++ (NSInteger)nearestEdgeIndexOfShape:(OCCTShape *)shape
+                            toPointX:(double)x y:(double)y z:(double)z
+                           tolerance:(double)tolerance {
+    if (shape == nil || shape->_shape.IsNull()) return 0;
+    try {
+        TopTools_IndexedMapOfShape edgeMap;
+        TopExp::MapShapes(shape->_shape, TopAbs_EDGE, edgeMap);
+        if (edgeMap.Extent() == 0) return 0;
+        const double pt[3] = {x, y, z};
+        const std::set<Standard_Integer> found =
+            OS3DNearestEdges(edgeMap, pt, 1, tolerance);
+        return found.empty() ? 0 : (NSInteger)*found.begin();
+    } catch (...) {
+        return 0;
+    }
+}
+
 + (nullable OCCTShape *)filletedShape:(OCCTShape *)shape
                         atWorldPoints:(NSData *)worldPoints
                                radius:(double)radius
@@ -1623,22 +1771,8 @@ static OCCTShape *OS3DFinishBlend(BRepFilletAPI_LocalOperation &mk,
                           @"no edge within tolerance of the pick");
             return nil;
         }
-        NSString *reason = nil;
-        const std::set<Standard_Integer> qualified =
-            OS3DBlendableEdges(shape->_shape, edgeMap, chosen, &reason);
-        if (qualified.empty()) {
-            OS3DSetStatus(status, OCCTOpCodeNoTargetMatched, reason);
-            return nil;
-        }
-
-        BRepFilletAPI_MakeFillet mk(shape->_shape);
-        for (Standard_Integer i : qualified) {
-            mk.Add(radius, TopoDS::Edge(edgeMap(i)));
-        }
-        mk.Build();
-        return OS3DFinishBlend(mk, edgeMap, qualified,
-                               mk.IsDone() ? mk.NbFaultyContours() : -1,
-                               status);
+        return OS3DBlendEdgeSet(shape->_shape, edgeMap, chosen,
+                                radius, /*isFillet*/ true, status);
     } catch (Standard_Failure &e) {
         OS3DSetStatus(status, OCCTOpCodeKernelRefused,
                       [NSString stringWithFormat:@"%s", e.GetMessageString()]);
@@ -1779,23 +1913,8 @@ static bool OS3DFilletBuilds(const TopoDS_Shape &shape,
                           @"no edge within tolerance of the pick");
             return nil;
         }
-        NSString *reason = nil;
-        const std::set<Standard_Integer> qualified =
-            OS3DBlendableEdges(shape->_shape, edgeMap, chosen, &reason);
-        if (qualified.empty()) {
-            OS3DSetStatus(status, OCCTOpCodeNoTargetMatched, reason);
-            return nil;
-        }
-
-        BRepFilletAPI_MakeChamfer mk(shape->_shape);
-        for (Standard_Integer i : qualified) {
-            // Symmetric chamfer: equal setback on both adjacent faces.
-            mk.Add(distance, TopoDS::Edge(edgeMap(i)));
-        }
-        mk.Build();
-        // MakeChamfer has no NbFaultyContours; the Generated() check in
-        // OS3DFinishBlend is the per-edge signal.
-        return OS3DFinishBlend(mk, edgeMap, qualified, -1, status);
+        return OS3DBlendEdgeSet(shape->_shape, edgeMap, chosen,
+                                distance, /*isFillet*/ false, status);
     } catch (Standard_Failure &e) {
         OS3DSetStatus(status, OCCTOpCodeKernelRefused,
                       [NSString stringWithFormat:@"%s", e.GetMessageString()]);

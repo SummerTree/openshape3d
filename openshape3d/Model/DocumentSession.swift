@@ -39,6 +39,17 @@ final class DocumentSession {
     /// table would be a WRONG name — worse than the nil a fresh load mints.
     private(set) var lastFaceTables: [BodyID: FaceTable] = [:]
 
+    /// Per-body kernel-face name maps from the same rebuild — what edge
+    /// picks mint `EdgeName`s from (step 4b).
+    private(set) var lastKernelNames: [BodyID: [Int: ElementName]] = [:]
+
+    /// The `meshRevision` each retained table/name map describes. Live tools
+    /// replace bodies WITHOUT re-evaluating (ReplaceBodyCommand), so the
+    /// retained maps go stale the moment one runs — and a stale map could
+    /// mint a WRONG name. Mint sites must check the body's current revision
+    /// against this before trusting either map.
+    private(set) var lastNamingRevisions: [BodyID: UInt64] = [:]
+
     /// Bumped on every document mutation; the editor observes this to rebuild
     /// the viewport scene.
     private(set) var changeCount = 0
@@ -370,6 +381,9 @@ final class DocumentSession {
         )
         lastEvalErrors = result.errors
         lastFaceTables = result.faceTables
+        lastKernelNames = result.kernelNames
+        lastNamingRevisions = Dictionary(uniqueKeysWithValues:
+            result.bodies.map { ($0.id, $0.meshRevision) })
 
         // Every BodyID any node owns — the pre-edit graph too, so a node removed
         // in `editedGraph` still has its now-orphaned body diffed (and deleted).

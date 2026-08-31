@@ -94,10 +94,22 @@ nonisolated enum KernelCaptureReplay {
             return outcome(op, OCCTKernel.booleanResult(
                 try input("a"), try input("b"), op: code).map(\.handle))
         case "fillet":
+            // Identity-addressed captures carry edgeIndices; point-matched
+            // captures carry points + tolerance. Replay whichever was used.
+            if let indices = params["edgeIndices"] as? [Int] {
+                return outcome(op, OCCTKernel.filletResult(
+                    try input("shape"), edgeIndices: indices,
+                    radius: try number("radius")))
+            }
             return outcome(op, OCCTKernel.filletResult(
                 try input("shape"), at: points(),
                 radius: try number("radius"), tolerance: try number("tolerance")))
         case "chamfer":
+            if let indices = params["edgeIndices"] as? [Int] {
+                return outcome(op, OCCTKernel.chamferResult(
+                    try input("shape"), edgeIndices: indices,
+                    distance: try number("distance")))
+            }
             return outcome(op, OCCTKernel.chamferResult(
                 try input("shape"), at: points(),
                 distance: try number("distance"), tolerance: try number("tolerance")))

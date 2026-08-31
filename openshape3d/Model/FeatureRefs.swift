@@ -141,9 +141,17 @@ nonisolated struct EdgeSignature: Codable, Hashable, Sendable {
 }
 
 /// A persistent reference to a straight edge on a feature-produced body.
+///
+/// `faceNames` is the kernel-history identity (step 4b): the unordered pair
+/// of adjacent-face names — "the crease between the top cap and wall X" —
+/// which survives rebuilds exactly as long as its two faces do, where the
+/// geometric signature drifts with every edit. Optional and omitted when
+/// nil, so old documents load unchanged; replay resolves by identity when
+/// EVERY ref of the feature carries one, else falls back to signatures.
 nonisolated struct EdgeRef: Codable, Hashable, Sendable {
     var body: BodyRef
     var signature: EdgeSignature
+    var faceNames: EdgeName? = nil
 }
 
 // MARK: - Expressions & intents

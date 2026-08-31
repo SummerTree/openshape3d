@@ -1,6 +1,27 @@
 # Kernel-history element naming — design (to land as its own mission)
 
-Status: **STEPS 1–4a LANDED** (2026-08-31). Step 4's FACE half shipped:
+Status: **STEPS 1–4 LANDED** (2026-08-31). Step 4's EDGE half (4b) shipped
+on top of 4a: `EdgeName` (unordered adjacent-face-name pair + occurrence,
+custom order-insensitive ==/hash), `EdgeRef.faceNames` (optional, omitted
+when nil — old documents unchanged), bridge identity addressing
+(`filletedShape:edgeIndices:`/`chamferedShape:edgeIndices:` sharing ONE
+implementation with the point-matched entries via `OS3DBlendEdgeSet`, plus
+`edgeFaceAdjacencyOfShape:` and `nearestEdgeIndexOfShape:` for mint-time
+pick→kernel bridging), and `evalEdgeBlend` resolving IDENTITY FIRST: when
+every ref carries a name and the input body has kernel names, blend edges
+are chosen by name-pair — no geometric matching anywhere in the path — with
+all-or-nothing fallback to signatures (mixing could blend an edge twice).
+Live blend picks mint names via `DocumentSession.lastKernelNames`, guarded
+by `lastNamingRevisions` (`meshRevision` check): live tools replace bodies
+WITHOUT re-evaluating, and a stale map must mint nil, never a wrong name —
+this guard also covers the blend-EDIT path's rollback-recovered body.
+Payoff pinned end to end: a chamfer ref whose signature drifted onto hole
+B's rim but whose name says hole A blends hole A; the same ref without the
+name blends hole B. Remaining: step 5 (opportunistic ref upgrade,
+modifier-op history so blends/shells stop erasing downstream names) and
+revolve/sweep/loft naming (blocked on their adopt-vs-assign render split).
+
+Step 4's FACE half shipped:
 `FaceRef.elementName` (optional; synthesized Codable omits nil and
 `decodeIfPresent`s, so old documents load unchanged and legacy refs are
 byte-identical on disk), name-first `SignatureNaming.resolve` (exact name

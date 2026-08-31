@@ -627,6 +627,81 @@ nonisolated enum OCCTKernel {
                            tolerance: tolerance).get()
     }
 
+    // MARK: Identity-addressed blends (TOPO_NAMING_HISTORY_DESIGN step 4b)
+
+    /// Every edge with exactly two distinct adjacent faces: `(edge, faceA,
+    /// faceB)` in the shared 1-based indexed-map numbering. Seams/borders
+    /// are omitted — no pair identity, and the blend pre-qualifier vetoes
+    /// them anyway.
+    static func edgeFaceAdjacency(_ handle: BRepHandle)
+        -> [(edge: Int, faceA: Int, faceB: Int)] {
+        guard let data = OCCTBridge.edgeFaceAdjacency(of: handle.shape) else { return [] }
+        let values = data.int32Array()
+        var out: [(edge: Int, faceA: Int, faceB: Int)] = []
+        out.reserveCapacity(values.count / 3)
+        for base in stride(from: 0, to: (values.count / 3) * 3, by: 3) {
+            out.append((Int(values[base]), Int(values[base + 1]),
+                        Int(values[base + 2])))
+        }
+        return out
+    }
+
+    /// The kernel edge nearest a world point — the mint-time bridge from a
+    /// picked mesh edge to its kernel identity. Same matching the
+    /// point-based blends use; nil when nothing is within tolerance.
+    static func nearestEdgeIndex(_ handle: BRepHandle, to point: SIMD3<Double>,
+                                 tolerance: Double) -> Int? {
+        let index = OCCTBridge.nearestEdgeIndex(
+            of: handle.shape, toPointX: point.x, y: point.y, z: point.z,
+            tolerance: tolerance)
+        return index > 0 ? Int(index) : nil
+    }
+
+    /// Blend BY IDENTITY: edges chosen by index, not by proximity to a
+    /// point — same qualification and validation as the point path (they
+    /// share one implementation).
+    static func filletResult(_ handle: BRepHandle, edgeIndices: [Int],
+                             radius: Double) -> Result<BRepHandle, OCCTOpError> {
+        guard !edgeIndices.isEmpty, radius > 0 else {
+            return .failure(.kernelRefused("nothing to fillet"))
+        }
+        let status = OCCTOpStatus()
+        guard let shape = OCCTBridge.filletedShape(
+            handle.shape, edgeIndices: packIndices(edgeIndices),
+            radius: radius, status: status) else {
+            let error = OCCTOpError(status)
+            KernelCapture.recordFailure(
+                op: "fillet", inputs: [("shape", handle)],
+                params: ["radius": radius, "edgeIndices": edgeIndices],
+                error: error)
+            return .failure(error)
+        }
+        return .success(BRepHandle(shape))
+    }
+
+    static func chamferResult(_ handle: BRepHandle, edgeIndices: [Int],
+                              distance: Double) -> Result<BRepHandle, OCCTOpError> {
+        guard !edgeIndices.isEmpty, distance > 0 else {
+            return .failure(.kernelRefused("nothing to chamfer"))
+        }
+        let status = OCCTOpStatus()
+        guard let shape = OCCTBridge.chamferedShape(
+            handle.shape, edgeIndices: packIndices(edgeIndices),
+            distance: distance, status: status) else {
+            let error = OCCTOpError(status)
+            KernelCapture.recordFailure(
+                op: "chamfer", inputs: [("shape", handle)],
+                params: ["distance": distance, "edgeIndices": edgeIndices],
+                error: error)
+            return .failure(error)
+        }
+        return .success(BRepHandle(shape))
+    }
+
+    private static func packIndices(_ indices: [Int]) -> Data {
+        indices.map(Int32.init).withUnsafeBytes { Data($0) }
+    }
+
     /// Hollow a solid to `thickness`, opening the faces nearest `points` (spec
     /// §4.4 Shell). Empty `points` = fully-enclosed hollow. Correct on curved
     /// walls, unlike the mesh inset. The failure distinguishes "no face near
@@ -846,5 +921,9 @@ private extension Data {
     /// Reinterpret the packed bytes as tightly-packed `UInt32`s.
     func uint32Array() -> [UInt32] {
         withUnsafeBytes { Array($0.bindMemory(to: UInt32.self)) }
+    }
+    /// Reinterpret the packed bytes as tightly-packed `Int32`s.
+    func int32Array() -> [Int32] {
+        withUnsafeBytes { Array($0.bindMemory(to: Int32.self)) }
     }
 }

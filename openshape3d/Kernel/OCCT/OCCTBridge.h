@@ -377,6 +377,37 @@ typedef NS_ENUM(NSInteger, OCCTOpCode) {
                            tolerance:(double)tolerance
                               status:(nullable OCCTOpStatus *)status;
 
+/// Identity-addressed blends (docs/TOPO_NAMING_HISTORY_DESIGN.md step 4b):
+/// same pre-qualification, per-edge checks and validation as the
+/// point-matched entries — the two share one implementation — but edges are
+/// chosen by 1-based indexed-map position (the numbering
+/// `edgeFaceAdjacencyOfShape:` reports) instead of nearest-to-a-point. An
+/// out-of-range index fails the WHOLE op: identity addressing that silently
+/// blended a subset would be worse than failing.
++ (nullable OCCTShape *)filletedShape:(OCCTShape *)shape
+                          edgeIndices:(NSData *)edgeIndices
+                               radius:(double)radius
+                               status:(nullable OCCTOpStatus *)status;
++ (nullable OCCTShape *)chamferedShape:(OCCTShape *)shape
+                           edgeIndices:(NSData *)edgeIndices
+                              distance:(double)distance
+                                status:(nullable OCCTOpStatus *)status;
+
+/// Every edge with exactly two distinct adjacent faces, as packed int32
+/// triples `(edgeIndex, faceA, faceB)` — 1-based indexed-map numbering
+/// shared with the render mesh's face channel and the ancestry rows; the
+/// pair is normalized `faceA < faceB`. Seams and border edges are omitted
+/// on purpose: they carry no pair identity, and they are exactly the edges
+/// the blend pre-qualifier vetoes anyway.
++ (nullable NSData *)edgeFaceAdjacencyOfShape:(OCCTShape *)shape;
+
+/// The 1-based index of the edge nearest the world point (within
+/// `tolerance`), 0 when none — the mint-time bridge from a picked mesh edge
+/// to its kernel edge, using the same matching the point-based blends use.
++ (NSInteger)nearestEdgeIndexOfShape:(OCCTShape *)shape
+                            toPointX:(double)x y:(double)y z:(double)z
+                           tolerance:(double)tolerance;
+
 /// The largest fillet radius the edges near `worldPoints` can actually
 /// take, found by bisection over REAL (fully checked) `BRepFilletAPI`
 /// builds — so the drag clamp and the commit agree by construction, unlike

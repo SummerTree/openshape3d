@@ -659,6 +659,186 @@ final class ElementNamingTests: XCTestCase {
                        accuracy: 1e-6)
     }
 
+    // MARK: - Edge identity (step 4b)
+
+    func testEdgeNamesPairUnorderedAndCountOccurrences() {
+        let cap = ElementName(creator: creator, source: .profileCap(end: true))
+        let wall = ElementName(creator: creator,
+                               source: .profileWall(entity: UUID(), occurrence: 0))
+        let names = [1: cap, 2: wall]
+        let adjacency = [(edge: 3, faceA: 1, faceB: 2),
+                         (edge: 7, faceA: 2, faceB: 1),   // same pair again
+                         (edge: 9, faceA: 1, faceB: 5)]   // face 5 unnamed
+        let edgeNames = ElementNaming.edgeNames(adjacency: adjacency, names: names)
+        XCTAssertEqual(edgeNames.count, 2, "the unnamed-flank edge is unaddressable")
+        XCTAssertEqual(edgeNames[3]?.occurrence, 0)
+        XCTAssertEqual(edgeNames[7]?.occurrence, 1, "same pair, next occurrence")
+        // Unordered equality: a swapped pair finds the same edge.
+        let swapped = EdgeName(faceA: wall, faceB: cap, occurrence: 0)
+        XCTAssertEqual(ElementNaming.edgeIndex(named: swapped,
+                                               adjacency: adjacency,
+                                               names: names), 3)
+    }
+
+    func testAdjacencyCoversEveryBoxEdge() throws {
+        let box = try XCTUnwrap(OCCTKernel.primitiveShape(
+            .box(width: 4, depth: 4, height: 4), placement: .identity))
+        let adjacency = OCCTKernel.edgeFaceAdjacency(box)
+        XCTAssertEqual(adjacency.count, 12)
+        for triple in adjacency {
+            XCTAssertNotEqual(triple.faceA, triple.faceB)
+            XCTAssertTrue((1...6).contains(triple.faceA))
+            XCTAssertTrue((1...6).contains(triple.faceB))
+        }
+        XCTAssertEqual(Set(adjacency.map(\.edge)).count, 12, "each edge once")
+    }
+
+    /// Identity addressing and point matching share one implementation —
+    /// blending the same rim by edge index and by midpoint must produce the
+    /// same solid, and a bad index must fail the WHOLE op, typed.
+    func testBlendByIndexMatchesBlendByPointAndFailsClosed() throws {
+        let cylinder = try XCTUnwrap(OCCTKernel.primitiveShape(
+            .cylinder(radius: 5, height: 8), placement: .identity))
+        let rim = SIMD3<Double>(5, 8, 0)
+        let tolerance = OCCTKernel.matchTolerance(for: cylinder)
+        let byPoint = try OCCTKernel.filletResult(
+            cylinder, at: [rim], radius: 1, tolerance: tolerance).get()
+        let index = try XCTUnwrap(OCCTKernel.nearestEdgeIndex(
+            cylinder, to: rim, tolerance: tolerance))
+        let byIndex = try OCCTKernel.filletResult(
+            cylinder, edgeIndices: [index], radius: 1).get()
+        XCTAssertEqual(OCCTKernel.volume(byPoint),
+                       OCCTKernel.volume(byIndex), accuracy: 1e-9)
+
+        guard case .failure = OCCTKernel.filletResult(
+            cylinder, edgeIndices: [999], radius: 1) else {
+            return XCTFail("an out-of-range index must fail the whole op")
+        }
+    }
+
+    /// THE step-4b payoff: a chamfer ref whose SIGNATURE drifted onto hole
+    /// B's rim but whose NAME says hole A blends hole A. The same ref
+    /// without the name blends hole B — the silent wrong-edge rebind that
+    /// "rebuild broke my fillet" reports come from.
+    func testABlendResolvesByIdentityNotBySignature() throws {
+        let slabSketch = SketchID(), aSketch = SketchID(), bSketch = SketchID()
+        let slabRect = UUID(), aRect = UUID(), bRect = UUID()
+        let slabFeature = FeatureID(), cutA = FeatureID(), cutB = FeatureID()
+        let slabID = BodyID()
+        func cutNode(_ id: FeatureID, name: String, sketch: SketchID,
+                     seed: SIMD2<Double>, entity: UUID) -> FeatureNode {
+            FeatureNode(
+                id: id, name: name,
+                kind: .extrude(
+                    profile: ProfileRef(sketchID: sketch, entityIDs: [entity],
+                                        holeEntityIDs: [], seedPoint: seed),
+                    plane: PlaneRef(source: .sketch(sketch)),
+                    distance: Expr(value: 3), symmetric: true,
+                    boolean: BooleanIntent(
+                        op: .subtract,
+                        resolvedTargets: [BodyRef(producer: slabFeature,
+                                                  bodyID: slabID)]),
+                    extraProfiles: []),
+                outputBodyIDs: [])
+        }
+        let baseNodes = [
+            FeatureNode(
+                id: slabFeature, name: "Slab",
+                kind: .extrude(
+                    profile: ProfileRef(sketchID: slabSketch, entityIDs: [slabRect],
+                                        holeEntityIDs: [], seedPoint: .zero),
+                    plane: PlaneRef(source: .sketch(slabSketch)),
+                    distance: Expr(value: 2), symmetric: true,
+                    boolean: BooleanIntent(op: .newBody, resolvedTargets: []),
+                    extraProfiles: []),
+                outputBodyIDs: [slabID]),
+            cutNode(cutA, name: "CutA", sketch: aSketch, seed: SIMD2(-3, 0),
+                    entity: aRect),
+            cutNode(cutB, name: "CutB", sketch: bSketch, seed: SIMD2(3, 0),
+                    entity: bRect),
+        ]
+        let sketches = [
+            Sketch(id: slabSketch, name: "S", plane: .ground, entities: [
+                .rect(id: slabRect, min: SIMD2(-5, -3), max: SIMD2(5, 3))]),
+            Sketch(id: aSketch, name: "A", plane: .ground, entities: [
+                .rect(id: aRect, min: SIMD2(-4, -1), max: SIMD2(-2, 1))]),
+            Sketch(id: bSketch, name: "B", plane: .ground, entities: [
+                .rect(id: bRect, min: SIMD2(2, -1), max: SIMD2(4, 1))]),
+        ]
+        func evaluate(_ nodes: [FeatureNode]) -> EvalResult {
+            var revision: UInt64 = 0
+            return FeatureGraph(nodes: nodes).evaluate(
+                sketches: sketches, planes: [], naming: SignatureNaming(),
+                nextRevision: { revision += 1; return revision })
+        }
+
+        // Harvest identity from the base build.
+        let base = evaluate(baseNodes)
+        XCTAssertTrue(base.errors.isEmpty, "\(base.errors)")
+        let baseBody = try XCTUnwrap(base.bodies.first { $0.id == slabID })
+        let brep = try XCTUnwrap(baseBody.brep)
+        let names = try XCTUnwrap(base.kernelNames[slabID])
+        let edgeNames = ElementNaming.edgeNames(
+            adjacency: OCCTKernel.edgeFaceAdjacency(brep), names: names)
+        // An edge on hole A's TOP rim: top cap on one flank, a cutA wall on
+        // the other.
+        let topCap = ElementName(creator: slabFeature,
+                                 source: .profileCap(end: true))
+        let ridgeName = try XCTUnwrap(edgeNames.values.first { name in
+            let pair = [name.faceA, name.faceB]
+            return pair.contains(topCap) && pair.contains { other in
+                guard case .profileWall = other.source else { return false }
+                return other.creator == cutA
+            }
+        }, "no named top-rim edge on hole A: \(edgeNames)")
+
+        // A DRIFTED signature: the mirrored rim edge over at hole B.
+        let driftedEdge = try XCTUnwrap(
+            EdgeTopology.selectableEdges(from: baseBody.render).first {
+                $0.midpoint.y > 1.9 && $0.midpoint.x > 1.4
+                    && abs($0.midpoint.z) < 1.1 && $0.isConvex
+            }, "no selectable rim edge near hole B")
+        let driftedSignature = EdgeTopology.signature(of: driftedEdge)
+
+        func chamferNode(faceNames: EdgeName?) -> FeatureNode {
+            FeatureNode(
+                name: "Chamfer",
+                kind: .chamfer(
+                    body: BodyRef(producer: slabFeature, bodyID: slabID),
+                    edges: [EdgeRef(body: BodyRef(producer: slabFeature,
+                                                  bodyID: slabID),
+                                    signature: driftedSignature,
+                                    faceNames: faceNames)],
+                    setback: Expr(value: 0.4)),
+                outputBodyIDs: [slabID])
+        }
+        // Which side did the chamfer land on? The new 45° face's centroid
+        // says: hole A lives at x < 0, hole B at x > 0.
+        func chamferSideX(_ result: EvalResult) throws -> Double {
+            XCTAssertTrue(result.errors.isEmpty, "\(result.errors)")
+            let table = try XCTUnwrap(result.faceTables[slabID])
+            let slanted = table.entries.filter {
+                if case .planar = $0.signature.kind {
+                    return abs($0.signature.normal.y) > 0.6
+                        && abs($0.signature.normal.y) < 0.8
+                }
+                return false
+            }
+            XCTAssertEqual(slanted.count, 1,
+                           "exactly one chamfer face, got \(slanted.count)")
+            return try XCTUnwrap(slanted.first).signature.centroid.x
+        }
+
+        let byIdentity = evaluate(baseNodes + [chamferNode(faceNames: ridgeName)])
+        XCTAssertLessThan(try chamferSideX(byIdentity), 0,
+                          "the NAME says hole A — the chamfer must land there")
+
+        let bySignature = evaluate(baseNodes + [chamferNode(faceNames: nil)])
+        XCTAssertGreaterThan(try chamferSideX(bySignature), 0,
+                             "without the name, the drifted signature rebinds "
+                             + "to hole B — the bug class this step closes")
+    }
+
     // MARK: - Detector identity arrays
 
     func testTheDetectorEmitsEdgeEntitiesInLoopOrder() throws {

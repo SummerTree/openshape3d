@@ -259,15 +259,20 @@ nonisolated enum FeatureError: Sendable, Equatable {
 nonisolated struct EvalResult: Sendable {
     var bodies: [Body]
     var faceTables: [BodyID: FaceTable]
+    /// Per-body kernel-face name maps (step 3/4) — retained by
+    /// `DocumentSession` so live picks can mint edge identities.
+    var kernelNames: [BodyID: [Int: ElementName]]
     var errors: [FeatureID: FeatureError]
 
     init(
         bodies: [Body] = [],
         faceTables: [BodyID: FaceTable] = [:],
+        kernelNames: [BodyID: [Int: ElementName]] = [:],
         errors: [FeatureID: FeatureError] = [:]
     ) {
         self.bodies = bodies
         self.faceTables = faceTables
+        self.kernelNames = kernelNames
         self.errors = errors
     }
 }
@@ -303,6 +308,7 @@ nonisolated extension FeatureGraph {
         return EvalResult(
             bodies: state.order.compactMap { state.bodies[$0] },
             faceTables: state.faceTables,
+            kernelNames: state.kernelNames,
             errors: state.errors
         )
     }
@@ -931,6 +937,59 @@ nonisolated extension FeatureGraph {
             state.errors[node.id] = .brokenRef("blend body unresolved")
             return
         }
+
+        // IDENTITY FIRST (TOPO_NAMING_HISTORY_DESIGN step 4b): when every
+        // ref carries an edge name and the input body has kernel names,
+        // resolve the blend edges by their adjacent-face NAME PAIRS and
+        // blend by index — no geometric matching anywhere in the path, so
+        // an upstream edit that moved or resized the edge cannot re-bind
+        // the blend to a lookalike. All-or-nothing: a partial identity
+        // resolution falls back to signatures WHOLESALE, because mixing the
+        // two could blend one edge twice.
+        if OCCTKernel.useOCCTAsSourceOfTruth, let brep = body.brep,
+           !edgeRefs.isEmpty, edgeRefs.allSatisfy({ $0.faceNames != nil }),
+           let names = state.kernelNames[body.id], !names.isEmpty {
+            let adjacency = OCCTKernel.edgeFaceAdjacency(brep)
+            let edgeNames = ElementNaming.edgeNames(adjacency: adjacency,
+                                                    names: names)
+            let indices = edgeRefs.compactMap { ref -> Int? in
+                guard let name = ref.faceNames else { return nil }
+                return edgeNames.first { $0.value == name }?.key
+            }
+            if indices.count == edgeRefs.count {
+                let blended = isFillet
+                    ? OCCTKernel.filletResult(brep, edgeIndices: indices,
+                                              radius: amount)
+                    : OCCTKernel.chamferResult(brep, edgeIndices: indices,
+                                               distance: amount)
+                switch blended {
+                case let .success(handle):
+                    var result = Body(
+                        id: body.id, name: body.name, transform: .identity,
+                        primitive: nil, euclidMesh: body.euclidMesh(),
+                        revision: nextRevision())
+                    guard result.adoptBRep(handle) else {
+                        state.errors[node.id] = .emptyGeometry
+                        return
+                    }
+                    let table = state.naming.faceTable(
+                        for: result, createdBy: node.id, scheme: .generic)
+                    state.put(result, table: table)
+                    return
+                case let .failure(error):
+                    // The named edges EXIST — the blend itself failed
+                    // (radius too big, invalid result). Same typed surfacing
+                    // as the point path; no silent fallback that would
+                    // report a different edge's failure.
+                    let verb = isFillet ? "fillet" : "chamfer"
+                    state.errors[node.id] = .kernelFailure("\(verb): \(error.message)")
+                    return
+                }
+            }
+            // Some name no longer exists on the input body — fall through to
+            // signature resolution, which reports honestly per edge.
+        }
+
         let available = EdgeTopology.selectableEdges(from: body.render)
         let aabb = body.render.localAABB
         let scale = Double(simd_length(aabb.max - aabb.min))

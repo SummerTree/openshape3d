@@ -3209,7 +3209,8 @@ final class EditorViewModel {
         // SECOND blend node on top of the first.
         if let featureID = blendEditingFeature, let bodyRef = blendEditBodyRef {
             let edgeRefs = blendSelectedEdges.map {
-                EdgeRef(body: bodyRef, signature: EdgeTopology.signature(of: $0))
+                EdgeRef(body: bodyRef, signature: EdgeTopology.signature(of: $0),
+                        faceNames: mintEdgeName(body: source, edge: $0))
             }
             let after: FeatureKind = kind == .fillet
                 ? .fillet(body: bodyRef, edges: edgeRefs, radius: Expr(value: blendValue))
@@ -3243,7 +3244,8 @@ final class EditorViewModel {
         if let owner = featureNode(owning: bodyID) {
             let bodyRef = BodyRef(producer: owner.id, bodyID: bodyID)
             let edgeRefs = blendSelectedEdges.map {
-                EdgeRef(body: bodyRef, signature: EdgeTopology.signature(of: $0))
+                EdgeRef(body: bodyRef, signature: EdgeTopology.signature(of: $0),
+                        faceNames: mintEdgeName(body: source, edge: $0))
             }
             let node = FeatureNode(
                 name: kind.title,
@@ -3462,7 +3464,7 @@ final class EditorViewModel {
             let faceRefs = shellSelectedFaces.map {
                 Self.shellFaceRef(face: $0, bodyRef: bodyRef, creator: owner.id,
                                   elementName: mintElementName(
-                                      body: bodyRef.bodyID,
+                                      body: source,
                                       triangle: $0.triangles.first))
             }
             let node = FeatureNode(
@@ -3643,7 +3645,7 @@ final class EditorViewModel {
                 FaceRef(body: bodyRef, creator: owner.id,
                         role: .derived(index: 0), signature: $0.signature,
                         elementName: mintElementName(
-                            body: bodyRef.bodyID,
+                            body: source,
                             triangle: $0.triangles.first))
             }
             let node = FeatureNode(
@@ -3885,7 +3887,7 @@ final class EditorViewModel {
             let faceRef = FaceRef(
                 body: bodyRef, creator: owner.id, role: .derived(index: 0),
                 signature: SignatureNaming.signature(planar: face),
-                elementName: mintElementName(body: bodyRef.bodyID,
+                elementName: mintElementName(body: source,
                                              triangle: face.triangles.first))
             let node = FeatureNode(
                 name: "Replace Face",
@@ -10757,19 +10759,40 @@ final class EditorViewModel {
         return FaceRef(
             body: BodyRef(producer: creator, bodyID: source.id),
             creator: creator, role: role, signature: signature,
-            elementName: mintElementName(body: source.id, triangle: seed))
+            elementName: mintElementName(body: source, triangle: seed))
     }
 
-    /// The kernel-history name of the face containing `triangle` on `bodyID`,
+    /// The kernel-history name of the face containing `triangle` on `body`,
     /// read from the last APPLIED rebuild's face tables
     /// (TOPO_NAMING_HISTORY_DESIGN step 4). Nil is normal — a fresh load, a
-    /// mesh-path body, an unnamed face — and mints a legacy ref. Lookup is
-    /// exact triangle membership in the current table only, because a name
-    /// minted off a misaligned table would be WRONG, which is worse.
-    private func mintElementName(body bodyID: BodyID, triangle: Int?) -> ElementName? {
-        guard let triangle else { return nil }
-        return session.lastFaceTables[bodyID]?.entries
+    /// mesh-path body, an unnamed face — and mints a legacy ref. The
+    /// revision guard is what makes this safe: live tools replace bodies
+    /// without re-evaluating, and a name looked up in a table describing an
+    /// OLDER render would be WRONG, which is worse than none.
+    private func mintElementName(body: Body, triangle: Int?) -> ElementName? {
+        guard let triangle,
+              session.lastNamingRevisions[body.id] == body.meshRevision
+        else { return nil }
+        return session.lastFaceTables[body.id]?.entries
             .first { $0.triangles.contains(triangle) }?.elementName
+    }
+
+    /// The kernel-history identity of the picked mesh edge on `body` — its
+    /// adjacent-face name pair (step 4b). Same staleness guard; nil mints a
+    /// legacy signature-only ref.
+    private func mintEdgeName(body: Body, edge: SelectableEdge) -> EdgeName? {
+        guard let brep = body.brep,
+              session.lastNamingRevisions[body.id] == body.meshRevision,
+              let names = session.lastKernelNames[body.id], !names.isEmpty
+        else { return nil }
+        let mid = edge.midpoint
+        guard let index = OCCTKernel.nearestEdgeIndex(
+            brep, to: SIMD3(Double(mid.x), Double(mid.y), Double(mid.z)),
+            tolerance: OCCTKernel.matchTolerance(for: brep))
+        else { return nil }
+        return ElementNaming.edgeNames(
+            adjacency: OCCTKernel.edgeFaceAdjacency(brep),
+            names: names)[index]
     }
 
     /// The signed ±X/±Y/±Z box face a normal points most strongly along.
