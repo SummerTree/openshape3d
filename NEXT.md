@@ -85,6 +85,31 @@ exposure + per-triangle face-index channel), which changes no behavior.
    with G5 sketch completeness (splines!) in parallel. Note that doc's
    §2/G1/G2 are stale (chamfer/shell are OCCT now, not mesh).
 
+## 4b. The Shapr3D tutorial-model thread (paused, 2026-08-31)
+
+Goal as posed: import the tutorial models and rebuild them through the app's
+own UI, as a real workout for the modeling stack. Where it got to:
+
+- **`.shapr` is decoded.** ZIP -> SQLite. Bodies are Parasolid XT and stay
+  unreadable (OCCT cannot read Parasolid, no open converter exists), but
+  sketches are plain JSON and `HistoryTreeNodes` type 2 is the feature graph.
+  `scripts/shapr_extract.py` dumps a model to a recipe; its docstring holds the
+  format notes and the Google Drive ids for all eight models (PR #25).
+- **`scripts/rebuild_wheel.py`** rebuilds "4 motorcycle wheel" through
+  `/v1/exec` and is a manual regression for that endpoint — it documents the
+  expected volumes and why each is right.
+- **Triage: only 4 of the 8 models are reachable at all.** Frame, Block casting,
+  Motorcycle cover, 4 motorcycle wheel carry sketches + history. Rod clamp /
+  Piston / Piston rod are frozen imported solids (one body, zero sketches);
+  Motorcycle ships as a Parasolid TEXT `.x_t`. Block casting is unreachable
+  anyway — 7 of its 27 steps are `MaterializeImportedBodies`.
+- **What blocks the rest:** the Motorcycle cover needs Fillet and Shell, and
+  `/v1/exec` cannot express those. They take `EdgeRef`/`FaceRef` — topological
+  signatures, not numbers — so exec needs a way to NAME an edge or face over
+  the wire. That is the same identity problem §3 is about, so it is probably
+  cheaper AFTER the topological-naming mission, not before. The wheel itself is
+  also not 1:1 yet: its Mirror, second Boolean and 12.7 mm bolt holes are undone.
+
 ## 5. What PR #22 changed (so new work builds on it, not around it)
 
 - Kernel ops return typed failures: prefer `OCCTKernel.filletResult/
