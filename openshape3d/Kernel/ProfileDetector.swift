@@ -60,6 +60,48 @@ nonisolated struct Profile: Identifiable {
     /// geometry and a second thing to keep in step.
     var segments: [Segment] = []
 
+    /// Which sketch entity owns each boundary edge, in order — the identity
+    /// `sourceEntityIDs` throws away by being a set. `edgeEntityIDs` is
+    /// parallel to `loop`'s edges (edge i spans `loop[i] → loop[i+1]`);
+    /// `segmentEntityIDs` is parallel to `segments`. Both EMPTY for the
+    /// single-entity profiles (circle/rect/ellipse/polygon), where the one
+    /// entity in `sourceEntityIDs` owns everything. Element naming reads
+    /// these through `boundaryIdentity(wireEdge:wireEdgeCount:)` — nothing
+    /// else should, because which array applies depends on how the kernel
+    /// built the wire.
+    var edgeEntityIDs: [UUID] = []
+    var segmentEntityIDs: [UUID] = []
+
+    /// The sketch entity that owns wire edge `j` (1-based, construction
+    /// order) of this profile's boundary, plus how many earlier wire edges
+    /// the same entity owns (the `occurrence` disambiguator — derived from
+    /// the profile arrays alone, so a dropped history row can't shift it).
+    ///
+    /// `wireEdgeCount` is how many wall edges the kernel actually built for
+    /// this loop; it selects WHICH boundary description the wire came from —
+    /// one edge per exact segment, one per polyline point, or one for a
+    /// conic. Nil when no description matches: refusing to guess is the
+    /// contract, because a wrong identity is worse than a missing one.
+    func boundaryIdentity(wireEdge j: Int, wireEdgeCount: Int)
+        -> (entity: UUID, occurrence: Int)? {
+        guard j >= 1, j <= wireEdgeCount else { return nil }
+        if sourceEntityIDs.count == 1, let only = sourceEntityIDs.first {
+            return (only, j - 1)
+        }
+        func lookup(_ ids: [UUID]) -> (UUID, Int)? {
+            guard j <= ids.count else { return nil }
+            let entity = ids[j - 1]
+            return (entity, ids[..<(j - 1)].count(where: { $0 == entity }))
+        }
+        if !segmentEntityIDs.isEmpty, wireEdgeCount == segmentEntityIDs.count {
+            return lookup(segmentEntityIDs)
+        }
+        if wireEdgeCount == loop.count, edgeEntityIDs.count == loop.count {
+            return lookup(edgeEntityIDs)
+        }
+        return nil
+    }
+
     /// Signed area (positive for CCW).
     var area: Double {
         Profile.signedArea(loop)
@@ -290,6 +332,8 @@ nonisolated enum ProfileDetector {
             var loop: [SIMD2<Double>] = []
             var chainIDs: [Int] = []
             var segments: [Profile.Segment] = []
+            var edgeEntityIDs: [UUID] = []
+            var segmentEntityIDs: [UUID] = []
             var sawArc = false
             var spur = false
             for index in cycle {
@@ -299,6 +343,12 @@ nonisolated enum ProfileDetector {
                 let chain = chains[half.chain]
                 let pts = half.forward ? chain.points : Array(chain.points.reversed())
                 loop.append(contentsOf: pts.dropLast())
+                // Each appended point starts one loop edge, so the chain owns
+                // the next pts.count-1 edges — identity in traversal order,
+                // which the set below cannot carry.
+                edgeEntityIDs.append(contentsOf: Array(
+                    repeating: chain.entityID, count: max(0, pts.count - 1)))
+                segmentEntityIDs.append(chain.entityID)
                 // The chain occupies one contiguous run of `loop`, so its
                 // exact boundary is one segment spanning the same ground.
                 // An interior SAMPLE serves as the arc's third point: it is on
@@ -328,7 +378,10 @@ nonisolated enum ProfileDetector {
                 kind: .polygonal,
                 sourceEntityIDs: Set(chainIDs.map { chains[$0].entityID }),
                 // Nothing to gain on an all-straight loop; see `segments`.
-                segments: sawArc ? segments : []
+                segments: sawArc ? segments : [],
+                edgeEntityIDs: edgeEntityIDs,
+                // Parallel to `segments`, so it follows the same emptiness.
+                segmentEntityIDs: sawArc ? segmentEntityIDs : []
             ))
         }
         return profiles

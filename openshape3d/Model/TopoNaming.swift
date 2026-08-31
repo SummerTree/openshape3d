@@ -33,6 +33,10 @@ nonisolated struct FaceTable: Codable, Sendable {
         var role: FaceRole
         var signature: FaceSignature
         var triangles: [Int]
+        /// Kernel-history identity, when one could be derived without
+        /// guessing (docs/TOPO_NAMING_HISTORY_DESIGN.md step 2). Nil is
+        /// normal — signature matching stays the universal fallback.
+        var elementName: ElementName? = nil
     }
 
     init(entries: [Entry] = []) { self.entries = entries }

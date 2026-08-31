@@ -44,6 +44,12 @@ nonisolated struct ShapeAncestry: Sendable, Equatable {
     /// always means "history doesn't know" — signatures stay the fallback.
     let truncatedByHeal: Bool
 
+    /// Direct construction, for tests and future non-bridge derivations.
+    init(rows: [Row], truncatedByHeal: Bool = false) {
+        self.rows = rows
+        self.truncatedByHeal = truncatedByHeal
+    }
+
     init(_ history: OCCTShapeHistory) {
         truncatedByHeal = history.truncatedByHeal
         let values: [Int32] = history.rows.withUnsafeBytes {
