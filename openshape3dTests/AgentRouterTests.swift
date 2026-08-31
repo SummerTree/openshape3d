@@ -60,6 +60,42 @@ final class AgentRouterTests: XCTestCase {
                        .screenshot(width: AgentRouter.maxShotSize, height: AgentRouter.minShotSize))
     }
 
+    // MARK: /v1/check and /v1/capture (docs/FREECAD_PLAYBOOK.md D1/D2)
+
+    func testCheckRoutesWithBodyAndBOPQuery() {
+        XCTAssertEqual(route("GET", "/v1/check"),
+                       .check(bodyID: nil, runBOPCheck: false))
+        XCTAssertEqual(route("GET", "/v1/check?bop=1"),
+                       .check(bodyID: nil, runBOPCheck: true))
+        XCTAssertEqual(route("GET", "/v1/check?body=AB12&bop=0"),
+                       .check(bodyID: "AB12", runBOPCheck: false))
+    }
+
+    func testCaptureCarriesItsNote() {
+        XCTAssertEqual(route("POST", "/v1/capture",
+                             body: #"{"note":"wheel hub looks wrong"}"#),
+                       .capture(note: "wheel hub looks wrong"))
+        XCTAssertEqual(route("POST", "/v1/capture"), .capture(note: ""))
+    }
+
+    func testCheckIsGETOnlyAndCaptureIsPOSTOnly() {
+        guard case let .reply(checkStatus, checkError, _) = route("POST", "/v1/check") else {
+            return XCTFail("expected a reply for POST /v1/check")
+        }
+        XCTAssertEqual(checkStatus, 405)
+        XCTAssertEqual(checkError, "method_not_allowed")
+        guard case let .reply(captureStatus, captureError, _) = route("GET", "/v1/capture") else {
+            return XCTFail("expected a reply for GET /v1/capture")
+        }
+        XCTAssertEqual(captureStatus, 405)
+        XCTAssertEqual(captureError, "method_not_allowed")
+    }
+
+    func testCheckAndCaptureNeedTheEditor() {
+        XCTAssertTrue(AgentRoute.check(bodyID: nil, runBOPCheck: false).needsEditor)
+        XCTAssertTrue(AgentRoute.capture(note: "").needsEditor)
+    }
+
     func testUnknownPathIs404() {
         guard case let .reply(status, error, _) = route("GET", "/v1/nope") else {
             return XCTFail("expected a reply")

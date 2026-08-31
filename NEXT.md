@@ -6,7 +6,19 @@ and exactly what to pick up next. The living authority is still
 `docs/STATUS_AND_NEXT_STEPS.md` (§4 mission 0 records what just landed);
 this file is the short version plus the machine-move checklist.
 
-## 1. New-machine setup checklist
+## 1. New-machine setup checklist — DONE on this machine (2026-08-31)
+
+All four steps below were completed: LFS libs verified real, unit suite green
+(**1034 tests, ~18 s** — 21 above the handoff count, from the debug-tooling
+tranche the same day, see §2b), FreeCAD re-cloned to
+`~/projects/reference/FreeCAD`, and the UDID problem solved for good —
+`scripts/run_sim.sh` and the drive skill now resolve the simulator BY NAME.
+Two machine quirks worth knowing, both now handled in the scripts:
+`xcode-select` points at CommandLineTools here, so every `xcodebuild`/`xcrun`
+needs `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer` (the real fix
+is `sudo xcode-select -s /Applications/Xcode.app/Contents/Developer`); and
+port 8787 is occupied by an unrelated local service, so launch the agent
+bridge with `SIMCTL_CHILD_OS3D_AGENT_PORT=8899`.
 
 1. `git lfs install` **before** cloning — `ThirdParty/OCCT.xcframework`'s
    static libs come through LFS (headers are plain files). No OCCT rebuild
@@ -41,6 +53,19 @@ this file is the short version plus the machine-move checklist.
 - The full **UI suite has not run** since the hardening landed (only the
   6 blend UI tests, all green). Kick off the ~44 min suite once and check
   the four health signals listed at the top of STATUS §"test baseline".
+
+## 2b. Debug-tooling tranche — LANDED 2026-08-31 (this machine's first work)
+
+The tutorial-model thread (§4b) kept surfacing kernel bugs that each cost a
+hand-built repro, so the FreeCAD mining focus shifted to its DEBUGGING
+machinery first. Landed: geometry health report (`GET /v1/check`, FreeCAD's
+Check Geometry re-derived), automatic failing-op capture bundles +
+`POST /v1/capture` + `scripts/fetch_captures.sh`, replay harness with
+committed regression fixtures, and per-feature `evalErrors` in `/v1/state`.
+Playbook rows D1–D3; workflow doc **`docs/KERNEL_DEBUG_TOOLING.md`**; STATUS
+§4 mission 0c is the record. When the tutorial-model thread resumes, run
+`/v1/check?bop=1` the moment a rebuild looks wrong, and promote any capture
+bundle a failure leaves behind.
 
 ## 3. The next mission: kernel-history topological naming
 

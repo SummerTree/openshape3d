@@ -67,13 +67,19 @@ nonisolated enum AgentRoute: Sendable, Equatable {
     case runCommand(id: String)
     case exec(AgentExecOp)
     case screenshot(width: Int, height: Int)
+    /// Geometry health report for one body (or all with a `brep`) —
+    /// docs/FREECAD_PLAYBOOK.md D1. `bop` adds the slow self-intersection check.
+    case check(bodyID: String?, runBOPCheck: Bool)
+    /// Snapshot every analytic body into a replayable capture bundle —
+    /// the "op succeeded but the geometry looks wrong" repro path (D2).
+    case capture(note: String)
     /// Already-decided replies.
     case reply(status: Int, error: String, message: String)
 
     /// Whether serving this needs a hop to the main actor.
     var needsEditor: Bool {
         switch self {
-        case .state, .runCommand, .exec, .screenshot: return true
+        case .state, .runCommand, .exec, .screenshot, .check, .capture: return true
         case .health, .commands, .reply: return false
         }
     }
@@ -108,6 +114,18 @@ nonisolated enum AgentRouter {
                                         min: minShotSize, max: maxShotSize),
                 height: request.intQuery("h", default: defaultShotSize,
                                          min: minShotSize, max: maxShotSize))
+
+        case "/v1/check":
+            if let bad = get(request) { return bad }
+            return .check(bodyID: request.query["body"],
+                          runBOPCheck: request.query["bop"] == "1")
+
+        case "/v1/capture":
+            guard request.method == "POST" else {
+                return .reply(status: 405, error: "method_not_allowed",
+                              message: "POST to /v1/capture (optional JSON body {\"note\":\"…\"}).")
+            }
+            return .capture(note: request.jsonBody?["note"] as? String ?? "")
 
         case "/v1/command":
             guard request.method == "POST" else {

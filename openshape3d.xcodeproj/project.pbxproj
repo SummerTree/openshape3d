@@ -36,6 +36,16 @@
 		7F70432C300C0ED7003471DC /* openshape3dUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = openshape3dUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
+/* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
+		7F7046013010F00000347100 /* Exceptions for "openshape3dTests" folder in "openshape3dTests" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Fixtures,
+			);
+			target = 7F704321300C0ED7003471DC /* openshape3dTests */;
+		};
+/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
+
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		7F704315300C0ED6003471DC /* openshape3d */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
@@ -44,6 +54,9 @@
 		};
 		7F704325300C0ED7003471DC /* openshape3dTests */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				7F7046013010F00000347100 /* Exceptions for "openshape3dTests" folder in "openshape3dTests" target */,
+			);
 			path = openshape3dTests;
 			sourceTree = "<group>";
 		};

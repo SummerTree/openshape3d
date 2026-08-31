@@ -2,7 +2,11 @@
 # Build, install, and launch openshape3d on the iPad simulator, then screenshot.
 # Usage: scripts/run_sim.sh [screenshot_path] [--no-build]
 set -e
-UDID="69DB84F4-607C-46F2-9089-3E8C0770B4A9"   # iPad Pro 13-inch (M5)
+# xcode-select may point at CommandLineTools (no simctl); route to Xcode.app.
+xcrun --find simctl >/dev/null 2>&1 || export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
+DEVICE_NAME="iPad Pro 13-inch (M5)"
+UDID=$(xcrun simctl list devices available | grep -F "$DEVICE_NAME (" | head -1 | grep -oE '[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}')
+[[ -n "$UDID" ]] || { echo "No available simulator named $DEVICE_NAME" >&2; exit 1; }
 BUNDLE="com.laan.labs.openshape3d"
 SHOT="${1:-}"
 

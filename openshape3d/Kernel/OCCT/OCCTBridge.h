@@ -342,6 +342,44 @@ typedef NS_ENUM(NSInteger, OCCTOpCode) {
 /// caller reports an unreadable/unsupported file rather than crashing.
 + (NSArray<OCCTShape *> *)readSTEPFromPath:(NSString *)path;
 
+// MARK: - Geometry health + capture replay (docs/FREECAD_PLAYBOOK.md D1/D2)
+
+/// Deep validity report over a shape — the "Check Geometry" pipeline every
+/// mature OCCT consumer grows, re-derived from the OCCT documentation with
+/// FreeCAD's checker as the worked example. Always cheap context first
+/// (sub-shape counts, volume, min/avg/max tolerance, free boundary wires),
+/// then `BRepCheck_Analyzer`: when the shape is INVALID, every sub-shape's
+/// named statuses are collected — both the status a shape carries in itself
+/// and the status it carries IN ITS PARENT (a wire can be fine alone and
+/// self-intersecting in its face; OCCT stores those separately). Sub-shapes
+/// are named `Face3`/`Edge17` — 1-based indices into the root's indexed map
+/// of that type, the convention CAD checkers report in.
+///
+/// `runBOPCheck` additionally runs `BOPAlgo_ArgumentAnalyzer` (self-
+/// intersection, small edges, continuity…) — only when the shape passed
+/// `BRepCheck_Analyzer` (its findings are advisory and it is SLOW; FreeCAD
+/// gates it the same way), under the kernel deadline so a pathological shape
+/// can't hang the caller. Keys: `valid`, `findings` (subshape/type/status/
+/// context?), `bopCheckRan`, `bopFindings`, `counts`, `tolerance`,
+/// `volumeMM3`, `openFreeWires`, `closedFreeWires` — all JSON-safe.
++ (NSDictionary<NSString *, id> *)healthReportForShape:(OCCTShape *)shape
+                                           runBOPCheck:(BOOL)runBOPCheck;
+
+/// Raw deserialization for DIAGNOSTIC REPLAY ONLY. `shapeFromSerialized:`
+/// heals-and-validates because stored blobs are a trust boundary — but a
+/// capture replay must hand the op EXACTLY the bytes the failing op saw, or
+/// it reproduces a different bug. Keeps only the guards that stop the suite
+/// dying (read deadline, finite-bounds NaN gate); skips heal-and-validate.
++ (nullable OCCTShape *)rawShapeFromSerialized:(NSData *)data;
+
+#if DEBUG
+/// A deterministically INVALID solid — a box whose shell is missing one face
+/// (`BRepCheck_NotClosed`) — so tests can exercise the health-report findings
+/// path. No public op can build an invalid shape (they all validate), which
+/// is exactly why this factory exists. DEBUG only.
++ (nullable OCCTShape *)debugInvalidOpenBoxWithSize:(double)size;
+#endif
+
 /// Serialize a solid to OCCT's BRep text format, so the analytic geometry can be
 /// stored in the document and survive a reload. Nil on failure.
 + (nullable NSData *)serializedShape:(OCCTShape *)shape;

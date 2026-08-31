@@ -108,6 +108,32 @@ final class AgentBridge {
         case .exec(let op):
             return execute(op, on: viewModel)
 
+        case let .check(bodyID, runBOPCheck):
+            return check(bodyID: bodyID, runBOPCheck: runBOPCheck, on: viewModel)
+
+        case let .capture(note):
+            let analytic = viewModel.session.document.bodies.compactMap { body in
+                body.brep.map { (label: body.name, handle: $0) }
+            }
+            guard !analytic.isEmpty else {
+                return .failure(409, "Conflict", error: "nothing_to_capture",
+                                message: "No body carries a brep — a snapshot captures "
+                                       + "analytic solids, and every body here is mesh-only.")
+            }
+            guard let bundle = KernelCapture.recordSnapshot(
+                inputs: analytic, note: note.isEmpty ? "requested over /v1/capture" : note)
+            else {
+                return .failure(500, "Internal Server Error", error: "capture_failed",
+                                message: "The capture bundle could not be written "
+                                       + "(OS3D_KERNEL_CAPTURE=0 disables capture entirely).")
+            }
+            return .ok([
+                "path": bundle.path,
+                "bodies": analytic.map(\.label),
+                "message": "Replayable bundle written. Pull it with scripts/fetch_captures.sh, "
+                         + "or promote it to openshape3dTests/Fixtures/Captures as a regression fixture.",
+            ])
+
         case .screenshot(let width, let height):
             guard let png = viewModel.captureScreenshot(
                 width: width, height: height, transparentBackground: false, showGrid: true
@@ -325,6 +351,49 @@ final class AgentBridge {
         return .ok(payload)
     }
 
+    // MARK: - Geometry health (/v1/check — docs/FREECAD_PLAYBOOK.md D1)
+
+    /// Deep validity report per body. Mesh-only bodies are reported as
+    /// `meshOnly` rather than silently skipped — losing the brep somewhere in
+    /// a chain is itself a finding, and /v1/state's `brep` flag alone won't
+    /// tell you WHICH downstream check you can no longer run.
+    private func check(bodyID: String?, runBOPCheck: Bool,
+                       on viewModel: EditorViewModel) -> AgentResponse {
+        let bodies = viewModel.session.document.bodies
+        let targets: [Body]
+        if let bodyID {
+            guard let uuid = UUID(uuidString: bodyID),
+                  let body = bodies.first(where: { $0.id.raw == uuid }) else {
+                return execMissing("body", bodyID)
+            }
+            targets = [body]
+        } else {
+            targets = bodies
+        }
+        var invalid = 0
+        let rows = targets.map { body -> [String: Any] in
+            var row: [String: Any] = [
+                "id": body.id.raw.uuidString,
+                "name": body.name,
+            ]
+            if let brep = body.brep {
+                let health = OCCTKernel.healthReportDictionary(
+                    for: brep, runBOPCheck: runBOPCheck)
+                if health["valid"] as? Bool != true { invalid += 1 }
+                row["health"] = health
+            } else {
+                row["meshOnly"] = true
+            }
+            return row
+        }
+        return .ok([
+            "checked": rows.count,
+            "invalid": invalid,
+            "bopCheckRequested": runBOPCheck,
+            "bodies": rows,
+        ])
+    }
+
     // MARK: State snapshot
 
     /// What the agent can see. Deliberately the same numbers the human sees:
@@ -366,6 +435,21 @@ final class AgentBridge {
         ]
         if let title = viewModel.session.undoStack.undoTitle { state["undoTitle"] = title }
         if let error = viewModel.errorMessage { state["error"] = error }
+        // Per-feature replay failures — the same signal the History badges
+        // render. `error` above is the one-shot interactive alert; this is the
+        // persistent graph state, so an agent that drove the UI (not /v1/exec)
+        // can still see WHICH feature failed without a second channel.
+        let evalErrors = viewModel.session.lastEvalErrors
+        if !evalErrors.isEmpty {
+            state["evalErrors"] = document.features.nodes.compactMap { node -> [String: String]? in
+                guard let err = evalErrors[node.id] else { return nil }
+                return [
+                    "featureID": node.id.raw.uuidString,
+                    "feature": node.name,
+                    "error": String(describing: err),
+                ]
+            }
+        }
         return state
     }
 

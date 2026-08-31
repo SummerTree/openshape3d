@@ -1,18 +1,21 @@
 # Status & Next Steps — Handoff Notes
 
-Last updated: 2026-08-31 (FreeCAD-reference hardening tranches; see §4 mission
-0). This is the living handoff document: what is DONE, how the newest
-subsystems work, the dev workflow, and the prioritized next missions.
+Last updated: 2026-08-31 (debug-tooling tranche, §4 mission 0c — after the
+FreeCAD-reference hardening tranches, §4 mission 0). This is the living
+handoff document: what is DONE, how the newest subsystems work, the dev
+workflow, and the prioritized next missions.
 Companions: `IMPLEMENTATION_PLAN.md` (original phase plan),
 `SHAPR3D_PARITY_SPEC.md` (feature spec), `PHASE_D_DESIGN.md` (feature-graph
 design), and — new — `FREECAD_PLAYBOOK.md` (the FreeCAD-derived hardening
 ledger: every OCCT defensive pattern mined from the reference checkout at
 `~/projects/reference/FreeCAD`, its licensing rules, and where each landed).
 
-**Current test baseline (2026-08-31): 1013 unit tests in ~18s** — the
-FreeCAD-hardening tranches added 42 geometry-value tests (typed blend
-diagnostics, boolean normalization, exact-volume oracles, constraint
-lifecycle). Previous baseline (2026-08-30): 920 unit tests in 18s — down from
+**Current test baseline (2026-08-31): 1034 unit tests in ~18s** — the
+debug-tooling tranche (§4 mission 0c) added 21 (shape health, kernel capture
++ replay, /v1/check + /v1/capture routing) on top of the 1013 the
+FreeCAD-hardening tranches left, which had added 42 geometry-value tests
+(typed blend diagnostics, boolean normalization, exact-volume oracles,
+constraint lifecycle). Previous baseline (2026-08-30): 920 unit tests in 18s — down from
 ~100 s after booleans stopped running both kernels (see §3b). Full UI suite last
 measured at the analytic-ellipses commit: 103 executed, 2 skipped, 0 failures,
 44m28s — 0 idle-timeouts, 0 field-clear retries, store pinned at
@@ -404,7 +407,8 @@ Notes:
 | `OS3D_DEBUG_SEED_IMAGE` | Reference image on the ground plane, left unselected |
 | `OS3D_GIZMO_DEBUG` | Print the gizmo part each drag grabs, its world delta, and the rotation pill's live value |
 | `OS3D_RESET_STORE` | **Destructive.** Delete the SwiftData store before it opens — the app starts with zero projects. Every UI test sets it (see below); do not put it in a shell profile or a scheme you also model in. |
-| `OS3D_AGENT` / `OS3D_AGENT_PORT` | Loopback control channel for driving the app from Claude (`Agent/`). Health, command catalog, editor state, `POST /v1/command`, and a PNG of the viewport. Clients: `.claude/skills/drive-openshape3d/` (Claude Code, via curl) and `scripts/mcp_openshape3d.py` (Claude Desktop). Protocol: **`docs/AGENT_CONTROL.md`**. |
+| `OS3D_AGENT` / `OS3D_AGENT_PORT` | Loopback control channel for driving the app from Claude (`Agent/`). Health, command catalog, editor state (incl. per-feature `evalErrors`), `POST /v1/command`, `POST /v1/exec`, `GET /v1/check` (geometry health), `POST /v1/capture` (repro snapshot), and a PNG of the viewport. Clients: `.claude/skills/drive-openshape3d/` (Claude Code, via curl) and `scripts/mcp_openshape3d.py` (Claude Desktop). Protocol: **`docs/AGENT_CONTROL.md`**. NOTE: another local service may squat port 8787 (it did on this machine) — the app then binds IPv6 only and curl answers from the wrong server; launch with `OS3D_AGENT_PORT=8899`. |
+| `OS3D_KERNEL_CAPTURE` | Failing kernel ops auto-dump their inputs + params as replayable bundles to `Documents/KernelCaptures` (`=0` disables; default ON in the app, OFF under XCTest). Pull with `scripts/fetch_captures.sh`; promote to `openshape3dTests/Fixtures/Captures`. **`docs/KERNEL_DEBUG_TOOLING.md`** is the workflow. |
 
 To read `print()` output from a hook, launch through a console pty:
 
@@ -683,6 +687,38 @@ MIT), the change here, the defect closed, the pinning test. Landed:
   relaunch") and `resolve` now hard-vetoes surface-kind mismatches.
 - **Oracle tests** (R3-D): `GeometryOracleTests` — exact analytic volumes
   (incl. a Pappus-derived rim fillet) so wrong-but-non-empty can't pass.
+
+### 0c. Debug tooling — ✅ DONE (2026-08-31)
+
+Motivated by the tutorial-model thread (§4b of NEXT.md): every complex
+rebuild surfaces a kernel bug, and each bug cost a hand-built repro. Mined
+FreeCAD's debugging machinery and landed the three patterns that shorten the
+loop (playbook rows D1–D3; **`docs/KERNEL_DEBUG_TOOLING.md`** is the
+worked workflow):
+
+- **Geometry health report** (`OCCTKernel.healthReport` / `GET /v1/check`):
+  FreeCAD's Check Geometry re-derived — per-subshape `BRepCheck` faults with
+  "Face3"-style names (self AND in-context statuses), tolerance min/avg/max,
+  free boundary loops, counts, volume, opt-in BOP self-intersection check
+  (only on BRepCheck-clean shapes, on a copy, under the kernel deadline).
+- **Failing-op capture** (`KernelCapture`): every `*Result` failure dumps its
+  input breps + manifest (op, params, typed error, per-input health) as a
+  bundle; `POST /v1/capture` snapshots on demand;
+  `scripts/fetch_captures.sh` pulls them; newest-20 retention.
+- **Capture replay + fixtures** (`KernelCaptureReplay`,
+  `KernelCaptureReplayTests`): a bundle replays through the SAME kernel entry
+  points (inputs loaded RAW — no heal), and a committed bundle with an
+  `expect` block is a permanent regression test. Seed fixture:
+  `overradius-fillet-d10-rim`.
+- `/v1/state` now carries per-feature `evalErrors`, so driving sessions see
+  which feature broke without exec replies.
+
+Three traps encoded on the way: synchronized-group resources FLAT-COPY (two
+fixture `manifest.json`s break the build — Fixtures/ is pbxproj-excluded and
+read via `#filePath`); replay must use `rawShapeFromSerialized:` because the
+normal deserialize path heals what it reads; and `TopExp_Explorer` counts
+shared sub-shapes once per parent (a box "has" 24 edges) — counts use
+`TopExp::MapShapes`.
 
 **Next mission from this line of work:** kernel-history topological naming —
 design agreed and written up in `docs/TOPO_NAMING_HISTORY_DESIGN.md`

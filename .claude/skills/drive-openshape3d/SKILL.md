@@ -32,10 +32,15 @@ the editor endpoints will answer 409 — open a project, or relaunch with
 The simulator shares the Mac's network stack, so the app's loopback port is your
 loopback port. Nothing to forward.
 
+UDIDs are machine-specific — resolve by device name, never hardcode one. If
+`xcrun` cannot find `simctl`, `xcode-select` points at CommandLineTools; set
+`DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer` for every call.
+
 ```bash
-xcodebuild build -scheme openshape3d -destination 'platform=iOS Simulator,id=69DB84F4-607C-46F2-9089-3E8C0770B4A9' -quiet
-xcrun simctl install 69DB84F4-607C-46F2-9089-3E8C0770B4A9 ~/Library/Developer/Xcode/DerivedData/openshape3d-*/Build/Products/Debug-iphonesimulator/openshape3d.app
-SIMCTL_CHILD_OS3D_AGENT=1 SIMCTL_CHILD_OS3D_FRESH=1 xcrun simctl launch 69DB84F4-607C-46F2-9089-3E8C0770B4A9 com.laan.labs.openshape3d
+UDID=$(xcrun simctl list devices available | grep -F "iPad Pro 13-inch (M5) (" | head -1 | grep -oE '[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}')
+xcodebuild build -scheme openshape3d -destination "platform=iOS Simulator,id=$UDID" -quiet
+xcrun simctl install "$UDID" ~/Library/Developer/Xcode/DerivedData/openshape3d-*/Build/Products/Debug-iphonesimulator/openshape3d.app
+SIMCTL_CHILD_OS3D_AGENT=1 SIMCTL_CHILD_OS3D_FRESH=1 xcrun simctl launch "$UDID" com.laan.labs.openshape3d
 ```
 
 **Do not launch with `--console-pty &` from a tool call.** When the call ends its
@@ -95,9 +100,32 @@ curl -s http://127.0.0.1:8787/v1/state | jq
 ```
 
 Gives mode, selection, every body with `volumeMM3` and whether it is still
-analytic (`brep`), undo/redo availability, and `measurements` — the exact rows
-the human sees in the bottom info bar. **Assert on `volumeMM3`, not on a
-screenshot.** A picture cannot tell you a boolean silently produced a 0 mm³ body.
+analytic (`brep`), undo/redo availability, `measurements` — the exact rows
+the human sees in the bottom info bar — and, when any feature failed to
+replay, `evalErrors` (feature name + error per failing node). **Assert on
+`volumeMM3`, not on a screenshot.** A picture cannot tell you a boolean
+silently produced a 0 mm³ body.
+
+### Check geometry health / capture a repro
+
+```bash
+curl -s "http://127.0.0.1:8787/v1/check?bop=1" | jq '.invalid, .bodies[].health.findings'
+curl -s -X POST http://127.0.0.1:8787/v1/capture -d '{"note":"what looks wrong"}'
+```
+
+`/v1/check` is the first move when a rebuild LOOKS wrong: named per-subshape
+faults ("Face3: notClosed"), tolerances, free boundary loops, volumes; `bop=1`
+adds the slow self-intersection pass. `/v1/capture` snapshots every analytic
+body into a replayable bundle (failed kernel ops write one automatically);
+pull bundles with `scripts/fetch_captures.sh`. Workflow:
+`docs/KERNEL_DEBUG_TOOLING.md`.
+
+### If the bridge answers nonsense
+
+Port 8787 may be held by an unrelated local service (it is on this machine —
+`curl -v` showing `Server: BaseHTTP/Python` is the tell; the app then binds
+IPv6 only). Launch with `SIMCTL_CHILD_OS3D_AGENT_PORT=8899` and curl that
+port instead.
 
 ### Run a command
 

@@ -1,0 +1,36 @@
+{
+  "date" : "2026-08-31T16:22:09Z",
+  "error" : "partialResult(failed: 1, requested: 1)",
+  "expect" : {
+    "outcome" : "failure"
+  },
+  "inputs" : [
+    {
+      "faceCounts" : {
+        "cylindrical" : 1,
+        "other" : 0,
+        "planar" : 2
+      },
+      "file" : "shape.brep",
+      "label" : "shape",
+      "maxTolerance" : 9.9999999999999995e-08,
+      "valid" : true,
+      "volumeMM3" : 628.31853071795865
+    }
+  ],
+  "message" : "this size is too large for the local geometry — try a smaller value",
+  "note" : "Seed fixture: a 6 mm fillet on a Ø10 cylinder rim must fail typed, never crash or return a partial build.",
+  "op" : "fillet",
+  "params" : {
+    "points" : [
+      [
+        5,
+        8,
+        0
+      ]
+    ],
+    "radius" : 6,
+    "tolerance" : 0.40000000000000002
+  },
+  "version" : 1
+}

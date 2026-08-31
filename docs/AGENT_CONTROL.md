@@ -128,8 +128,48 @@ person reading over its shoulder never disagree about what the model measures.
 `brep` says whether a body is still analytic or has been flattened to its
 tessellation — the distinction the OCCT port exists for.
 
+When any feature failed to replay, the state also carries `evalErrors` — one
+`{featureID, feature, error}` row per failing node, in graph order: the same
+signal the History badges render, so a session that drove the UI (not
+`/v1/exec`) can still see WHICH feature failed and why. Absent when everything
+built.
+
 Verify geometry here, not in a screenshot: an image cannot show that a boolean
 produced a 0 mm³ body.
+
+### `GET /v1/check?body=<uuid>&bop=1`
+
+Deep geometry-health report (docs/FREECAD_PLAYBOOK.md D1) — the first thing to
+run when a rebuilt model "looks wrong". Without `body`, every body is checked;
+`bop=1` adds the slow `BOPAlgo_ArgumentAnalyzer` pass (self-intersections,
+too-small edges — advisory, runs only on shapes `BRepCheck` already passed,
+under the kernel deadline).
+
+```json
+{"ok":true,"checked":1,"invalid":0,"bopCheckRequested":true,
+ "bodies":[{"id":"34CF5D5F-…","name":"Drilled","health":{
+   "valid":true,"findings":[],"bopCheckRan":true,"bopFindings":[],
+   "counts":{"solids":1,"shells":1,"faces":7,"wires":9,"edges":15,"vertices":10},
+   "tolerance":{"min":1e-07,"avg":1.0e-07,"max":1.0e-07},
+   "volumeMM3":524.60,"openFreeWires":0,"closedFreeWires":0}}]}
+```
+
+A finding names its sub-shape (`"Face3"`, `"Edge17"` — 1-based indices into
+the body's own indexed shape maps) and its OCCT status (`"notClosed"`,
+`"selfIntersectingWire"`, …), with `context` when the fault is registered
+against a parent (a wire can be fine alone and self-intersecting in its face).
+A mesh-only body comes back as `{"meshOnly": true}` — losing the brep
+somewhere in a chain is itself a finding. `invalid` counts sick breps only.
+
+### `POST /v1/capture`
+
+Body optional: `{"note":"wheel hub looks wrong"}`. Snapshots every analytic
+body into a replayable capture bundle (docs/FREECAD_PLAYBOOK.md D2) — the
+manual counterpart of the automatic failed-op capture. Returns the bundle
+path; pull it with `scripts/fetch_captures.sh`, replay it with
+`KernelCaptureReplay`, or promote it into
+`openshape3dTests/Fixtures/Captures/` as a regression fixture. 409
+`nothing_to_capture` when no body carries a brep.
 
 ### `POST /v1/command`
 

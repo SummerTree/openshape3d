@@ -98,6 +98,22 @@
 #include <Message_ProgressIndicator.hxx>
 #include <Message_ProgressScope.hxx>
 #include <TopTools_FormatVersion.hxx>
+#include <functional>
+#include <map>
+#include <BRepCheck_Result.hxx>
+#include <BRepCheck_ListIteratorOfListOfStatus.hxx>
+#include <BRepCheck_Status.hxx>
+#include <BOPAlgo_ArgumentAnalyzer.hxx>
+#include <BOPAlgo_CheckResult.hxx>
+#include <BOPAlgo_ListOfCheckResult.hxx>
+#include <BRepBuilderAPI_Copy.hxx>
+#include <ShapeAnalysis_FreeBounds.hxx>
+#include <TopTools_MapOfShape.hxx>
+#include <TopTools_ListIteratorOfListOfShape.hxx>
+#include <TopoDS_Iterator.hxx>
+#include <TopoDS_Compound.hxx>
+#include <TopoDS_Shell.hxx>
+#include <TopoDS_Solid.hxx>
 
 // Opaque handle: a world-space solid. The C++ TopoDS_Shape ivar is destroyed
 // automatically (ARC runs C++ ivar destructors in Obj-C++).
@@ -1692,6 +1708,368 @@ static double OS3DVolume(const TopoDS_Shape &shape) {
     }
     return out;
 }
+
+// MARK: - Geometry health (docs/FREECAD_PLAYBOOK.md D1)
+
+// Enumerator-derived name for a BRepCheck status. Written from the OCCT enum
+// itself (BRepCheck_Status.hxx), so the strings track the kernel, not any
+// other tool's UI copy.
+static NSString *OS3DCheckStatusName(BRepCheck_Status status) {
+    switch (status) {
+        case BRepCheck_NoError: return @"noError";
+        case BRepCheck_InvalidPointOnCurve: return @"invalidPointOnCurve";
+        case BRepCheck_InvalidPointOnCurveOnSurface: return @"invalidPointOnCurveOnSurface";
+        case BRepCheck_InvalidPointOnSurface: return @"invalidPointOnSurface";
+        case BRepCheck_No3DCurve: return @"no3DCurve";
+        case BRepCheck_Multiple3DCurve: return @"multiple3DCurve";
+        case BRepCheck_Invalid3DCurve: return @"invalid3DCurve";
+        case BRepCheck_NoCurveOnSurface: return @"noCurveOnSurface";
+        case BRepCheck_InvalidCurveOnSurface: return @"invalidCurveOnSurface";
+        case BRepCheck_InvalidCurveOnClosedSurface: return @"invalidCurveOnClosedSurface";
+        case BRepCheck_InvalidSameRangeFlag: return @"invalidSameRangeFlag";
+        case BRepCheck_InvalidSameParameterFlag: return @"invalidSameParameterFlag";
+        case BRepCheck_InvalidDegeneratedFlag: return @"invalidDegeneratedFlag";
+        case BRepCheck_FreeEdge: return @"freeEdge";
+        case BRepCheck_InvalidMultiConnexity: return @"invalidMultiConnexity";
+        case BRepCheck_InvalidRange: return @"invalidRange";
+        case BRepCheck_EmptyWire: return @"emptyWire";
+        case BRepCheck_RedundantEdge: return @"redundantEdge";
+        case BRepCheck_SelfIntersectingWire: return @"selfIntersectingWire";
+        case BRepCheck_NoSurface: return @"noSurface";
+        case BRepCheck_InvalidWire: return @"invalidWire";
+        case BRepCheck_RedundantWire: return @"redundantWire";
+        case BRepCheck_IntersectingWires: return @"intersectingWires";
+        case BRepCheck_InvalidImbricationOfWires: return @"invalidImbricationOfWires";
+        case BRepCheck_EmptyShell: return @"emptyShell";
+        case BRepCheck_RedundantFace: return @"redundantFace";
+        case BRepCheck_InvalidImbricationOfShells: return @"invalidImbricationOfShells";
+        case BRepCheck_UnorientableShape: return @"unorientableShape";
+        case BRepCheck_NotClosed: return @"notClosed";
+        case BRepCheck_NotConnected: return @"notConnected";
+        case BRepCheck_SubshapeNotInShape: return @"subshapeNotInShape";
+        case BRepCheck_BadOrientation: return @"badOrientation";
+        case BRepCheck_BadOrientationOfSubshape: return @"badOrientationOfSubshape";
+        case BRepCheck_InvalidPolygonOnTriangulation: return @"invalidPolygonOnTriangulation";
+        case BRepCheck_InvalidToleranceValue: return @"invalidToleranceValue";
+        case BRepCheck_EnclosedRegion: return @"enclosedRegion";
+        case BRepCheck_CheckFail: return @"checkFail";
+    }
+    return @"unknownStatus";
+}
+
+static NSString *OS3DBOPStatusName(BOPAlgo_CheckStatus status) {
+    switch (status) {
+        case BOPAlgo_CheckUnknown: return @"unknown";
+        case BOPAlgo_BadType: return @"badType";
+        case BOPAlgo_SelfIntersect: return @"selfIntersect";
+        case BOPAlgo_TooSmallEdge: return @"tooSmallEdge";
+        case BOPAlgo_NonRecoverableFace: return @"nonRecoverableFace";
+        case BOPAlgo_IncompatibilityOfVertex: return @"incompatibilityOfVertex";
+        case BOPAlgo_IncompatibilityOfEdge: return @"incompatibilityOfEdge";
+        case BOPAlgo_IncompatibilityOfFace: return @"incompatibilityOfFace";
+        case BOPAlgo_OperationAborted: return @"operationAborted";
+        case BOPAlgo_GeomAbs_C0: return @"c0Continuity";
+        case BOPAlgo_InvalidCurveOnSurface: return @"invalidCurveOnSurface";
+        case BOPAlgo_NotValid: return @"notValid";
+    }
+    return @"unknownStatus";
+}
+
+static NSString *OS3DShapeTypeWord(TopAbs_ShapeEnum type) {
+    switch (type) {
+        case TopAbs_COMPOUND: return @"Compound";
+        case TopAbs_COMPSOLID: return @"CompSolid";
+        case TopAbs_SOLID: return @"Solid";
+        case TopAbs_SHELL: return @"Shell";
+        case TopAbs_FACE: return @"Face";
+        case TopAbs_WIRE: return @"Wire";
+        case TopAbs_EDGE: return @"Edge";
+        case TopAbs_VERTEX: return @"Vertex";
+        case TopAbs_SHAPE: return @"Shape";
+    }
+    return @"Shape";
+}
+
+// Names a sub-shape "Face3"/"Edge17": the 1-based index into the ROOT shape's
+// indexed map of that type. Stable for a given shape, and what lets a report
+// reader (or a test) point at the exact offender. Maps are built lazily, one
+// per type actually named.
+class OS3DSubshapeNamer {
+public:
+    explicit OS3DSubshapeNamer(const TopoDS_Shape &root) : myRoot(root) {}
+    NSString *name(const TopoDS_Shape &sub) {
+        const TopAbs_ShapeEnum type = sub.ShapeType();
+        NSString *word = OS3DShapeTypeWord(type);
+        if (type == TopAbs_COMPOUND || type == TopAbs_COMPSOLID) return word;
+        TopTools_IndexedMapOfShape &map = myMaps[type];
+        if (map.IsEmpty()) TopExp::MapShapes(myRoot, type, map);
+        const Standard_Integer index = map.FindIndex(sub);
+        // Index 0 = not a sub-shape of the root (shouldn't happen; the type
+        // word alone is still more useful than a crash).
+        return index > 0 ? [NSString stringWithFormat:@"%@%d", word, (int)index] : word;
+    }
+private:
+    TopoDS_Shape myRoot;
+    std::map<TopAbs_ShapeEnum, TopTools_IndexedMapOfShape> myMaps;
+};
+
+// A pathological shape can carry thousands of faults; past this the report
+// stops saying anything new and starts being the problem.
+static const NSUInteger kOS3DMaxFindings = 200;
+
++ (NSDictionary<NSString *, id> *)healthReportForShape:(OCCTShape *)shape
+                                           runBOPCheck:(BOOL)runBOPCheck {
+    NSMutableDictionary<NSString *, id> *report = [NSMutableDictionary dictionary];
+    report[@"bopCheckRan"] = @NO;
+    if (shape == nil || shape->_shape.IsNull()) {
+        report[@"valid"] = @NO;
+        report[@"error"] = @"null shape";
+        return report;
+    }
+    const TopoDS_Shape &root = shape->_shape;
+    try {
+        // Cheap context first — these frame every finding (a 0-volume "solid"
+        // or a 1e-2 max tolerance is often the whole diagnosis by itself).
+        NSMutableDictionary *counts = [NSMutableDictionary dictionary];
+        const struct { TopAbs_ShapeEnum type; NSString *key; } kinds[] = {
+            {TopAbs_SOLID, @"solids"}, {TopAbs_SHELL, @"shells"},
+            {TopAbs_FACE, @"faces"}, {TopAbs_WIRE, @"wires"},
+            {TopAbs_EDGE, @"edges"}, {TopAbs_VERTEX, @"vertices"},
+        };
+        for (const auto &kind : kinds) {
+            // MapShapes, not an explorer walk: the explorer visits a shared
+            // sub-shape once PER PARENT (a box counts 24 edges), the indexed
+            // map once — and once is what "12 edges" means to a reader.
+            TopTools_IndexedMapOfShape map;
+            TopExp::MapShapes(root, kind.type, map);
+            counts[kind.key] = @((NSInteger)map.Extent());
+        }
+        report[@"counts"] = counts;
+        report[@"volumeMM3"] = @(OS3DVolume(root));
+        ShapeAnalysis_ShapeTolerance tolAnalysis;
+        report[@"tolerance"] = @{
+            @"min": @(tolAnalysis.Tolerance(root, -1)),
+            @"avg": @(tolAnalysis.Tolerance(root, 0)),
+            @"max": @(tolAnalysis.Tolerance(root, 1)),
+        };
+
+        // Free boundary wires: a healthy solid has none, and an open shell's
+        // open wires ARE its holes — each one is one boundary loop.
+        try {
+            ShapeAnalysis_FreeBounds freeBounds(root);
+            NSInteger open = 0, closed = 0;
+            const TopoDS_Compound openWires = freeBounds.GetOpenWires();
+            if (!openWires.IsNull()) {
+                for (TopoDS_Iterator it(openWires); it.More(); it.Next()) ++open;
+            }
+            const TopoDS_Compound closedWires = freeBounds.GetClosedWires();
+            if (!closedWires.IsNull()) {
+                for (TopoDS_Iterator it(closedWires); it.More(); it.Next()) ++closed;
+            }
+            report[@"openFreeWires"] = @(open);
+            report[@"closedFreeWires"] = @(closed);
+        } catch (...) {
+            // Advisory only; the validity check below still runs.
+        }
+
+        // One analyzer for the whole walk: it computes per-sub-shape results
+        // at construction, so every query below is a lookup, not a re-check.
+        BRepCheck_Analyzer analyzer(root);
+        const bool valid = analyzer.IsValid() == Standard_True;
+        report[@"valid"] = @(valid);
+
+        NSMutableArray *findings = [NSMutableArray array];
+        if (!valid) {
+            OS3DSubshapeNamer namer(root);
+            TopTools_MapOfShape visited;
+            std::function<void(const TopoDS_Shape &)> walk =
+                [&](const TopoDS_Shape &current) {
+                if (findings.count >= kOS3DMaxFindings) return;
+                // Shared sub-shapes (an edge under two faces) are reached
+                // repeatedly by the recursion; report each once.
+                if (!visited.Add(current)) return;
+
+                // The status a shape carries IN ITSELF.
+                const Handle(BRepCheck_Result) own = analyzer.Result(current);
+                if (!own.IsNull()) {
+                    for (BRepCheck_ListIteratorOfListOfStatus it(own->Status());
+                         it.More(); it.Next()) {
+                        if (it.Value() == BRepCheck_NoError) continue;
+                        [findings addObject:@{
+                            @"subshape": namer.name(current),
+                            @"type": OS3DShapeTypeWord(current.ShapeType()),
+                            @"status": OS3DCheckStatusName(it.Value()),
+                        }];
+                    }
+                }
+
+                // The status a sub-shape carries IN THIS PARENT. OCCT stores
+                // these against the (sub, context) pair — a wire can be fine
+                // alone and self-intersecting in its face — so they are only
+                // reachable through the context iterator, filtered to the
+                // parent being walked.
+                std::vector<TopAbs_ShapeEnum> subTypes;
+                switch (current.ShapeType()) {
+                    case TopAbs_SOLID: subTypes = {TopAbs_SHELL}; break;
+                    case TopAbs_FACE:
+                        subTypes = {TopAbs_WIRE, TopAbs_EDGE, TopAbs_VERTEX};
+                        break;
+                    case TopAbs_EDGE: subTypes = {TopAbs_VERTEX}; break;
+                    default: break;
+                }
+                for (TopAbs_ShapeEnum subType : subTypes) {
+                    for (TopExp_Explorer ex(current, subType); ex.More(); ex.Next()) {
+                        const Handle(BRepCheck_Result) sub = analyzer.Result(ex.Current());
+                        if (sub.IsNull()) continue;
+                        for (sub->InitContextIterator(); sub->MoreShapeInContext();
+                             sub->NextShapeInContext()) {
+                            if (!sub->ContextualShape().IsSame(current)) continue;
+                            for (BRepCheck_ListIteratorOfListOfStatus it(sub->StatusOnShape());
+                                 it.More(); it.Next()) {
+                                if (it.Value() == BRepCheck_NoError) continue;
+                                if (findings.count >= kOS3DMaxFindings) return;
+                                [findings addObject:@{
+                                    @"subshape": namer.name(ex.Current()),
+                                    @"type": OS3DShapeTypeWord(ex.Current().ShapeType()),
+                                    @"status": OS3DCheckStatusName(it.Value()),
+                                    @"context": namer.name(current),
+                                }];
+                            }
+                        }
+                    }
+                }
+
+                for (TopoDS_Iterator it(current); it.More(); it.Next()) {
+                    walk(it.Value());
+                }
+            };
+            walk(root);
+            if (findings.count >= kOS3DMaxFindings) {
+                report[@"findingsTruncated"] = @YES;
+            }
+        }
+        report[@"findings"] = findings;
+
+        // The BOP check finds what BRepCheck cannot (self-intersections,
+        // too-small edges) but is SLOW and advisory — run it only on request
+        // and only on a shape BRepCheck already passed, under the kernel
+        // deadline so a pathological case aborts instead of hanging.
+        if (runBOPCheck && valid) {
+            try {
+                // The analyzer works on a copy: it may touch the shape's
+                // shared internals, and this report must never mutate the
+                // solid it is reporting on.
+                const TopoDS_Shape copy = BRepBuilderAPI_Copy(root).Shape();
+                BOPAlgo_ArgumentAnalyzer bop;
+                bop.SetShape1(copy);
+                bop.ArgumentTypeMode() = Standard_True;
+                bop.SelfInterMode() = Standard_True;
+                bop.SmallEdgeMode() = Standard_True;
+                bop.RebuildFaceMode() = Standard_True;
+                bop.ContinuityMode() = Standard_True;
+                bop.TangentMode() = Standard_True;
+                bop.MergeVertexMode() = Standard_True;
+                bop.MergeEdgeMode() = Standard_True;
+                bop.CurveOnSurfaceMode() = Standard_True;
+                bop.SetRunParallel(Standard_True);
+                OS3DDeadlineProgress *deadline =
+                    new OS3DDeadlineProgress(kOS3DKernelDeadlineSeconds);
+                Handle(Message_ProgressIndicator) progress(deadline);
+                bop.Perform(progress->Start());
+                if (deadline->Fired()) {
+                    report[@"bopCheckError"] = @"deadline exceeded";
+                } else {
+                    report[@"bopCheckRan"] = @YES;
+                    NSMutableArray *bopFindings = [NSMutableArray array];
+                    if (bop.HasFaulty()) {
+                        // Faulty shapes belong to the COPY — index against it,
+                        // not the original, or FindIndex answers 0.
+                        OS3DSubshapeNamer copyNamer(copy);
+                        for (BOPAlgo_ListIteratorOfListOfCheckResult it(bop.GetCheckResult());
+                             it.More(); it.Next()) {
+                            NSString *status = OS3DBOPStatusName(it.Value().GetCheckStatus());
+                            for (TopTools_ListIteratorOfListOfShape faulty(
+                                     it.Value().GetFaultyShapes1());
+                                 faulty.More(); faulty.Next()) {
+                                if (bopFindings.count >= kOS3DMaxFindings) break;
+                                [bopFindings addObject:@{
+                                    @"subshape": copyNamer.name(faulty.Value()),
+                                    @"type": OS3DShapeTypeWord(faulty.Value().ShapeType()),
+                                    @"status": status,
+                                }];
+                            }
+                        }
+                    }
+                    report[@"bopFindings"] = bopFindings;
+                }
+            } catch (const Standard_Failure &failure) {
+                const char *message = failure.GetMessageString();
+                report[@"bopCheckError"] = [NSString stringWithFormat:@"%s: %s",
+                    failure.DynamicType()->Name(),
+                    (message && message[0]) ? message : "no kernel message"];
+            } catch (...) {
+                report[@"bopCheckError"] = @"the BOP check threw";
+            }
+        }
+    } catch (const Standard_Failure &failure) {
+        report[@"valid"] = @NO;
+        const char *message = failure.GetMessageString();
+        report[@"error"] = [NSString stringWithFormat:@"%s: %s",
+            failure.DynamicType()->Name(),
+            (message && message[0]) ? message : "no kernel message"];
+    } catch (...) {
+        report[@"valid"] = @NO;
+        report[@"error"] = @"the health check threw";
+    }
+    return report;
+}
+
++ (nullable OCCTShape *)rawShapeFromSerialized:(NSData *)data {
+    if (data.length == 0) return nil;
+    try {
+        std::istringstream is(std::string((const char *)data.bytes, data.length));
+        TopoDS_Shape shape;
+        BRep_Builder builder;
+        // Same hang/NaN guards as shapeFromSerialized:, but NO heal — a
+        // capture replay must hand the op exactly what the failing op saw.
+        OS3DDeadlineProgress *deadline =
+            new OS3DDeadlineProgress(kOS3DKernelDeadlineSeconds);
+        Handle(Message_ProgressIndicator) progress(deadline);
+        BRepTools::Read(shape, is, builder, progress->Start());
+        if (deadline->Fired() || shape.IsNull()) return nil;
+        if (!OS3DFiniteBounds(shape)) return nil;
+        OCCTShape *out = [OCCTShape new];
+        out->_shape = shape;
+        return out;
+    } catch (...) {
+        return nil;
+    }
+}
+
+#if DEBUG
++ (nullable OCCTShape *)debugInvalidOpenBoxWithSize:(double)size {
+    if (size <= 0) return nil;
+    try {
+        BRepPrimAPI_MakeBox box(size, size, size);
+        BRep_Builder builder;
+        TopoDS_Shell shell;
+        builder.MakeShell(shell);
+        bool dropped = false;
+        for (TopExp_Explorer ex(box.Shape(), TopAbs_FACE); ex.More(); ex.Next()) {
+            if (!dropped) { dropped = true; continue; }  // leave one face out
+            builder.Add(shell, ex.Current());
+        }
+        TopoDS_Solid solid;
+        builder.MakeSolid(solid);
+        builder.Add(solid, shell);
+        OCCTShape *out = [OCCTShape new];
+        out->_shape = solid;
+        return out;
+    } catch (...) {
+        return nil;
+    }
+}
+#endif
 
 + (nullable NSData *)serializedShape:(OCCTShape *)shape {
     if (shape == nil) return nil;

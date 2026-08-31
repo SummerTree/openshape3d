@@ -502,7 +502,11 @@ nonisolated enum OCCTKernel {
         let status = OCCTOpStatus()
         guard let shape = OCCTBridge.boolean(of: a.shape, with: b.shape,
                                              op: op, status: status) else {
-            return .failure(OCCTOpError(status))
+            let error = OCCTOpError(status)
+            KernelCapture.recordFailure(op: "boolean",
+                                        inputs: [("a", a), ("b", b)],
+                                        params: ["op": op], error: error)
+            return .failure(error)
         }
         let solids = status.code == .multiSolid ? status.solidCount : 1
         return .success(BooleanOutcome(handle: BRepHandle(shape),
@@ -526,7 +530,13 @@ nonisolated enum OCCTKernel {
         guard let shape = OCCTBridge.defeaturedShape(
             handle.shape, atWorldPoints: pack(points),
             tolerance: tolerance, status: status) else {
-            return .failure(OCCTOpError(status))
+            let error = OCCTOpError(status)
+            KernelCapture.recordFailure(
+                op: "removeFaces", inputs: [("shape", handle)],
+                params: ["tolerance": tolerance,
+                         "points": points.map { [$0.x, $0.y, $0.z] }],
+                error: error)
+            return .failure(error)
         }
         return .success(BRepHandle(shape))
     }
@@ -562,7 +572,13 @@ nonisolated enum OCCTKernel {
         guard let shape = OCCTBridge.filletedShape(
             handle.shape, atWorldPoints: pack(points),
             radius: radius, tolerance: tolerance, status: status) else {
-            return .failure(OCCTOpError(status))
+            let error = OCCTOpError(status)
+            KernelCapture.recordFailure(
+                op: "fillet", inputs: [("shape", handle)],
+                params: ["radius": radius, "tolerance": tolerance,
+                         "points": points.map { [$0.x, $0.y, $0.z] }],
+                error: error)
+            return .failure(error)
         }
         return .success(BRepHandle(shape))
     }
@@ -585,7 +601,13 @@ nonisolated enum OCCTKernel {
         guard let shape = OCCTBridge.chamferedShape(
             handle.shape, atWorldPoints: pack(points),
             distance: distance, tolerance: tolerance, status: status) else {
-            return .failure(OCCTOpError(status))
+            let error = OCCTOpError(status)
+            KernelCapture.recordFailure(
+                op: "chamfer", inputs: [("shape", handle)],
+                params: ["distance": distance, "tolerance": tolerance,
+                         "points": points.map { [$0.x, $0.y, $0.z] }],
+                error: error)
+            return .failure(error)
         }
         return .success(BRepHandle(shape))
     }
@@ -612,7 +634,13 @@ nonisolated enum OCCTKernel {
         guard let shape = OCCTBridge.shelledShape(
             handle.shape, atWorldPoints: pack(points),
             thickness: thickness, tolerance: tolerance, status: status) else {
-            return .failure(OCCTOpError(status))
+            let error = OCCTOpError(status)
+            KernelCapture.recordFailure(
+                op: "shell", inputs: [("shape", handle)],
+                params: ["thickness": thickness, "tolerance": tolerance,
+                         "points": points.map { [$0.x, $0.y, $0.z] }],
+                error: error)
+            return .failure(error)
         }
         return .success(BRepHandle(shape))
     }
