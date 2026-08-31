@@ -30,6 +30,15 @@ final class DocumentSession {
     /// badges). Empty when the last rebuild was clean.
     private(set) var lastEvalErrors: [FeatureID: FeatureError] = [:]
 
+    /// The face tables of the most recent APPLIED rebuild — the tables whose
+    /// triangle indices are valid against the documents' CURRENT renders,
+    /// which is what lets a live pick read a face's `elementName` at mint
+    /// time (TOPO_NAMING_HISTORY_DESIGN step 4). Deliberately NOT populated
+    /// by `refreshEvalErrors()`: that replay discards its bodies, so its
+    /// tables describe scratch renders, and a name minted off a misaligned
+    /// table would be a WRONG name — worse than the nil a fresh load mints.
+    private(set) var lastFaceTables: [BodyID: FaceTable] = [:]
+
     /// Bumped on every document mutation; the editor observes this to rebuild
     /// the viewport scene.
     private(set) var changeCount = 0
@@ -360,6 +369,7 @@ final class DocumentSession {
             nextRevision: { self.document.nextRevision() }
         )
         lastEvalErrors = result.errors
+        lastFaceTables = result.faceTables
 
         // Every BodyID any node owns — the pre-edit graph too, so a node removed
         // in `editedGraph` still has its now-orphaned body diffed (and deleted).

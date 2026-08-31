@@ -3460,7 +3460,10 @@ final class EditorViewModel {
         if let owner = featureNode(owning: bodyID) {
             let bodyRef = BodyRef(producer: owner.id, bodyID: bodyID)
             let faceRefs = shellSelectedFaces.map {
-                Self.shellFaceRef(face: $0, bodyRef: bodyRef, creator: owner.id)
+                Self.shellFaceRef(face: $0, bodyRef: bodyRef, creator: owner.id,
+                                  elementName: mintElementName(
+                                      body: bodyRef.bodyID,
+                                      triangle: $0.triangles.first))
             }
             let node = FeatureNode(
                 name: "Shell",
@@ -3638,7 +3641,10 @@ final class EditorViewModel {
             let bodyRef = BodyRef(producer: owner.id, bodyID: bodyID)
             let faceRefs = deleteFaceTargets.map {
                 FaceRef(body: bodyRef, creator: owner.id,
-                        role: .derived(index: 0), signature: $0.signature)
+                        role: .derived(index: 0), signature: $0.signature,
+                        elementName: mintElementName(
+                            body: bodyRef.bodyID,
+                            triangle: $0.triangles.first))
             }
             let node = FeatureNode(
                 name: "Delete Face",
@@ -3878,7 +3884,9 @@ final class EditorViewModel {
             let bodyRef = BodyRef(producer: owner.id, bodyID: bodyID)
             let faceRef = FaceRef(
                 body: bodyRef, creator: owner.id, role: .derived(index: 0),
-                signature: SignatureNaming.signature(planar: face))
+                signature: SignatureNaming.signature(planar: face),
+                elementName: mintElementName(body: bodyRef.bodyID,
+                                             triangle: face.triangles.first))
             let node = FeatureNode(
                 name: "Replace Face",
                 kind: .replaceFace(
@@ -3902,7 +3910,8 @@ final class EditorViewModel {
     /// A `FaceRef` pinning an open face by geometric signature in body-local
     /// space (mirrors `pushPullFaceRef`; role is only a resolve tiebreak).
     private static func shellFaceRef(
-        face: PlanarFace, bodyRef: BodyRef, creator: FeatureID
+        face: PlanarFace, bodyRef: BodyRef, creator: FeatureID,
+        elementName: ElementName? = nil
     ) -> FaceRef {
         let n = SIMD3<Double>(
             Double(face.normal.x), Double(face.normal.y), Double(face.normal.z))
@@ -3913,7 +3922,8 @@ final class EditorViewModel {
             area: max(area, 0), planeOffset: simd_dot(n, face.origin))
         return FaceRef(
             body: bodyRef, creator: creator,
-            role: .derived(index: 0), signature: signature)
+            role: .derived(index: 0), signature: signature,
+            elementName: elementName)
     }
 
     /// Distance from a point to a segment (both body-local).
@@ -10746,7 +10756,20 @@ final class EditorViewModel {
         }
         return FaceRef(
             body: BodyRef(producer: creator, bodyID: source.id),
-            creator: creator, role: role, signature: signature)
+            creator: creator, role: role, signature: signature,
+            elementName: mintElementName(body: source.id, triangle: seed))
+    }
+
+    /// The kernel-history name of the face containing `triangle` on `bodyID`,
+    /// read from the last APPLIED rebuild's face tables
+    /// (TOPO_NAMING_HISTORY_DESIGN step 4). Nil is normal — a fresh load, a
+    /// mesh-path body, an unnamed face — and mints a legacy ref. Lookup is
+    /// exact triangle membership in the current table only, because a name
+    /// minted off a misaligned table would be WRONG, which is worse.
+    private func mintElementName(body bodyID: BodyID, triangle: Int?) -> ElementName? {
+        guard let triangle else { return nil }
+        return session.lastFaceTables[bodyID]?.entries
+            .first { $0.triangles.contains(triangle) }?.elementName
     }
 
     /// The signed ±X/±Y/±Z box face a normal points most strongly along.

@@ -1,6 +1,27 @@
 # Kernel-history element naming — design (to land as its own mission)
 
-Status: **STEPS 1–3 LANDED** (2026-08-31); steps 4–5 remain design. Step 3
+Status: **STEPS 1–4a LANDED** (2026-08-31). Step 4's FACE half shipped:
+`FaceRef.elementName` (optional; synthesized Codable omits nil and
+`decodeIfPresent`s, so old documents load unchanged and legacy refs are
+byte-identical on disk), name-first `SignatureNaming.resolve` (exact name
+hit → confidence 1.0, verified by triangle-set alignment and kind-checked
+against the signature — a name pointing at an incompatible face is a MISS,
+never obeyed), and the `nameMissMargin` ambiguity gate: a name-bearing ref
+whose name missed resolves by signature only when the best candidate beats
+the runner-up by ≥ 0.05 — refs with no name resolve exactly as before,
+which is the migration story. Live picks mint names via
+`DocumentSession.lastFaceTables` (retained ONLY from applied rebuilds —
+`refreshEvalErrors`' scratch tables describe scratch renders and could mint
+WRONG names; a fresh load mints legacy refs until the first rebuild) at all
+four mint sites (pushPull, shell, deleteFace, replaceFace). Pinned by the
+two-identical-holes fixture: the drifted ref binds the NAMED hole with the
+name and silently binds the wrong one without it; a name miss between
+near-ties refuses. STILL OPEN from step 4: `EdgeRef.faceNames` + identity-
+based blend targeting (the biggest "rebuild broke my fillet" fix — needs
+the `filletedShape:edgeIndices:` bridge entry), and step 5's opportunistic
+ref upgrade + modifier-op history.
+
+Step 3
 (boolean name composition) shipped: `EvalState.kernelNames` is the
 composable per-body layer — per-kernel-face name maps, cleared by `put()` on
 EVERY body replacement so a non-composing op can never leave a stale map —

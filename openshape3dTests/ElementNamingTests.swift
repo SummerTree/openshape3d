@@ -464,6 +464,201 @@ final class ElementNamingTests: XCTestCase {
         XCTAssertEqual(Set(names).count, names.count, "no duplicate names")
     }
 
+    // MARK: - Name-first resolve (step 4)
+
+    /// A slab with two IDENTICAL square through-holes — the geometry that
+    /// makes signature scoring genuinely ambiguous, which is what name-first
+    /// resolution exists for.
+    private func twoHoleFixture() throws
+        -> (body: Body, table: FaceTable, cutA: FeatureID, cutB: FeatureID) {
+        let slabSketch = SketchID(), aSketch = SketchID(), bSketch = SketchID()
+        let slabRect = UUID(), aRect = UUID(), bRect = UUID()
+        let slabFeature = FeatureID(), cutA = FeatureID(), cutB = FeatureID()
+        let slabID = BodyID()
+        func cut(_ id: FeatureID, name: String, sketch: SketchID,
+                 entity: UUID, seed: SIMD2<Double>) -> FeatureNode {
+            FeatureNode(
+                id: id, name: name,
+                kind: .extrude(
+                    profile: ProfileRef(sketchID: sketch, entityIDs: [entity],
+                                        holeEntityIDs: [], seedPoint: seed),
+                    plane: PlaneRef(source: .sketch(sketch)),
+                    distance: Expr(value: 3), symmetric: true,
+                    boolean: BooleanIntent(
+                        op: .subtract,
+                        resolvedTargets: [BodyRef(producer: slabFeature,
+                                                  bodyID: slabID)]),
+                    extraProfiles: []),
+                outputBodyIDs: [])
+        }
+        let graph = FeatureGraph(nodes: [
+            FeatureNode(
+                id: slabFeature, name: "Slab",
+                kind: .extrude(
+                    profile: ProfileRef(sketchID: slabSketch, entityIDs: [slabRect],
+                                        holeEntityIDs: [], seedPoint: .zero),
+                    plane: PlaneRef(source: .sketch(slabSketch)),
+                    distance: Expr(value: 2), symmetric: true,
+                    boolean: BooleanIntent(op: .newBody, resolvedTargets: []),
+                    extraProfiles: []),
+                outputBodyIDs: [slabID]),
+            cut(cutA, name: "CutA", sketch: aSketch, entity: aRect,
+                seed: SIMD2(-3, 0)),
+            cut(cutB, name: "CutB", sketch: bSketch, entity: bRect,
+                seed: SIMD2(3, 0)),
+        ])
+        let sketches = [
+            Sketch(id: slabSketch, name: "S", plane: .ground, entities: [
+                .rect(id: slabRect, min: SIMD2(-5, -3), max: SIMD2(5, 3))]),
+            Sketch(id: aSketch, name: "A", plane: .ground, entities: [
+                .rect(id: aRect, min: SIMD2(-4, -1), max: SIMD2(-2, 1))]),
+            Sketch(id: bSketch, name: "B", plane: .ground, entities: [
+                .rect(id: bRect, min: SIMD2(2, -1), max: SIMD2(4, 1))]),
+        ]
+        var revision: UInt64 = 0
+        let result = graph.evaluate(sketches: sketches, planes: [],
+                                    naming: SignatureNaming(),
+                                    nextRevision: { revision += 1; return revision })
+        XCTAssertTrue(result.errors.isEmpty, "\(result.errors)")
+        let body = try XCTUnwrap(result.bodies.first { $0.id == slabID })
+        return (body, try XCTUnwrap(result.faceTables[slabID]), cutA, cutB)
+    }
+
+    /// The +x-facing wall entry of the given cut's hole.
+    private func plusXWall(of creator: FeatureID,
+                           in table: FaceTable) throws -> FaceTable.Entry {
+        try XCTUnwrap(table.entries.first { entry in
+            guard entry.elementName?.creator == creator,
+                  case .profileWall = entry.elementName?.source else { return false }
+            return entry.signature.normal.x > 0.9
+        }, "no +x wall named for \(creator)")
+    }
+
+    /// THE mis-binding demonstration: a ref whose geometry has drifted onto
+    /// hole B's wall but whose NAME says hole A. Signature-only binds B;
+    /// name-first binds A. This is R4-N1..N6 in one assertion.
+    func testANameHitOutranksSignatureScoring() throws {
+        let (body, table, cutA, cutB) = try twoHoleFixture()
+        let wallA = try plusXWall(of: cutA, in: table)
+        let wallB = try plusXWall(of: cutB, in: table)
+        let naming = SignatureNaming()
+
+        let driftedRef = FaceRef(
+            body: BodyRef(producer: cutA, bodyID: body.id), creator: cutA,
+            role: .derived(index: 0),
+            signature: wallB.signature,          // geometry says B…
+            elementName: wallA.elementName)      // …identity says A
+        let named = try XCTUnwrap(naming.resolve(driftedRef, in: body, table: table))
+        XCTAssertEqual(named.confidence, 1, "a name hit is exact")
+        XCTAssertLessThan(try XCTUnwrap(named.planar).origin.x, 0,
+                          "the name must win: hole A lives at x < 0")
+
+        var legacyRef = driftedRef
+        legacyRef.elementName = nil
+        let legacy = try XCTUnwrap(naming.resolve(legacyRef, in: body, table: table))
+        XCTAssertGreaterThan(try XCTUnwrap(legacy.planar).origin.x, 0,
+                             "without the name, the signature binds hole B — "
+                             + "the silent mis-bind this design exists to stop")
+    }
+
+    /// A name-bearing ref whose name MISSED and whose signature sits exactly
+    /// between two identical candidates: refuse. The same ref without a name
+    /// keeps today's behavior and picks one.
+    func testANameMissWithAmbiguousSignatureRefusesToGuess() throws {
+        let (body, table, _, cutB) = try twoHoleFixture()
+        let wallB = try plusXWall(of: cutB, in: table)
+        let naming = SignatureNaming()
+
+        var midway = wallB.signature
+        midway.centroid.x = 0
+        midway.planeOffset = simd_dot(midway.normal, midway.centroid)
+        let ghostName = ElementName(creator: FeatureID(),
+                                    source: .profileCap(end: true))
+        let namedRef = FaceRef(
+            body: BodyRef(producer: cutB, bodyID: body.id), creator: cutB,
+            role: .derived(index: 0), signature: midway,
+            elementName: ghostName)
+        XCTAssertNil(naming.resolve(namedRef, in: body, table: table),
+                     "two near-tied candidates after a name miss must refuse")
+
+        var legacyRef = namedRef
+        legacyRef.elementName = nil
+        XCTAssertNotNil(naming.resolve(legacyRef, in: body, table: table),
+                        "legacy refs keep today's behavior untouched")
+    }
+
+    /// Old documents carry refs with no elementName key at all — they must
+    /// decode unchanged, and a nil name must not even be written.
+    func testFaceRefCodableBackCompat() throws {
+        let legacy = FaceRef(
+            body: BodyRef(producer: creator, bodyID: BodyID()),
+            creator: creator, role: .derived(index: 0),
+            signature: FaceSignature(kind: .planar, normal: SIMD3(0, 0, 1),
+                                     centroid: .zero, area: 1, planeOffset: 0))
+        let encoded = try JSONEncoder().encode(legacy)
+        XCTAssertFalse(String(decoding: encoded, as: UTF8.self)
+            .contains("elementName"), "nil names stay off disk")
+        let decoded = try JSONDecoder().decode(FaceRef.self, from: encoded)
+        XCTAssertEqual(decoded, legacy)
+
+        var named = legacy
+        named.elementName = ElementName(creator: creator,
+                                        source: .profileCap(end: true))
+        let namedRoundTrip = try JSONDecoder().decode(
+            FaceRef.self, from: JSONEncoder().encode(named))
+        XCTAssertEqual(namedRoundTrip, named)
+    }
+
+    /// The name path through a full replay: a pushPull whose ref carries the
+    /// top cap's name evaluates cleanly and moves the right face.
+    func testAPushPullResolvesByNameThroughReplay() throws {
+        let (body, table, _, _) = try twoHoleFixture()
+        _ = body
+        let capEntry = try XCTUnwrap(table.entries.first {
+            $0.elementName?.source == .profileCap(end: true)
+        })
+        // Rebuild the same document with a pushPull appended, its ref
+        // carrying BOTH the honest signature and the name.
+        // (Fixture rebuilt inline because FeatureGraph nodes are immutable.)
+        let slabSketch = SketchID(), slabRect = UUID()
+        let slabFeature = FeatureID(), pushFeature = FeatureID()
+        let slabID = BodyID()
+        let ref = FaceRef(
+            body: BodyRef(producer: slabFeature, bodyID: slabID),
+            creator: slabFeature, role: .derived(index: 0),
+            signature: capEntry.signature,
+            elementName: ElementName(creator: slabFeature,
+                                     source: .profileCap(end: true)))
+        let graph = FeatureGraph(nodes: [
+            FeatureNode(
+                id: slabFeature, name: "Slab",
+                kind: .extrude(
+                    profile: ProfileRef(sketchID: slabSketch, entityIDs: [slabRect],
+                                        holeEntityIDs: [], seedPoint: .zero),
+                    plane: PlaneRef(source: .sketch(slabSketch)),
+                    distance: Expr(value: 2), symmetric: true,
+                    boolean: BooleanIntent(op: .newBody, resolvedTargets: []),
+                    extraProfiles: []),
+                outputBodyIDs: [slabID]),
+            FeatureNode(
+                id: pushFeature, name: "Push",
+                kind: .pushPull(face: ref, distance: Expr(value: 2),
+                                mode: .planarAxial),
+                outputBodyIDs: []),
+        ])
+        let sketches = [Sketch(id: slabSketch, name: "S", plane: .ground, entities: [
+            .rect(id: slabRect, min: SIMD2(-5, -3), max: SIMD2(5, 3))])]
+        var revision: UInt64 = 0
+        let result = graph.evaluate(sketches: sketches, planes: [],
+                                    naming: SignatureNaming(),
+                                    nextRevision: { revision += 1; return revision })
+        XCTAssertTrue(result.errors.isEmpty, "\(result.errors)")
+        let pushed = try XCTUnwrap(result.bodies.first { $0.id == slabID })
+        // 10×4×6 slab, top cap pushed out 2 → 10×6×6.
+        XCTAssertEqual(MeasureKit.bodyVolume(pushed.render, scale: 1), 360,
+                       accuracy: 1e-6)
+    }
+
     // MARK: - Detector identity arrays
 
     func testTheDetectorEmitsEdgeEntitiesInLoopOrder() throws {

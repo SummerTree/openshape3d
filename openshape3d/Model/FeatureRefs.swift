@@ -109,11 +109,19 @@ nonisolated struct FaceSignature: Codable, Hashable, Sendable {
 }
 
 /// A persistent reference to a face on a feature-produced body.
+/// Note on `elementName` (docs/TOPO_NAMING_HISTORY_DESIGN.md step 4): an
+/// OPTIONAL kernel-history identity layered under the signature. Synthesized
+/// Codable decodes optionals with `decodeIfPresent` and omits nil on encode,
+/// so documents written before the field exist load unchanged and legacy
+/// refs stay byte-identical on disk. Resolution: a name hit wins outright;
+/// a name MISS falls back to signature scoring gated by an ambiguity margin;
+/// a ref with no name resolves exactly as it always did.
 nonisolated struct FaceRef: Codable, Hashable, Sendable {
     var body: BodyRef
     var creator: FeatureID
     var role: FaceRole
     var signature: FaceSignature
+    var elementName: ElementName? = nil
 }
 
 // MARK: - Edges

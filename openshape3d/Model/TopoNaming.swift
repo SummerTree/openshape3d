@@ -95,6 +95,13 @@ nonisolated struct SignatureNaming: TopoNaming {
     static let roleBoost: Double = 0.2
     /// A face must score at least this to `resolve`.
     static let resolveThreshold: Double = 0.6
+
+    /// Ambiguity gate for a ref whose kernel-history NAME missed (step 4):
+    /// the signature fallback must beat its runner-up by at least this much,
+    /// or the resolve reports broken instead of guessing between near-ties.
+    /// Applies only to name-bearing refs — legacy refs resolve as they
+    /// always did.
+    static let nameMissMargin: Double = 0.05
     /// An output face must score at least this to inherit an input entry's role.
     static let propagateThreshold: Double = 0.55
 
@@ -152,7 +159,30 @@ nonisolated struct SignatureNaming: TopoNaming {
         guard !faces.isEmpty else { return nil }
         let diag = Self.bboxDiagonal(body.render)
 
+        // NAME FIRST (docs/TOPO_NAMING_HISTORY_DESIGN.md step 4): an exact
+        // kernel-history identity hit outranks any geometric score, because
+        // identity is what the score was always trying to approximate. Table
+        // entries and enumerated faces align row-for-row (both come from the
+        // same `enumerate` partition) — verified by triangle set before
+        // trusting, and the hit is sanity-checked against the signature's
+        // KIND: a name pointing at an incompatible face is a miss to fall
+        // through from, never an instruction to obey.
+        if let name = ref.elementName, let table {
+            for (index, entry) in table.entries.enumerated()
+            where entry.elementName == name {
+                guard index < faces.count else { break }
+                let face = faces[index]
+                guard face.triangles == entry.triangles,
+                      Self.kindCompatible(face.signature.kind, ref.signature.kind)
+                else { break }
+                return ResolvedFace(planar: face.planar,
+                                    cylinder: face.cylinder,
+                                    confidence: 1)
+            }
+        }
+
         var best: (score: Double, face: EnumeratedFace)?
+        var runnerUpScore: Double?
         for face in faces {
             // The ref knows what KIND of surface it referenced, and until now
             // nothing read it (review R4-N4): a cylindrical ref could bind a
@@ -180,9 +210,23 @@ nonisolated struct SignatureNaming: TopoNaming {
                role == ref.role {
                 s += Self.roleBoost
             }
-            if best == nil || s > best!.score { best = (s, face) }
+            if best == nil || s > best!.score {
+                runnerUpScore = best?.score
+                best = (s, face)
+            } else if runnerUpScore == nil || s > runnerUpScore! {
+                runnerUpScore = s
+            }
         }
         guard let best, best.score >= Self.resolveThreshold else { return nil }
+        // A ref that CARRIED a name and missed it is on notice: something
+        // structural changed. It may still resolve by signature, but only
+        // when the answer is unambiguous — two near-tied candidates after a
+        // name miss is exactly the silent mis-bind this whole design exists
+        // to prevent. Legacy refs (no name) keep today's behavior untouched.
+        if ref.elementName != nil, let runnerUpScore,
+           best.score - runnerUpScore < Self.nameMissMargin {
+            return nil
+        }
         return ResolvedFace(
             planar: best.face.planar,
             cylinder: best.face.cylinder,
