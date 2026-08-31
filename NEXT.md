@@ -76,13 +76,19 @@ history, layered UNDER `SignatureNaming` (never replacing it), zero
 persisted-format change, and identity-based blend-edge targeting as the
 payoff. Its prerequisites already landed in PR #22 (boolean result
 normalization; deterministic face basis R4-N1; kind veto R4-N4).
-Sequencing S/M/L per step is in the doc. **Steps 1–2 landed 2026-08-31**
-(five commits, e1506cd…54c90f3): face channel, boolean + extrude ancestry
-from OCCT's own history, ElementName + creation-op naming wired into
-evalPrimitive/evalExtrude — all zero-behavior (nothing consumes names until
-step 4). Next: step 3, boolean history through evalBoolean (name
-inheritance across ancestry + section-face names), then step 4's name-first
-resolve, which is where the user-visible payoff starts.
+Sequencing S/M/L per step is in the doc. **Steps 1–4 landed 2026-08-31**
+(nine commits, e1506cd…edd0300): face channel, boolean + extrude ancestry,
+ElementName + creation-op naming, boolean name composition
+(inherit/split-mint/section), name-first FaceRef resolution with the
+ambiguity margin, and identity-addressed blends (EdgeRef.faceNames +
+blend-by-edge-index — the "rebuild broke my fillet" fix, pinned by a test
+where a drifted signature rebinds to the wrong hole without the name and
+the right one with it). Old documents load unchanged; legacy refs resolve
+exactly as before. Remaining: step 5 (opportunistic ref upgrade so old refs
+gain names during rebuilds; modifier-op history so blends/shells stop
+erasing downstream names) and revolve/sweep/loft naming (blocked on their
+assign-vs-adopt render split). Also still open: wiring fillet/shell over
+/v1/exec, which the edge-name vocabulary now makes expressible (§4b).
 
 ## 4. Smaller follow-ups, in rough priority order
 
