@@ -220,20 +220,67 @@ nonisolated enum FaceTopology {
         }
         guard !loops3D.isEmpty else { return nil }
 
-        // Face basis: origin at loop centroid, X along the first edge.
+        // Face basis: origin at the OUTER loop's centroid, X toward a
+        // canonical neighbour of its lexicographically-least vertex.
+        //
+        // Determinism is the point (review R4-N1/R2-4): `loops3D` arrives in
+        // Dictionary-traversal order, which is randomized per process, and
+        // downstream `.moveFace`/`.rotateFace` deltas are STORED in this
+        // basis — so a basis hung off "whichever loop came out of the hash
+        // first, along whichever direction the walk happened to go" replays
+        // a lateral move rotated by an arbitrary amount after a relaunch.
+        // Largest-area loop + least vertex + lexicographic neighbour are all
+        // properties of the face itself, not of the traversal.
+        func lexLess(_ a: SIMD3<Float>, _ b: SIMD3<Float>) -> Bool {
+            if a.x != b.x { return a.x < b.x }
+            if a.y != b.y { return a.y < b.y }
+            return a.z < b.z
+        }
+        func loopArea3D(_ loop: [SIMD3<Float>]) -> Double {
+            guard loop.count >= 3 else { return 0 }
+            let o = SIMD3<Double>(Double(loop[0].x), Double(loop[0].y), Double(loop[0].z))
+            var cross = SIMD3<Double>.zero
+            for i in 1..<(loop.count - 1) {
+                let a = SIMD3<Double>(Double(loop[i].x), Double(loop[i].y), Double(loop[i].z)) - o
+                let b = SIMD3<Double>(Double(loop[i + 1].x), Double(loop[i + 1].y), Double(loop[i + 1].z)) - o
+                cross += simd_cross(a, b)
+            }
+            return simd_length(cross) * 0.5
+        }
         let normalD = SIMD3<Double>(Double(seedNormal.x), Double(seedNormal.y), Double(seedNormal.z))
-        let firstLoop = loops3D[0]
+        var outerLoop = loops3D[0]
+        var outerArea3D = loopArea3D(outerLoop)
+        for loop in loops3D.dropFirst() {
+            let area = loopArea3D(loop)
+            if area > outerArea3D + 1e-12 {
+                outerLoop = loop; outerArea3D = area
+            } else if abs(area - outerArea3D) <= 1e-12,
+                      let a = loop.min(by: lexLess), let b = outerLoop.min(by: lexLess),
+                      lexLess(a, b) {
+                outerLoop = loop  // deterministic tie-break
+            }
+        }
         var centroid = SIMD3<Double>.zero
-        for p in firstLoop {
+        for p in outerLoop {
             centroid += SIMD3(Double(p.x), Double(p.y), Double(p.z))
         }
-        centroid /= Double(firstLoop.count)
+        centroid /= Double(outerLoop.count)
 
         var edgeDir = SIMD3<Double>(1, 0, 0)
-        if firstLoop.count >= 2 {
-            let a = firstLoop[0]
-            let b = firstLoop[1]
-            let d = SIMD3<Double>(Double(b.x - a.x), Double(b.y - a.y), Double(b.z - a.z))
+        if outerLoop.count >= 2 {
+            var start = 0
+            for i in outerLoop.indices where lexLess(outerLoop[i], outerLoop[start]) {
+                start = i
+            }
+            // The walk's direction is traversal-dependent too, so pick the
+            // canonical NEIGHBOUR rather than "the next vertex".
+            let n = outerLoop.count
+            let prev = outerLoop[(start + n - 1) % n]
+            let next = outerLoop[(start + 1) % n]
+            let second = lexLess(prev, next) ? prev : next
+            let a = outerLoop[start]
+            let d = SIMD3<Double>(Double(second.x - a.x), Double(second.y - a.y),
+                                  Double(second.z - a.z))
             if simd_length(d) > 1e-9 {
                 edgeDir = simd_normalize(d)
             }

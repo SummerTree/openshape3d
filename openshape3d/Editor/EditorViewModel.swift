@@ -2977,21 +2977,29 @@ final class EditorViewModel {
     /// when the blend fails (too-big radius) — preview shows invalid.
     private func blendedBody(_ kind: BlendKind, source: Body, revision: UInt64) -> Body? {
         if OCCTKernel.useOCCTAsSourceOfTruth, let brep = source.brep {
-            let aabb = source.render.localAABB
-            let scale = Double(simd_length(aabb.max - aabb.min))
             let midpoints = blendSelectedEdges.map { edge -> SIMD3<Double> in
                 SIMD3(Double(edge.midpoint.x), Double(edge.midpoint.y), Double(edge.midpoint.z))
             }
-            let tolerance = max(scale * 0.01, 1e-6)
+            // Deflection-derived, not body-size-derived — same rule as replay
+            // (FeatureGraph.evalEdgeBlend, docs/FREECAD_PLAYBOOK.md T1).
+            let tolerance = OCCTKernel.matchTolerance(for: brep)
             let blended = kind == .fillet
-                ? OCCTKernel.fillet(brep, at: midpoints, radius: blendValue, tolerance: tolerance)
-                : OCCTKernel.chamfer(brep, at: midpoints, distance: blendValue, tolerance: tolerance)
-            guard let blended else { return nil }
-            var result = Body(
-                id: source.id, name: source.name, transform: source.transform,
-                primitive: nil, euclidMesh: source.euclidMesh(), revision: revision)
-            guard result.adoptBRep(blended) else { return nil }
-            return result
+                ? OCCTKernel.filletResult(brep, at: midpoints, radius: blendValue,
+                                          tolerance: tolerance)
+                : OCCTKernel.chamferResult(brep, at: midpoints, distance: blendValue,
+                                           tolerance: tolerance)
+            switch blended {
+            case let .failure(error):
+                blendPreviewFailure = error.message
+                return nil
+            case let .success(handle):
+                var result = Body(
+                    id: source.id, name: source.name, transform: source.transform,
+                    primitive: nil, euclidMesh: source.euclidMesh(), revision: revision)
+                guard result.adoptBRep(handle) else { return nil }
+                blendPreviewFailure = nil
+                return result
+            }
         }
         let mesh = blendedMesh(kind, source: source)
         guard !mesh.polygons.isEmpty else { return nil }
@@ -3025,10 +3033,17 @@ final class EditorViewModel {
         return ProcessInfo.processInfo.systemUptime - lastPreviewFinished < lastPreviewDuration
     }
 
+    /// Why the current blend preview failed to build, in user terms — the
+    /// typed diagnostic from OCCT ("2 of 6 edges can't take this size…"),
+    /// shown in the blend bar. Nil while the preview is valid or nothing is
+    /// picked yet. Set by `blendedBody`.
+    var blendPreviewFailure: String?
+
     /// Recompute the live blend preview (edge toggles and size edits call this).
     private func updateBlendPreview() {
         guard case .pickingBlendEdges(let kind) = mode, let source = blendSource else {
             blendPreview = nil
+            blendPreviewFailure = nil
             return
         }
         guard !blendSelectedEdges.isEmpty, blendValue > 1e-6 else {
@@ -3042,6 +3057,7 @@ final class EditorViewModel {
                 body.meshRevision = (1 << 62) | blendPreviewRevision
                 return body
             }
+            blendPreviewFailure = nil
             return
         }
         guard !shouldSkipPreviewDuringDrag else { return }
@@ -3068,22 +3084,46 @@ final class EditorViewModel {
 
     /// Drag-to-size: value at drag start; the drag applies a delta to it.
     private var blendDragStartValue: Double?
+    /// Kernel-derived ceiling for the current fillet drag, in mm — bisection
+    /// over real checked builds (docs/FREECAD_PLAYBOOK.md F3), so the clamp
+    /// and Apply agree by construction. Nil for chamfers, mesh-path bodies,
+    /// or when the probe found nothing blendable; the typed preview errors
+    /// still cover those. Shown in the blend bar while dragging.
+    var blendDragMax: Double?
 
     func beginBlendDrag() -> Bool {
-        guard case .pickingBlendEdges = mode, !blendSelectedEdges.isEmpty else { return false }
+        guard case let .pickingBlendEdges(kind) = mode, !blendSelectedEdges.isEmpty
+        else { return false }
         blendDragStartValue = blendValue
         isDraggingBlendSize = true
+        // Computed ONCE here (a handful of fillet builds), never per tick.
+        // The edge set is frozen for the duration of the drag.
+        blendDragMax = nil
+        if kind == .fillet, OCCTKernel.useOCCTAsSourceOfTruth,
+           let source = blendSource, let brep = source.brep {
+            let midpoints = blendSelectedEdges.map { edge -> SIMD3<Double> in
+                SIMD3(Double(edge.midpoint.x), Double(edge.midpoint.y), Double(edge.midpoint.z))
+            }
+            let cap = OCCTKernel.maxFilletRadius(
+                brep, at: midpoints, tolerance: OCCTKernel.matchTolerance(for: brep))
+            if cap > 0 { blendDragMax = cap }
+        }
         return true
     }
 
     /// `delta` is world mm along the arrow's pointing direction (into the body).
     func updateBlendDrag(delta: Double) {
         guard let start = blendDragStartValue else { return }
-        blendValue = max(0, start + delta)   // didSet recomputes the preview
+        var next = max(0, start + delta)
+        // Clamp to what the kernel can actually build, so the drag never
+        // enters the range Apply would refuse.
+        if let cap = blendDragMax { next = min(next, cap) }
+        blendValue = next   // didSet recomputes the preview
     }
 
     func endBlendDrag() {
         blendDragStartValue = nil
+        blendDragMax = nil
         // The gate may have skipped the last few frames, so the preview can be
         // one size behind the finger. Settle it before the user can commit.
         isDraggingBlendSize = false
@@ -3337,8 +3377,10 @@ final class EditorViewModel {
     /// a brep body hollows with `BRepOffsetAPI_MakeThickSolid` so CURVED
     /// walls come out right — the mesh inset is only honest on prismatic
     /// bodies (a live-shelled cylinder used to commit wrong walls that the
-    /// next rebuild silently replaced). Falls back to the mesh shell when
-    /// OCCT can't offset the solid, matching eval. Nil = invalid.
+    /// next rebuild silently replaced). A brep body whose OCCT shell fails
+    /// shows as INVALID (matching eval, which now errors instead of
+    /// degrading to the clamping mesh inset — review R3-E); the mesh path
+    /// stays for brep-less bodies. Nil = invalid.
     private func shelledBody(source: Body, revision: UInt64) -> Body? {
         if OCCTKernel.useOCCTAsSourceOfTruth, let brep = source.brep {
             // A point at the centroid of each open face identifies it to OCCT.
@@ -3347,17 +3389,15 @@ final class EditorViewModel {
                 let c = face.outline.reduce(SIMD2<Double>.zero, +) / n
                 return face.origin + face.basisX * c.x + face.basisY * c.y
             }
-            let aabb = source.render.localAABB
-            let scale = Double(simd_length(aabb.max - aabb.min))
-            if let hollow = OCCTKernel.shell(
+            guard let hollow = try? OCCTKernel.shellResult(
                 brep, openingAt: openPoints, thickness: shellThickness,
-                tolerance: max(scale * 0.02, 1e-6)) {
-                var result = Body(
-                    id: source.id, name: source.name, transform: source.transform,
-                    primitive: nil, euclidMesh: source.euclidMesh(), revision: revision)
-                if result.adoptBRep(hollow) { return result }
+                tolerance: OCCTKernel.matchTolerance(for: brep)).get() else {
+                return nil
             }
-            // Fall through to the mesh shell — same fallback as eval.
+            var result = Body(
+                id: source.id, name: source.name, transform: source.transform,
+                primitive: nil, euclidMesh: source.euclidMesh(), revision: revision)
+            return result.adoptBRep(hollow) ? result : nil
         }
         let mesh = KernelOps.shell(
             mesh: source.euclidMesh(), thickness: shellThickness,
@@ -3537,7 +3577,7 @@ final class EditorViewModel {
         guard let healed = OCCTKernel.removingFaces(
             brep,
             at: deleteFaceTargets.map(\.samplePoint),
-            tolerance: DeleteFaceKit.tolerance(for: source.render)) else { return nil }
+            tolerance: OCCTKernel.matchTolerance(for: brep)) else { return nil }
         var result = Body(
             id: source.id, name: source.name, transform: source.transform,
             primitive: nil, render: source.render, revision: revision)
@@ -5287,9 +5327,19 @@ final class EditorViewModel {
             // replay makes (evalBoolean), so a live boolean and its later
             // rebuild produce the same class of geometry instead of the live
             // result silently degrading to mesh-only (review C4). On the
-            // MainActor, per BRepHandle's serialization caveat.
-            if let brep = OCCTKernel.composedBoolean(kind, target: target, tool: tool) {
-                composed.adoptBRep(brep)
+            // MainActor, per BRepHandle's serialization caveat. When OCCT
+            // OWNS the op (both sides analytic) and fails for cause, refuse
+            // the commit: replay would error on the very next rebuild, so
+            // committing the mesh result would store a feature that cannot
+            // reproduce itself.
+            switch OCCTKernel.composedBooleanResult(kind, target: target, tool: tool) {
+            case let .success(outcome):
+                composed.adoptBRep(outcome.handle)
+            case let .failure(error):
+                self.errorMessage = "The \(kind.rawValue) failed: \(error.message)"
+                return
+            case nil:
+                break  // an operand is mesh-only — the mesh result stands
             }
             let boolean = BooleanCommand(
                 kind: kind,
@@ -7349,10 +7399,19 @@ final class EditorViewModel {
         else { return }
         selectedSketchEntityIDs.remove(hit.entity.id)
         // Phase D: trimming edits sketch geometry — the dependent-feature
-        // rebuild lands in the SAME undo step (S6).
-        session.performWithSketchRebuild(TrimCommand(
-            sketchID: sketchID, index: index, removed: hit.entity, fragments: fragments
-        ), sketchID: sketchID)
+        // rebuild lands in the SAME undo step (S6). The sketch-aware init
+        // re-anchors constraints/dimensions onto the surviving fragments and
+        // drops what can't transfer (R2-2) — say so when it does, since a
+        // silently vanished dimension reads as data loss.
+        let command = TrimCommand(
+            sketch: sketch, index: index, removed: hit.entity, fragments: fragments)
+        session.performWithSketchRebuild(command, sketchID: sketchID)
+        let droppedCount = command.droppedConstraints.count + command.droppedDimensions.count
+        if droppedCount > 0 {
+            showNotice(droppedCount == 1
+                ? "1 constraint on the trimmed span was removed"
+                : "\(droppedCount) constraints on the trimmed span were removed")
+        }
     }
 
     // MARK: - Construction axes (spec §6.2)
@@ -7781,9 +7840,21 @@ final class EditorViewModel {
         // absolute and the result is deterministic across frames.
         var baselineSketch = sketch
         baselineSketch.entities = drag.baseline
-        let (solved, dof) = SketchSolverBridge.solve(
+        let outcome = SketchSolverBridge.solveOutcome(
             baselineSketch, movingEntity: drag.before.id, dragTarget: target
         )
+        // Conflicting constraint system: the solver's output is a best-fit
+        // COMPROMISE that satisfies nothing, and amending it into the
+        // document every drag frame was review R2-3 — the sketch visibly
+        // "melted" toward the compromise. Hold the baseline (spring back)
+        // and badge the conflict instead, the same gate planegcs applies
+        // before updating geometry (docs/FREECAD_PLAYBOOK.md S1).
+        guard outcome.structuralResidual <= Self.overConstraintTolerance else {
+            sketchSolveConflict = true
+            return
+        }
+        sketchSolveConflict = false
+        let (solved, dof) = (outcome.entities, outcome.dof)
 
         // Rigid sketch: refuse to move (no-op / spring back to baseline).
         guard dof > 0 else { return }
@@ -7957,6 +8028,13 @@ final class EditorViewModel {
         return (dof, dof == 0)
     }
 
+    /// True while the active sketch's constraint system is CONFLICTING — the
+    /// solver could not satisfy every constraint/dimension simultaneously, so
+    /// drags spring back instead of writing the solver's compromise into the
+    /// document (review R2-3). Set/cleared by the solved drag path; shown as
+    /// a red chip in the sketch pill.
+    var sketchSolveConflict = false
+
     func startSketch(tool: SketchTool) {
         if case .sketching(let id, _) = mode {
             commitPendingArc()
@@ -8098,6 +8176,7 @@ final class EditorViewModel {
         sketchEntityDrag = nil
         sketchGizmoDrag = nil
         sketchCopyOnDrag = false
+        sketchSolveConflict = false
         selectedSketchEntityIDs.removeAll()
         selectedSketchPoints.removeAll()
         selectedConstraintID = nil

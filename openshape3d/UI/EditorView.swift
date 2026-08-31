@@ -292,7 +292,19 @@ struct EditorView: View {
     /// so this only surfaces the positive GREEN "Fully defined" confirmation.
     @ViewBuilder
     private func sketchStateChip(_ viewModel: EditorViewModel) -> some View {
-        if let status = viewModel.sketchDefinitionStatus, status.fullyDefined {
+        if viewModel.sketchSolveConflict {
+            // A conflicting system is the one sketch state that IS an error:
+            // drags spring back rather than writing the solver's compromise
+            // into the document, and without this chip that reads as a
+            // stuck gesture.
+            Text("Constraints conflict")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.white)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 4)
+                .background(Color.red, in: Capsule())
+                .accessibilityIdentifier("SketchConflictChip")
+        } else if let status = viewModel.sketchDefinitionStatus, status.fullyDefined {
             Text("Fully defined")
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(.white)
@@ -380,11 +392,23 @@ struct EditorView: View {
             set: { viewModel.blendValue = max(0, $0) }))
         return AdaptiveBar(style: .capsule, spacing: 12) {
             Image(systemName: kind == .chamfer ? "square.on.circle" : "circle.circle")
-            Text(viewModel.blendSelectedEdges.isEmpty
-                 ? "Tap edges to \(kind.title.lowercased())"
-                 : "\(viewModel.blendSelectedEdges.count) edge\(viewModel.blendSelectedEdges.count == 1 ? "" : "s") selected")
-                .font(.subheadline)
-                .fixedSize()
+            // When the kernel refused the current size/pick, say WHY — the
+            // typed diagnostic replaces the count until the preview is valid
+            // again. Concrete color, not hierarchical .secondary (gotcha 10).
+            if let failure = viewModel.blendPreviewFailure,
+               !viewModel.blendSelectedEdges.isEmpty {
+                Text(failure)
+                    .font(.subheadline)
+                    .foregroundStyle(.orange)
+                    .lineLimit(2)
+                    .accessibilityIdentifier("BlendFailureHint")
+            } else {
+                Text(viewModel.blendSelectedEdges.isEmpty
+                     ? "Tap edges to \(kind.title.lowercased())"
+                     : "\(viewModel.blendSelectedEdges.count) edge\(viewModel.blendSelectedEdges.count == 1 ? "" : "s") selected")
+                    .font(.subheadline)
+                    .fixedSize()
+            }
             Divider().frame(height: 20)
             Text(kind.valueLabel).font(.caption).foregroundStyle(.barLabel).fixedSize()
             TextField(settings.unit.symbol, value: value,
@@ -395,6 +419,15 @@ struct EditorView: View {
                 .keyboardType(.decimalPad)
                 .accessibilityIdentifier("BlendValueField")
             Text(settings.unit.symbol).font(.caption).foregroundStyle(.barLabel).fixedSize()
+            // While dragging, show the kernel-derived ceiling the drag is
+            // clamped to, so the stop doesn't read as a stuck gesture.
+            if let cap = viewModel.blendDragMax {
+                Text("max \(settings.unit.display(fromMM: cap), format: .number.precision(.fractionLength(0...1)))")
+                    .font(.caption)
+                    .foregroundStyle(.barLabel)
+                    .fixedSize()
+                    .accessibilityIdentifier("BlendMaxHint")
+            }
         } actions: {
             Button("Cancel") { viewModel.cancelBlend() }
                 .buttonStyle(.bordered)

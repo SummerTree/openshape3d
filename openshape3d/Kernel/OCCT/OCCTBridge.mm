@@ -27,10 +27,12 @@
 #include <ShapeUpgrade_UnifySameDomain.hxx>
 #include <TopTools_ListOfShape.hxx>
 #include <BRepFilletAPI_MakeChamfer.hxx>
+#include <BRepFilletAPI_LocalOperation.hxx>
 #include <STEPControl_Writer.hxx>
 #include <STEPControl_Reader.hxx>
 #include <IFSelect_ReturnStatus.hxx>
 #include <BRepOffsetAPI_MakeThickSolid.hxx>
+#include <BRepOffsetAPI_MakeOffsetShape.hxx>
 #include <TopTools_IndexedDataMapOfShapeListOfShape.hxx>
 #include <BRepAdaptor_Curve.hxx>
 #include <GeomAPI_ProjectPointOnCurve.hxx>
@@ -56,6 +58,7 @@
 #include <BRepBuilderAPI_MakeWire.hxx>
 #include <BRepBuilderAPI_MakeFace.hxx>
 #include <BRepMesh_IncrementalMesh.hxx>
+#include <IMeshTools_Parameters.hxx>
 #include <BRepGProp.hxx>
 #include <GProp_GProps.hxx>
 #include <BRep_Tool.hxx>
@@ -83,6 +86,18 @@
 #include <BRepAlgoAPI_Fuse.hxx>
 #include <BRepAlgoAPI_Cut.hxx>
 #include <BRepAlgoAPI_Common.hxx>
+#include <BRepAlgoAPI_BooleanOperation.hxx>
+#include <BRepCheck_Analyzer.hxx>
+#include <ShapeFix_Shape.hxx>
+#include <ShapeAnalysis_ShapeTolerance.hxx>
+#include <BRepExtrema_DistShapeShape.hxx>
+#include <BRepBuilderAPI_MakeVertex.hxx>
+#include <Precision.hxx>
+#include <Standard_Failure.hxx>
+#include <GeomAbs_Shape.hxx>
+#include <Message_ProgressIndicator.hxx>
+#include <Message_ProgressScope.hxx>
+#include <TopTools_FormatVersion.hxx>
 
 // Opaque handle: a world-space solid. The C++ TopoDS_Shape ivar is destroyed
 // automatically (ARC runs C++ ivar destructors in Obj-C++).
@@ -113,6 +128,108 @@
     return self;
 }
 @end
+
+@implementation OCCTOpStatus
+@end
+
+// Fill a caller-supplied status object (nil status = caller doesn't care).
+static void OS3DSetStatus(OCCTOpStatus *status, OCCTOpCode code, NSString *detail) {
+    if (status == nil) return;
+    status.code = code;
+    status.detail = detail;
+}
+
+// True when the shape has a bounding box with only finite coordinates. A
+// shape carrying NaN/inf can parse cleanly and then spin forever inside
+// BRepMesh_IncrementalMesh (an infinite loop no catch(...) reaches) — see the
+// note in TessellateShape. Also the cheap first gate at every constructive-op
+// entry, so degenerate operands are refused instead of propagated.
+static bool OS3DFiniteBounds(const TopoDS_Shape &shape) {
+    if (shape.IsNull()) return false;
+    Bnd_Box bounds;
+    BRepBndLib::Add(shape, bounds);
+    if (bounds.IsVoid()) return false;
+    Standard_Real xmin, ymin, zmin, xmax, ymax, zmax;
+    bounds.Get(xmin, ymin, zmin, xmax, ymax, zmax);
+    for (Standard_Real v : {xmin, ymin, zmin, xmax, ymax, zmax}) {
+        if (!std::isfinite(v)) return false;
+    }
+    return true;
+}
+
+// Post-op contract (docs/FREECAD_PLAYBOOK.md I2): a builder's IsDone() is not
+// a statement about the RESULT, so check it with BRepCheck_Analyzer; on
+// failure make exactly one healing attempt (ShapeFix_Shape) and re-check.
+// Returns a null shape when the result is still invalid — the caller must
+// fail rather than store it, because a stored invalid solid becomes the
+// body's source of truth and is persisted.
+static TopoDS_Shape OS3DHealAndValidate(const TopoDS_Shape &result) {
+    if (result.IsNull()) return result;
+    if (BRepCheck_Analyzer(result).IsValid()) return result;
+    Handle(ShapeFix_Shape) fixer = new ShapeFix_Shape(result);
+    fixer->Perform();
+    const TopoDS_Shape healed = fixer->Shape();
+    if (!healed.IsNull() && BRepCheck_Analyzer(healed).IsValid()) return healed;
+    return TopoDS_Shape();
+}
+
+// Unwrap the single solid from an op result. OCCT booleans hand back a
+// COMPOUND even when it holds exactly one solid; storing the compound feeds
+// downstream ops (shell, fillet) input they are not specified for. Returns
+// the solid itself when there is exactly one, otherwise a null shape with
+// `solidCount` saying whether that was 0 (empty result) or several.
+static TopoDS_Shape OS3DExtractSingleSolid(const TopoDS_Shape &shape,
+                                           int &solidCount) {
+    solidCount = 0;
+    TopoDS_Shape single;
+    for (TopExp_Explorer ex(shape, TopAbs_SOLID); ex.More(); ex.Next()) {
+        ++solidCount;
+        if (solidCount == 1) single = ex.Current();
+    }
+    return solidCount == 1 ? single : TopoDS_Shape();
+}
+
+// A progress indicator whose only job is to abort a runaway kernel loop: the
+// NaN fuzzing rounds proved BRepMesh_IncrementalMesh (and BRepTools::Read)
+// can spin FOREVER on degenerate input — an infinite loop no catch(...)
+// reaches, on the MainActor. Passed as `indicator->Start()` to any op that
+// accepts a Message_ProgressRange; `Fired()` says the deadline tripped, so
+// the caller returns a clean failure instead of trusting a half-built
+// result. (FreeCAD wraps the same mechanism around its long ops —
+// docs/FREECAD_PLAYBOOK.md H1.)
+class OS3DDeadlineProgress : public Message_ProgressIndicator {
+public:
+    explicit OS3DDeadlineProgress(double seconds)
+        : myDeadline(CFAbsoluteTimeGetCurrent() + seconds) {}
+    Standard_Boolean UserBreak() Standard_OVERRIDE {
+        return CFAbsoluteTimeGetCurrent() > myDeadline;
+    }
+    void Show(const Message_ProgressScope &, const Standard_Boolean) Standard_OVERRIDE {}
+    bool Fired() const { return CFAbsoluteTimeGetCurrent() > myDeadline; }
+private:
+    double myDeadline;
+};
+
+// Generous against real work (normal tessellation is milliseconds), tight
+// against a hang the user would otherwise force-quit out of.
+static const double kOS3DKernelDeadlineSeconds = 5.0;
+
+// Same-domain unification, shared by unifiedShape: and the boolean result
+// path. (unifyEdges, unifyFaces, concatBSplines) — faces and edges, but do
+// NOT merge B-spline geometry: that would change analytic surfaces into
+// something else. Returns the input on any failure — the un-unified shape is
+// still valid.
+static TopoDS_Shape OS3DUnified(const TopoDS_Shape &shape) {
+    try {
+        ShapeUpgrade_UnifySameDomain unifier(
+            shape, Standard_True, Standard_True, Standard_False);
+        unifier.Build();
+        const TopoDS_Shape result = unifier.Shape();
+        return result.IsNull() ? shape : result;
+    } catch (...) {
+        return shape;
+    }
+}
 
 @interface OCCTRenderMesh () {
 @public
@@ -155,18 +272,24 @@ static OCCTRenderMesh *TessellateShape(const TopoDS_Shape &solid,
     // unrecoverable freeze on document open. Verified by fuzzing the BREP
     // reader (2026-08-25 review round 3). Also protects the internal path
     // when a degenerate kernel op emits a NaN.
-    Bnd_Box bounds;
-    BRepBndLib::Add(solid, bounds);
-    if (bounds.IsVoid()) return EmptyRenderMesh();
-    Standard_Real xmin, ymin, zmin, xmax, ymax, zmax;
-    bounds.Get(xmin, ymin, zmin, xmax, ymax, zmax);
-    for (Standard_Real v : {xmin, ymin, zmin, xmax, ymax, zmax}) {
-        if (!std::isfinite(v)) return EmptyRenderMesh();
-    }
+    if (!OS3DFiniteBounds(solid)) return EmptyRenderMesh();
 
-    BRepMesh_IncrementalMesh mesher(solid, linearDeflection, Standard_False,
-                                    angularDeflection, Standard_True);
-    mesher.Perform();
+    // The finite-bounds gate above catches NaN COORDINATES; the deadline
+    // catches everything else that makes the mesher spin (degenerate
+    // pcurves, self-intersecting tolerance zones from a fuzzed blob). A
+    // tripped deadline yields an empty mesh — the same recoverable failure
+    // as any other bad shape — instead of a frozen MainActor. (The simple
+    // constructor auto-Performs with no progress hook, so parameters go
+    // through IMeshTools_Parameters.)
+    OS3DDeadlineProgress *deadline = new OS3DDeadlineProgress(kOS3DKernelDeadlineSeconds);
+    Handle(Message_ProgressIndicator) progress(deadline);
+    IMeshTools_Parameters params;
+    params.Deflection = linearDeflection;
+    params.Angle = angularDeflection;
+    params.Relative = Standard_False;
+    params.InParallel = Standard_True;
+    BRepMesh_IncrementalMesh mesher(solid, params, progress->Start());
+    if (deadline->Fired()) return EmptyRenderMesh();
 
     std::vector<float> positions, normals;
     std::vector<uint32_t> indices;
@@ -715,59 +838,128 @@ static gp_Trsf OS3DBasisTransform(OCCTPlaneBasis *basis) {
 
 + (nullable OCCTShape *)unifiedShape:(OCCTShape *)shape {
     if (shape == nil || shape->_shape.IsNull()) return nil;
-    try {
-        // (unifyEdges, unifyFaces, concatBSplines) — faces first, edges with
-        // them, but do NOT merge B-spline geometry: that would change analytic
-        // surfaces into something else, which is the opposite of the point.
-        ShapeUpgrade_UnifySameDomain unifier(
-            shape->_shape, Standard_True, Standard_True, Standard_False);
-        unifier.Build();
-        const TopoDS_Shape result = unifier.Shape();
-        if (result.IsNull()) return nil;
-        OCCTShape *out = [OCCTShape new];
-        out->_shape = result;
-        return out;
-    } catch (...) {
-        return nil;
-    }
+    const TopoDS_Shape result = OS3DUnified(shape->_shape);
+    if (result.IsNull()) return nil;
+    OCCTShape *out = [OCCTShape new];
+    out->_shape = result;
+    return out;
 }
 
 + (nullable OCCTShape *)booleanOfShape:(OCCTShape *)a
                              withShape:(OCCTShape *)b
-                                    op:(NSInteger)op {
+                                    op:(NSInteger)op
+                                status:(nullable OCCTOpStatus *)status {
+    OS3DSetStatus(status, OCCTOpCodeKernelRefused, @"missing operand");
     if (a == nil || b == nil) return nil;
     try {
-        // BRepAlgoAPI_Algo::Shape() is documented as "does NOT check if the
-        // shape is built" — reading it without IsDone()/HasErrors() can hand
-        // back a partial or invalid solid, which then becomes a body's source
-        // of truth and gets persisted (2026-08-25 review round 4). This was
-        // the only op in the file reading a builder result unchecked.
-        TopoDS_Shape result;
-        switch (op) {
-            case 0: {
-                BRepAlgoAPI_Fuse builder(a->_shape, b->_shape);
-                if (!builder.IsDone() || builder.HasErrors()) return nil;
-                result = builder.Shape();
-                break;
-            }
-            case 1: {
-                BRepAlgoAPI_Cut builder(a->_shape, b->_shape);
-                if (!builder.IsDone() || builder.HasErrors()) return nil;
-                result = builder.Shape();
-                break;
-            }
-            default: {
-                BRepAlgoAPI_Common builder(a->_shape, b->_shape);
-                if (!builder.IsDone() || builder.HasErrors()) return nil;
-                result = builder.Shape();
-                break;
+        // Garbage in was how "solid ops corrupt": an invalid operand doesn't
+        // make the boolean FAIL, it makes the result subtly wrong, and that
+        // result becomes a body's source of truth and gets persisted. So
+        // check both operands up front (with one healing attempt each) —
+        // the same gate FreeCAD's boolean wrapper applies
+        // (docs/FREECAD_PLAYBOOK.md B1).
+        TopoDS_Shape sa = a->_shape, sb = b->_shape;
+        if (!OS3DFiniteBounds(sa) || !OS3DFiniteBounds(sb)) {
+            OS3DSetStatus(status, OCCTOpCodeKernelRefused,
+                          @"an operand has empty or non-finite geometry");
+            return nil;
+        }
+        if (!BRepCheck_Analyzer(sa).IsValid()) {
+            sa = OS3DHealAndValidate(sa);
+            if (sa.IsNull()) {
+                OS3DSetStatus(status, OCCTOpCodeKernelRefused,
+                              @"the target solid is invalid");
+                return nil;
             }
         }
-        if (result.IsNull()) return nil;
+        if (!BRepCheck_Analyzer(sb).IsValid()) {
+            sb = OS3DHealAndValidate(sb);
+            if (sb.IsNull()) {
+                OS3DSetStatus(status, OCCTOpCodeKernelRefused,
+                              @"the tool solid is invalid");
+                return nil;
+            }
+        }
+
+        // Fuzzy tolerance scaled to the operands' combined extent — the
+        // near-coincident faces two snapped-together bodies meet on need a
+        // merge tolerance proportional to the model, and Precision::Confusion
+        // alone (1e-7) is far below it. Retry once at 10× before giving up:
+        // a bounded ladder, not a loop.
+        Bnd_Box bounds;
+        BRepBndLib::Add(sa, bounds);
+        BRepBndLib::Add(sb, bounds);
+        const double baseFuzzy =
+            sqrt(bounds.SquareExtent()) * Precision::Confusion();
+
+        TopTools_ListOfShape args, tools;
+        args.Append(sa);
+        tools.Append(sb);
+        const BOPAlgo_Operation operation =
+            op == 0 ? BOPAlgo_FUSE : (op == 1 ? BOPAlgo_CUT : BOPAlgo_COMMON);
+
+        TopoDS_Shape result;
+        std::string errorDump;
+        for (const double fuzzy : {baseFuzzy, baseFuzzy * 10.0}) {
+            BRepAlgoAPI_BooleanOperation builder;
+            builder.SetArguments(args);
+            builder.SetTools(tools);
+            builder.SetOperation(operation);
+            // Non-destructive: never let the builder modify the input
+            // TShapes — handles are aliased by undo snapshots.
+            builder.SetNonDestructive(Standard_True);
+            builder.SetFuzzyValue(fuzzy);
+            builder.Build();
+            if (builder.IsDone() && !builder.HasErrors()) {
+                result = builder.Shape();
+                break;
+            }
+            std::ostringstream os;
+            builder.DumpErrors(os);
+            errorDump = os.str();
+        }
+        if (result.IsNull()) {
+            OS3DSetStatus(status, OCCTOpCodeKernelRefused,
+                          [NSString stringWithFormat:@"boolean failed: %s",
+                           errorDump.c_str()]);
+            return nil;
+        }
+
+        // Normalize: unwrap the compound, merge coplanar seams, validate.
+        // Downstream ops (shell, fillet) receive this shape as their input
+        // and are only specified for a SOLID — feeding them the raw compound
+        // was review finding R4-O3.
+        int solidCount = 0;
+        const TopoDS_Shape single = OS3DExtractSingleSolid(result, solidCount);
+        if (solidCount == 0) {
+            OS3DSetStatus(status, OCCTOpCodeKernelRefused,
+                          @"the operation leaves no solid");
+            return nil;
+        }
+        TopoDS_Shape normalized = OS3DUnified(
+            solidCount == 1 ? single : result);
+        normalized = OS3DHealAndValidate(normalized);
+        if (normalized.IsNull()) {
+            OS3DSetStatus(status, OCCTOpCodeInvalidResult,
+                          @"boolean result failed validity checking");
+            return nil;
+        }
+
+        if (solidCount > 1) {
+            OS3DSetStatus(status, OCCTOpCodeMultiSolid, nil);
+            if (status != nil) status.solidCount = solidCount;
+        } else {
+            OS3DSetStatus(status, OCCTOpCodeOK, nil);
+        }
         OCCTShape *out = [OCCTShape new];
-        out->_shape = result;
+        out->_shape = normalized;
         return out;
+    } catch (Standard_Failure &e) {
+        OS3DSetStatus(status, OCCTOpCodeKernelRefused,
+                      [NSString stringWithFormat:@"%s", e.GetMessageString()]);
+        return nil;
     } catch (...) {
+        OS3DSetStatus(status, OCCTOpCodeKernelRefused, @"kernel exception");
         return nil;
     }
 }
@@ -777,10 +969,13 @@ static gp_Trsf OS3DBasisTransform(OCCTPlaneBasis *basis) {
 /// 2% of the body diagonal, the old all-within-tolerance rule opened or
 /// deleted the face on the OPPOSITE side of a thin plate.
 ///
-/// NOTE: sampling still walks the surface's UV BOUNDING BOX rather than the
-/// trimmed face, so samples can land off a non-rectangular face (review
-/// finding R4-O2, still open). Nearest-wins narrows the damage but does not
-/// fix that.
+/// Distance is the EXACT distance to the trimmed face
+/// (`BRepExtrema_DistShapeShape`), not to samples on the surface's UV
+/// bounding box. The old 5×5 UV grid measured the un-trimmed surface, so a
+/// pick at the centroid of a triangular face could land 10+ mm from every
+/// sample and be rejected, while a point under an overhanging face's UV box
+/// could match a face it isn't even on (review finding R4-O2, closed here —
+/// docs/FREECAD_PLAYBOOK.md FT1).
 static std::set<Standard_Integer> OS3DNearestFaces(
     const TopTools_IndexedMapOfShape &faceMap,
     const double *pts, NSUInteger count, double tolerance
@@ -788,21 +983,17 @@ static std::set<Standard_Integer> OS3DNearestFaces(
     std::vector<double> bestDistance(count, std::numeric_limits<double>::max());
     std::vector<Standard_Integer> bestFace(count, 0);
 
-    for (Standard_Integer i = 1; i <= faceMap.Extent(); ++i) {
-        const TopoDS_Face face = TopoDS::Face(faceMap(i));
-        BRepAdaptor_Surface surf(face);
-        const double u0 = surf.FirstUParameter(), u1 = surf.LastUParameter();
-        const double v0 = surf.FirstVParameter(), v1 = surf.LastVParameter();
-        const int S = 4;
-        for (int a = 0; a <= S; ++a) {
-            for (int b = 0; b <= S; ++b) {
-                const gp_Pnt q = surf.Value(u0 + (u1 - u0) * a / (double)S,
-                                            v0 + (v1 - v0) * b / (double)S);
-                for (NSUInteger k = 0; k < count; ++k) {
-                    const gp_Pnt t(pts[3*k], pts[3*k+1], pts[3*k+2]);
-                    const double d = q.Distance(t);
-                    if (d < bestDistance[k]) { bestDistance[k] = d; bestFace[k] = i; }
-                }
+    for (NSUInteger k = 0; k < count; ++k) {
+        const TopoDS_Shape vertex = BRepBuilderAPI_MakeVertex(
+            gp_Pnt(pts[3*k], pts[3*k+1], pts[3*k+2])).Shape();
+        for (Standard_Integer i = 1; i <= faceMap.Extent(); ++i) {
+            try {
+                BRepExtrema_DistShapeShape dist(vertex, faceMap(i));
+                if (!dist.IsDone() || dist.NbSolution() == 0) continue;
+                const double d = dist.Value();
+                if (d < bestDistance[k]) { bestDistance[k] = d; bestFace[k] = i; }
+            } catch (...) {
+                continue;  // an unmeasurable face simply can't win the pick
             }
         }
     }
@@ -818,33 +1009,62 @@ static std::set<Standard_Integer> OS3DNearestFaces(
 
 + (nullable OCCTShape *)defeaturedShape:(OCCTShape *)shape
                                  atWorldPoints:(NSData *)worldPoints
-                                     tolerance:(double)tolerance {
+                                     tolerance:(double)tolerance
+                                        status:(nullable OCCTOpStatus *)status {
+    OS3DSetStatus(status, OCCTOpCodeKernelRefused, @"no input");
     if (shape == nil) return nil;
     const NSUInteger count = worldPoints.length / (3 * sizeof(double));
     if (count == 0) return nil;
     const double *pts = (const double *)worldPoints.bytes;
 
     try {
+        if (!OS3DFiniteBounds(shape->_shape)) {
+            OS3DSetStatus(status, OCCTOpCodeKernelRefused,
+                          @"the body has empty or non-finite geometry");
+            return nil;
+        }
         TopTools_IndexedMapOfShape faceMap;
         TopExp::MapShapes(shape->_shape, TopAbs_FACE, faceMap);
         TopTools_ListOfShape toRemove;
         for (Standard_Integer i : OS3DNearestFaces(faceMap, pts, count, tolerance)) {
             toRemove.Append(TopoDS::Face(faceMap(i)));
         }
-        if (toRemove.IsEmpty()) return nil;
+        if (toRemove.IsEmpty()) {
+            OS3DSetStatus(status, OCCTOpCodeNoTargetMatched,
+                          @"no face within tolerance of the pick");
+            return nil;
+        }
 
         BRepAlgoAPI_Defeaturing defeat;
         defeat.SetShape(shape->_shape);
         defeat.AddFacesToRemove(toRemove);
         defeat.Build();
-        if (!defeat.IsDone()) return nil;
-        const TopoDS_Shape result = defeat.Shape();
-        if (result.IsNull()) return nil;
+        if (!defeat.IsDone() || defeat.HasErrors()) {
+            std::ostringstream os;
+            defeat.DumpErrors(os);
+            OS3DSetStatus(status, OCCTOpCodeKernelRefused,
+                          [NSString stringWithFormat:
+                           @"the solid can't be healed without these faces: %s",
+                           os.str().c_str()]);
+            return nil;
+        }
+        const TopoDS_Shape valid = OS3DHealAndValidate(defeat.Shape());
+        if (valid.IsNull()) {
+            OS3DSetStatus(status, OCCTOpCodeInvalidResult,
+                          @"the healed solid failed validity checking");
+            return nil;
+        }
 
+        OS3DSetStatus(status, OCCTOpCodeOK, nil);
         OCCTShape *out = [OCCTShape new];
-        out->_shape = result;
+        out->_shape = valid;
         return out;
+    } catch (Standard_Failure &e) {
+        OS3DSetStatus(status, OCCTOpCodeKernelRefused,
+                      [NSString stringWithFormat:@"%s", e.GetMessageString()]);
+        return nil;
     } catch (...) {
+        OS3DSetStatus(status, OCCTOpCodeKernelRefused, @"kernel exception");
         return nil;
     }
 }
@@ -939,86 +1159,375 @@ static std::set<Standard_Integer> OS3DNearestEdges(
     return chosen;
 }
 
+// Keep only the edges a blend can actually be built on. Policy re-derived
+// from PartDesign's dress-up edge filter (docs/FREECAD_PLAYBOOK.md F2): an
+// edge must join exactly two DISTINCT faces (a seam — the vertical closure of
+// a cylinder wall — has the same face on both sides and nothing to blend; a
+// free edge has one), must not be degenerate (an apex "edge" has zero
+// length), and must meet its faces with only C0 continuity — ChFi3d picks up
+// tangent-continuous neighbours by chain propagation on its own, and adding
+// one explicitly is a failure mode, not a request it honours. Handing ChFi3d
+// an edge that violates any of these is how the SIGTRAP-in-`Polygon.clip`
+// class of crash started upstream of here.
+//
+// When the filter empties the pick, `reason` gets the first rejection so the
+// caller can say WHY nothing was blendable.
+static std::set<Standard_Integer> OS3DBlendableEdges(
+    const TopoDS_Shape &shape,
+    const TopTools_IndexedMapOfShape &edgeMap,
+    const std::set<Standard_Integer> &candidates,
+    NSString *__strong *reason
+) {
+    TopTools_IndexedDataMapOfShapeListOfShape edgeFaces;
+    TopExp::MapShapesAndAncestors(shape, TopAbs_EDGE, TopAbs_FACE, edgeFaces);
+
+    std::set<Standard_Integer> out;
+    NSString *why = nil;
+    for (Standard_Integer i : candidates) {
+        const TopoDS_Edge edge = TopoDS::Edge(edgeMap(i));
+        if (BRep_Tool::Degenerated(edge)) {
+            if (why == nil) why = @"the picked edge is degenerate";
+            continue;
+        }
+        if (!edgeFaces.Contains(edge)) {
+            if (why == nil) why = @"the picked edge is not attached to a face";
+            continue;
+        }
+        const TopTools_ListOfShape &faces = edgeFaces.FindFromKey(edge);
+        if (faces.Extent() != 2) {
+            if (why == nil) why = @"the picked edge does not join two faces";
+            continue;
+        }
+        const TopoDS_Face f1 = TopoDS::Face(faces.First());
+        const TopoDS_Face f2 = TopoDS::Face(faces.Last());
+        if (f1.IsSame(f2)) {
+            if (why == nil) why = @"the picked edge is a seam, not a boundary";
+            continue;
+        }
+        if (BRep_Tool::Continuity(edge, f1, f2) != GeomAbs_C0) {
+            if (why == nil) {
+                why = @"the faces already meet smoothly here — "
+                      @"blend a neighbouring sharp edge instead";
+            }
+            continue;
+        }
+        out.insert(i);
+    }
+    if (out.empty() && reason != NULL && *reason == nil) *reason = why;
+    return out;
+}
+
+// Shared tail of the fillet and chamfer paths: count the picked edges the
+// builder actually blended (via its Generated() history — the only per-edge
+// success signal MakeChamfer exposes), refuse partial builds outright, then
+// unwrap/validate the result. Returns nil with `status` filled on any
+// failure. `faultyContours` is the fillet builder's own count (-1 when the
+// builder doesn't expose one).
+static OCCTShape *OS3DFinishBlend(BRepFilletAPI_LocalOperation &mk,
+                                  const TopTools_IndexedMapOfShape &edgeMap,
+                                  const std::set<Standard_Integer> &edges,
+                                  NSInteger faultyContours,
+                                  OCCTOpStatus *status) {
+    const NSInteger requested = (NSInteger)edges.size();
+    if (!mk.IsDone() || faultyContours > 0) {
+        const NSInteger failed =
+            faultyContours > 0 ? faultyContours : requested;
+        OS3DSetStatus(status, OCCTOpCodePartialResult,
+                      @"the size is too large for the local geometry");
+        if (status != nil) {
+            status.failedCount = failed;
+            status.requestedCount = requested;
+        }
+        return nil;
+    }
+
+    // IsDone() with zero faulty contours can STILL mean an edge was quietly
+    // dropped: check that every requested edge generated blend geometry.
+    NSInteger blended = 0;
+    for (Standard_Integer i : edges) {
+        if (!mk.Generated(edgeMap(i)).IsEmpty()) ++blended;
+    }
+    if (blended < requested) {
+        OS3DSetStatus(status, OCCTOpCodePartialResult,
+                      @"the size is too large for the local geometry");
+        if (status != nil) {
+            status.failedCount = requested - blended;
+            status.requestedCount = requested;
+        }
+        return nil;
+    }
+
+    int solidCount = 0;
+    const TopoDS_Shape single = OS3DExtractSingleSolid(mk.Shape(), solidCount);
+    if (solidCount != 1) {
+        OS3DSetStatus(status, OCCTOpCodeInvalidResult,
+                      @"the blend did not produce a single solid");
+        if (status != nil) status.solidCount = solidCount;
+        return nil;
+    }
+    const TopoDS_Shape valid = OS3DHealAndValidate(single);
+    if (valid.IsNull()) {
+        OS3DSetStatus(status, OCCTOpCodeInvalidResult,
+                      @"the blended solid failed validity checking");
+        return nil;
+    }
+    OS3DSetStatus(status, OCCTOpCodeOK, nil);
+    OCCTShape *out = [OCCTShape new];
+    out->_shape = valid;
+    return out;
+}
+
 + (nullable OCCTShape *)filletedShape:(OCCTShape *)shape
                         atWorldPoints:(NSData *)worldPoints
                                radius:(double)radius
-                            tolerance:(double)tolerance {
+                            tolerance:(double)tolerance
+                               status:(nullable OCCTOpStatus *)status {
+    OS3DSetStatus(status, OCCTOpCodeKernelRefused, @"no input");
     if (shape == nil || radius <= 0.0) return nil;
     const NSUInteger count = worldPoints.length / (3 * sizeof(double));
     if (count == 0) return nil;
     const double *pts = (const double *)worldPoints.bytes;
 
     try {
+        if (!OS3DFiniteBounds(shape->_shape)) {
+            OS3DSetStatus(status, OCCTOpCodeKernelRefused,
+                          @"the body has empty or non-finite geometry");
+            return nil;
+        }
         TopTools_IndexedMapOfShape edgeMap;
         TopExp::MapShapes(shape->_shape, TopAbs_EDGE, edgeMap);
-        if (edgeMap.Extent() == 0) return nil;
+        if (edgeMap.Extent() == 0) {
+            OS3DSetStatus(status, OCCTOpCodeNoTargetMatched,
+                          @"the body has no edges");
+            return nil;
+        }
 
-        BRepFilletAPI_MakeFillet mk(shape->_shape);
         const std::set<Standard_Integer> chosen =
             OS3DNearestEdges(edgeMap, pts, count, tolerance);
-        for (Standard_Integer i : chosen) {
+        if (chosen.empty()) {
+            OS3DSetStatus(status, OCCTOpCodeNoTargetMatched,
+                          @"no edge within tolerance of the pick");
+            return nil;
+        }
+        NSString *reason = nil;
+        const std::set<Standard_Integer> qualified =
+            OS3DBlendableEdges(shape->_shape, edgeMap, chosen, &reason);
+        if (qualified.empty()) {
+            OS3DSetStatus(status, OCCTOpCodeNoTargetMatched, reason);
+            return nil;
+        }
+
+        BRepFilletAPI_MakeFillet mk(shape->_shape);
+        for (Standard_Integer i : qualified) {
             mk.Add(radius, TopoDS::Edge(edgeMap(i)));
         }
-        if (chosen.empty()) return nil;
-
         mk.Build();
-        if (!mk.IsDone()) return nil;
-        const TopoDS_Shape result = mk.Shape();
-        if (result.IsNull()) return nil;
-
-        OCCTShape *out = [OCCTShape new];
-        out->_shape = result;
-        return out;
-    } catch (...) {
+        return OS3DFinishBlend(mk, edgeMap, qualified,
+                               mk.IsDone() ? mk.NbFaultyContours() : -1,
+                               status);
+    } catch (Standard_Failure &e) {
+        OS3DSetStatus(status, OCCTOpCodeKernelRefused,
+                      [NSString stringWithFormat:@"%s", e.GetMessageString()]);
         return nil;
+    } catch (...) {
+        OS3DSetStatus(status, OCCTOpCodeKernelRefused, @"kernel exception");
+        return nil;
+    }
+}
+
+// One fully-checked fillet attempt at `radius` on the given edges: built,
+// contour-complete, per-edge generated, single-solid, analyzer-valid. The
+// bisection's probe — identical checks to the committing path, so what the
+// clamp says fits IS what Apply builds.
+static bool OS3DFilletBuilds(const TopoDS_Shape &shape,
+                             const TopTools_IndexedMapOfShape &edgeMap,
+                             const std::set<Standard_Integer> &edges,
+                             double radius) {
+    try {
+        BRepFilletAPI_MakeFillet mk(shape);
+        for (Standard_Integer i : edges) {
+            mk.Add(radius, TopoDS::Edge(edgeMap(i)));
+        }
+        mk.Build();
+        if (!mk.IsDone() || mk.NbFaultyContours() > 0) return false;
+        for (Standard_Integer i : edges) {
+            if (mk.Generated(edgeMap(i)).IsEmpty()) return false;
+        }
+        int solidCount = 0;
+        const TopoDS_Shape single = OS3DExtractSingleSolid(mk.Shape(), solidCount);
+        if (solidCount != 1) return false;
+        return BRepCheck_Analyzer(single).IsValid();
+    } catch (...) {
+        return false;
+    }
+}
+
++ (double)maxFilletRadiusForShape:(OCCTShape *)shape
+                    atWorldPoints:(NSData *)worldPoints
+                        tolerance:(double)tolerance {
+    if (shape == nil) return 0.0;
+    const NSUInteger count = worldPoints.length / (3 * sizeof(double));
+    if (count == 0) return 0.0;
+    const double *pts = (const double *)worldPoints.bytes;
+
+    try {
+        if (!OS3DFiniteBounds(shape->_shape)) return 0.0;
+        TopTools_IndexedMapOfShape edgeMap;
+        TopExp::MapShapes(shape->_shape, TopAbs_EDGE, edgeMap);
+        if (edgeMap.Extent() == 0) return 0.0;
+        const std::set<Standard_Integer> chosen =
+            OS3DNearestEdges(edgeMap, pts, count, tolerance);
+        if (chosen.empty()) return 0.0;
+        NSString *reason = nil;
+        const std::set<Standard_Integer> qualified =
+            OS3DBlendableEdges(shape->_shape, edgeMap, chosen, &reason);
+        if (qualified.empty()) return 0.0;
+
+        // Upper bracket: half the body diagonal, tightened by the local
+        // curvature of any cylindrical/spherical face adjacent to a chosen
+        // edge — a blend can never exceed the radius of the surface it eats
+        // into.
+        Bnd_Box bounds;
+        BRepBndLib::Add(shape->_shape, bounds);
+        double hi = 0.5 * sqrt(bounds.SquareExtent());
+        TopTools_IndexedDataMapOfShapeListOfShape edgeFaces;
+        TopExp::MapShapesAndAncestors(shape->_shape, TopAbs_EDGE, TopAbs_FACE,
+                                      edgeFaces);
+        for (Standard_Integer i : qualified) {
+            const TopoDS_Edge edge = TopoDS::Edge(edgeMap(i));
+            if (!edgeFaces.Contains(edge)) continue;
+            for (TopTools_ListOfShape::Iterator it(edgeFaces.FindFromKey(edge));
+                 it.More(); it.Next()) {
+                BRepAdaptor_Surface surf(TopoDS::Face(it.Value()));
+                if (surf.GetType() == GeomAbs_Cylinder) {
+                    hi = std::min(hi, surf.Cylinder().Radius());
+                } else if (surf.GetType() == GeomAbs_Sphere) {
+                    hi = std::min(hi, surf.Sphere().Radius());
+                }
+            }
+        }
+        if (!(hi > 0)) return 0.0;
+
+        // ~7-step bisection over real builds. `lo` is always a radius that
+        // BUILT; a tiny probe first so a hopeless pick returns 0 fast.
+        if (OS3DFilletBuilds(shape->_shape, edgeMap, qualified, hi)) return hi;
+        double lo = 0.0;
+        const double probe = std::min(hi * 0.01, 0.05);
+        if (probe > 0 && OS3DFilletBuilds(shape->_shape, edgeMap, qualified, probe)) {
+            lo = probe;
+        } else {
+            return 0.0;
+        }
+        for (int step = 0; step < 7; ++step) {
+            const double mid = 0.5 * (lo + hi);
+            if (OS3DFilletBuilds(shape->_shape, edgeMap, qualified, mid)) {
+                lo = mid;
+            } else {
+                hi = mid;
+            }
+        }
+        return lo;
+    } catch (...) {
+        return 0.0;
     }
 }
 
 + (nullable OCCTShape *)chamferedShape:(OCCTShape *)shape
                         atWorldPoints:(NSData *)worldPoints
                              distance:(double)distance
-                            tolerance:(double)tolerance {
+                            tolerance:(double)tolerance
+                                status:(nullable OCCTOpStatus *)status {
+    OS3DSetStatus(status, OCCTOpCodeKernelRefused, @"no input");
     if (shape == nil || distance <= 0.0) return nil;
     const NSUInteger count = worldPoints.length / (3 * sizeof(double));
     if (count == 0) return nil;
     const double *pts = (const double *)worldPoints.bytes;
 
     try {
+        if (!OS3DFiniteBounds(shape->_shape)) {
+            OS3DSetStatus(status, OCCTOpCodeKernelRefused,
+                          @"the body has empty or non-finite geometry");
+            return nil;
+        }
         TopTools_IndexedMapOfShape edgeMap;
         TopExp::MapShapes(shape->_shape, TopAbs_EDGE, edgeMap);
+        if (edgeMap.Extent() == 0) {
+            OS3DSetStatus(status, OCCTOpCodeNoTargetMatched,
+                          @"the body has no edges");
+            return nil;
+        }
 
-        BRepFilletAPI_MakeChamfer mk(shape->_shape);
         // Nearest-wins, same rule as the fillet path (see OS3DNearestEdges).
         const std::set<Standard_Integer> chosen =
             OS3DNearestEdges(edgeMap, pts, count, tolerance);
-        for (Standard_Integer i : chosen) {
+        if (chosen.empty()) {
+            OS3DSetStatus(status, OCCTOpCodeNoTargetMatched,
+                          @"no edge within tolerance of the pick");
+            return nil;
+        }
+        NSString *reason = nil;
+        const std::set<Standard_Integer> qualified =
+            OS3DBlendableEdges(shape->_shape, edgeMap, chosen, &reason);
+        if (qualified.empty()) {
+            OS3DSetStatus(status, OCCTOpCodeNoTargetMatched, reason);
+            return nil;
+        }
+
+        BRepFilletAPI_MakeChamfer mk(shape->_shape);
+        for (Standard_Integer i : qualified) {
             // Symmetric chamfer: equal setback on both adjacent faces.
             mk.Add(distance, TopoDS::Edge(edgeMap(i)));
         }
-        if (chosen.empty()) return nil;
-
         mk.Build();
-        if (!mk.IsDone()) return nil;
-        const TopoDS_Shape result = mk.Shape();
-        if (result.IsNull()) return nil;
-
-        OCCTShape *out = [OCCTShape new];
-        out->_shape = result;
-        return out;
-    } catch (...) {
+        // MakeChamfer has no NbFaultyContours; the Generated() check in
+        // OS3DFinishBlend is the per-edge signal.
+        return OS3DFinishBlend(mk, edgeMap, qualified, -1, status);
+    } catch (Standard_Failure &e) {
+        OS3DSetStatus(status, OCCTOpCodeKernelRefused,
+                      [NSString stringWithFormat:@"%s", e.GetMessageString()]);
         return nil;
+    } catch (...) {
+        OS3DSetStatus(status, OCCTOpCodeKernelRefused, @"kernel exception");
+        return nil;
+    }
+}
+
+// Exact volume via BRepGProp; 0 on any failure. Shared by the public
+// volumeOfShape: and the shell sanity check.
+static double OS3DVolume(const TopoDS_Shape &shape) {
+    if (shape.IsNull()) return 0.0;
+    try {
+        GProp_GProps props;
+        BRepGProp::VolumeProperties(shape, props);
+        return props.Mass();
+    } catch (...) {
+        return 0.0;
     }
 }
 
 + (nullable OCCTShape *)shelledShape:(OCCTShape *)shape
                        atWorldPoints:(NSData *)worldPoints
                            thickness:(double)thickness
-                           tolerance:(double)tolerance {
+                           tolerance:(double)tolerance
+                              status:(nullable OCCTOpStatus *)status {
+    OS3DSetStatus(status, OCCTOpCodeKernelRefused, @"no input");
     if (shape == nil || thickness == 0.0) return nil;
     const NSUInteger count = worldPoints.length / (3 * sizeof(double));
     const double *pts = count > 0 ? (const double *)worldPoints.bytes : NULL;
 
     try {
+        if (!OS3DFiniteBounds(shape->_shape)) {
+            OS3DSetStatus(status, OCCTOpCodeKernelRefused,
+                          @"the body has empty or non-finite geometry");
+            return nil;
+        }
+        // MakeThickSolid is specified for a SOLID. A body stored before
+        // boolean results were normalized can still carry a one-solid
+        // COMPOUND — unwrap it here so the op stays in contract.
+        int inputSolids = 0;
+        TopoDS_Shape input = OS3DExtractSingleSolid(shape->_shape, inputSolids);
+        if (input.IsNull()) input = shape->_shape;
+
         // Faces to open: those with a sample within tolerance of a picked point.
         // Empty selection => fully-enclosed hollow.
         TopTools_ListOfShape openFaces;
@@ -1027,7 +1536,7 @@ static std::set<Standard_Integer> OS3DNearestEdges(
             // face within tolerance, which on a thin plate meant picking the
             // top also opened the bottom.
             TopTools_IndexedMapOfShape faceMap;
-            TopExp::MapShapes(shape->_shape, TopAbs_FACE, faceMap);
+            TopExp::MapShapes(input, TopAbs_FACE, faceMap);
             for (Standard_Integer i : OS3DNearestFaces(faceMap, pts, count, tolerance)) {
                 openFaces.Append(TopoDS::Face(faceMap(i)));
             }
@@ -1036,27 +1545,99 @@ static std::set<Standard_Integer> OS3DNearestEdges(
             // IsDone() passes, a valid closed hollow comes back, and the user
             // gets a shell with no opening and no diagnostic (2026-08-25
             // review round 4). Refuse instead, so the error surfaces.
-            if (openFaces.IsEmpty()) return nil;
+            if (openFaces.IsEmpty()) {
+                OS3DSetStatus(status, OCCTOpCodeNoTargetMatched,
+                              @"no face within tolerance of the pick");
+                return nil;
+            }
         }
 
-        BRepOffsetAPI_MakeThickSolid mk;
+        TopoDS_Shape built;
         if (openFaces.IsEmpty()) {
-            // Fully-enclosed hollow. ByJoin with an empty closing-face list has
-            // nothing to remove and hands back the original solid, so the simple
-            // form is the correct one here.
-            mk.MakeThickSolidBySimple(shape->_shape, -fabs(thickness));
+            // Fully-enclosed hollow: offset the solid inward and SUBTRACT the
+            // shrunken copy. (ByJoin with an empty closing-face list hands
+            // back the original solid, and MakeThickSolidBySimple refuses a
+            // closed solid outright — it never worked; the mesh fallback was
+            // silently covering for it until eval stopped degrading.)
+            BRepOffsetAPI_MakeOffsetShape off;
+            off.PerformByJoin(input, -fabs(thickness), 1.0e-3);
+            if (!off.IsDone() || off.Shape().IsNull()) {
+                OS3DSetStatus(status, OCCTOpCodeKernelRefused,
+                              @"the wall thickness is out of range for this shape");
+                return nil;
+            }
+            int innerSolids = 0;
+            TopoDS_Shape inner = OS3DExtractSingleSolid(off.Shape(), innerSolids);
+            if (inner.IsNull()) {
+                OS3DSetStatus(status, OCCTOpCodeKernelRefused,
+                              @"the wall thickness is out of range for this shape");
+                return nil;
+            }
+            BRepAlgoAPI_Cut cut(input, inner);
+            if (!cut.IsDone() || cut.HasErrors()) {
+                OS3DSetStatus(status, OCCTOpCodeKernelRefused,
+                              @"hollowing failed on this shape");
+                return nil;
+            }
+            built = cut.Shape();
         } else {
-            mk.MakeThickSolidByJoin(shape->_shape, openFaces, -fabs(thickness), 1.0e-3);
+            BRepOffsetAPI_MakeThickSolid mk;
+            mk.MakeThickSolidByJoin(input, openFaces, -fabs(thickness), 1.0e-3);
+            if (!mk.IsDone()) {
+                OS3DSetStatus(status, OCCTOpCodeKernelRefused,
+                              @"the wall thickness is out of range for this shape");
+                return nil;
+            }
+            built = mk.Shape();
         }
-        if (!mk.IsDone()) return nil;
-        const TopoDS_Shape result = mk.Shape();
-        if (result.IsNull()) return nil;
 
+        int solidCount = 0;
+        TopoDS_Shape result = OS3DExtractSingleSolid(built, solidCount);
+        if (result.IsNull()) result = built;
+        const TopoDS_Shape valid = OS3DHealAndValidate(result);
+        if (valid.IsNull()) {
+            OS3DSetStatus(status, OCCTOpCodeInvalidResult,
+                          @"the shelled solid failed validity checking");
+            return nil;
+        }
+        // A shell REMOVES material by definition. A "hollow" whose volume
+        // didn't shrink is the sealed-body failure mode wearing a valid
+        // topology — refuse it (docs/FREECAD_PLAYBOOK.md B2).
+        const double before = OS3DVolume(input);
+        const double after = OS3DVolume(valid);
+        if (before > 0 && after >= before * (1.0 - 1e-9)) {
+            OS3DSetStatus(status, OCCTOpCodeInvalidResult,
+                          @"the shell removed no material");
+            return nil;
+        }
+
+        OS3DSetStatus(status, OCCTOpCodeOK, nil);
         OCCTShape *out = [OCCTShape new];
-        out->_shape = result;
+        out->_shape = valid;
         return out;
-    } catch (...) {
+    } catch (Standard_Failure &e) {
+        OS3DSetStatus(status, OCCTOpCodeKernelRefused,
+                      [NSString stringWithFormat:@"%s", e.GetMessageString()]);
         return nil;
+    } catch (...) {
+        OS3DSetStatus(status, OCCTOpCodeKernelRefused, @"kernel exception");
+        return nil;
+    }
+}
+
++ (double)volumeOfShape:(OCCTShape *)shape {
+    if (shape == nil) return 0.0;
+    return OS3DVolume(shape->_shape);
+}
+
++ (double)maxToleranceOfShape:(OCCTShape *)shape {
+    if (shape == nil || shape->_shape.IsNull()) return 0.0;
+    try {
+        ShapeAnalysis_ShapeTolerance analysis;
+        // mode > 0 = the MAXIMAL tolerance any sub-shape carries.
+        return analysis.Tolerance(shape->_shape, 1);
+    } catch (...) {
+        return 0.0;
     }
 }
 
@@ -1081,6 +1662,19 @@ static std::set<Standard_Integer> OS3DNearestEdges(
         STEPControl_Reader reader;
         if (reader.ReadFile(path.fileSystemRepresentation) != IFSelect_RetDone) return out;
         reader.TransferRoots();
+        // Imported geometry is a TRUST BOUNDARY: heal-and-validate each
+        // solid on the way in (one ShapeFix pass — FreeCAD heals at import
+        // too, docs/FREECAD_PLAYBOOK.md H1) and DROP what still doesn't
+        // validate, so a dirty export can't seed a body every later op
+        // chokes on.
+        const auto append = [out](const TopoDS_Shape &candidate) {
+            if (!OS3DFiniteBounds(candidate)) return;
+            const TopoDS_Shape valid = OS3DHealAndValidate(candidate);
+            if (valid.IsNull()) return;
+            OCCTShape *w = [OCCTShape new];
+            w->_shape = valid;
+            [out addObject:w];
+        };
         for (Standard_Integer i = 1; i <= reader.NbShapes(); ++i) {
             const TopoDS_Shape shape = reader.Shape(i);
             if (shape.IsNull()) continue;
@@ -1088,15 +1682,9 @@ static std::set<Standard_Integer> OS3DNearestEdges(
             // becomes its own body.
             TopExp_Explorer solids(shape, TopAbs_SOLID);
             if (solids.More()) {
-                for (; solids.More(); solids.Next()) {
-                    OCCTShape *w = [OCCTShape new];
-                    w->_shape = solids.Current();
-                    [out addObject:w];
-                }
+                for (; solids.More(); solids.Next()) append(solids.Current());
             } else {
-                OCCTShape *w = [OCCTShape new];
-                w->_shape = shape;
-                [out addObject:w];
+                append(shape);
             }
         }
     } catch (...) {
@@ -1108,8 +1696,16 @@ static std::set<Standard_Integer> OS3DNearestEdges(
 + (nullable NSData *)serializedShape:(OCCTShape *)shape {
     if (shape == nil) return nil;
     try {
+        // No triangulation in the blob (the mesh is derived state, re-built
+        // on load — persisting it bloated every save), and the format
+        // version PINNED so stored documents don't silently change format
+        // when the linked OCCT is upgraded (review R4-O5,
+        // docs/FREECAD_PLAYBOOK.md P1).
         std::ostringstream os;
-        BRepTools::Write(shape->_shape, os);
+        BRepTools::Write(shape->_shape, os,
+                         /*withTriangles*/ Standard_False,
+                         /*withNormals*/ Standard_False,
+                         TopTools_FormatVersion_VERSION_2);
         const std::string s = os.str();
         if (s.empty()) return nil;
         return [NSData dataWithBytes:s.data() length:s.size()];
@@ -1124,10 +1720,22 @@ static std::set<Standard_Integer> OS3DNearestEdges(
         std::istringstream is(std::string((const char *)data.bytes, data.length));
         TopoDS_Shape shape;
         BRep_Builder builder;
-        BRepTools::Read(shape, is, builder);
-        if (shape.IsNull()) return nil;
+        // A stored blob is a TRUST BOUNDARY (docs/FREECAD_PLAYBOOK.md H1):
+        // fuzzing proved a few flipped bytes can parse into a shape that
+        // hangs the mesher or quietly carries invalid topology into every
+        // downstream op. Deadline the read, then gate on finite bounds and
+        // validity (with one heal attempt). A refused blob degrades to the
+        // persisted render mesh — the documented fallback — not a crash.
+        OS3DDeadlineProgress *deadline =
+            new OS3DDeadlineProgress(kOS3DKernelDeadlineSeconds);
+        Handle(Message_ProgressIndicator) progress(deadline);
+        BRepTools::Read(shape, is, builder, progress->Start());
+        if (deadline->Fired() || shape.IsNull()) return nil;
+        if (!OS3DFiniteBounds(shape)) return nil;
+        const TopoDS_Shape valid = OS3DHealAndValidate(shape);
+        if (valid.IsNull()) return nil;
         OCCTShape *out = [OCCTShape new];
-        out->_shape = shape;
+        out->_shape = valid;
         return out;
     } catch (...) {
         return nil;

@@ -88,13 +88,4 @@ nonisolated enum DeleteFaceKit {
         return nil
     }
 
-    /// Tolerance for matching a sample point to its face, as
-    /// `FeatureGraph.evalDeleteFace` computes it — 2% of the body diagonal,
-    /// which covers the sagitta between a tessellated chord and the analytic
-    /// surface it approximates. Shared so the live pick and the replay agree.
-    static func tolerance(for mesh: RenderMesh) -> Double {
-        let aabb = mesh.localAABB
-        let scale = Double(simd_length(aabb.max - aabb.min))
-        return max(scale * 0.02, 1e-6)
-    }
 }

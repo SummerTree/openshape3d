@@ -29,6 +29,54 @@ nonisolated final class BRepHandle: @unchecked Sendable {
     init(_ shape: OCCTShape) { self.shape = shape }
 }
 
+/// Typed failure from an OCCT op — the bridge's `OCCTOpStatus` lifted into
+/// Swift, so callers can finally say WHY an op failed instead of guessing
+/// from a nil ("radius too large" was a guess covering six distinct causes).
+/// `message` is ready-made copy for `EvalError.kernelFailure`.
+nonisolated enum OCCTOpError: Error, Equatable {
+    /// Nothing pickable within tolerance (or nothing usable — the string
+    /// says which: seam edge, tangent edge, degenerate…).
+    case noTargetMatched(String)
+    /// The op succeeded on `requested - failed` targets and failed on the
+    /// rest. The partial shape was DISCARDED, never returned.
+    case partialResult(failed: Int, requested: Int)
+    /// The op "succeeded" but its result failed validity checking (after one
+    /// healing attempt) or a sanity check (a shell that removed no material).
+    case invalidResult(String)
+    /// The kernel declined the inputs or threw.
+    case kernelRefused(String)
+
+    init(_ status: OCCTOpStatus) {
+        let detail = status.detail ?? "no diagnostic"
+        switch status.code {
+        case .noTargetMatched: self = .noTargetMatched(detail)
+        case .partialResult:
+            self = .partialResult(failed: status.failedCount,
+                                  requested: status.requestedCount)
+        case .invalidResult: self = .invalidResult(detail)
+        default: self = .kernelRefused(detail)
+        }
+    }
+
+    /// One user-facing sentence, specific enough to act on.
+    var message: String {
+        switch self {
+        case let .noTargetMatched(detail):
+            return detail
+        case let .partialResult(failed, requested):
+            return requested > 1
+                ? "\(failed) of \(requested) edges can't take this size — "
+                  + "try a smaller value or fewer edges"
+                : "this size is too large for the local geometry — "
+                  + "try a smaller value"
+        case let .invalidResult(detail):
+            return detail
+        case let .kernelRefused(detail):
+            return detail
+        }
+    }
+}
+
 /// Namespace for OCCT-backed geometry. `nonisolated` — kernel work runs off the
 /// main actor, same contract as `KernelOps`.
 nonisolated enum OCCTKernel {
@@ -409,12 +457,26 @@ nonisolated enum OCCTKernel {
     static func composedBoolean(
         _ kind: BooleanKind, target: Body, tool: Body
     ) -> BRepHandle? {
+        guard let outcome = composedBooleanResult(kind, target: target, tool: tool)
+        else { return nil }
+        return try? outcome.get().handle
+    }
+
+    /// `composedBoolean` with the reason when OCCT fails. Nil means OCCT
+    /// DECLINED the op (an operand is mesh-only, or the B-rep flag is off) —
+    /// the Euclid fallback is then legitimate. A `.failure` means OCCT owned
+    /// the op and failed for cause; callers surface that instead of silently
+    /// degrading to the mesh result (which drops the brep and goes faceted
+    /// forever — the "corrupt-looking boolean" class).
+    static func composedBooleanResult(
+        _ kind: BooleanKind, target: Body, tool: Body
+    ) -> Result<BooleanOutcome, OCCTOpError>? {
         guard useOCCTAsSourceOfTruth,
               let a0 = target.brep, let b0 = tool.brep,
               let a = transformed(a0, by: target.transform),
               let b = transformed(b0, by: tool.transform)
         else { return nil }
-        return boolean(a, b, op: booleanOp(kind))
+        return booleanResult(a, b, op: booleanOp(kind))
     }
 
     /// Merge faces sharing one underlying surface (and the seams between
@@ -426,22 +488,52 @@ nonisolated enum OCCTKernel {
         OCCTBridge.unifiedShape(handle.shape).map(BRepHandle.init) ?? handle
     }
 
+    /// A boolean's result plus how many disjoint solids it holds. The shape
+    /// is unwrapped/unified/validated by the bridge; `solidCount > 1` means a
+    /// cut split the body apart — a legitimate geometric outcome the caller
+    /// decides how to present, not a silent one (review R4-O3).
+    nonisolated struct BooleanOutcome {
+        let handle: BRepHandle
+        let solidCount: Int
+    }
+
+    static func booleanResult(_ a: BRepHandle, _ b: BRepHandle, op: Int)
+        -> Result<BooleanOutcome, OCCTOpError> {
+        let status = OCCTOpStatus()
+        guard let shape = OCCTBridge.boolean(of: a.shape, with: b.shape,
+                                             op: op, status: status) else {
+            return .failure(OCCTOpError(status))
+        }
+        let solids = status.code == .multiSolid ? status.solidCount : 1
+        return .success(BooleanOutcome(handle: BRepHandle(shape),
+                                       solidCount: solids))
+    }
+
     static func boolean(_ a: BRepHandle, _ b: BRepHandle, op: Int) -> BRepHandle? {
-        OCCTBridge.boolean(of: a.shape, with: b.shape, op: op).map(BRepHandle.init)
+        try? booleanResult(a, b, op: op).get().handle
     }
 
     /// Remove the faces nearest `points` and heal the solid (spec §4.16 Delete
-    /// Face). Nil when nothing matched or OCCT couldn't close the result — the
-    /// caller should surface a recoverable failure rather than mutate the body.
+    /// Face). Failure says whether nothing matched or OCCT couldn't close the
+    /// result — the caller surfaces it rather than mutating the body.
+    static func removingFacesResult(
+        _ handle: BRepHandle, at points: [SIMD3<Double>], tolerance: Double
+    ) -> Result<BRepHandle, OCCTOpError> {
+        guard !points.isEmpty else {
+            return .failure(.noTargetMatched("no face was picked"))
+        }
+        let status = OCCTOpStatus()
+        guard let shape = OCCTBridge.defeaturedShape(
+            handle.shape, atWorldPoints: pack(points),
+            tolerance: tolerance, status: status) else {
+            return .failure(OCCTOpError(status))
+        }
+        return .success(BRepHandle(shape))
+    }
+
     static func removingFaces(_ handle: BRepHandle, at points: [SIMD3<Double>],
                               tolerance: Double) -> BRepHandle? {
-        guard !points.isEmpty else { return nil }
-        var flat = [Double](); flat.reserveCapacity(points.count * 3)
-        for p in points { flat.append(p.x); flat.append(p.y); flat.append(p.z) }
-        let data = flat.withUnsafeBytes { Data($0) }
-        return OCCTBridge.defeaturedShape(handle.shape, atWorldPoints: data,
-                                               tolerance: tolerance)
-            .map(BRepHandle.init)
+        try? removingFacesResult(handle, at: points, tolerance: tolerance).get()
     }
 
     /// Analytic face-type histogram of a solid — how we assert that geometry
@@ -452,44 +544,118 @@ nonisolated enum OCCTKernel {
         return (c.planar, c.cylindrical, c.other)
     }
 
-    /// Round the analytic edges nearest `points` to `radius`. `points` are world
-    /// positions on the edges to blend (mesh-edge midpoints from the picker);
-    /// `tolerance` should scale with the body (a fraction of its bounding box),
-    /// since a tessellated chord sits slightly inside the true arc.
+    /// Round the analytic edges nearest `points` to `radius`. `points` are
+    /// world positions on the edges to blend (mesh-edge midpoints from the
+    /// picker); pass `matchTolerance(for:)` as `tolerance`.
     ///
-    /// Returns nil when nothing matched or OCCT couldn't build the blend (e.g.
-    /// the radius exceeds what the geometry allows) — callers fall back to the
-    /// mesh blend rather than failing the user's action.
+    /// The failure says what actually went wrong: nothing near the pick, the
+    /// pick was a seam/tangent edge, the radius is too large for N of M
+    /// edges (a partial build is DISCARDED, never returned — review R4-O4),
+    /// or the result failed validation.
+    static func filletResult(_ handle: BRepHandle, at points: [SIMD3<Double>],
+                             radius: Double, tolerance: Double)
+        -> Result<BRepHandle, OCCTOpError> {
+        guard !points.isEmpty, radius > 0 else {
+            return .failure(.kernelRefused("nothing to fillet"))
+        }
+        let status = OCCTOpStatus()
+        guard let shape = OCCTBridge.filletedShape(
+            handle.shape, atWorldPoints: pack(points),
+            radius: radius, tolerance: tolerance, status: status) else {
+            return .failure(OCCTOpError(status))
+        }
+        return .success(BRepHandle(shape))
+    }
+
     static func fillet(_ handle: BRepHandle, at points: [SIMD3<Double>],
                        radius: Double, tolerance: Double) -> BRepHandle? {
-        guard !points.isEmpty, radius > 0 else { return nil }
-        var flat = [Double](); flat.reserveCapacity(points.count * 3)
-        for p in points { flat.append(p.x); flat.append(p.y); flat.append(p.z) }
-        let data = flat.withUnsafeBytes { Data($0) }
-        return OCCTBridge.filletedShape(handle.shape, atWorldPoints: data,
-                                        radius: radius, tolerance: tolerance)
-            .map(BRepHandle.init)
+        try? filletResult(handle, at: points, radius: radius,
+                          tolerance: tolerance).get()
     }
 
     /// Bevel the analytic edges nearest `points` by `distance` (spec §4.3
-    /// chamfer). Same fallback contract as `fillet`.
+    /// chamfer). Same contract as `filletResult`.
+    static func chamferResult(_ handle: BRepHandle, at points: [SIMD3<Double>],
+                              distance: Double, tolerance: Double)
+        -> Result<BRepHandle, OCCTOpError> {
+        guard !points.isEmpty, distance > 0 else {
+            return .failure(.kernelRefused("nothing to chamfer"))
+        }
+        let status = OCCTOpStatus()
+        guard let shape = OCCTBridge.chamferedShape(
+            handle.shape, atWorldPoints: pack(points),
+            distance: distance, tolerance: tolerance, status: status) else {
+            return .failure(OCCTOpError(status))
+        }
+        return .success(BRepHandle(shape))
+    }
+
     static func chamfer(_ handle: BRepHandle, at points: [SIMD3<Double>],
                         distance: Double, tolerance: Double) -> BRepHandle? {
-        guard !points.isEmpty, distance > 0 else { return nil }
-        return OCCTBridge.chamferedShape(handle.shape, atWorldPoints: pack(points),
-                                         distance: distance, tolerance: tolerance)
-            .map(BRepHandle.init)
+        try? chamferResult(handle, at: points, distance: distance,
+                           tolerance: tolerance).get()
     }
 
     /// Hollow a solid to `thickness`, opening the faces nearest `points` (spec
     /// §4.4 Shell). Empty `points` = fully-enclosed hollow. Correct on curved
-    /// walls, unlike the mesh inset. Nil when the thickness is out of range.
+    /// walls, unlike the mesh inset. The failure distinguishes "no face near
+    /// the pick" from "thickness out of range" from "result didn't validate"
+    /// (including a shell that removed no material — the silent sealed-body
+    /// case).
+    static func shellResult(_ handle: BRepHandle, openingAt points: [SIMD3<Double>],
+                            thickness: Double, tolerance: Double)
+        -> Result<BRepHandle, OCCTOpError> {
+        guard thickness > 0 else {
+            return .failure(.kernelRefused("thickness must be positive"))
+        }
+        let status = OCCTOpStatus()
+        guard let shape = OCCTBridge.shelledShape(
+            handle.shape, atWorldPoints: pack(points),
+            thickness: thickness, tolerance: tolerance, status: status) else {
+            return .failure(OCCTOpError(status))
+        }
+        return .success(BRepHandle(shape))
+    }
+
     static func shell(_ handle: BRepHandle, openingAt points: [SIMD3<Double>],
                       thickness: Double, tolerance: Double) -> BRepHandle? {
-        guard thickness > 0 else { return nil }
-        return OCCTBridge.shelledShape(handle.shape, atWorldPoints: pack(points),
-                                       thickness: thickness, tolerance: tolerance)
-            .map(BRepHandle.init)
+        try? shellResult(handle, openingAt: points, thickness: thickness,
+                         tolerance: tolerance).get()
+    }
+
+    /// Exact solid volume in mm³ (`BRepGProp`); 0 on failure.
+    static func volume(_ handle: BRepHandle) -> Double {
+        OCCTBridge.volume(of: handle.shape)
+    }
+
+    /// The largest fillet radius the edges nearest `points` can actually
+    /// take — bisection over real, fully-checked `BRepFilletAPI` builds, so
+    /// the drag clamp and the commit agree by construction
+    /// (docs/FREECAD_PLAYBOOK.md F3). Costs a handful of fillet builds:
+    /// compute once per drag, never per tick. 0 when nothing blendable is
+    /// near the points.
+    static func maxFilletRadius(_ handle: BRepHandle, at points: [SIMD3<Double>],
+                                tolerance: Double) -> Double {
+        guard !points.isEmpty else { return 0 }
+        return OCCTBridge.maxFilletRadius(for: handle.shape,
+                                          atWorldPoints: pack(points),
+                                          tolerance: tolerance)
+    }
+
+    /// Pick-matching tolerance for a B-rep body — docs/FREECAD_PLAYBOOK.md T1.
+    ///
+    /// The points the pickers hand the bridge are midpoints of the OCCT
+    /// tessellation's own mesh edges/faces, so their distance from the
+    /// analytic geometry is bounded by the tessellation deflection — NOT by
+    /// the body's size. Scaling tolerance to the AABB diagonal was how a
+    /// 100×100×1 mm plate got a millimetre-scale pick ball against a 1 mm
+    /// wall: shelling the top also opened the bottom (review S5). The second
+    /// term grows the ball only when the shape itself carries fat tolerances
+    /// (a healed import), which is the one case geometry legitimately sits
+    /// farther from where the mesh says it is.
+    static func matchTolerance(for handle: BRepHandle) -> Double {
+        max(4 * renderLinearDeflection,
+            10 * OCCTBridge.maxTolerance(of: handle.shape))
     }
 
     private static func pack(_ points: [SIMD3<Double>]) -> Data {

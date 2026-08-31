@@ -544,10 +544,18 @@ nonisolated extension FeatureGraph {
                    outer: outer, holes: holes, extras: extras,
                    zMin: z.zMin, zMax: z.zMax,
                    origin: plane.origin, xAxis: plane.xAxis,
-                   yAxis: plane.yAxis, normal: plane.normal),
-               let resultBrep = OCCTKernel.boolean(
-                   a, toolBrep, op: OCCTKernel.booleanOp(kind)) {
-                result.adoptBRep(resultBrep)
+                   yAxis: plane.yAxis, normal: plane.normal) {
+                switch OCCTKernel.booleanResult(
+                    a, toolBrep, op: OCCTKernel.booleanOp(kind)) {
+                case let .success(outcome):
+                    result.adoptBRep(outcome.handle)
+                case let .failure(error):
+                    // Both operands were analytic; a mesh-only result here
+                    // would silently drop the target's brep on the next save
+                    // (C4). Surface the failure instead.
+                    state.errors[node.id] = .kernelFailure("boolean: \(error.message)")
+                    return
+                }
             }
         }
         let inputTables = [state.faceTables[target.id], toolTable].compactMap { $0 }
@@ -594,11 +602,22 @@ nonisolated extension FeatureGraph {
             // evaluate. Nothing about the resulting body changes here; only the
             // work that produced it does.
             var next: Body?
-            if let resultBrep = OCCTKernel.composedBoolean(kind, target: operand, tool: tool) {
+            switch OCCTKernel.composedBooleanResult(kind, target: operand, tool: tool) {
+            case let .success(outcome):
                 var body = Body(
                     id: target.id, name: target.name, transform: .identity,
                     primitive: nil, euclidMesh: Euclid.Mesh([]), revision: nextRevision())
-                if body.adoptBRep(resultBrep) { next = body }
+                if body.adoptBRep(outcome.handle) { next = body }
+            case let .failure(error):
+                // OCCT owned this boolean (both operands analytic) and failed
+                // for cause. Falling through to Euclid here was how "corrupt"
+                // booleans appeared: the mesh subtract still succeeds on the
+                // tessellations, the brep is dropped, and the body silently
+                // goes faceted forever. Surface the failure instead.
+                state.errors[node.id] = .kernelFailure("boolean: \(error.message)")
+                return
+            case nil:
+                break  // an operand is mesh-only — Euclid legitimately owns it
             }
             if next == nil {
                 // Either operand is mesh-only, or OCCT produced something that
@@ -872,15 +891,22 @@ nonisolated extension FeatureGraph {
         // radii, which OCCT handles cleanly, just work.
         if OCCTKernel.useOCCTAsSourceOfTruth, let brep = body.brep {
             let midpoints = specs.map { ($0.p0 + $0.p1) * 0.5 }
-            let tolerance = max(scale * 0.01, 1e-6)
+            // Pick tolerance is deflection-derived, not body-size-derived
+            // (docs/FREECAD_PLAYBOOK.md T1): the midpoints above sit within
+            // the tessellation deflection of the true edge no matter how big
+            // the body is, and a body-scaled ball on a 100×1 mm plate was
+            // wider than the wall it was picking across.
+            let tolerance = OCCTKernel.matchTolerance(for: brep)
             let blended = isFillet
-                ? OCCTKernel.fillet(brep, at: midpoints, radius: amount, tolerance: tolerance)
-                : OCCTKernel.chamfer(brep, at: midpoints, distance: amount, tolerance: tolerance)
-            guard let blended else {
-                let verb = isFillet ? "fillet" : "chamfer"
-                state.errors[node.id] = .kernelFailure(
-                    "\(verb) radius \(String(format: "%g", amount)) is too large for this "
-                    + "geometry — try a smaller value")
+                ? OCCTKernel.filletResult(brep, at: midpoints, radius: amount,
+                                          tolerance: tolerance)
+                : OCCTKernel.chamferResult(brep, at: midpoints, distance: amount,
+                                           tolerance: tolerance)
+            guard case let .success(blended) = blended else {
+                if case let .failure(error) = blended {
+                    let verb = isFillet ? "fillet" : "chamfer"
+                    state.errors[node.id] = .kernelFailure("\(verb): \(error.message)")
+                }
                 return
             }
             var result = Body(
@@ -947,7 +973,12 @@ nonisolated extension FeatureGraph {
         // BRepOffsetAPI_MakeThickSolid so CURVED walls are correct — the mesh
         // path insets a planar face outline, which is only honest on prismatic
         // bodies (a shelled cylinder must end up with two concentric walls).
-        // Falls back to the mesh shell when OCCT can't offset the solid.
+        //
+        // A brep body whose OCCT shell fails ERRORS rather than degrading to
+        // the mesh inset — the same decision the blends made (see
+        // evalEdgeBlend): ShellKit clamps its mitre on corners sharper than
+        // ~14.5° and ships thin walls that pass every downstream validity
+        // check (review R3-E). The mesh path below stays for brep-less bodies.
         if OCCTKernel.useOCCTAsSourceOfTruth, let brep = body.brep {
             // A point at the centroid of each open face identifies it to OCCT.
             let openPoints: [SIMD3<Double>] = openFaces.map { face in
@@ -955,21 +986,24 @@ nonisolated extension FeatureGraph {
                 let c = face.outline.reduce(SIMD2<Double>.zero, +) / n
                 return face.origin + face.basisX * c.x + face.basisY * c.y
             }
-            let aabb = body.render.localAABB
-            let scale = Double(simd_length(aabb.max - aabb.min))
-            if let hollow = OCCTKernel.shell(
+            switch OCCTKernel.shellResult(
                 brep, openingAt: openPoints, thickness: thickness,
-                tolerance: max(scale * 0.02, 1e-6)) {
+                tolerance: OCCTKernel.matchTolerance(for: brep)) {
+            case let .success(hollow):
                 var result = Body(
                     id: body.id, name: body.name, transform: .identity, primitive: nil,
                     euclidMesh: body.euclidMesh(), revision: nextRevision())
-                if result.adoptBRep(hollow) {
-                    let newTable = state.naming.faceTable(
-                        for: result, createdBy: node.id, scheme: .generic)
-                    state.put(result, table: newTable)
+                guard result.adoptBRep(hollow) else {
+                    state.errors[node.id] = .emptyGeometry
                     return
                 }
+                let newTable = state.naming.faceTable(
+                    for: result, createdBy: node.id, scheme: .generic)
+                state.put(result, table: newTable)
+            case let .failure(error):
+                state.errors[node.id] = .kernelFailure("shell: \(error.message)")
             }
+            return
         }
 
         let mesh = KernelOps.shell(
@@ -1029,14 +1063,16 @@ nonisolated extension FeatureGraph {
             points.append(point)
         }
 
-        let aabb = body.render.localAABB
-        let scale = Double(simd_length(aabb.max - aabb.min))
-        guard let healed = OCCTKernel.removingFaces(
-            brep, at: points, tolerance: max(scale * 0.02, 1e-6)) else {
+        let healed: BRepHandle
+        switch OCCTKernel.removingFacesResult(
+            brep, at: points, tolerance: OCCTKernel.matchTolerance(for: brep)) {
+        case let .success(handle):
+            healed = handle
+        case let .failure(error):
             // Defeaturing legitimately fails when the neighbours cannot close
             // (§4.16: those deletions leave sheet bodies). Report rather than
             // ship a broken solid.
-            state.errors[node.id] = .kernelFailure("the surrounding faces could not heal")
+            state.errors[node.id] = .kernelFailure("delete face: \(error.message)")
             return
         }
         var result = Body(
@@ -1238,11 +1274,18 @@ nonisolated extension FeatureGraph {
         // Compose the boolean in OCCT when BOTH sides are analytic, so a
         // revolved boss cut into an analytic block leaves an analytic result.
         // One brep-less side falls back to the mesh for the whole operation —
-        // a half-analytic result would be worse than an honest mesh one.
-        if OCCTKernel.useOCCTAsSourceOfTruth, let brep, let targetBrep = target.brep,
-           let composed = OCCTKernel.boolean(
-               targetBrep, brep, op: OCCTKernel.booleanOp(kind)) {
-            result.brep = composed
+        // a half-analytic result would be worse than an honest mesh one. But
+        // when OCCT OWNS the op (both sides analytic) and fails for cause,
+        // surface it: shipping the mesh result would silently drop the brep.
+        if OCCTKernel.useOCCTAsSourceOfTruth, let brep, let targetBrep = target.brep {
+            switch OCCTKernel.booleanResult(
+                targetBrep, brep, op: OCCTKernel.booleanOp(kind)) {
+            case let .success(outcome):
+                result.brep = outcome.handle
+            case let .failure(error):
+                state.errors[node.id] = .kernelFailure("boolean: \(error.message)")
+                return
+            }
         }
         let inputTables = [state.faceTables[target.id], toolTable].compactMap { $0 }
         let table = state.naming.propagate(inputs: inputTables, output: result, op: .boolean(kind))

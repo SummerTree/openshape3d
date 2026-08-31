@@ -150,6 +150,14 @@ nonisolated struct SignatureNaming: TopoNaming {
 
         var best: (score: Double, face: EnumeratedFace)?
         for face in faces {
+            // The ref knows what KIND of surface it referenced, and until now
+            // nothing read it (review R4-N4): a cylindrical ref could bind a
+            // planar cap whenever centroid and area happened to line up, and
+            // the downstream op then deformed the wrong face. The kind is a
+            // hard veto; its radius is NOT compared — edits legitimately
+            // change it, and the area term already reflects size.
+            guard Self.kindCompatible(face.signature.kind, ref.signature.kind)
+            else { continue }
             var s = score(face.signature, against: ref.signature, bboxDiag: diag)
             // Boost candidates whose recorded role (from the table) matches the ref.
             //
@@ -202,6 +210,17 @@ nonisolated struct SignatureNaming: TopoNaming {
     /// are designed to make unresolvable.
     static func normalAlignment(_ candidate: FaceSignature, _ ref: FaceSignature) -> Double {
         max(0, simd_dot(unit(candidate.normal), unit(ref.normal)))
+    }
+
+    /// Whether two signature kinds can name the same face. Same surface
+    /// class only; a cylindrical ref's radius is free to differ (edits
+    /// change it), so the associated value is deliberately ignored.
+    static func kindCompatible(_ a: FaceSignature.Kind, _ b: FaceSignature.Kind) -> Bool {
+        switch (a, b) {
+        case (.planar, .planar): return true
+        case (.cylindrical, .cylindrical): return true
+        default: return false
+        }
     }
 
     /// The role the `table` would assign to `face` (its closest entry by signature).

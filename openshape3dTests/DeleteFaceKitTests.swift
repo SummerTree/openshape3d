@@ -74,7 +74,7 @@ final class DeleteFaceKitTests: XCTestCase {
 
         let healed = try XCTUnwrap(
             OCCTKernel.removingFaces(drilled, at: [target.samplePoint],
-                                     tolerance: DeleteFaceKit.tolerance(for: mesh)),
+                                     tolerance: OCCTKernel.matchTolerance(for: drilled)),
             "the neighbouring faces must close over the deleted hole")
 
         let counts = OCCTKernel.faceTypeCounts(healed)
@@ -158,19 +158,27 @@ final class DeleteFaceKitTests: XCTestCase {
         XCTAssertEqual(a, b, "pick order must not make it a different face")
     }
 
-    /// Tolerance scales with the body, so the same 2% rule the parametric
-    /// replay uses covers the sagitta on a large part as well as a small one.
-    func testToleranceScalesWithTheBody() {
-        let small = RenderMesh(
-            positions: [SIMD3(0, 0, 0), SIMD3(1, 0, 0), SIMD3(0, 1, 0)],
-            normals: [SIMD3(0, 0, 1), SIMD3(0, 0, 1), SIMD3(0, 0, 1)],
-            indices: [0, 1, 2])
-        let large = RenderMesh(
-            positions: [SIMD3(0, 0, 0), SIMD3(100, 0, 0), SIMD3(0, 100, 0)],
-            normals: [SIMD3(0, 0, 1), SIMD3(0, 0, 1), SIMD3(0, 0, 1)],
-            indices: [0, 1, 2])
-        XCTAssertLessThan(DeleteFaceKit.tolerance(for: small),
-                          DeleteFaceKit.tolerance(for: large))
-        XCTAssertGreaterThan(DeleteFaceKit.tolerance(for: small), 0)
+    /// Pick tolerance is deflection-derived, NOT body-size-derived
+    /// (docs/FREECAD_PLAYBOOK.md T1): sample points come from the OCCT
+    /// tessellation, so their error is bounded by the deflection no matter
+    /// how big the body is. The old 2%-of-diagonal rule gave a 100× larger
+    /// body a 100× larger pick ball — which on a thin plate was wider than
+    /// the wall being picked (review S5).
+    func testToleranceDoesNotScaleWithTheBody() throws {
+        let small = try XCTUnwrap(
+            OCCTKernel.primitiveShape(.box(width: 10, depth: 10, height: 10),
+                                      placement: .identity))
+        let large = try XCTUnwrap(
+            OCCTKernel.primitiveShape(.box(width: 1000, depth: 1000, height: 1000),
+                                      placement: .identity))
+        let smallTol = OCCTKernel.matchTolerance(for: small)
+        let largeTol = OCCTKernel.matchTolerance(for: large)
+        XCTAssertEqual(smallTol, largeTol, accuracy: 1e-9,
+                       "healthy analytic solids get the same deflection floor")
+        XCTAssertGreaterThanOrEqual(
+            smallTol, 4 * OCCTKernel.renderLinearDeflection,
+            "the floor covers the tessellation's chord error")
+        XCTAssertLessThan(largeTol, 1.0,
+                          "a metre-scale part must NOT get a millimetre-scale ball")
     }
 }

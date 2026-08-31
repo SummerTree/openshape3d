@@ -247,6 +247,28 @@ nonisolated struct Sketch: Identifiable, Codable, Equatable, Sendable {
     }
 }
 
+// MARK: - Constraint integrity
+
+nonisolated extension Sketch {
+    /// Every constraint/dimension ref points at a live entity. The delete and
+    /// trim commands maintain this invariant (review R2-2 — a dangling ref
+    /// meant the solver silently dropped the residual while the dimension
+    /// kept displaying a value it no longer drove); tests assert it after
+    /// every mutation.
+    func validateConstraintRefs() -> Bool {
+        let ids = Set(entities.map(\.id))
+        for constraint in constraints
+        where constraint.refs.contains(where: { !ids.contains($0.entityID) }) {
+            return false
+        }
+        for dimension in dimensions
+        where dimension.refs.contains(where: { !ids.contains($0.entityID) }) {
+            return false
+        }
+        return true
+    }
+}
+
 // MARK: - Construction geometry (spec §3.3)
 
 nonisolated extension Sketch {

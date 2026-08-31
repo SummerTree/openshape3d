@@ -46,6 +46,40 @@ NS_ASSUME_NONNULL_BEGIN
 @interface OCCTShape : NSObject
 @end
 
+/// Why a kernel op ended the way it did. Every mutating op used to collapse
+/// all of its failure modes into one nil — "no edge matched the pick", "the
+/// radius is too big for the geometry", "OCCT built half of what you asked
+/// and we threw it away" all looked identical, so the UI could only guess at
+/// a message. Callers allocate one of these, pass it in, and read it back;
+/// nil is accepted everywhere for callers that don't care.
+typedef NS_ENUM(NSInteger, OCCTOpCode) {
+    OCCTOpCodeOK = 0,
+    /// No edge/face lay within tolerance of the picked points (or none of the
+    /// matched ones was usable — `detail` says which).
+    OCCTOpCodeNoTargetMatched = 1,
+    /// The op succeeded on some targets and failed on others. The partial
+    /// shape is DISCARDED — `failedCount` of `requestedCount` failed.
+    OCCTOpCodePartialResult = 2,
+    /// The op reported success but its result failed `BRepCheck_Analyzer`
+    /// even after one healing attempt, or flunked a sanity check.
+    OCCTOpCodeInvalidResult = 3,
+    /// The op succeeded but produced `solidCount` (> 1) disjoint solids.
+    /// The shape IS returned; callers decide whether that's acceptable.
+    OCCTOpCodeMultiSolid = 4,
+    /// The kernel declined the inputs or threw before producing a result.
+    OCCTOpCodeKernelRefused = 5,
+};
+
+@interface OCCTOpStatus : NSObject
+@property (nonatomic) OCCTOpCode code;
+/// Short machine-ish diagnostic ("2 of 6 edges failed to blend"). Input for
+/// building a user-facing message, not the message itself.
+@property (nonatomic, copy, nullable) NSString *detail;
+@property (nonatomic) NSInteger failedCount;
+@property (nonatomic) NSInteger requestedCount;
+@property (nonatomic) NSInteger solidCount;
+@end
+
 /// Orthonormal sketch-plane basis: world = origin + xAxis·x + yAxis·y + normal·z.
 @interface OCCTPlaneBasis : NSObject
 - (instancetype)initWithOriginX:(double)ox originY:(double)oy originZ:(double)oz
@@ -202,18 +236,30 @@ NS_ASSUME_NONNULL_BEGIN
 
 /// Boolean of two world-space shapes. `op`: 0 = union (fuse), 1 = subtract
 /// (cut a from ... i.e. a − b), 2 = intersect (common). Nil on failure.
+///
+/// Hardened per the FreeCAD boolean pattern (docs/FREECAD_PLAYBOOK.md B1):
+/// both operands are validity-checked (with one healing attempt) before OCCT
+/// sees them, the builder runs non-destructive with a fuzzy tolerance derived
+/// from the operands' combined extent (retried once at 10×), and a
+/// single-solid result is unwrapped from its compound, unified
+/// (`ShapeUpgrade_UnifySameDomain`) and validated before it is returned — so
+/// downstream shell/fillet receive in-contract input. A result of several
+/// disjoint solids is returned as-is with `OCCTOpCodeMultiSolid` in `status`.
 + (nullable OCCTShape *)booleanOfShape:(OCCTShape *)a
                              withShape:(OCCTShape *)b
-                                    op:(NSInteger)op;
+                                    op:(NSInteger)op
+                                status:(nullable OCCTOpStatus *)status;
 
 /// Remove the faces nearest `worldPoints` and heal the result
 /// (`BRepAlgoAPI_Defeaturing`) — spec §4.16 Delete Face. A face counts as picked
 /// when a sample on it lies within `tolerance` of a point. Nil when nothing
 /// matched or the solid couldn't be healed (OCCT refuses when removal would
-/// leave an unclosable gap), so callers can report a recoverable failure.
+/// leave an unclosable gap), so callers can report a recoverable failure —
+/// `status` says which of those it was.
 + (nullable OCCTShape *)defeaturedShape:(OCCTShape *)shape
                                  atWorldPoints:(NSData *)worldPoints
-                                     tolerance:(double)tolerance;
+                                     tolerance:(double)tolerance
+                                        status:(nullable OCCTOpStatus *)status;
 
 /// Analytic face-type histogram of any solid — the check that geometry stayed
 /// exact through an operation (e.g. a filleted cylinder keeps ONE cylindrical
@@ -227,30 +273,64 @@ NS_ASSUME_NONNULL_BEGIN
 ///
 /// Because a tessellated rim is many mesh segments but ONE analytic edge, this
 /// gives tangent-chain propagation for free: picking a single segment of a
-/// cylinder's rim rounds the entire circular edge. Nil if nothing matched or the
-/// blend failed (radius too large for the geometry), so callers can fall back.
+/// cylinder's rim rounds the entire circular edge. Nil if nothing matched or
+/// the blend failed — `status` distinguishes "no edge there", "radius too big
+/// for N of M edges" (a partial build is DISCARDED, never returned) and "the
+/// result didn't validate". Picked edges are pre-qualified first: degenerate
+/// edges, seams, free edges and tangent-continuous edges are refused up front
+/// (docs/FREECAD_PLAYBOOK.md F1/F2) instead of being handed to ChFi3d, which
+/// crashes or silently no-ops on them.
 + (nullable OCCTShape *)filletedShape:(OCCTShape *)shape
                         atWorldPoints:(NSData *)worldPoints
                                radius:(double)radius
-                            tolerance:(double)tolerance;
+                            tolerance:(double)tolerance
+                               status:(nullable OCCTOpStatus *)status;
 
 /// Bevel the edges near `worldPoints` by `distance`
 /// (`BRepFilletAPI_MakeChamfer`) — the chamfer half of spec §4.3. Same
-/// edge-matching and tangent-chain behaviour as `filletedShape:`.
+/// edge-matching, pre-qualification, post-validation and tangent-chain
+/// behaviour as `filletedShape:`.
 + (nullable OCCTShape *)chamferedShape:(OCCTShape *)shape
                         atWorldPoints:(NSData *)worldPoints
                              distance:(double)distance
-                            tolerance:(double)tolerance;
+                            tolerance:(double)tolerance
+                                status:(nullable OCCTOpStatus *)status;
 
 /// Hollow a solid to a wall of `thickness`, opening the faces near
 /// `worldPoints` (`BRepOffsetAPI_MakeThickSolid`) — spec §4.4 Shell. Pass an
 /// empty `worldPoints` for a fully-enclosed hollow. Correct on CURVED walls,
 /// unlike the mesh inset approximation. Nil when OCCT can't offset the solid
-/// (thickness out of the valid range), so the caller can report it.
+/// (thickness out of the valid range) or the result fails validation/the
+/// volume-must-shrink sanity check — `status` says which.
 + (nullable OCCTShape *)shelledShape:(OCCTShape *)shape
                        atWorldPoints:(NSData *)worldPoints
                            thickness:(double)thickness
-                           tolerance:(double)tolerance;
+                           tolerance:(double)tolerance
+                              status:(nullable OCCTOpStatus *)status;
+
+/// The largest fillet radius the edges near `worldPoints` can actually
+/// take, found by bisection over REAL (fully checked) `BRepFilletAPI`
+/// builds — so the drag clamp and the commit agree by construction, unlike
+/// the mesh heuristic it replaces (docs/FREECAD_PLAYBOOK.md F3). The
+/// bracket starts at half the body diagonal, tightened by any cylindrical/
+/// spherical neighbour's radius. Costs a handful of fillet builds — compute
+/// once per drag, never per tick. 0 when nothing blendable is near the
+/// points.
++ (double)maxFilletRadiusForShape:(OCCTShape *)shape
+                    atWorldPoints:(NSData *)worldPoints
+                        tolerance:(double)tolerance;
+
+/// Exact solid volume (mm³) via `BRepGProp`; 0 on failure. Cheap enough for
+/// sanity checks (a shell must REMOVE material) and exact enough for tests to
+/// pin against analytically-derived values.
++ (double)volumeOfShape:(OCCTShape *)shape;
+
+/// The largest tolerance any sub-shape of `shape` carries
+/// (`ShapeAnalysis_ShapeTolerance`). Healthy analytic solids sit at
+/// `Precision::Confusion()` (1e-7); a shape that has been through healing can
+/// carry more, and pick tolerances should scale with THIS, not with the
+/// body's bounding box (docs/FREECAD_PLAYBOOK.md T1).
++ (double)maxToleranceOfShape:(OCCTShape *)shape;
 
 // MARK: - STEP interchange (spec §12.1 / §12.2)
 

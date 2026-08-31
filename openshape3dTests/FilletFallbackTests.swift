@@ -133,7 +133,11 @@ final class FilletFallbackTests: XCTestCase {
         let error = try XCTUnwrap(result.errors[filletFeature],
                                   "a radius OCCT can't build must error, not distort")
         if case let .kernelFailure(message) = error {
-            XCTAssertTrue(message.contains("too large"), "actionable message: \(message)")
+            // The typed diagnostics say either "N of M edges can't take this
+            // size — try a smaller value or fewer edges" or "this size is too
+            // large for the local geometry — try a smaller value".
+            XCTAssertTrue(message.contains("try a smaller value"),
+                          "actionable message: \(message)")
         } else {
             XCTFail("expected a kernelFailure, got \(error)")
         }
