@@ -65,6 +65,7 @@ nonisolated enum AgentRoute: Sendable, Equatable {
     /// Needs the live `EditorViewModel` — see `AgentBridge`.
     case state
     case runCommand(id: String)
+    case exec(AgentExecOp)
     case screenshot(width: Int, height: Int)
     /// Already-decided replies.
     case reply(status: Int, error: String, message: String)
@@ -72,7 +73,7 @@ nonisolated enum AgentRoute: Sendable, Equatable {
     /// Whether serving this needs a hop to the main actor.
     var needsEditor: Bool {
         switch self {
-        case .state, .runCommand, .screenshot: return true
+        case .state, .runCommand, .exec, .screenshot: return true
         case .health, .commands, .reply: return false
         }
     }
@@ -118,6 +119,18 @@ nonisolated enum AgentRouter {
                               message: #"Body must be JSON like {"id":"view.isometric"}."#)
             }
             return classify(id)
+
+        case "/v1/exec":
+            guard request.method == "POST" else {
+                return .reply(status: 405, error: "method_not_allowed",
+                              message: "POST a JSON body to /v1/exec.")
+            }
+            switch AgentExec.parse(request.jsonBody) {
+            case .success(let op):
+                return .exec(op)
+            case .failure(let error):
+                return .reply(status: 400, error: error.code, message: error.message)
+            }
 
         default:
             return .reply(status: 404, error: "unknown_path",

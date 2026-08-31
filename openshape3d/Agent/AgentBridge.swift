@@ -105,6 +105,9 @@ final class AgentBridge {
             }
             return .ok(payload)
 
+        case .exec(let op):
+            return execute(op, on: viewModel)
+
         case .screenshot(let width, let height):
             guard let png = viewModel.captureScreenshot(
                 width: width, height: height, transparentBackground: false, showGrid: true
@@ -120,6 +123,180 @@ final class AgentBridge {
             return .failure(500, "Internal Server Error", error: "misrouted",
                             message: "Route did not need the editor.")
         }
+    }
+
+
+    // MARK: - Exec
+
+    /// Run one parameterized operation. See `AgentExec.swift` for why this goes
+    /// to `DocumentCommand`/`FeatureKind` rather than puppeting the interactive
+    /// tools: an exec'd model has to be the same model a person would have built.
+    ///
+    /// UNDO: a feature exec lands as TWO undo steps — the `AppendFeatureCommand`
+    /// and the rebuild that evaluates it. `performRebuild` is private to
+    /// `DocumentSession`, so bundling them would mean changing production code
+    /// to suit a debug channel. Reported as `undoSteps` so a caller unwinding an
+    /// exec knows how far back to go instead of guessing.
+    private func execute(_ op: AgentExecOp, on viewModel: EditorViewModel) -> AgentResponse {
+        let session = viewModel.session
+
+        switch op {
+
+        case let .createSketch(name, plane):
+            let sketch = Sketch(name: name, plane: plane)
+            session.perform(AddSketchCommand(sketch: sketch, title: "Add \(name)"))
+            return execOK(viewModel, ["sketchID": sketch.id.raw.uuidString,
+                                      "name": name, "undoSteps": 1])
+
+        case let .addEntities(sketchID, entities, constructionIndices):
+            guard session.document.sketches.contains(where: { $0.id == sketchID }) else {
+                return execMissing("sketch", sketchID.raw.uuidString)
+            }
+            // `AddSketchEntitiesCommand` flags the WHOLE batch construction or
+            // not, so a mixed batch has to be two commands. Split rather than
+            // refuse: a revolve axis is a construction line living in the same
+            // sketch as the profile it spins, which is the common case, not an
+            // exotic one.
+            let normal = entities.enumerated().filter { !constructionIndices.contains($0.offset) }.map(\.element)
+            let construction = entities.enumerated().filter { constructionIndices.contains($0.offset) }.map(\.element)
+            var steps = 0
+            if !normal.isEmpty {
+                session.perform(AddSketchEntitiesCommand(sketchID: sketchID, entities: normal))
+                steps += 1
+            }
+            if !construction.isEmpty {
+                session.perform(AddSketchEntitiesCommand(
+                    sketchID: sketchID, entities: construction, asConstruction: true))
+                steps += 1
+            }
+            session.rebuildForSketchChange(sketchID)
+            return execOK(viewModel, [
+                "sketchID": sketchID.raw.uuidString,
+                "entityIDs": entities.map { $0.id.uuidString },
+                "constructionCount": construction.count,
+                "undoSteps": steps,
+            ])
+
+        case let .extrude(sketchID, seed, distance, symmetric, booleanOp, targets):
+            guard session.document.sketches.contains(where: { $0.id == sketchID }) else {
+                return execMissing("sketch", sketchID.raw.uuidString)
+            }
+            if let bad = missingBody(targets, session) { return bad }
+            let intent = BooleanIntent(op: booleanOp, resolvedTargets: targets.map { bodyRef($0, session) })
+            return record(FeatureNode(
+                name: "Extrude",
+                kind: .extrude(
+                    profile: ProfileRef(sketchID: sketchID, entityIDs: [],
+                                        holeEntityIDs: [], seedPoint: seed),
+                    plane: PlaneRef(source: .sketch(sketchID)),
+                    distance: Expr(value: distance),
+                    symmetric: symmetric,
+                    boolean: intent,
+                    extraProfiles: []),
+                outputBodyIDs: [BodyID()]), on: viewModel)
+
+        case let .revolve(sketchID, seed, axis, angleDegrees, booleanOp, targets):
+            guard session.document.sketches.contains(where: { $0.id == sketchID }) else {
+                return execMissing("sketch", sketchID.raw.uuidString)
+            }
+            if let bad = missingBody(targets, session) { return bad }
+            let intent = BooleanIntent(op: booleanOp, resolvedTargets: targets.map { bodyRef($0, session) })
+            return record(FeatureNode(
+                name: "Revolve",
+                kind: .revolve(
+                    profile: ProfileRef(sketchID: sketchID, entityIDs: [],
+                                        holeEntityIDs: [], seedPoint: seed),
+                    plane: PlaneRef(source: .sketch(sketchID)),
+                    axis: AxisRef(source: .explicit(axis)),
+                    angle: Expr(value: angleDegrees),
+                    boolean: intent),
+                outputBodyIDs: [BodyID()]), on: viewModel)
+
+        case let .pattern(bodyID, spec):
+            if let bad = missingBody([bodyID], session) { return bad }
+            // count includes the original, so a pattern emits count-1 NEW bodies.
+            let outputs = (0..<max(0, spec.count - 1)).map { _ in BodyID() }
+            return record(FeatureNode(
+                name: spec.kind == .circular ? "Circular Pattern" : "Linear Pattern",
+                kind: .pattern(body: bodyRef(bodyID, session), spec: spec),
+                outputBodyIDs: outputs), on: viewModel)
+
+        case let .mirror(bodyID, plane, keepOriginal):
+            if let bad = missingBody([bodyID], session) { return bad }
+            return record(FeatureNode(
+                name: "Mirror",
+                kind: .mirror(body: bodyRef(bodyID, session),
+                              plane: PlaneRef(source: .explicit(plane)),
+                              keepOriginal: keepOriginal),
+                outputBodyIDs: [BodyID()]), on: viewModel)
+
+        case let .boolean(kindName, target, tools):
+            if let bad = missingBody([target] + tools, session) { return bad }
+            guard let kind = BooleanKind(rawValue: kindName) else {
+                return .failure(400, "Bad Request", error: "unknown_boolean_kind",
+                                message: "'\(kindName)' is not a boolean kind.")
+            }
+            return record(FeatureNode(
+                name: kindName.capitalized,
+                kind: .boolean(kind: kind,
+                               target: bodyRef(target, session),
+                               tools: tools.map { bodyRef($0, session) }),
+                outputBodyIDs: [BodyID()]), on: viewModel)
+        }
+    }
+
+    /// Append a node and evaluate it. Reports the eval errors rather than a bare
+    /// success: a feature that lands in History but produces no body is exactly
+    /// the "silent no-op" failure this bridge exists to make visible.
+    private func record(_ node: FeatureNode, on viewModel: EditorViewModel) -> AgentResponse {
+        let session = viewModel.session
+        let bodiesBefore = Set(session.document.bodies.map(\.id))
+        session.record(node)
+        session.rebuildFrom(node.id)
+        let produced = session.document.bodies.map(\.id).filter { !bodiesBefore.contains($0) }
+
+        var payload: [String: Any] = [
+            "featureID": node.id.raw.uuidString,
+            "feature": node.name,
+            "producedBodyIDs": produced.map(\.raw.uuidString),
+            "undoSteps": 2,
+        ]
+        // Keyed by feature id, so an agent can tell ITS node failing from an
+        // unrelated upstream node that was already broken.
+        let errors = session.lastEvalErrors
+        if !errors.isEmpty {
+            payload["evalErrors"] = Dictionary(uniqueKeysWithValues:
+                errors.map { ($0.key.raw.uuidString, String(describing: $0.value)) })
+        }
+        if produced.isEmpty {
+            payload["warning"] = "The feature was recorded but produced no geometry. "
+                + "Check the seed point lies inside a closed profile."
+        }
+        return execOK(viewModel, payload)
+    }
+
+    private func bodyRef(_ id: BodyID, _ session: DocumentSession) -> BodyRef {
+        let producer = session.document.features.nodes.last { $0.outputBodyIDs.contains(id) }
+        return BodyRef(producer: producer?.id ?? FeatureID(), bodyID: id)
+    }
+
+    private func missingBody(_ ids: [BodyID], _ session: DocumentSession) -> AgentResponse? {
+        let known = Set(session.document.bodies.map(\.id))
+        guard let missing = ids.first(where: { !known.contains($0) }) else { return nil }
+        return execMissing("body", missing.raw.uuidString)
+    }
+
+    private func execMissing(_ what: String, _ id: String) -> AgentResponse {
+        .failure(404, "Not Found", error: "unknown_\(what)",
+                 message: "No \(what) with id \(id) in this document. GET /v1/state for what exists.")
+    }
+
+    /// Every exec reply carries the post-op state, so an agent never needs a
+    /// second round trip to see what its own call did.
+    private func execOK(_ viewModel: EditorViewModel, _ extra: [String: Any]) -> AgentResponse {
+        var payload = snapshot(of: viewModel)
+        for (k, v) in extra { payload[k] = v }
+        return .ok(payload)
     }
 
     // MARK: State snapshot
