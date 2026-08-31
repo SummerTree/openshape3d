@@ -76,8 +76,13 @@ history, layered UNDER `SignatureNaming` (never replacing it), zero
 persisted-format change, and identity-based blend-edge targeting as the
 payoff. Its prerequisites already landed in PR #22 (boolean result
 normalization; deterministic face basis R4-N1; kind veto R4-N4).
-Sequencing S/M/L per step is in the doc; start with step 1 (bridge history
-exposure + per-triangle face-index channel), which changes no behavior.
+Sequencing S/M/L per step is in the doc. **Steps 1–2 landed 2026-08-31**
+(five commits, e1506cd…54c90f3): face channel, boolean + extrude ancestry
+from OCCT's own history, ElementName + creation-op naming wired into
+evalPrimitive/evalExtrude — all zero-behavior (nothing consumes names until
+step 4). Next: step 3, boolean history through evalBoolean (name
+inheritance across ancestry + section-face names), then step 4's name-first
+resolve, which is where the user-visible payoff starts.
 
 ## 4. Smaller follow-ups, in rough priority order
 
