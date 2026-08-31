@@ -33,6 +33,17 @@ nonisolated struct ElementName: Codable, Hashable, Sendable {
         /// Fallback identity: the k-th face (1-based indexed-map order) of
         /// the creating op's result, when nothing finer exists.
         case kernelFace(index: Int)
+        /// A face an OPERATION minted: a section face cut into being, a
+        /// face merged from several parents, or one of several fragments a
+        /// split parent left behind (plain inheritance would collide there —
+        /// the FreeCAD `;:M2` lesson, in value form). `parents` are the
+        /// deduped ancestor names in deterministic ancestry order, empty
+        /// when no ancestor carried a name; `index` separates siblings that
+        /// share the same operation + parents, ordered by result face —
+        /// deterministic per build, and the one component that can shuffle
+        /// across topology-changing edits, which is why step 4's resolve
+        /// must sanity-check name hits against signatures.
+        indirect case opFace(operation: FeatureID, parents: [ElementName], index: Int)
     }
 
     var creator: FeatureID
@@ -117,6 +128,109 @@ nonisolated enum ElementNaming {
             else { continue }
             out.entries[i].elementName = names[Int(winner.key)]
         }
+        return out
+    }
+
+    /// Compose names THROUGH a boolean: each result face's name derived
+    /// from its ancestors' names (docs/TOPO_NAMING_HISTORY_DESIGN.md
+    /// step 3). `inputNames` is indexed by ancestry input ordinal (0 =
+    /// target, 1 = tool), each a per-kernel-face name map of that operand.
+    ///
+    /// Rules, in order:
+    /// - exactly one named parent, nothing generated, and NO OTHER result
+    ///   face inherits the same name → the identity CONTINUES: inherit the
+    ///   parent's name unchanged. This is the common case — an untouched or
+    ///   trimmed face is still "the top cap of extrude N".
+    /// - a split parent (two result faces from one name) → each fragment
+    ///   gets `opFace(operation, parents: [name], index: k)` — inheritance
+    ///   would collide, and a duplicated name is worse than a new one.
+    /// - generated rows or several named parents (section faces, merged
+    ///   walls) → `opFace` with all parents.
+    /// - no named parents and nothing generated → unnamed; signatures
+    ///   remain the fallback, per the design's migration story.
+    static func booleanNames(operation: FeatureID, ancestry: ShapeAncestry,
+                             inputNames: [[Int: ElementName]]) -> [Int: ElementName] {
+        struct Claim {
+            var parents: [ElementName] = []
+            var hasGenerated = false
+        }
+        var claims: [Int: Claim] = [:]
+        for row in ancestry.rows where row.inputKind == .face {
+            var claim = claims[row.resultFace] ?? Claim()
+            if row.relation == .generated { claim.hasGenerated = true }
+            if row.inputOrdinal < inputNames.count,
+               let parent = inputNames[row.inputOrdinal][row.inputSubshape],
+               !claim.parents.contains(parent) {
+                claim.parents.append(parent)
+            }
+            claims[row.resultFace] = claim
+        }
+
+        // Who would inherit what, before knowing about collisions.
+        var heirs: [ElementName: [Int]] = [:]
+        for (face, claim) in claims
+        where !claim.hasGenerated && claim.parents.count == 1 {
+            heirs[claim.parents[0], default: []].append(face)
+        }
+
+        var names: [Int: ElementName] = [:]
+        var mintIndex: [ElementName: Int] = [:]
+        func mint(_ face: Int, parents: [ElementName]) {
+            // Sibling index per (operation, parents) key, in result-face
+            // order — callers iterate faces ascending below.
+            let key = ElementName(creator: operation,
+                                  source: .opFace(operation: operation,
+                                                  parents: parents, index: -1))
+            let index = mintIndex[key, default: 0]
+            mintIndex[key] = index + 1
+            names[face] = ElementName(
+                creator: operation,
+                source: .opFace(operation: operation, parents: parents,
+                                index: index))
+        }
+        for face in claims.keys.sorted() {
+            guard let claim = claims[face] else { continue }
+            if !claim.hasGenerated, claim.parents.count == 1,
+               let siblings = heirs[claim.parents[0]] {
+                if siblings.count == 1 {
+                    names[face] = claim.parents[0]
+                } else {
+                    mint(face, parents: claim.parents)
+                }
+            } else if claim.hasGenerated || claim.parents.count >= 2 {
+                mint(face, parents: claim.parents)
+            }
+            // else: modified with no named parent — honestly unnamed.
+        }
+        return names
+    }
+
+    /// Per-kernel-face names recovered from a NAMED table via the channel —
+    /// the inverse of `attach`, for bodies whose names were minted
+    /// table-side (primitives). Same strict-majority rule; a kernel face
+    /// claimed by two entries with different names is dropped.
+    static func kernelNames(from table: FaceTable,
+                            channel: [UInt32]) -> [Int: ElementName] {
+        guard !channel.isEmpty else { return [:] }
+        var out: [Int: ElementName] = [:]
+        var conflicted: Set<Int> = []
+        for entry in table.entries {
+            guard let name = entry.elementName else { continue }
+            var votes: [UInt32: Int] = [:]
+            for triangle in entry.triangles where triangle < channel.count {
+                votes[channel[triangle], default: 0] += 1
+            }
+            guard let winner = votes.max(by: { $0.value < $1.value }),
+                  winner.key != 0,
+                  winner.value * 2 > entry.triangles.count else { continue }
+            let face = Int(winner.key)
+            if let existing = out[face], existing != name {
+                conflicted.insert(face)
+                continue
+            }
+            out[face] = name
+        }
+        for face in conflicted { out.removeValue(forKey: face) }
         return out
     }
 

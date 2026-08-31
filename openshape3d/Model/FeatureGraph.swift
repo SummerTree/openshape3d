@@ -408,11 +408,12 @@ nonisolated extension FeatureGraph {
         // with a cylinder stay analytic (and round). Only CURVED primitives take
         // the OCCT render mesh — a box looks identical either way, so it keeps the
         // Euclid render and existing coverage is unperturbed.
+        var adoptedHandle: BRepHandle?
         if OCCTKernel.useOCCTAsSourceOfTruth,
            let handle = OCCTKernel.primitiveShape(spec, placement: placement) {
             if OCCTKernel.hasCurvedFaces(spec) {
                 // Curved primitive: OCCT owns render AND CSG (one tessellation).
-                body.adoptBRep(handle)
+                if body.adoptBRep(handle) { adoptedHandle = handle }
             } else {
                 // A box looks identical either way — keep the Euclid mesh it was
                 // built with, but still carry the brep so booleans stay analytic.
@@ -427,6 +428,15 @@ nonisolated extension FeatureGraph {
                                    scheme: .primitive(spec)),
             creator: node.id)
         state.put(body, table: table)
+        // The composable layer booleans inherit through — recoverable only
+        // where the render IS the OCCT tessellation. The box keeps its
+        // Euclid render, so its map waits for a direct derivation (noted in
+        // the design doc); its faces then simply have nothing to pass on.
+        if let adoptedHandle {
+            state.kernelNames[body.id] = ElementNaming.kernelNames(
+                from: table,
+                channel: OCCTKernel.renderMeshFaceChannel(from: adoptedHandle))
+        }
     }
 
     // MARK: Extrude
@@ -511,6 +521,7 @@ nonisolated extension FeatureGraph {
             var table = state.naming.faceTable(for: body, createdBy: node.id, scheme: .extrude(outer))
             table = ElementNaming.attach(names, to: table, channel: channel)
             state.put(body, table: table)
+            if !names.isEmpty { state.kernelNames[id] = names }
             return
         }
 
@@ -555,19 +566,38 @@ nonisolated extension FeatureGraph {
         // PERMANENT smooth→faceted degrade (2026-08-25 review, C4). The OCCT
         // tool is the EXACT prism (no overlap padding — analytic booleans
         // merge coincident faces robustly without it).
+        var resultNames: [Int: ElementName] = [:]
+        var resultHandle: BRepHandle?
         if OCCTKernel.useOCCTAsSourceOfTruth,
            let targetBrep = target.brep,
            let a = OCCTKernel.transformed(targetBrep, by: target.transform) {
             let z = OCCTKernel.extrudeZRange(distance: distance.value, symmetric: symmetric)
+            let history: OCCTShapeHistory? = extras.isEmpty ? OCCTShapeHistory() : nil
             if let toolBrep = OCCTKernel.extrudeSolid(
                    outer: outer, holes: holes, extras: extras,
                    zMin: z.zMin, zMax: z.zMax,
                    origin: plane.origin, xAxis: plane.xAxis,
-                   yAxis: plane.yAxis, normal: plane.normal) {
-                switch OCCTKernel.booleanResult(
+                   yAxis: plane.yAxis, normal: plane.normal,
+                   history: history) {
+                // The transient tool's identities: its walls and caps belong
+                // to THIS extrude node — the cut's trench walls are "wall of
+                // sketch entity X, created by extrude N" exactly like a
+                // new-body extrude's would be (step 3, cut branch).
+                let toolNames = history.map {
+                    ElementNaming.extrudeNames(
+                        creator: node.id, ancestry: ShapeAncestry($0),
+                        outer: outer, holes: holes)
+                } ?? [:]
+                switch OCCTKernel.booleanResultWithAncestry(
                     a, toolBrep, op: OCCTKernel.booleanOp(kind)) {
-                case let .success(outcome):
-                    result.adoptBRep(outcome.handle)
+                case let .success((outcome, ancestry)):
+                    if result.adoptBRep(outcome.handle) {
+                        resultHandle = outcome.handle
+                        resultNames = ElementNaming.booleanNames(
+                            operation: node.id, ancestry: ancestry,
+                            inputNames: [state.kernelNames[target.id] ?? [:],
+                                         toolNames])
+                    }
                 case let .failure(error):
                     // Both operands were analytic; a mesh-only result here
                     // would silently drop the target's brep on the next save
@@ -578,8 +608,14 @@ nonisolated extension FeatureGraph {
             }
         }
         let inputTables = [state.faceTables[target.id], toolTable].compactMap { $0 }
-        let table = state.naming.propagate(inputs: inputTables, output: result, op: .boolean(kind))
+        var table = state.naming.propagate(inputs: inputTables, output: result, op: .boolean(kind))
+        if let resultHandle, !resultNames.isEmpty {
+            table = ElementNaming.attach(
+                resultNames, to: table,
+                channel: OCCTKernel.renderMeshFaceChannel(from: resultHandle))
+        }
         state.put(result, table: table)
+        if !resultNames.isEmpty { state.kernelNames[result.id] = resultNames }
     }
 
     // MARK: Boolean
@@ -599,6 +635,11 @@ nonisolated extension FeatureGraph {
         var acc = target
         var inputTables: [FaceTable] = state.faceTables[target.id].map { [$0] } ?? []
         var consumed: [BodyID] = []
+        // The composable identity layer (step 3): the running result's
+        // kernel-face names, re-derived through each tool's ancestry. The
+        // Euclid fallback clears them — mesh-only results carry no names.
+        var accNames = state.kernelNames[target.id] ?? [:]
+        var accHandle: BRepHandle?
 
         for toolRef in toolRefs {
             guard let tool = state.bodies[toolRef.bodyID] else {
@@ -621,12 +662,22 @@ nonisolated extension FeatureGraph {
             // evaluate. Nothing about the resulting body changes here; only the
             // work that produced it does.
             var next: Body?
-            switch OCCTKernel.composedBooleanResult(kind, target: operand, tool: tool) {
-            case let .success(outcome):
+            switch OCCTKernel.composedBooleanResultWithAncestry(kind, target: operand, tool: tool) {
+            case let .success((outcome, ancestry)):
                 var body = Body(
                     id: target.id, name: target.name, transform: .identity,
                     primitive: nil, euclidMesh: Euclid.Mesh([]), revision: nextRevision())
-                if body.adoptBRep(outcome.handle) { next = body }
+                if body.adoptBRep(outcome.handle) {
+                    next = body
+                    accHandle = outcome.handle
+                    // Inherit / mint through this hop's ancestry; a face
+                    // with no named ancestors stays unnamed and signatures
+                    // remain its fallback.
+                    accNames = ElementNaming.booleanNames(
+                        operation: node.id, ancestry: ancestry,
+                        inputNames: [accNames,
+                                     state.kernelNames[tool.id] ?? [:]])
+                }
             case let .failure(error):
                 // OCCT owned this boolean (both operands analytic) and failed
                 // for cause. Falling through to Euclid here was how "corrupt"
@@ -640,7 +691,10 @@ nonisolated extension FeatureGraph {
             }
             if next == nil {
                 // Either operand is mesh-only, or OCCT produced something that
-                // would not tessellate. Euclid owns the result.
+                // would not tessellate. Euclid owns the result — and a
+                // mesh-only result has no kernel faces to name.
+                accNames = [:]
+                accHandle = nil
                 let mesh = KernelOps.boolean(kind, target: acc, tool: tool)
                 guard !mesh.polygons.isEmpty else {
                     state.errors[node.id] = .emptyGeometry
@@ -661,8 +715,14 @@ nonisolated extension FeatureGraph {
         // Remove the consumed tool bodies from the live set.
         for id in consumed { state.remove(id) }
 
-        let table = state.naming.propagate(inputs: inputTables, output: acc, op: .boolean(kind))
+        var table = state.naming.propagate(inputs: inputTables, output: acc, op: .boolean(kind))
+        if let accHandle, !accNames.isEmpty {
+            table = ElementNaming.attach(
+                accNames, to: table,
+                channel: OCCTKernel.renderMeshFaceChannel(from: accHandle))
+        }
         state.put(acc, table: table)
+        if !accNames.isEmpty { state.kernelNames[acc.id] = accNames }
     }
 
     // MARK: Push/pull
@@ -1555,19 +1615,31 @@ private struct EvalState {
     var bodies: [BodyID: Body] = [:]
     var order: [BodyID] = []
     var faceTables: [BodyID: FaceTable] = [:]
+    /// Per-body kernel-face name maps (1-based OCCT face index →
+    /// ElementName) — the COMPOSABLE identity layer booleans inherit
+    /// through (step 3). Transient like `faceTables`; `put` clears a
+    /// replaced body's map so staleness is impossible by construction.
+    var kernelNames: [BodyID: [Int: ElementName]] = [:]
     var errors: [FeatureID: FeatureError] = [:]
 
     /// Insert or replace a body (keeping its slot on replace) with its face table.
+    ///
+    /// Always clears the body's kernel-face names: any op that replaces a
+    /// body without composing names must not leave a STALE map behind — a
+    /// wrong name is worse than none. Ops that did compose (creation ops,
+    /// booleans) write `kernelNames[body.id]` back after this call.
     mutating func put(_ body: Body, table: FaceTable) {
         if bodies[body.id] == nil { order.append(body.id) }
         bodies[body.id] = body
         faceTables[body.id] = table
+        kernelNames[body.id] = nil
     }
 
     /// Remove a consumed body from the live set.
     mutating func remove(_ id: BodyID) {
         bodies[id] = nil
         faceTables[id] = nil
+        kernelNames[id] = nil
         order.removeAll { $0 == id }
     }
 

@@ -104,6 +104,24 @@ nonisolated extension OCCTKernel {
         return (handle, ShapeAncestry(history))
     }
 
+    /// `composedBooleanResult` that also reports ancestry — the feature
+    /// replay's entry point (step 3). Same nil/failure semantics: nil means
+    /// OCCT DECLINED (mesh-only operand), and the Euclid fallback then owns
+    /// the result with no names. Input sub-shape indices are over the
+    /// TRANSFORMED operands, whose indexed-map order matches the body-local
+    /// shapes (the placing transform copies structure in order), so a
+    /// body's own kernel-face name map keys still apply.
+    static func composedBooleanResultWithAncestry(
+        _ kind: BooleanKind, target: Body, tool: Body
+    ) -> Result<(outcome: BooleanOutcome, ancestry: ShapeAncestry), OCCTOpError>? {
+        guard useOCCTAsSourceOfTruth,
+              let a0 = target.brep, let b0 = tool.brep,
+              let a = transformed(a0, by: target.transform),
+              let b = transformed(b0, by: tool.transform)
+        else { return nil }
+        return booleanResultWithAncestry(a, b, op: booleanOp(kind))
+    }
+
     /// `booleanResult` that also reports each result face's kernel-history
     /// ancestry (input ordinal 0 = `a`, 1 = `b`). Identical geometry to
     /// `booleanResult` for identical inputs — ancestry is observation only.

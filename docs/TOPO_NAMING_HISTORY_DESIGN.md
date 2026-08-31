@@ -1,6 +1,26 @@
 # Kernel-history element naming — design (to land as its own mission)
 
-Status: **STEPS 1–2 LANDED** (2026-08-31); steps 3–5 remain design. Step 2
+Status: **STEPS 1–3 LANDED** (2026-08-31); steps 4–5 remain design. Step 3
+(boolean name composition) shipped: `EvalState.kernelNames` is the
+composable per-body layer — per-kernel-face name maps, cleared by `put()` on
+EVERY body replacement so a non-composing op can never leave a stale map —
+and `ElementNaming.booleanNames` derives a result's names from its
+ancestors': one named parent and nothing generated → the identity CONTINUES
+(inherit verbatim); a split parent → each fragment minted as
+`opFace(operation:parents:index:)` because a duplicated inherit is worse
+than a new name; generated rows or multiple parents → `opFace` with all
+parents; no named parents → honestly unnamed. Wired through `evalBoolean`
+(per-tool hops, Euclid fallback clears names) AND `evalExtrude`'s cut
+branch (the transient tool's walls/caps are named for the extrude node, so
+a hole's walls become "wall of sketch entity X, created by extrude N").
+Pinned end-to-end on real geometry: the slab-trench split test (top cap →
+two minted fragments, tool identities crossing into the result, zero
+duplicate names) and the through-hole cut test. Known soft spot, by
+design: `opFace.index` orders by result-face index and can shuffle across
+topology-changing edits — step 4's resolve must sanity-check name hits
+against signatures (FreeCAD's `;:M2` lesson).
+
+Step 2
 (`ElementName` + creation-op naming) shipped in two slices on top of step 1:
 `Model/ElementNaming.swift` (the Codable value + `extrudeNames`/`attach`/
 `namePrimitiveEntries`), `Profile.edgeEntityIDs`/`segmentEntityIDs` +
