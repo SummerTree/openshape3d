@@ -87,6 +87,33 @@ typedef NS_ENUM(NSInteger, OCCTOpCode) {
 @property (nonatomic) NSInteger solidCount;
 @end
 
+/// Kernel-history ancestry of an op result (docs/TOPO_NAMING_HISTORY_DESIGN.md
+/// step 1): which input sub-shape each result FACE came from, from OCCT's own
+/// Modified()/Generated() history — never geometric resemblance. Caller
+/// allocates and passes in, like `OCCTOpStatus`; the bridge fills it.
+///
+/// `rows` is packed int32s, 5 per row:
+///   resultFaceIndex, inputOrdinal, inputKind, inputSubshapeIndex, relation
+/// `resultFaceIndex` is 1-based into the RESULT's indexed face map — the same
+/// numbering the render mesh's `faceIndices` channel and the health report
+/// use. `inputSubshapeIndex` is 1-based into input `inputOrdinal`'s indexed
+/// map of `inputKind` (0 = face, 1 = edge), over the operand AS THE KERNEL
+/// CONSUMED IT (after any operand heal). `relation`: 0 = the input face
+/// survives untouched, 1 = modified, 2 = generated.
+///
+/// Every row is validated against the final shape before it is emitted —
+/// OCCT history can report phantoms that never reach the result (measured in
+/// FreeCAD's revolve), and a wrong ancestor is worse than a missing one. So
+/// a face with NO rows means "history doesn't know"; consumers fall back to
+/// signature matching, which stays mandatory.
+@interface OCCTShapeHistory : NSObject
+@property (nonatomic) NSInteger rowCount;
+@property (nonatomic, copy) NSData *rows;  // int32 x 5 x rowCount
+/// A post-history heal rebuilt the result. Surviving rows are still valid
+/// (each was checked against the FINAL shape), but coverage may have holes.
+@property (nonatomic) BOOL truncatedByHeal;
+@end
+
 /// Orthonormal sketch-plane basis: world = origin + xAxis·x + yAxis·y + normal·z.
 @interface OCCTPlaneBasis : NSObject
 - (instancetype)initWithOriginX:(double)ox originY:(double)oy originZ:(double)oz
@@ -256,6 +283,17 @@ typedef NS_ENUM(NSInteger, OCCTOpCode) {
                              withShape:(OCCTShape *)b
                                     op:(NSInteger)op
                                 status:(nullable OCCTOpStatus *)status;
+
+/// `booleanOfShape:` that also reports per-face ancestry. Identical result
+/// for identical inputs — `history` is fill-only, composed across BOTH hops
+/// of the pipeline: the boolean builder's own Modified()/Generated(), then
+/// `ShapeUpgrade_UnifySameDomain::History()` for faces the seam merge
+/// rewrote. Input ordinal 0 = `a` (target), 1 = `b` (tool).
++ (nullable OCCTShape *)booleanOfShape:(OCCTShape *)a
+                             withShape:(OCCTShape *)b
+                                    op:(NSInteger)op
+                                status:(nullable OCCTOpStatus *)status
+                               history:(nullable OCCTShapeHistory *)history;
 
 /// Remove the faces nearest `worldPoints` and heal the result
 /// (`BRepAlgoAPI_Defeaturing`) — spec §4.16 Delete Face. A face counts as picked

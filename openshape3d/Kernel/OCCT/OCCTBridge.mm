@@ -100,6 +100,7 @@
 #include <TopTools_FormatVersion.hxx>
 #include <functional>
 #include <map>
+#include <array>
 #include <BRepCheck_Result.hxx>
 #include <BRepCheck_ListIteratorOfListOfStatus.hxx>
 #include <BRepCheck_Status.hxx>
@@ -146,6 +147,15 @@
 @end
 
 @implementation OCCTOpStatus
+@end
+
+@implementation OCCTShapeHistory
+- (instancetype)init {
+    if ((self = [super init])) {
+        _rows = [NSData data];
+    }
+    return self;
+}
 @end
 
 // Fill a caller-supplied status object (nil status = caller doesn't care).
@@ -875,10 +885,182 @@ static gp_Trsf OS3DBasisTransform(OCCTPlaneBasis *basis) {
     return out;
 }
 
+// MARK: - Kernel-history ancestry (docs/TOPO_NAMING_HISTORY_DESIGN.md step 1)
+
+// One (input sub-shape → builder-output shape) history edge, held with the
+// live TopoDS target until the unify/heal hops decide what it maps to in the
+// FINAL shape. Mined reliability facts baked in below (from FreeCAD's Mapper
+// catalog, re-derived — see the playbook's licensing rules):
+//   - Modified()/Generated() THROW on sub-shapes some builders don't know;
+//     a throw means "no history", never an error.
+//   - Builders can report a HIGHER-level result ("this face generated the
+//     whole solid"); demote to faces instead of trusting it.
+//   - History can name phantoms that never reach the result; every emitted
+//     row is checked against the final face map first.
+struct OS3DHistEdge {
+    TopoDS_Shape target;
+    int32_t ordinal;
+    int32_t kind;      // 0 = face, 1 = edge (of the input)
+    int32_t subIndex;  // 1-based in that input's map of `kind`
+    int32_t relation;  // 1 = modified, 2 = generated
+};
+
+static const size_t kOS3DMaxHistoryRows = 4096;
+
+// Harvest the builder's own history while the builder is still alive.
+static void OS3DCollectMakerHistory(BRepAlgoAPI_BooleanOperation &builder,
+                                    const std::vector<TopoDS_Shape> &inputs,
+                                    std::vector<OS3DHistEdge> &edges) {
+    for (int32_t ordinal = 0; ordinal < (int32_t)inputs.size(); ++ordinal) {
+        const struct { TopAbs_ShapeEnum type; int32_t kind; } kinds[] = {
+            {TopAbs_FACE, 0}, {TopAbs_EDGE, 1}};
+        for (const auto &k : kinds) {
+            TopTools_IndexedMapOfShape map;
+            TopExp::MapShapes(inputs[(size_t)ordinal], k.type, map);
+            for (Standard_Integer i = 1; i <= map.Extent(); ++i) {
+                const TopoDS_Shape &sub = map(i);
+                for (int32_t relation : {1, 2}) {
+                    try {
+                        const TopTools_ListOfShape &list = relation == 1
+                            ? builder.Modified(sub) : builder.Generated(sub);
+                        for (TopTools_ListIteratorOfListOfShape it(list);
+                             it.More(); it.Next()) {
+                            edges.push_back({it.Value(), ordinal, k.kind,
+                                             (int32_t)i, relation});
+                        }
+                    } catch (...) {
+                        // "No history for this sub-shape", reported loudly.
+                    }
+                }
+            }
+        }
+    }
+}
+
+// Compose builder edges across the unify hop, validate every row against the
+// FINAL shape, add same-face survivals, and pack the result.
+static void OS3DFillHistory(OCCTShapeHistory *history,
+                            const std::vector<OS3DHistEdge> &edges,
+                            const std::vector<TopoDS_Shape> &inputs,
+                            const Handle(BRepTools_History) &unifyHistory,
+                            const TopoDS_Shape &finalShape,
+                            BOOL truncatedByHeal) {
+    TopTools_IndexedMapOfShape finalFaces;
+    TopExp::MapShapes(finalShape, TopAbs_FACE, finalFaces);
+
+    std::set<std::array<int32_t, 5>> rowSet;
+
+    // Final face indices an intermediate face maps to: its unify images
+    // when the seam merge rewrote it, else the face itself. Empty when the
+    // face never reached the final shape — the phantom gate.
+    auto finalIndices = [&](const TopoDS_Shape &face) {
+        std::vector<int32_t> out;
+        if (!unifyHistory.IsNull()) {
+            try {
+                const TopTools_ListOfShape &images = unifyHistory->Modified(face);
+                for (TopTools_ListIteratorOfListOfShape it(images);
+                     it.More(); it.Next()) {
+                    const int32_t index = finalFaces.FindIndex(it.Value());
+                    if (index > 0) out.push_back(index);
+                }
+            } catch (...) {}
+        }
+        if (out.empty()) {
+            const int32_t index = finalFaces.FindIndex(face);
+            if (index > 0) out.push_back(index);
+        }
+        return out;
+    };
+
+    auto emitFace = [&](const TopoDS_Shape &face, const OS3DHistEdge &edge,
+                        int32_t relation) {
+        for (int32_t index : finalIndices(face)) {
+            if (rowSet.size() >= kOS3DMaxHistoryRows) return;
+            rowSet.insert({index, edge.ordinal, edge.kind, edge.subIndex, relation});
+        }
+    };
+
+    for (const OS3DHistEdge &edge : edges) {
+        const TopAbs_ShapeEnum type = edge.target.ShapeType();
+        if (type == TopAbs_FACE) {
+            emitFace(edge.target, edge, edge.relation);
+        } else if (type < TopAbs_FACE) {
+            // Higher-level report (solid/shell/compound): demote to faces.
+            for (TopExp_Explorer ex(edge.target, TopAbs_FACE); ex.More(); ex.Next()) {
+                emitFace(ex.Current(), edge, edge.relation);
+            }
+        }
+        // Wire/edge/vertex targets: edge-level ancestry is a later step.
+    }
+
+    // Faces the builder never mentions: either they survive untouched
+    // (relation 0) or only the unify hop rewrote them (relation 1). Recorded
+    // per input FACE so a result face merged from both operands lists both.
+    for (int32_t ordinal = 0; ordinal < (int32_t)inputs.size(); ++ordinal) {
+        TopTools_IndexedMapOfShape faces;
+        TopExp::MapShapes(inputs[(size_t)ordinal], TopAbs_FACE, faces);
+        for (Standard_Integer i = 1; i <= faces.Extent(); ++i) {
+            const TopoDS_Shape &face = faces(i);
+            const int32_t direct = finalFaces.FindIndex(face);
+            if (direct > 0 && rowSet.size() < kOS3DMaxHistoryRows) {
+                rowSet.insert({direct, ordinal, 0, (int32_t)i, 0});
+                continue;
+            }
+            if (unifyHistory.IsNull()) continue;
+            try {
+                const TopTools_ListOfShape &images = unifyHistory->Modified(face);
+                for (TopTools_ListIteratorOfListOfShape it(images);
+                     it.More(); it.Next()) {
+                    const int32_t index = finalFaces.FindIndex(it.Value());
+                    if (index > 0 && rowSet.size() < kOS3DMaxHistoryRows) {
+                        rowSet.insert({index, ordinal, 0, (int32_t)i, 1});
+                    }
+                }
+            } catch (...) {}
+        }
+    }
+
+    std::vector<int32_t> packed;
+    packed.reserve(rowSet.size() * 5);
+    for (const auto &row : rowSet) {
+        packed.insert(packed.end(), row.begin(), row.end());
+    }
+    history.rowCount = (NSInteger)rowSet.size();
+    history.rows = [NSData dataWithBytes:packed.data()
+                                  length:packed.size() * sizeof(int32_t)];
+    history.truncatedByHeal = truncatedByHeal;
+}
+
+// Same-domain unification, exposing the unifier's own history for the
+// ancestry composition above. Mirrors OS3DUnified (which stays the plain
+// path); returns the input on any failure, with a null history.
+static TopoDS_Shape OS3DUnifiedWithHistory(const TopoDS_Shape &shape,
+                                           Handle(BRepTools_History) &outHistory) {
+    try {
+        ShapeUpgrade_UnifySameDomain unifier(
+            shape, Standard_True, Standard_True, Standard_False);
+        unifier.Build();
+        const TopoDS_Shape result = unifier.Shape();
+        if (result.IsNull()) return shape;
+        outHistory = unifier.History();
+        return result;
+    } catch (...) {
+        return shape;
+    }
+}
+
 + (nullable OCCTShape *)booleanOfShape:(OCCTShape *)a
                              withShape:(OCCTShape *)b
                                     op:(NSInteger)op
                                 status:(nullable OCCTOpStatus *)status {
+    return [self booleanOfShape:a withShape:b op:op status:status history:nil];
+}
+
++ (nullable OCCTShape *)booleanOfShape:(OCCTShape *)a
+                             withShape:(OCCTShape *)b
+                                    op:(NSInteger)op
+                                status:(nullable OCCTOpStatus *)status
+                               history:(nullable OCCTShapeHistory *)history {
     OS3DSetStatus(status, OCCTOpCodeKernelRefused, @"missing operand");
     if (a == nil || b == nil) return nil;
     try {
@@ -930,6 +1112,8 @@ static gp_Trsf OS3DBasisTransform(OCCTPlaneBasis *basis) {
 
         TopoDS_Shape result;
         std::string errorDump;
+        std::vector<OS3DHistEdge> histEdges;
+        const std::vector<TopoDS_Shape> historyInputs = {sa, sb};
         for (const double fuzzy : {baseFuzzy, baseFuzzy * 10.0}) {
             BRepAlgoAPI_BooleanOperation builder;
             builder.SetArguments(args);
@@ -942,6 +1126,11 @@ static gp_Trsf OS3DBasisTransform(OCCTPlaneBasis *basis) {
             builder.Build();
             if (builder.IsDone() && !builder.HasErrors()) {
                 result = builder.Shape();
+                // Harvest ancestry NOW — the builder owns its history and
+                // dies with this scope.
+                if (history != nil) {
+                    OS3DCollectMakerHistory(builder, historyInputs, histEdges);
+                }
                 break;
             }
             std::ostringstream os;
@@ -966,13 +1155,23 @@ static gp_Trsf OS3DBasisTransform(OCCTPlaneBasis *basis) {
                           @"the operation leaves no solid");
             return nil;
         }
-        TopoDS_Shape normalized = OS3DUnified(
-            solidCount == 1 ? single : result);
-        normalized = OS3DHealAndValidate(normalized);
+        Handle(BRepTools_History) unifyHistory;
+        TopoDS_Shape unified = history != nil
+            ? OS3DUnifiedWithHistory(solidCount == 1 ? single : result,
+                                     unifyHistory)
+            : OS3DUnified(solidCount == 1 ? single : result);
+        TopoDS_Shape normalized = OS3DHealAndValidate(unified);
         if (normalized.IsNull()) {
             OS3DSetStatus(status, OCCTOpCodeInvalidResult,
                           @"boolean result failed validity checking");
             return nil;
+        }
+        if (history != nil) {
+            // Rows are validated against the shape actually returned, so a
+            // heal that rebuilt faces just drops their rows; the flag says
+            // coverage may have holes.
+            OS3DFillHistory(history, histEdges, historyInputs, unifyHistory,
+                            normalized, !normalized.IsSame(unified));
         }
 
         if (solidCount > 1) {

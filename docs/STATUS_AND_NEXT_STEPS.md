@@ -10,12 +10,13 @@ design), and — new — `FREECAD_PLAYBOOK.md` (the FreeCAD-derived hardening
 ledger: every OCCT defensive pattern mined from the reference checkout at
 `~/projects/reference/FreeCAD`, its licensing rules, and where each landed).
 
-**Current test baseline (2026-08-31): 1034 unit tests in ~18s** — the
+**Current test baseline (2026-08-31): 1042 unit tests in ~18s** — the
 debug-tooling tranche (§4 mission 0c) added 21 (shape health, kernel capture
-+ replay, /v1/check + /v1/capture routing) on top of the 1013 the
-FreeCAD-hardening tranches left, which had added 42 geometry-value tests
-(typed blend diagnostics, boolean normalization, exact-volume oracles,
-constraint lifecycle). Previous baseline (2026-08-30): 920 unit tests in 18s — down from
++ replay, /v1/check + /v1/capture routing) and topo-naming step 1 added 8
+(render-mesh face channel, boolean ancestry incl. the two-hop unify case) on
+top of the 1013 the FreeCAD-hardening tranches left, which had added 42
+geometry-value tests (typed blend diagnostics, boolean normalization,
+exact-volume oracles, constraint lifecycle). Previous baseline (2026-08-30): 920 unit tests in 18s — down from
 ~100 s after booleans stopped running both kernels (see §3b). Full UI suite last
 measured at the analytic-ellipses commit: 103 executed, 2 skipped, 0 failures,
 44m28s — 0 idle-timeouts, 0 field-clear retries, store pinned at

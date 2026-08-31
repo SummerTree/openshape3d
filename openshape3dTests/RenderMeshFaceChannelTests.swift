@@ -59,7 +59,7 @@ final class RenderMeshFaceChannelTests: XCTestCase {
             .box(width: 10, depth: 10, height: 6), placement: .identity))
         let drill = try XCTUnwrap(OCCTKernel.primitiveShape(
             .cylinder(radius: 2, height: 20),
-            placement: Transform3D(translation: SIMD3(5, -1, 5))))
+            placement: Transform3D(translation: SIMD3(0, -1, 0))))
         let cut = try OCCTKernel.booleanResult(plate, drill, op: 1).get().handle
         let counts = OCCTKernel.faceTypeCounts(cut)
         let (channel, triangles) = channelAndTriangles(cut)

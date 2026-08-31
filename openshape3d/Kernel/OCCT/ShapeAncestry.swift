@@ -1,0 +1,101 @@
+//
+//  ShapeAncestry.swift
+//  openshape3d — kernel-history ancestry (docs/TOPO_NAMING_HISTORY_DESIGN.md
+//  step 1)
+//
+//  Typed Swift face of `OCCTShapeHistory`: which input sub-shape each result
+//  face came from, per OCCT's own Modified()/Generated() history. This is
+//  the raw material element naming will consume — no naming decisions are
+//  made here, and nothing consumes it in production yet.
+//
+
+import Foundation
+
+/// Per-face ancestry of one kernel op's result.
+nonisolated struct ShapeAncestry: Sendable, Equatable {
+
+    nonisolated enum Relation: Int32, Sendable {
+        /// The input face reaches the result untouched (same TShape).
+        case same = 0
+        case modified = 1
+        case generated = 2
+    }
+
+    nonisolated enum InputKind: Int32, Sendable {
+        case face = 0
+        case edge = 1
+    }
+
+    /// One history edge. `resultFace` is 1-based into the result's indexed
+    /// face map — the same numbering `renderMeshFaceChannel` and the health
+    /// report use. `inputSubshape` is 1-based into input `inputOrdinal`'s
+    /// map of `inputKind`, over the operand as the kernel consumed it.
+    nonisolated struct Row: Sendable, Equatable {
+        let resultFace: Int
+        let inputOrdinal: Int
+        let inputKind: InputKind
+        let inputSubshape: Int
+        let relation: Relation
+    }
+
+    let rows: [Row]
+    /// A post-history heal rebuilt the result: surviving rows are valid, but
+    /// some faces may have lost their ancestry. Absence of rows for a face
+    /// always means "history doesn't know" — signatures stay the fallback.
+    let truncatedByHeal: Bool
+
+    init(_ history: OCCTShapeHistory) {
+        truncatedByHeal = history.truncatedByHeal
+        let values: [Int32] = history.rows.withUnsafeBytes {
+            Array($0.bindMemory(to: Int32.self))
+        }
+        var rows: [Row] = []
+        rows.reserveCapacity(values.count / 5)
+        for base in stride(from: 0, to: (values.count / 5) * 5, by: 5) {
+            guard let kind = InputKind(rawValue: values[base + 2]),
+                  let relation = Relation(rawValue: values[base + 4]) else { continue }
+            rows.append(Row(resultFace: Int(values[base]),
+                            inputOrdinal: Int(values[base + 1]),
+                            inputKind: kind,
+                            inputSubshape: Int(values[base + 3]),
+                            relation: relation))
+        }
+        self.rows = rows
+    }
+
+    /// All history edges landing on one result face (1-based).
+    func ancestors(ofResultFace face: Int) -> [Row] {
+        rows.filter { $0.resultFace == face }
+    }
+
+    /// The result faces that carry no ancestry at all — the honest holes a
+    /// consumer must resolve by signature instead.
+    func unknownFaces(resultFaceCount: Int) -> [Int] {
+        let known = Set(rows.map(\.resultFace))
+        return (1...max(1, resultFaceCount)).filter { !known.contains($0) }
+    }
+}
+
+nonisolated extension OCCTKernel {
+    /// `booleanResult` that also reports each result face's kernel-history
+    /// ancestry (input ordinal 0 = `a`, 1 = `b`). Identical geometry to
+    /// `booleanResult` for identical inputs — ancestry is observation only.
+    static func booleanResultWithAncestry(_ a: BRepHandle, _ b: BRepHandle, op: Int)
+        -> Result<(outcome: BooleanOutcome, ancestry: ShapeAncestry), OCCTOpError> {
+        let status = OCCTOpStatus()
+        let history = OCCTShapeHistory()
+        guard let shape = OCCTBridge.boolean(of: a.shape, with: b.shape,
+                                             op: op, status: status,
+                                             history: history) else {
+            let error = OCCTOpError(status)
+            KernelCapture.recordFailure(op: "boolean",
+                                        inputs: [("a", a), ("b", b)],
+                                        params: ["op": op], error: error)
+            return .failure(error)
+        }
+        let solids = status.code == .multiSolid ? status.solidCount : 1
+        return .success((BooleanOutcome(handle: BRepHandle(shape),
+                                        solidCount: solids),
+                         ShapeAncestry(history)))
+    }
+}

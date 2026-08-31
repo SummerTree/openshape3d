@@ -1,6 +1,31 @@
 # Kernel-history element naming — design (to land as its own mission)
 
-Status: **DESIGN ONLY** (2026-08-31). Approved direction; not yet implemented.
+Status: **STEP 1 LANDED** (2026-08-31); steps 2–5 remain design. Landed as
+two slices, both zero-behavior-change and fully gated:
+
+- **1a** — per-triangle OCCT face channel on `OCCTRenderMesh`
+  (`faceIndices`, `OCCTKernel.renderMeshFaceChannel`), 1-based indexed-map
+  numbering shared with the health report. `RenderMeshFaceChannelTests`.
+- **1b** — boolean ancestry: `booleanOfShape:…history:` fills an
+  `OCCTShapeHistory` (packed rows: result face ← input sub-shape, relation
+  same/modified/generated), composed across the `UnifySameDomain` hop via its
+  own `History()`, every row validated against the FINAL shape (the phantom
+  gate), higher-level reports demoted to faces, history queries
+  try/catch-wrapped (OCCT throws on unknown sub-shapes). Swift face:
+  `ShapeAncestry` + `OCCTKernel.booleanResultWithAncestry`.
+  `ShapeAncestryTests` pins the two-hop case (fused tower's merged walls
+  list BOTH parents) and tool-only bore-wall descent.
+
+The per-op reliability catalog mined from FreeCAD's Mapper classes (which
+OCCT history calls to trust per op, known gaps, workarounds) is preserved in
+the 2026-08-31 session research; headline rules now encoded in
+`OS3DCollectMakerHistory`/`OS3DFillHistory`: wrap every history query,
+validate in-result, demote higher-level reports, treat absence as "history
+doesn't know" and fall back to signatures. Note one design correction:
+FreeCAD does NOT route history through `ShapeUpgrade_UnifySameDomain` (it
+uses its own FaceUniter); our two-hop composition rides OCCT's documented
+`History()` with the in-result gate as the safety net — watch it.
+
 Prerequisites landed in the FreeCAD-hardening tranche: boolean result
 normalization (single-solid unwrap + unify, `OCCTBridge.mm`), deterministic
 face basis + `FaceSignature.kind` honored in resolve (R4-N1/N4 — tranche 2).
