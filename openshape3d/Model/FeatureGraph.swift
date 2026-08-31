@@ -582,23 +582,41 @@ nonisolated extension FeatureGraph {
             // Capture the pre-boolean operand for the brep composition below
             // (acc is replaced by `next` after each tool).
             let operand = acc
-            let mesh = KernelOps.boolean(kind, target: acc, tool: tool)
-            guard !mesh.polygons.isEmpty else {
+
+            // OCCT FIRST, and only fall back to Euclid if it declines.
+            //
+            // When both operands are analytic, `adoptBRep` replaces render,
+            // edges AND euclid from OCCT's tessellation — so the Euclid CSG
+            // that used to run first was computed in full and then thrown away
+            // entirely. It is not a cheap thing to throw away: for a 10 mm box
+            // minus a Ø4 cylinder the Euclid subtract takes 4,877 ms against
+            // the OCCT boolean's 1 ms, and it is why a drilled box took ~7 s to
+            // evaluate. Nothing about the resulting body changes here; only the
+            // work that produced it does.
+            var next: Body?
+            if let resultBrep = OCCTKernel.composedBoolean(kind, target: operand, tool: tool) {
+                var body = Body(
+                    id: target.id, name: target.name, transform: .identity,
+                    primitive: nil, euclidMesh: Euclid.Mesh([]), revision: nextRevision())
+                if body.adoptBRep(resultBrep) { next = body }
+            }
+            if next == nil {
+                // Either operand is mesh-only, or OCCT produced something that
+                // would not tessellate. Euclid owns the result.
+                let mesh = KernelOps.boolean(kind, target: acc, tool: tool)
+                guard !mesh.polygons.isEmpty else {
+                    state.errors[node.id] = .emptyGeometry
+                    return
+                }
+                next = Body(
+                    id: target.id, name: target.name, transform: .identity,
+                    primitive: nil, euclidMesh: mesh, revision: nextRevision())
+            }
+            guard let resolved = next else {
                 state.errors[node.id] = .emptyGeometry
                 return
             }
-            var next = Body(
-                id: target.id, name: target.name, transform: .identity, primitive: nil,
-                euclidMesh: mesh, revision: nextRevision())
-            // B-rep source of truth: when BOTH operands are analytic (OCCT),
-            // compose them with an OCCT boolean and render the result smooth —
-            // so a boolean involving a cylinder stays round. Euclid still owns
-            // the CSG `mesh`; `composedBoolean` handles the world-space
-            // placement, and `next`'s identity transform keeps them consistent.
-            if let resultBrep = OCCTKernel.composedBoolean(kind, target: operand, tool: tool) {
-                next.adoptBRep(resultBrep)
-            }
-            acc = next
+            acc = resolved
             consumed.append(tool.id)
         }
 
