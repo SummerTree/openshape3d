@@ -741,6 +741,20 @@ nonisolated enum OCCTKernel {
         return (positions, normals, indices)
     }
 
+    /// Per-triangle OCCT face channel for a B-rep render mesh: entry i is the
+    /// 1-based indexed-map face number triangle i tessellates (0 = unknown) —
+    /// the same numbering the health report's "Face3" findings use. Step 1 of
+    /// docs/TOPO_NAMING_HISTORY_DESIGN.md: element naming attaches kernel
+    /// identities to mesh-derived face groups by majority vote over this.
+    /// Cheap to call after `renderMesh(from:)` — the triangulation is cached
+    /// on the shape, so the mesher does not run twice.
+    static func renderMeshFaceChannel(from handle: BRepHandle) -> [UInt32] {
+        OCCTBridge.renderMesh(
+            from: handle.shape,
+            angularDeflection: renderAngularDeflection,
+            linearDeflection: renderLinearDeflection).faceIndices.uint32Array()
+    }
+
     /// 7 doubles per edge — `isArc, x1, y1, x2, y2, midX, midY` — matching
     /// `SegWire` in the bridge. Empty in, empty out: an all-straight loop has
     /// nothing to say here that its polyline does not already say exactly.

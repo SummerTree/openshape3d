@@ -38,6 +38,13 @@ NS_ASSUME_NONNULL_BEGIN
 @property (nonatomic, readonly) NSData *positions;  // float32 x 3 x vertexCount
 @property (nonatomic, readonly) NSData *normals;    // float32 x 3 x vertexCount
 @property (nonatomic, readonly) NSData *indices;    // uint32  x 3 x triangleCount
+/// One uint32 PER TRIANGLE: the 1-based index of the OCCT face that triangle
+/// tessellates, into `TopExp::MapShapes(shape, TopAbs_FACE)` — the same
+/// numbering the health report's "Face3" uses. 0 = unknown. This is the
+/// bridge between mesh-derived face groups and kernel-history element naming
+/// (docs/TOPO_NAMING_HISTORY_DESIGN.md step 1): a mesh face claims an OCCT
+/// face by majority vote over its triangles' entries here.
+@property (nonatomic, readonly) NSData *faceIndices;
 @end
 
 /// Opaque handle to a world-space OCCT solid (`TopoDS_Shape`). Reference type;

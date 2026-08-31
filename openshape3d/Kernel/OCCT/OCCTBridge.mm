@@ -254,6 +254,7 @@ static TopoDS_Shape OS3DUnified(const TopoDS_Shape &shape) {
     NSData *_positions;
     NSData *_normals;
     NSData *_indices;
+    NSData *_faceIndices;
 }
 @end
 
@@ -264,6 +265,7 @@ static OCCTRenderMesh *EmptyRenderMesh() {
     out->_positions = [NSData data];
     out->_normals = [NSData data];
     out->_indices = [NSData data];
+    out->_faceIndices = [NSData data];
     return out;
 }
 
@@ -309,9 +311,18 @@ static OCCTRenderMesh *TessellateShape(const TopoDS_Shape &solid,
 
     std::vector<float> positions, normals;
     std::vector<uint32_t> indices;
+    std::vector<uint32_t> faceIndices;
+
+    // The SAME numbering the health report and (coming) element naming use:
+    // 1-based index into the shape's indexed face map. The explorer below
+    // usually walks in map order, but "usually" is not a contract — look each
+    // face up instead of trusting the walk.
+    TopTools_IndexedMapOfShape faceMap;
+    TopExp::MapShapes(solid, TopAbs_FACE, faceMap);
 
     for (TopExp_Explorer ex(solid, TopAbs_FACE); ex.More(); ex.Next()) {
         TopoDS_Face face = TopoDS::Face(ex.Current());
+        const uint32_t faceIndex = (uint32_t)faceMap.FindIndex(face);
         TopLoc_Location loc;
         Handle(Poly_Triangulation) tri = BRep_Tool::Triangulation(face, loc);
         if (tri.IsNull()) continue;
@@ -352,6 +363,7 @@ static OCCTRenderMesh *TessellateShape(const TopoDS_Shape &solid,
             indices.push_back(base + (uint32_t)(a - 1));
             indices.push_back(base + (uint32_t)(b - 1));
             indices.push_back(base + (uint32_t)(c - 1));
+            faceIndices.push_back(faceIndex);
         }
     }
 
@@ -361,6 +373,7 @@ static OCCTRenderMesh *TessellateShape(const TopoDS_Shape &solid,
     out->_positions = [NSData dataWithBytes:positions.data() length:positions.size() * sizeof(float)];
     out->_normals = [NSData dataWithBytes:normals.data() length:normals.size() * sizeof(float)];
     out->_indices = [NSData dataWithBytes:indices.data() length:indices.size() * sizeof(uint32_t)];
+    out->_faceIndices = [NSData dataWithBytes:faceIndices.data() length:faceIndices.size() * sizeof(uint32_t)];
     return out;
   } catch (...) {
     return EmptyRenderMesh();
@@ -395,6 +408,7 @@ static OCCTRenderMesh *TessellateShape(const TopoDS_Shape &solid,
 - (NSData *)positions { return _positions; }
 - (NSData *)normals { return _normals; }
 - (NSData *)indices { return _indices; }
+- (NSData *)faceIndices { return _faceIndices; }
 @end
 
 @implementation OCCTBridge
