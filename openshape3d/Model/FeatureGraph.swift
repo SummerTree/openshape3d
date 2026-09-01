@@ -1383,8 +1383,11 @@ nonisolated extension FeatureGraph {
         }
 
         var result: Body
+        var outNames: [Int: ElementName] = [:]
+        var outHandle: BRepHandle?
         if OCCTKernel.useOCCTAsSourceOfTruth, let brep = body.brep,
-           let replaced = ReplaceFaceKit.applyBRep(to: brep, face: planar, plan: plan) {
+           let (replaced, ancestry) = ReplaceFaceKit.applyBRepWithAncestry(
+                to: brep, face: planar, plan: plan) {
             result = Body(
                 id: body.id, name: body.name, transform: .identity, primitive: nil,
                 render: body.render, revision: nextRevision())
@@ -1392,6 +1395,14 @@ nonisolated extension FeatureGraph {
                 state.errors[node.id] = .emptyGeometry
                 return
             }
+            outHandle = replaced
+            // Replace-face is a boolean (body ⊕ prism): the body's untouched
+            // faces keep their identities through the ancestry; the moved face
+            // and any new walls descend only from the unnamed prism and mint
+            // fresh. Input ordinal 0 = body, 1 = prism (no names).
+            outNames = ElementNaming.composeNames(
+                operation: node.id, ancestry: ancestry,
+                inputNames: [state.kernelNames[body.id] ?? [:], [:]])
         } else {
             guard let mesh = ReplaceFaceKit.apply(
                 to: body.euclidMesh(), face: planar, plan: plan),
@@ -1403,10 +1414,16 @@ nonisolated extension FeatureGraph {
                 id: body.id, name: body.name, transform: .identity, primitive: nil,
                 euclidMesh: mesh, revision: nextRevision())
         }
-        // The moved face and everything it cut through are re-trimmed, so the
-        // old labels no longer describe them — relabel by geometry.
-        let newTable = state.naming.faceTable(for: result, createdBy: node.id, scheme: .generic)
+        // Roles relabel by geometry; the IDENTITIES that survived the boolean
+        // are attached on top so a fillet/name upstream of the replace holds.
+        var newTable = state.naming.faceTable(for: result, createdBy: node.id, scheme: .generic)
+        if let outHandle, !outNames.isEmpty {
+            newTable = ElementNaming.attach(
+                outNames, to: newTable,
+                channel: OCCTKernel.renderMeshFaceChannel(from: outHandle))
+        }
         state.put(result, table: newTable)
+        if !outNames.isEmpty { state.kernelNames[result.id] = outNames }
     }
 
     /// User-facing text for a `ReplaceFaceKit.Refusal`, shared by replay and

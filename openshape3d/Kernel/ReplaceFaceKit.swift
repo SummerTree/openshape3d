@@ -171,15 +171,30 @@ nonisolated enum ReplaceFaceKit {
     static func applyBRep(
         to handle: BRepHandle, face: PlanarFace, plan: Plan
     ) -> BRepHandle? {
+        applyBRepWithAncestry(to: handle, face: face, plan: plan)?.handle
+    }
+
+    /// Replace-face is a boolean with a prism (union to extend, subtract to
+    /// trim), so it carries the SAME ancestry a boolean does — input ordinal 0
+    /// is the body, 1 the prism — which lets the caller compose element names
+    /// through it (the body's surviving faces keep their identities; the moved
+    /// face and any new walls, descending only from the ephemeral unnamed
+    /// prism, mint fresh). The bridge boolean already unifies WITH history
+    /// (collapsing the coplanar seam the prism leaves on the replaced face),
+    /// so the ancestry is over the final unified shape and no extra unify hop
+    /// is needed — a second one would only desync the face indices the
+    /// ancestry references.
+    static func applyBRepWithAncestry(
+        to handle: BRepHandle, face: PlanarFace, plan: Plan
+    ) -> (handle: BRepHandle, ancestry: ShapeAncestry)? {
         guard let prism = sweptBRep(face: face, plan: plan) else { return nil }
-        // 0 = union, 1 = subtract.
-        guard let result = OCCTKernel.boolean(
-            handle, prism, op: plan.isExtend ? 0 : 1) else { return nil }
-        // The prism meets the body ON the replaced face, so the boolean always
-        // leaves a coplanar seam: without this a box extended by 6 mm comes
-        // back with TEN planar faces instead of six, and those extra edges are
-        // selectable and blendable by the user.
-        return OCCTKernel.unified(result)
+        switch OCCTKernel.booleanResultWithAncestry(
+            handle, prism, op: plan.isExtend ? 0 : 1) {
+        case let .success((outcome, ancestry)):
+            return (outcome.handle, ancestry)
+        case .failure:
+            return nil
+        }
     }
 }
 

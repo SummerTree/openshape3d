@@ -1052,6 +1052,63 @@ final class ElementNamingTests: XCTestCase {
                       "the healed caps keep their identities: \(names)")
     }
 
+    /// Replace-face is a boolean under the hood, so the faces it does NOT
+    /// touch must keep their identities: extend the top cap of a named slab
+    /// and the bottom cap plus all four walls still carry their names (a
+    /// fillet or later boolean upstream of the replace stays bound).
+    func testReplaceFaceKeepsUntouchedFaceNames() throws {
+        let slabFeature = FeatureID(), replaceFeature = FeatureID()
+        let slabID = BodyID(), sketch = SketchID(), rect = UUID()
+        let nodes = [
+            FeatureNode(
+                id: slabFeature, name: "Slab",
+                kind: .extrude(
+                    profile: ProfileRef(sketchID: sketch, entityIDs: [rect],
+                                        holeEntityIDs: [], seedPoint: .zero),
+                    plane: PlaneRef(source: .sketch(sketch)),
+                    distance: Expr(value: 2), symmetric: true,
+                    boolean: BooleanIntent(op: .newBody, resolvedTargets: []),
+                    extraProfiles: []),
+                outputBodyIDs: [slabID]),
+        ]
+        let sketches = [Sketch(id: sketch, name: "S", plane: .ground, entities: [
+            .rect(id: rect, min: SIMD2(-5, -3), max: SIMD2(5, 3))])]
+        let base = evaluate(nodes, sketches)
+        XCTAssertTrue(base.errors.isEmpty, "\(base.errors)")
+
+        let table = try XCTUnwrap(base.faceTables[slabID])
+        let bottomCap = ElementName(creator: slabFeature, source: .profileCap(end: false))
+        let topCap = ElementName(creator: slabFeature, source: .profileCap(end: true))
+        let baseNames = try XCTUnwrap(base.kernelNames[slabID])
+        XCTAssertTrue(baseNames.values.contains(topCap), "\(baseNames.values)")
+        let topEntry = try XCTUnwrap(
+            table.entries.first { $0.elementName == topCap },
+            "the slab's top cap is named before the replace")
+
+        let bodyRef = BodyRef(producer: slabFeature, bodyID: slabID)
+        let replaceNode = FeatureNode(
+            id: replaceFeature, name: "Replace Face",
+            kind: .replaceFace(
+                face: FaceRef(body: bodyRef, creator: slabFeature,
+                              role: topEntry.role, signature: topEntry.signature,
+                              elementName: topEntry.elementName),
+                targetOrigin: PointWrapper(SIMD3(0, 4, 0)),
+                targetNormal: PointWrapper(SIMD3(0, 1, 0)), flip: false),
+            outputBodyIDs: [])
+        let result = evaluate(nodes + [replaceNode], sketches)
+        XCTAssertNil(result.errors[replaceFeature], "\(result.errors)")
+
+        let names = try XCTUnwrap(result.kernelNames[slabID],
+                                  "replace-face must compose the name layer")
+        XCTAssertTrue(names.values.contains(bottomCap),
+                      "the untouched bottom cap keeps its identity: \(names.values)")
+        let wallCount = names.values.filter {
+            if case .profileWall = $0.source { return true }
+            return false
+        }.count
+        XCTAssertEqual(wallCount, 4, "all four walls keep their names: \(names.values)")
+    }
+
     // MARK: - Opportunistic ref upgrade (step 5b)
 
     private func slabPushGraph(ref: FaceRef, slabFeature: FeatureID,

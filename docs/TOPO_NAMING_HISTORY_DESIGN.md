@@ -44,16 +44,24 @@ composeNames` (née `booleanNames`) gained `edgeParents`, so a blend face is
 named FOR ITS CREASE — `opFace(parents: the crease's two face names)` —
 identity, not an accident of geometry. Delete-face keeps the history OCCT
 reports and FreeCAD drops. The closed-hollow shell branch reports survival
-only (inner faces honestly unnamed); the point-based blend fallback and
-replace-face still relabel `.generic` (replace-face is a composite
-fuse+unify — needs its own composition pass). Pinned: names survive
-cut → blend → cut with the bottom cap's identity intact three ops later; a
-closed hollow keeps all six outer identities; delete-face heals a
-four-wall hole and the rewritten caps keep their names. STILL OPEN (5b):
-opportunistic ref upgrade — legacy refs gaining names during rebuilds
-touches the undo/persistence machinery and is deliberately its own slice —
-plus revolve/sweep naming (landed 2026-09-01, above), loft naming, and
-replace-face composition.
+only (inner faces honestly unnamed); the point-based blend fallback still
+relabels `.generic`. **Replace-face composition landed 2026-09-01**: it is
+a boolean with a prism (union to extend, subtract to trim), so it carries
+the SAME ancestry a boolean does — `ReplaceFaceKit.applyBRepWithAncestry`
+returns it from `booleanResultWithAncestry` (which already unifies WITH
+history, so the redundant second unify the old `applyBRep` did — which
+would only desync the ancestry's face indices — is gone), and
+`evalReplaceFace` composes names through it with input ordinal 0 = body,
+1 = the unnamed prism. The body's untouched faces keep their identities;
+the moved face and any new walls descend only from the prism and mint
+fresh. Pinned: names survive cut → blend → cut with the bottom cap's
+identity intact three ops later; a closed hollow keeps all six outer
+identities; delete-face heals a four-wall hole and the rewritten caps keep
+their names; extending a slab's top cap leaves the bottom cap and all four
+walls named. STILL OPEN (5b): opportunistic ref upgrade — legacy refs
+gaining names during rebuilds touches the undo/persistence machinery and is
+deliberately its own slice — plus loft naming (multi-section wire
+correspondence) and EdgeRef upgrades.
 
 Step 4's EDGE half (4b) shipped
 on top of 4a: `EdgeName` (unordered adjacent-face-name pair + occurrence,

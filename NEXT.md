@@ -84,11 +84,14 @@ naming landed 2026-09-01 (279a311)** — kernel-side `faceInfo` had already
 dissolved the assign-vs-adopt blocker, and the slice's find was an OCCT
 full-revolve history gap (`Generated()` hides half a washer's walls;
 recovered via the ungated `Revol().Shape(edge)` — see the design doc).
-Still open, all explicitly deferred with reasons in the design doc: loft
-naming, replace-face composition, EdgeRef upgrades, and
-deleteFace/replaceFace over exec (the latter two ops themselves landed —
-what remains is their naming composition). The UI suite ran clean over
-the whole mission (one long-run flake, passed in isolation).
+**Replace-face composition landed 2026-09-01** — it is a boolean with a
+prism, so it reuses `booleanResultWithAncestry`
+(`ReplaceFaceKit.applyBRepWithAncestry`) and composes names exactly like a
+boolean; the untouched faces keep their identities (pinned: extend a
+slab's top cap, the bottom cap and all four walls stay named). Still open,
+all explicitly deferred with reasons in the design doc: loft naming
+(multi-section wire correspondence) and EdgeRef upgrades. The UI suite ran
+clean over the whole mission (one long-run flake, passed in isolation).
 
 **Steps 1–5a landed 2026-08-31**
 (eleven commits, e1506cd…5730e5e — 5a made blends/shell/deleteFace REPORT
