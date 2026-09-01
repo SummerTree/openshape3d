@@ -7,8 +7,8 @@ plate extrudes with three mirrors, a shell, and an imported Parasolid part.
 The extractor resolves every derived plane to a concrete origin/normal/udir,
 which is what makes any of it drivable without implementing the CG-plane ops.
 
-This script drives the TUBE SKELETON — the stages that exercise sweep over
-exec (feature.sweep landed for exactly this):
+The first act drives the TUBE SKELETON — the stages that exercise sweep
+over exec (feature.sweep landed for exactly this):
 
   Extrusion 01  seat tube   circle r19.05 on a 15°-tilted plane, 217.5 long
   Sweep 01      down tube   circle r15.875 swept along line–arc–line
@@ -23,8 +23,32 @@ with xAxis=u, yAxis=v (the app derives its normal as u × v = n). Arc paths
 are tessellated into the polyline spine `FeatureKind.sweep` stores — the
 analytic-spine pipe is future work, so the bends are faceted.
 
-Out of scope, with reasons: the plate/head stages (three mirrors deep — next
-iteration), OffsetFace and Align (no exec op / no FeatureKind), Import 01
+The PLATE/HEAD stages (added 2026-09-01) decode the recipe's second act:
+
+  Extrusion 03  slab        289.56 x 254.0 rect at z=12.7, 6.35 thick
+  Extrusion 04  window plug the 106.68 x 88.9 inner rect of Sketch 11 at
+                            z=19.05, extruded -6.35 — the SAME layer as the
+                            slab. Sketch 11's other lines are leftover
+                            region-splitting geometry; the tutorial's click
+                            seeds the window, so we seed there too.
+  Mirror 02     left plug   across the bike plane x=0 (same ref as Mirror 01)
+  Mirror 03     back pair   across y=82.55 — the recipe's Plane 06 base is
+                            unresolved (CG plane from edge+face+angle), but
+                            mirroring the plate region [-44.45, 82.55] across
+                            y=82.55 lands EXACTLY on [82.55, 209.55], flush
+                            with the slab edge: the geometry pins the plane.
+  Boolean 01    windows     slab MINUS the four plugs (recipe op int32=2;
+                            subtract is the only reading where the windows
+                            exist in the result — union of coincident
+                            coplanar slabs would erase them). Expected
+                            volume asserts this decode: slab - 4 windows.
+  Extrusion 05  head tube   circle r31.75 at world (0, 323.85, 76.2) on the
+                            x=0 plane, 109.5375 along +x.
+
+Still out of scope, with reasons: Face Offset 01 + Align (no exec op / no
+FeatureKind), Shell 01 + Boolean 02 (their operands are Parasolid face/body
+refs we cannot decode, and unlike Plane 06 the geometry does not pin which
+six faces the shell opens — needs the tutorial's visual intent), Import 01
 (Parasolid). Run with OS3D_PORT as usual.
 """
 
@@ -159,6 +183,135 @@ if stay:
         "op": "feature.mirror", "args": {
             "bodyID": sid, "planeOrigin": [0, 0, 0],
             "planeNormal": [1, 0, 0], "keepOriginal": True}}))
+
+# ---- 5. Plate slab (Extrusion 03) ----------------------------------------
+# Sketch 10's rect, recipe-literal mm. Its dangling (0,0)->(0,82.55) line is
+# a reference for later steps, not a boundary — omitted.
+PX = 144.77999999942084          # rect half-width in x
+PY0, PY1 = -44.44999999982222, 209.54999999916177
+PYM = 82.54999999966978          # the abutment line Mirror 03 folds over
+PLATE_T = 6.35
+
+def slab():
+    sk = sketch_on("Plate Slab", [0.0, 0.0, 12.7000000000508], [0, 0, 1], [1, 0, 0])
+    X({"op": "sketch.addEntities", "args": {"sketchID": sk, "entities": [
+        {"kind": "line", "a": [-PX, PY0], "b": [PX, PY0]},
+        {"kind": "line", "a": [PX, PY0], "b": [PX, PY1]},
+        {"kind": "line", "a": [PX, PY1], "b": [-PX, PY1]},
+        {"kind": "line", "a": [-PX, PY1], "b": [-PX, PY0]}]}})
+    return X({"op": "feature.extrude", "args": {
+        "sketchID": sk, "seedPoint": [0.0, 100.0], "distance": PLATE_T}})
+
+slab_out = stage("Plate slab (Extrusion 03)", slab)
+slab_v = 2 * PX * (PY1 - PY0) * PLATE_T
+if slab_out:
+    print(f"     expected rect*t = {slab_v:,.1f} mm3")
+
+# ---- 6. Window plug (Extrusion 04) ---------------------------------------
+# Sketch 11 drawn in full (recipe-literal), seeded INSIDE the inner rect so
+# the detector picks the window region exactly as the tutorial's click did.
+WX0, WX1 = 12.699999999949267, 119.37999999952244
+WY0, WY1 = -19.04999999992381, 69.84999999972055
+
+def window_plug():
+    sk = sketch_on("Plate Window", [0.0, 0.0, 19.0500000000254], [0, 0, 1], [1, 0, 0])
+    X({"op": "sketch.addEntities", "args": {"sketchID": sk, "entities": [
+        {"kind": "line", "a": [0.0, PY0], "b": [0.0, PYM]},
+        {"kind": "line", "a": [-PX, PY0], "b": [PX, PY0]},
+        {"kind": "line", "a": [0.0, PYM], "b": [PX, PYM]},
+        {"kind": "line", "a": [PX, PY0], "b": [PX, PY1]},
+        {"kind": "line", "a": [WX0, WY1], "b": [WX1, WY1]},
+        {"kind": "line", "a": [WX1, WY0], "b": [WX1, WY1]},
+        {"kind": "line", "a": [WX0, WY0], "b": [WX1, WY0]},
+        {"kind": "line", "a": [WX0, WY1], "b": [WX0, WY0]}]}})
+    return X({"op": "feature.extrude", "args": {
+        "sketchID": sk, "seedPoint": [(WX0 + WX1) / 2, (WY0 + WY1) / 2],
+        "distance": -PLATE_T}})
+
+plug_out = stage("Window plug (Extrusion 04)", window_plug)
+window_v = (WX1 - WX0) * (WY1 - WY0) * PLATE_T
+if plug_out:
+    print(f"     expected window*t = {window_v:,.1f} mm3")
+
+# ---- 7-8. Mirrors: left plug, then the back pair -------------------------
+plugs = []
+if plug_out:
+    plugs.append(plug_out["producedBodyIDs"][0])
+    m2 = stage("Left plug (Mirror 02)", lambda: X({
+        "op": "feature.mirror", "args": {
+            "bodyID": plugs[0], "planeOrigin": [0, 0, 0],
+            "planeNormal": [1, 0, 0], "keepOriginal": True}}))
+    if m2:
+        plugs.append(m2["producedBodyIDs"][0])
+    for i, pid in enumerate(list(plugs)):
+        m3 = stage(f"Back plug {i + 1} (Mirror 03)", lambda pid=pid: X({
+            "op": "feature.mirror", "args": {
+                "bodyID": pid, "planeOrigin": [0, PYM, 0],
+                "planeNormal": [0, 1, 0], "keepOriginal": True}}))
+        if m3:
+            plugs.append(m3["producedBodyIDs"][0])
+
+# ---- 9. Boolean 01: punch the four windows -------------------------------
+if slab_out and len(plugs) == 4:
+    def punch():
+        return X({"op": "feature.boolean", "args": {
+            "kind": "subtract",
+            "targetBodyID": slab_out["producedBodyIDs"][0],
+            "toolBodyIDs": plugs}})
+    punched = stage("Windowed slab (Boolean 01)", punch)
+    if punched:
+        got = next(b["volumeMM3"] for b in punched["bodies"]
+                   if b["id"] == slab_out["producedBodyIDs"][0]) \
+            if any(b.get("id") == slab_out["producedBodyIDs"][0]
+                   for b in punched["bodies"]) \
+            else punched["bodies"][-1]["volumeMM3"]
+        want = slab_v - 4 * window_v
+        drift = abs(got - want) / want
+        print(f"     slab - 4 windows = {want:,.1f} mm3, got {got:,.1f} "
+              f"(drift {drift * 100:.2f}%)")
+        results["Boolean 01 volume decode"] = (
+            drift < 0.001, f"drift {drift * 100:.2f}%")
+
+# ---- 10. Head tube (Extrusion 05) ----------------------------------------
+def head_tube():
+    sk = sketch_on("Head Tube", [0.0, 0.0, 0.0], [1, 0, 0], [0, 1, 0])
+    X({"op": "sketch.addEntities", "args": {"sketchID": sk, "entities": [
+        {"kind": "circle", "center": [323.8499999987045, 76.2],
+         "radius": 31.749999999873}]}})
+    return X({"op": "feature.extrude", "args": {
+        "sketchID": sk, "seedPoint": [323.8499999987045, 76.2],
+        "distance": 109.53750000043816}})
+
+head = stage("Head tube (Extrusion 05)", head_tube)
+if head:
+    want = math.pi * 31.75**2 * 109.5375
+    got = head["bodies"][-1]["volumeMM3"]
+    print(f"     expected pi*r2*L = {want:,.1f} mm3 (mesh under-reads a "
+          f"cylinder slightly; got {got:,.1f})")
+
+# ---- naming coverage: the revolve/sweep naming slice, live ---------------
+# Every OCCT-owned body minted since 279a311 should answer /v1/faces with a
+# name on each referenceable face. Swept tubes exercise the sweep harvest.
+def naming_coverage():
+    named = unnamed = 0
+    for b in call("/v1/state")["bodies"]:
+        faces = call(f"/v1/faces?body={b['id']}")
+        for f in faces.get("faces", []):
+            if not f.get("referenceable", True):
+                continue
+            if f.get("name"):
+                named += 1
+            else:
+                unnamed += 1
+    return named, unnamed
+
+try:
+    named, unnamed = naming_coverage()
+    print(f"\nNAMING: {named} referenceable faces carry element names, "
+          f"{unnamed} do not")
+    results["Naming coverage"] = (named > 0, f"{named} named / {unnamed} bare")
+except Exception as err:
+    results["Naming coverage"] = (False, str(err))
 
 # ---- summary -------------------------------------------------------------
 print("\nSTATE:", json.dumps({

@@ -182,9 +182,23 @@ own UI, as a real workout for the modeling stack. Where it got to:
   cutter's −5° taper is unexpressed. **The Frame's tube skeleton stands
   too** (`rebuild_frame.py`, first pass all green: derived-plane sketches
   via the extractor's resolved bases, both sweeps over the new
-  `feature.sweep`, mirrored stay pair). Frame remaining: plates + three
-  mirrors + union, head + shell; OffsetFace/Align/Import excluded with
-  reasons. Block casting stays unreachable (`MaterializeImportedBodies`).
+  `feature.sweep`, mirrored stay pair). **The Frame's plate act stands as
+  well (2026-09-01)** — Extrusion 03/04 + Mirror 02/03 + Boolean 01, all
+  green first run: the unresolved Plane 06 was pinned geometrically
+  (mirroring the plate region across y=82.55 lands flush with the slab
+  edge), and Boolean 01's op code 2 decoded as SUBTRACT by volume assert
+  (slab − 4 window plugs, 0.003% drift — union of coincident slabs would
+  have erased the windows). Head tube (Extrusion 05) green too. The probe
+  also live-checks naming coverage and surfaced the next gap: **mirror
+  bodies carry no element names** (`evalMirror` has no naming pass), and
+  the gap propagates — the windowed slab's 12 bare faces are exactly the
+  walls punched by the three mirror-copy plugs, while the original plug's
+  walls got names through the boolean composition. Mirror is a copying
+  isometry, so names should copy 1:1 — a small follow-on slice. Frame
+  remaining: Shell 01 + Boolean 02 (Parasolid face refs undecodable and
+  geometry does not pin which six faces open — needs the tutorial's visual
+  intent); OffsetFace/Align/Import excluded with reasons. Block casting
+  stays unreachable (`MaterializeImportedBodies`).
 
 ## 5. What PR #22 changed (so new work builds on it, not around it)
 
