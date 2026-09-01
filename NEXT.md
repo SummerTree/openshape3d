@@ -274,6 +274,20 @@ Between them: revolve, polygon extrude, circle extrude, boolean cut,
 circular pattern — all producing valid manufactured-part geometry. No
 expressivity gap; the exec surface builds real CAD parts to spec.
 
+**Fillet/chamfer stress test on the wheel (2026-09-01)** — the operations
+most likely to break on curved revolved geometry held up. Filleting and
+chamfering all 8 concentric circular edges of the wheel at once: valid
+B-rep, 0 invalid subshapes. Over-size requests (a 5 mm fillet or 20 mm
+chamfer on the 10 mm flange, where two blends meet) fail GRACEFULLY with a
+typed, actionable error ("N of N edges can't take this size — try a smaller
+value or fewer edges"), no crash or hang, app healthy after. This is the
+payoff of the session's deadline + typed-failure hardening: the "we get
+stuck on complex geometry" scenario now degrades cleanly instead of
+wedging. (One process note: the iOS simulator idle-shuts-down between
+bursts of exec traffic — an empty /v1/health after a pause means relaunch
+the app, not an app crash; the real crash reports this session are the
+OS3D_FUZZ sweep's deliberate hostile-input kills.)
+
 ## 4b. The Shapr3D tutorial-model thread (paused, 2026-08-31)
 
 Goal as posed: import the tutorial models and rebuild them through the app's
