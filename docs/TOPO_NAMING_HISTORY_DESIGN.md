@@ -188,6 +188,42 @@ realthunder's topological-naming docs, FreeCAD wiki "Topological naming problem"
    instead of midpoint-within-tolerance. This is the single biggest
    "rebuild broke my fillet" fix.
 
+## Step 5b design — opportunistic ref upgrade (agreed 2026-09-01, not yet built)
+
+Legacy refs (no `elementName`/`faceNames`) that resolve STRONGLY by
+signature during a rebuild get their names written back, so the next
+rebuild resolves them by identity. Mechanism, honoring "rides undo
+machinery; never an out-of-band mutation":
+
+1. **Report at the resolve site, not post-hoc.** Refs resolve against
+   INTERMEDIATE bodies (a pushPull's ref binds the pre-pushPull body), so
+   re-resolving after the fact against final bodies could match a different
+   face. `ResolvedFace` gains additive fields — the matched entry's
+   `elementName` and the score `margin` vs runner-up — populated by
+   `resolve` when a table is present.
+2. **Propose during evaluate.** Each FaceRef eval site (pushPull, moveFace,
+   scaleFace, rotateFace, shell, deleteFace, replaceFace), when the ref
+   carries no name and the resolution clears `upgradeConfidence` (0.85) AND
+   `nameMissMargin`, records an upgraded `FeatureKind` copy into
+   `EvalState.proposedUpgrades: [FeatureID: FeatureKind]`, surfaced on
+   `EvalResult`. The name comes from the exact entry the signature matched,
+   so a proposal can never re-bind — it only pins what already resolved.
+   EdgeRef upgrades are DEFERRED: blends resolve against a mid-chain input
+   body whose kernel adjacency the eval site would have to expose; do them
+   when that plumbing exists.
+3. **Apply inside the SAME undo step.** `performRebuild` appends one
+   `EditFeatureCommand(featureID:before:after:)` per proposal to the
+   rebuild's `CompositeCommand` — one undo reverts geometry AND upgrades.
+   Upgrades change no geometry (names are unused until resolve, where they
+   bind the same face the signature chose), and a ref upgraded once is never
+   proposed again. `refreshEvalErrors()` (load/undo path) IGNORES proposals:
+   that replay must never mutate the document.
+4. **Tests**: evaluate-level — a graph with a legacy pushPull ref proposes
+   exactly one upgrade whose name matches the target face's entry, and a
+   near-tie proposes nothing; resolve-level — the additive fields; the
+   session-side command appending is exercised by the existing rebuild
+   UI/e2e flows (DocumentSession is untestable in unit, gotcha 1).
+
 ## Sequencing (S/M/L)
 
 1. (M) Bridge history exposure + face-index tessellation channel.
