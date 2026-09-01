@@ -209,18 +209,29 @@ final class AgentBridge {
                 "undoSteps": steps,
             ])
 
-        case let .extrude(sketchID, seed, distance, symmetric, booleanOp, targets):
+        case let .extrude(sketchID, seed, distance, symmetric, taperDegrees, booleanOp, targets):
             guard session.document.sketches.contains(where: { $0.id == sketchID }) else {
                 return execMissing("sketch", sketchID.raw.uuidString)
             }
             if let bad = missingBody(targets, session) { return bad }
             let intent = BooleanIntent(op: booleanOp, resolvedTargets: targets.map { bodyRef($0, session) })
+            let profile = execProfileRef(sketchID: sketchID, seed: seed, in: session)
+            let plane = PlaneRef(source: .sketch(sketchID))
+            // A non-zero taper is a genuinely different construction (a loft),
+            // so it records as .draftExtrude; zero stays the straight prism.
+            if abs(taperDegrees) > 1e-9 {
+                return record(FeatureNode(
+                    name: "Draft Extrude",
+                    kind: .draftExtrude(profile: profile, plane: plane,
+                                        distance: Expr(value: distance),
+                                        taperAngle: Expr(value: taperDegrees),
+                                        boolean: intent),
+                    outputBodyIDs: [BodyID()]), on: viewModel)
+            }
             return record(FeatureNode(
                 name: "Extrude",
                 kind: .extrude(
-                    profile: execProfileRef(sketchID: sketchID, seed: seed,
-                                            in: session),
-                    plane: PlaneRef(source: .sketch(sketchID)),
+                    profile: profile, plane: plane,
                     distance: Expr(value: distance),
                     symmetric: symmetric,
                     boolean: intent,

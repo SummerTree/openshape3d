@@ -105,6 +105,14 @@ nonisolated enum FeatureKind: Codable, Sendable {
         boolean: BooleanIntent,
         extraProfiles: [ProfileRef]
     )
+    /// Draft/taper extrude (playbook M1): the profile is lofted to an OFFSET
+    /// copy of itself `distance` away, offset = tan(`taperAngle`)·distance, so
+    /// the walls slope by the draft angle (cast/mould release). A distinct kind
+    /// because it is a genuinely different construction — a loft between two
+    /// sections, not a straight prism. `taperAngle` is degrees (converted at
+    /// eval); a zero angle would be a plain extrude and is never recorded here.
+    case draftExtrude(profile: ProfileRef, plane: PlaneRef, distance: Expr,
+                      taperAngle: Expr, boolean: BooleanIntent)
     case revolve(profile: ProfileRef, plane: PlaneRef, axis: AxisRef, angle: Expr, boolean: BooleanIntent)
     case sweep(profile: ProfileRef, plane: PlaneRef, spine: [PointWrapper], boolean: BooleanIntent)
     case loft(sections: [ProfileRef], boolean: BooleanIntent)
@@ -194,6 +202,9 @@ nonisolated extension FeatureNode {
         case let .extrude(profile, plane, _, _, _, extraProfiles):
             ids.insert(profile.sketchID)
             for extra in extraProfiles { ids.insert(extra.sketchID) }
+            addPlane(plane)
+        case let .draftExtrude(profile, plane, _, _, _):
+            ids.insert(profile.sketchID)
             addPlane(plane)
         case let .revolve(profile, plane, axis, _, _):
             ids.insert(profile.sketchID)
@@ -334,6 +345,10 @@ nonisolated extension FeatureGraph {
                 node, profileRef: profile, planeRef: plane, distance: distance,
                 symmetric: symmetric, boolean: boolean, extraProfileRefs: extraProfiles,
                 into: &state, next: nextRevision)
+        case let .draftExtrude(profile, plane, distance, taperAngle, boolean):
+            evalDraftExtrude(
+                node, profileRef: profile, planeRef: plane, distance: distance,
+                taperAngle: taperAngle, boolean: boolean, into: &state, next: nextRevision)
         case let .boolean(kind, target, tools):
             evalBoolean(node, kind: kind, target: target, tools: tools, into: &state, next: nextRevision)
         case let .pushPull(face, distance, mode):
@@ -1759,6 +1774,82 @@ nonisolated extension FeatureGraph {
             ElementNaming.extrudeNames(creator: node.id,
                                        ancestry: ShapeAncestry($0),
                                        outer: sections[0].profile, holes: [])
+        } ?? [:]
+        emitFullSolid(node, mesh: mesh, brep: brep, kernelNames: names,
+                      boolean: boolean, scheme: .generic,
+                      into: &state, next: nextRevision)
+    }
+
+    // MARK: Draft / taper extrude (playbook M1)
+
+    /// Extrude with draft: loft the profile to an OFFSET copy of itself
+    /// `distance` away, so the walls slope by `taperAngle`. A positive angle
+    /// CONTRACTS the section along the extrude direction (mould-release draft —
+    /// wider at the base); offset = −tan(angle)·distance. Slice 1: hole-free
+    /// profiles, single direction (see `docs/DRAFT_TAPER_DESIGN.md`).
+    private func evalDraftExtrude(
+        _ node: FeatureNode,
+        profileRef: ProfileRef,
+        planeRef: PlaneRef,
+        distance: Expr,
+        taperAngle: Expr,
+        boolean: BooleanIntent,
+        into state: inout EvalState,
+        next nextRevision: () -> UInt64
+    ) {
+        guard let (outer, holes) = state.resolveProfile(profileRef) else {
+            state.errors[node.id] = .brokenRef("draft-extrude profile unresolved")
+            return
+        }
+        guard let plane = state.resolvePlane(planeRef) else {
+            state.errors[node.id] = .brokenRef("draft-extrude plane unresolved")
+            return
+        }
+        // Slice 1: a hole needs the OPPOSITE offset and its own lofted
+        // subtraction — deferred, so surface it rather than draft the outline
+        // and silently drop the hole.
+        guard holes.isEmpty else {
+            state.errors[node.id] = .kernelFailure(
+                "draft on a profile with holes is not supported yet")
+            return
+        }
+        let d = distance.value
+        guard abs(d) > 1e-9 else {
+            state.errors[node.id] = .kernelFailure("draft-extrude distance must be non-zero")
+            return
+        }
+        let offsetDistance = -tan(taperAngle.value * .pi / 180) * d
+        guard let offsetLoop = ProfileOffset.offsetLoop(outer.loop, by: offsetDistance) else {
+            state.errors[node.id] = .kernelFailure(
+                "the taper offsets the profile into itself — reduce the angle or the depth")
+            return
+        }
+        // Both sections as POLYLINE profiles so the loft matches edge-for-edge
+        // (a conic base against a polygonal top would desync ThruSections).
+        func polyProfile(_ loop: [SIMD2<Double>]) -> Profile {
+            Profile(loop: loop, kind: .polygonal,
+                    sourceEntityIDs: outer.sourceEntityIDs,
+                    edgeEntityIDs: outer.edgeEntityIDs)
+        }
+        let base = polyProfile(outer.loop)
+        let n = simd_normalize(plane.normal)
+        let topPlane = SketchPlane(origin: plane.origin + n * d,
+                                   xAxis: plane.xAxis, yAxis: plane.yAxis)
+        let sections = [(profile: base, holes: [Profile](), plane: plane),
+                        (profile: polyProfile(offsetLoop), holes: [Profile](), plane: topPlane)]
+        let mesh = SweepLoftKit.loft(profiles: sections)
+        let history: OCCTShapeHistory? =
+            OCCTKernel.useOCCTAsSourceOfTruth ? OCCTShapeHistory() : nil
+        let brep = OCCTKernel.useOCCTAsSourceOfTruth
+            ? OCCTKernel.loftSolid(sections: sections.map { ($0.profile, $0.plane) },
+                                   history: history)
+            : nil
+        // Walls name from the base profile edges (loft naming); a drafted wall
+        // is still owned by the sketch edge that seeded it.
+        let names = (brep != nil ? history : nil).map {
+            ElementNaming.extrudeNames(creator: node.id,
+                                       ancestry: ShapeAncestry($0),
+                                       outer: base, holes: [])
         } ?? [:]
         emitFullSolid(node, mesh: mesh, brep: brep, kernelNames: names,
                       boolean: boolean, scheme: .generic,

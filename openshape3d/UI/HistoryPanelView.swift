@@ -133,6 +133,7 @@ struct HistoryPanelView: View {
         switch node.kind {
         case .primitive: return "cube"
         case .extrude: return "square.stack.3d.up"
+        case .draftExtrude: return "square.stack.3d.up.trianglebadge.exclamationmark"
         case .boolean: return "circle.lefthalf.filled"
         case .pushPull: return "hand.draw"
         case .moveFace: return "arrow.up.and.down.and.arrow.left.and.right"

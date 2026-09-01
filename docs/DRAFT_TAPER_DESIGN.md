@@ -1,8 +1,11 @@
 # Draft / taper angle on extrude — design (to land as its own mission)
 
-Status: **DESIGN + PATH VALIDATED (2026-09-01)**. The implementation is
-staged below; the geometry approach is proven end to end but the
-FeatureKind/eval/exec/kernel wiring is not written yet.
+Status: **SLICE 1 LANDED (2026-09-01)** — hole-free profiles, single
+direction, through `feature.extrude` with a `taperDegrees` argument. A
+40×40 square drafted 10° over 20 mm produces exactly 26,689 mm³ (the
+analytic square-frustum volume), end to end through exec, valid B-rep, 0
+invalid. Slices 2 (holes, symmetric) and 3 (curved boundaries) remain, per
+the staging at the bottom.
 
 ## Why
 

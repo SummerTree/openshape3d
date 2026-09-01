@@ -333,7 +333,7 @@ final class AgentExecTests: XCTestCase {
     // MARK: feature.extrude
 
     func testExtrudeCarriesSeedAndDistance() {
-        guard case let .extrude(sketch, seed, distance, symmetric, boolean, targets)?
+        guard case let .extrude(sketch, seed, distance, symmetric, taper, boolean, targets)?
             = op("""
             {"op":"feature.extrude","args":{"sketchID":"\(sketchUUID)",
              "seedPoint":[3,4],"distance":12,"symmetric":true}}
@@ -342,8 +342,21 @@ final class AgentExecTests: XCTestCase {
         XCTAssertEqual(seed, SIMD2(3, 4))
         XCTAssertEqual(distance, 12)
         XCTAssertTrue(symmetric)
+        XCTAssertEqual(taper, 0, "no taper by default → a straight prism")
         XCTAssertEqual(boolean, .newBody)
         XCTAssertTrue(targets.isEmpty)
+    }
+
+    func testTaperDegreesMakesADraftExtrude() {
+        guard case let .extrude(_, _, _, _, taper, _, _)? = op("""
+        {"op":"feature.extrude","args":{"sketchID":"\(sketchUUID)","seedPoint":[0,0],
+         "distance":20,"taperDegrees":10}}
+        """) else { return XCTFail("expected .extrude with taper") }
+        XCTAssertEqual(taper, 10)
+        XCTAssertEqual(code("""
+        {"op":"feature.extrude","args":{"sketchID":"\(sketchUUID)","seedPoint":[0,0],
+         "distance":20,"taperDegrees":90}}
+        """), "bad_taper", "a 90° taper has no far section")
     }
 
     func testZeroDistanceExtrudeIsRefusedRatherThanSilentlyDoingNothing() {
@@ -363,7 +376,7 @@ final class AgentExecTests: XCTestCase {
     }
 
     func testBooleanExtrudeWithTargetsParses() {
-        guard case let .extrude(_, _, _, _, boolean, targets)? = op("""
+        guard case let .extrude(_, _, _, _, _, boolean, targets)? = op("""
         {"op":"feature.extrude","args":{"sketchID":"\(sketchUUID)","seedPoint":[0,0],
          "distance":5,"boolean":"subtract","booleanTargets":["\(bodyUUID)"]}}
         """) else { return }

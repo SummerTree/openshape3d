@@ -246,7 +246,7 @@ graph, and shows up in History like any other feature.
 |---|---|
 | `sketch.create` | none (defaults to the ground plane); `origin`, `xAxis`, `yAxis`, `name` |
 | `sketch.addEntities` | `sketchID`, `entities[]`; optional `construction` (indices) |
-| `feature.extrude` | `sketchID`, `seedPoint`, `distance`; optional `symmetric`, `boolean`, `booleanTargets` |
+| `feature.extrude` | `sketchID`, `seedPoint`, `distance`; optional `symmetric`, `taperDegrees` (±89; non-zero = a DRAFT extrude, walls sloped, positive contracts — hole-free profiles), `boolean`, `booleanTargets` |
 | `feature.revolve` | `sketchID`, `seedPoint`, `axisPoint`, `axisDirection`; optional `angleDegrees` (360), `boolean`, `booleanTargets` |
 | `feature.pattern` | `bodyID`, `count`; optional `kind` (circular), `axis`, `center`, `spacing`, `totalAngleDegrees`, `rotateInstances` |
 | `feature.loft` | `sections[]` (≥2 `{sketchID, seedPoint}`, each a profile on its OWN sketch plane, lofted in order); optional `boolean`, `booleanTargets` |

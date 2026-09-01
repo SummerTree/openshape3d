@@ -61,8 +61,12 @@ nonisolated struct LoftSection: Sendable, Equatable {
 nonisolated enum AgentExecOp: Sendable, Equatable {
     case createSketch(name: String, plane: SketchPlane)
     case addEntities(sketch: SketchID, entities: [SketchEntity], constructionIndices: Set<Int>)
+    /// `taperDegrees` ≠ 0 makes this a DRAFT extrude (the profile lofts to an
+    /// offset copy, walls sloped by the angle — cast/mould release); 0 is a
+    /// plain straight prism. Positive contracts the section along the extrude.
     case extrude(sketch: SketchID, seed: SIMD2<Double>, distance: Double,
-                 symmetric: Bool, boolean: BooleanIntent.Op, targets: [BodyID])
+                 symmetric: Bool, taperDegrees: Double,
+                 boolean: BooleanIntent.Op, targets: [BodyID])
     /// Degrees, NOT radians. `FeatureKind.revolve`'s `Expr` stores degrees and
     /// `FeatureGraph` converts once at the OCCT boundary (`angle.value * .pi / 180`).
     /// Converting here too silently produced a 6.28-DEGREE revolve that still
@@ -232,10 +236,15 @@ nonisolated enum AgentExec {
                 return .failure(.init(code: "zero_distance",
                                       message: "A zero-distance extrude produces nothing. Give a non-zero \"distance\" in mm."))
             }
+            let taper = try optionalDouble(a, "taperDegrees") ?? 0
+            guard abs(taper) < 89 else {
+                return .failure(.init(code: "bad_taper",
+                                      message: #""taperDegrees" must be within ±89 (0 = straight)."#))
+            }
             let (op, targets) = try booleanIntent(a)
             return .success(.extrude(sketch: sketch, seed: seed, distance: distance,
                                      symmetric: a["symmetric"] as? Bool ?? false,
-                                     boolean: op, targets: targets))
+                                     taperDegrees: taper, boolean: op, targets: targets))
         } catch let e as AgentExecError { return .failure(e) } catch { return .failure(unexpected) }
     }
 
