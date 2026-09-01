@@ -76,7 +76,17 @@ history, layered UNDER `SignatureNaming` (never replacing it), zero
 persisted-format change, and identity-based blend-edge targeting as the
 payoff. Its prerequisites already landed in PR #22 (boolean result
 normalization; deterministic face basis R4-N1; kind veto R4-N4).
-Sequencing S/M/L per step is in the doc. **Steps 1–4 landed 2026-08-31**
+Sequencing S/M/L per step is in the doc. **Steps 1–5a landed 2026-08-31**
+(eleven commits, e1506cd…5730e5e — 5a made blends/shell/deleteFace REPORT
+history instead of erasing names: cut → blend → cut keeps identities intact
+and a fillet face is named for its crease). What's left of the mission:
+**5b opportunistic ref upgrade** (legacy refs gain names during rebuilds —
+touches undo/persistence, design it against DocumentSession's command flow
+before coding), revolve/sweep/loft naming, replace-face composition, and
+wiring fillet/shell over /v1/exec with the new edge-name vocabulary.
+Earlier progress detail below is HISTORY:
+
+**Steps 1–4 landed 2026-08-31**
 (nine commits, e1506cd…edd0300): face channel, boolean + extrude ancestry,
 ElementName + creation-op naming, boolean name composition
 (inherit/split-mint/section), name-first FaceRef resolution with the
