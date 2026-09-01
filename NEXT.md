@@ -191,6 +191,31 @@ assign-vs-adopt render split). Also still open: wiring fillet/shell over
    with G5 sketch completeness (splines!) in parallel. Note that doc's
    §2/G1/G2 are stale (chamfer/shell are OCCT now, not mesh).
 
+## 4a2. FreeCAD Basic modeling tutorial — REBUILT (2026-09-01)
+
+The FreeCAD beginner tutorial (wiki.freecad.org/Basic_modeling_tutorial)
+models an iron angle (an L-section table foot, 750 mm) two ways, and both
+must give the identical solid — the built-in cross-check. Both rebuild 1:1
+through `/v1/exec` (`scripts/rebuild_freecad_angle.py`): Method 1 (CSG:
+box 50×50×750 minus box 40×40×750 at the shared corner) and Method 2
+(extrude the L-profile the relative-coordinate Draft wire traces) each land
+EXACTLY on 675,000 mm³, agree with each other to 0.000%, and pass
+`/v1/check` with zero invalid subshapes. openshape3d has no box primitive
+or `rect` entity over exec, so each rectangle is four lines and the profile
+is closed line loops (what the ProfileDetector consumes) — no expressivity
+gap. Robust to busy/overlapping documents (retested with 6 clutter bodies
+and a pre-existing body overlapping the origin corner; still exact).
+
+One caveat WATCHED, not reproduced: the first run (against a stale
+many-faced Frame document still loaded from an earlier session) once
+returned a 64 mm³ brep=False cut — the OCCT boolean had declined and the
+Euclid mesh CSG collapsed on the coincident corner faces. It did NOT
+reproduce on a fresh doc, with clutter, or with overlapping origin
+geometry, so it was a one-off OCCT hiccup that dropped an operand to
+mesh-only. The lesson stands: Euclid CSG on coincident faces is fragile,
+and it is only reachable when OCCT declines for a brep body — which the B1
+hardening now surfaces as an error rather than silently falling through.
+
 ## 4b. The Shapr3D tutorial-model thread (paused, 2026-08-31)
 
 Goal as posed: import the tutorial models and rebuild them through the app's
