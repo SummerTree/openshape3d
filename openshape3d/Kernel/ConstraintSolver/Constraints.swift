@@ -80,9 +80,15 @@ nonisolated struct ColinearPointConstraint: ConstraintResidual {
     var variableIndices: [Int] { pointIndices(p) + pointIndices(lA) + pointIndices(lB) }
     var residualCount: Int { 1 }
     func residuals(_ vars: [Double]) -> [Double] {
+        // Normalized: the residual is the point's perpendicular distance to
+        // the line in mm — NOT cross2 raw, whose mm² value scales with the
+        // line's length and made the conflict gate over-sensitive on long
+        // lines and blind on short ones (playbook S1 fast-follow).
         let a = point(vars, lA)
         let dir = point(vars, lB) - a
-        return [cross2(dir, point(vars, p) - a)]
+        let len = simd_length(dir)
+        guard len > 1e-12 else { return [simd_length(point(vars, p) - a)] }
+        return [cross2(dir, point(vars, p) - a) / len]
     }
 }
 
@@ -204,9 +210,15 @@ nonisolated struct ParallelConstraint: ConstraintResidual {
     }
     var residualCount: Int { 1 }
     func residuals(_ vars: [Double]) -> [Double] {
+        // Normalized: sin(angle between) — unitless, bounded, scale-free.
+        // Raw cross2 is mm² and grows with BOTH segment lengths, so the same
+        // angular error read as a huge residual on long lines and vanished on
+        // short ones. A zero-length segment has no direction to violate.
         let d1 = point(vars, l1B) - point(vars, l1A)
         let d2 = point(vars, l2B) - point(vars, l2A)
-        return [cross2(d1, d2)]
+        let l1 = simd_length(d1), l2 = simd_length(d2)
+        guard l1 > 1e-12, l2 > 1e-12 else { return [0] }
+        return [cross2(d1, d2) / (l1 * l2)]
     }
 }
 
@@ -225,9 +237,13 @@ nonisolated struct PerpendicularConstraint: ConstraintResidual {
     }
     var residualCount: Int { 1 }
     func residuals(_ vars: [Double]) -> [Double] {
+        // Normalized: cos(angle between) — unitless and scale-free, same
+        // reasoning as ParallelConstraint.
         let d1 = point(vars, l1B) - point(vars, l1A)
         let d2 = point(vars, l2B) - point(vars, l2A)
-        return [simd_dot(d1, d2)]
+        let l1 = simd_length(d1), l2 = simd_length(d2)
+        guard l1 > 1e-12, l2 > 1e-12 else { return [0] }
+        return [simd_dot(d1, d2) / (l1 * l2)]
     }
 }
 
@@ -298,8 +314,13 @@ nonisolated struct SymmetricConstraint: ConstraintResidual {
         let la = point(vars, lA)
         let dir = point(vars, lB) - la
         let mid = (a + b) * 0.5
-        // Midpoint on the axis, and A→B perpendicular to the axis.
-        return [cross2(dir, mid - la), simd_dot(b - a, dir)]
+        // Midpoint on the axis, and A→B perpendicular to the axis — both
+        // normalized by the axis length so they read in mm (the midpoint's
+        // perpendicular distance; A→B's projection along the axis) instead
+        // of the axis-length-scaled mm² the raw forms gave.
+        let len = simd_length(dir)
+        guard len > 1e-12 else { return [0, 0] }
+        return [cross2(dir, mid - la) / len, simd_dot(b - a, dir) / len]
     }
 }
 

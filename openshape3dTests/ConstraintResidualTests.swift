@@ -217,4 +217,59 @@ final class ConstraintResidualTests: XCTestCase {
         // Line crossing the circle (r too big) → not tangent.
         assertViolated(c, [3, 2, 0, 0, 1, 0, 3])
     }
+
+    // MARK: - Residual normalization (scale honesty, playbook S1 fast-follow)
+
+    /// The same 30° misalignment reads the same whether the lines are 1mm or
+    /// 1000mm long — sin(30°) = 0.5 either way. Raw cross2 was mm² and made
+    /// the conflict gate over-sensitive on long lines, blind on short ones.
+    func testParallelResidualIsScaleFree() {
+        let c = ParallelConstraint(l1A: 0, l1B: 1, l2A: 2, l2B: 3)
+        let angle = Double.pi / 6
+        for length in [1.0, 1000.0] {
+            let vars = [0, 0, length, 0,
+                        0, 0, length * cos(angle), length * sin(angle)]
+            let r = c.residuals(vars)
+            XCTAssertEqual(abs(r[0]), 0.5, accuracy: 1e-9,
+                           "length \(length) distorted the residual: \(r)")
+        }
+    }
+
+    /// Perpendicular reads cos(angle): 0 when square, ±cos elsewhere,
+    /// independent of segment lengths.
+    func testPerpendicularResidualIsScaleFree() {
+        let c = PerpendicularConstraint(l1A: 0, l1B: 1, l2A: 2, l2B: 3)
+        for length in [1.0, 1000.0] {
+            assertSatisfied(c, [0, 0, length, 0, 0, 0, 0, length])
+            let r = c.residuals([0, 0, length, 0, 0, 0, length, 0])
+            XCTAssertEqual(abs(r[0]), 1.0, accuracy: 1e-9, "\(r)")
+        }
+    }
+
+    /// Colinear reads the point's perpendicular distance in mm — 3mm off the
+    /// line is 3.0 whether the line is 10mm or 200mm long.
+    func testColinearResidualIsThePerpendicularDistance() {
+        let c = ColinearPointConstraint(p: 0, lA: 1, lB: 2)
+        for length in [10.0, 200.0] {
+            let r = c.residuals([length / 2, 3, 0, 0, length, 0])
+            XCTAssertEqual(abs(r[0]), 3.0, accuracy: 1e-9,
+                           "length \(length) distorted the residual: \(r)")
+        }
+    }
+
+    /// Symmetric reads mm on both rows (midpoint's perpendicular distance to
+    /// the axis; A→B's along-axis projection), independent of axis length.
+    func testSymmetricResidualsReadInMillimetres() {
+        let c = SymmetricConstraint(pA: 0, pB: 1, lA: 2, lB: 3)
+        for length in [10.0, 500.0] {
+            // Vertical axis x=0. A=(−4,1), B=(4,1): symmetric except the
+            // midpoint sits ON the axis and A→B ⟂ axis — satisfied.
+            assertSatisfied(c, [-4, 1, 4, 1, 0, 0, 0, length])
+            // Shift both points +2 in x: midpoint 2mm off the axis.
+            let r = c.residuals([-2, 1, 6, 1, 0, 0, 0, length])
+            XCTAssertEqual(abs(r[0]), 2.0, accuracy: 1e-9,
+                           "axis length \(length) distorted row 0: \(r)")
+            XCTAssertEqual(r[1], 0, accuracy: 1e-9, "\(r)")
+        }
+    }
 }

@@ -137,9 +137,12 @@ assign-vs-adopt render split). Also still open: wiring fillet/shell over
    `src/Mod/Sketcher/App/planegcs/GCS.cpp` in the reference checkout. The
    mixed-units residual caveat (item 2) applies to the per-row tolerance
    too.
-2. **Residual normalization** in `Constraints.swift` — the solver-gate
-   tolerance (1e-3) compares mixed-unit residuals; normalize so the gate
-   is scale-honest (noted as a fast-follow in playbook S1).
+2. **Residual normalization — LANDED 2026-09-01** (playbook S7): the four
+   mm² residuals (parallel/perpendicular via raw cross/dot, colinear/
+   symmetric via unnormalized directions) now read sin/cos of the angle
+   and mm distances respectively; angle stays radians (bounded, 1e-3 rad
+   ≈ 0.057° is a sane conflict threshold). No solver-behavior fallout —
+   full suite green unchanged.
 3. **Trim re-anchor for curved fragments** — the PR #22 rule re-anchors by
    point-weld and single-fragment `.whole` transfer; extend to arc/circle
    fragment cases (`TrimCommand` in `openshape3d/Model/Commands.swift`).
