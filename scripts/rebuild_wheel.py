@@ -26,13 +26,24 @@ A revolve whose angle is wrong by the degrees/radians confusion still LOOKS like
 a plausible wheel. The volume is what catches it. Every op should report
 ok=True with no warning and no evalErrors.
 
-NOT a faithful 1:1 replica: the recipe's Mirror and second Boolean are not
-replicated, and its 12.7 mm bolt-hole circle is unused.
+FULL recipe as of 2026-09-01: the 12.7 mm bolt holes (patterned with the
+spokes), the Mirror, and the closing union are all replicated —
+
+  Bolt subtract  30,086,565 mm3  (135,121 removed = 27,024 per hole)
+  Full wheel     60,173,131 mm3  EXACTLY 2x the half (asserted at 0.1%):
+                                 the union meets only on the mirror plane,
+                                 so any mirror placement or seam error
+                                 shows up here as a volume error.
+
+The one remaining infidelity: the recipe's cutter extrude carries a -5 deg
+taper (its -87.2665 slot is radians), which we cannot express — both hole
+sets are straight.
 """
 
-import json, math, urllib.request
+import json, math, os, urllib.request
 def X(p):
-    r=urllib.request.urlopen(urllib.request.Request("http://127.0.0.1:8787/v1/exec",
+    port=os.environ.get("OS3D_PORT","8787")
+    r=urllib.request.urlopen(urllib.request.Request(f"http://127.0.0.1:{port}/v1/exec",
         data=json.dumps(p).encode(), headers={"Content-Type":"application/json"}), timeout=120)
     return json.load(r)
 def arc(cx,cy,sx,sy,ex,ey):
@@ -84,3 +95,45 @@ tools=[cid]+pat.get("producedBodyIDs",[])
 sub=X({"op":"feature.boolean","args":{"kind":"subtract","targetBodyID":wheel,
        "toolBodyIDs":tools}})
 vols(sub,"Subtract")
+
+# ---- 4. Bolt holes: the 12.7 cutter, patterned with the spokes ----
+# The recipe's Extrusion 01 extrudes BOTH circles of Sketch plane 02 in one
+# step and Boolean 01 subtracts all ten cutters at once; a second
+# extrude/pattern/subtract is geometrically equivalent. (Its −87.2665 slot is
+# −5° in radians — a cutter taper we don't support, ignored like the cover's.)
+sk3=X({"op":"sketch.create","args":{"name":"Bolt Holes",
+       "origin":[0,0,0],"xAxis":[0,1,0],"yAxis":[0,0,1]}})["sketchID"]
+X({"op":"sketch.addEntities","args":{"sketchID":sk3,"entities":[
+   {"kind":"circle","center":[-44.7892362245073,61.647094971124375],
+    "radius":12.699999999949195}]}})
+bolt=X({"op":"feature.extrude","args":{"sketchID":sk3,
+       "seedPoint":[-44.7892362245073,61.647094971124375],
+       "distance":400,"symmetric":True}})
+vols(bolt,"Bolt cutter"); bid=bolt["producedBodyIDs"][0]
+pat2=X({"op":"feature.pattern","args":{"bodyID":bid,"kind":"circular",
+       "axis":[1,0,0],"center":[0,0,0],"count":5,"totalAngleDegrees":288}})
+vols(pat2,"Bolt pattern x5")
+sub2=X({"op":"feature.boolean","args":{"kind":"subtract","targetBodyID":wheel,
+       "toolBodyIDs":[bid]+pat2.get("producedBodyIDs",[])}})
+vols(sub2,"Bolt subtract")
+half=sub2["bodies"][0]["volumeMM3"]
+
+# ---- 5. Mirror across the hub face and fuse: the FULL wheel ----
+# The revolve profile is the half cross-section (world x >= 0); Mirror 01 +
+# Boolean 02 in the recipe double it into the finished wheel. The union
+# meets only on the x=0 plane, so the fused volume must be 2x the half —
+# a mirror that lands anywhere else, or a union that leaves a wall, shows
+# up here as a volume error, not as a subtly wrong render.
+mir=X({"op":"feature.mirror","args":{"bodyID":wheel,"planeOrigin":[0,0,0],
+       "planeNormal":[1,0,0],"keepOriginal":True}})
+vols(mir,"Mirror")
+uni=X({"op":"feature.boolean","args":{"kind":"union","targetBodyID":wheel,
+       "toolBodyIDs":mir["producedBodyIDs"]}})
+vols(uni,"Union (full wheel)")
+full=uni["bodies"][0]["volumeMM3"]
+drift=abs(full-2*half)/(2*half)
+print(f"full wheel {full:,.0f} mm3 vs 2x half {2*half:,.0f} ({drift*100:.3f}% off)")
+assert drift < 0.001, "mirror+union must exactly double the half wheel"
+for r in (sub2, mir, uni):
+    assert not r.get("evalErrors"), r.get("evalErrors")
+print("\n4 motorcycle wheel: FULL recipe rebuilt (cutter tapers excluded).")

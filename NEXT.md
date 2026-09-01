@@ -171,8 +171,12 @@ own UI, as a real workout for the modeling stack. Where it got to:
   discs), constructive kernel builders had no deadline (a hang evades capture
   AND wedges the MainActor), and `propagate`'s O(faces×inputs) role pass spun
   for minutes on a tangent-fuse's sliver tessellation (found by SAMPLING the
-  wedged pid — see KERNEL_DEBUG_TOOLING). The wheel is still not 1:1 (Mirror,
-  second Boolean, 12.7 mm bolt holes undone).
+  wedged pid — see KERNEL_DEBUG_TOOLING). **The wheel reached full-recipe
+  1:1 the same day** (bolt holes + Mirror + closing union; the fused wheel
+  is exactly 2× its half, asserted in `rebuild_wheel.py`) — only the
+  cutter's −5° taper is unexpressed. Remaining tutorial thread: the Frame
+  model (the last with real history); Block casting stays unreachable
+  (`MaterializeImportedBodies`).
 
 ## 5. What PR #22 changed (so new work builds on it, not around it)
 
