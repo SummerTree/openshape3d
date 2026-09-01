@@ -77,7 +77,15 @@ history, layered UNDER `SignatureNaming` (never replacing it), zero
 persisted-format change, and identity-based blend-edge targeting as the
 payoff. Its prerequisites already landed in PR #22 (boolean result
 normalization; deterministic face basis R4-N1; kind veto R4-N4).
-Sequencing S/M/L per step is in the doc. **Steps 1–5a landed 2026-08-31**
+Sequencing S/M/L per step is in the doc. **THE MISSION'S CORE IS COMPLETE —
+steps 1–5 all landed** (5b on 2026-09-01, d8a39aa: legacy refs earn names
+during rebuilds, inside the rebuild's own undo step). Still open, all
+explicitly deferred with reasons in the design doc: revolve/sweep/loft
+naming (assign-vs-adopt render split), replace-face composition, EdgeRef
+upgrades, and deleteFace/replaceFace over exec. The UI suite ran clean over
+the whole mission (one long-run flake, passed in isolation).
+
+**Steps 1–5a landed 2026-08-31**
 (eleven commits, e1506cd…5730e5e — 5a made blends/shell/deleteFace REPORT
 history instead of erasing names: cut → blend → cut keeps identities intact
 and a fillet face is named for its crease). What's left of the mission:
