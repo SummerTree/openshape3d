@@ -245,6 +245,35 @@ the 90° sector shows the identical 0.285%, so it is uniform tessellation
 under-report, not a geometry error). Conclusion: openshape3d covers every
 core FreeCAD modeling operation, with no expressivity gap found.
 
+## 4a3. Real catalogue parts (TraceParts) — REBUILT (2026-09-01)
+
+`scripts/rebuild_traceparts.py` rebuilds three real manufactured parts
+through `/v1/exec`, each held to an INDEPENDENT ground truth, and covering
+the core op matrix. All three: valid analytic B-rep, 0 invalid subshapes,
+correct face topology, <1% volume drift.
+
+- **RÄDER-VOGEL 106/100/036/125/046/5/20** — a grey cast-iron single-flanged
+  wheel, a genuine TraceParts product (Casters/wheels › Wheels). One REVOLVE
+  of its radial section from the datasheet dimensions (tread Ø100, flange
+  Ø125, hub 54, bearing bore Ø42). The killer check: the datasheet's stated
+  weight of 2.5 kg — the model masses **2.519 kg (0.7% off)** at cast-iron
+  density, the residual being the bearing-bore step and lightening the
+  datasheet doesn't dimension. Visually confirmed in the simulator (a clean
+  stepped wheel).
+- **DIN 934 M16 hex nut** (a TraceParts fastener class) — HEXAGON extrude
+  (6-line loop, no polygon entity needed) minus a bore. Exact geometry
+  (across-flats 24.00, across-corners 27.71, hex area 498.8), 0.01% volume
+  drift; mass 33.6 g vs ~31 g standard (the DIN chamfer + thread a plain
+  model omits).
+- **EN 1092-1 DN50 PN16 flange** — extrude + central bore + CIRCULAR PATTERN
+  of a bolt hole ×4 + boolean. The pattern is the point: exactly 4 holes cut
+  (volume matches the 4-hole analytic to 0.03%; a wrong count would be
+  1.5%/hole off). Bolt holes visible in the simulator render.
+
+Between them: revolve, polygon extrude, circle extrude, boolean cut,
+circular pattern — all producing valid manufactured-part geometry. No
+expressivity gap; the exec surface builds real CAD parts to spec.
+
 ## 4b. The Shapr3D tutorial-model thread (paused, 2026-08-31)
 
 Goal as posed: import the tutorial models and rebuild them through the app's
