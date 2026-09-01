@@ -387,11 +387,30 @@ typedef NS_ENUM(NSInteger, OCCTOpCode) {
 + (nullable OCCTShape *)filletedShape:(OCCTShape *)shape
                           edgeIndices:(NSData *)edgeIndices
                                radius:(double)radius
-                               status:(nullable OCCTOpStatus *)status;
+                               status:(nullable OCCTOpStatus *)status
+                              history:(nullable OCCTShapeHistory *)history;
 + (nullable OCCTShape *)chamferedShape:(OCCTShape *)shape
                            edgeIndices:(NSData *)edgeIndices
                               distance:(double)distance
-                                status:(nullable OCCTOpStatus *)status;
+                                status:(nullable OCCTOpStatus *)status
+                               history:(nullable OCCTShapeHistory *)history;
+
+/// Modifier-op ancestry (step 5): shell and delete-face with the same
+/// fill-only `history` the boolean carries — untouched faces report `same`,
+/// offset/healed faces `modified`, new faces `generated` — so these ops
+/// stop erasing every name downstream. The closed-hollow shell branch
+/// reports survival only (its inner faces stay honestly unnamed).
++ (nullable OCCTShape *)shelledShape:(OCCTShape *)shape
+                       atWorldPoints:(NSData *)worldPoints
+                           thickness:(double)thickness
+                           tolerance:(double)tolerance
+                              status:(nullable OCCTOpStatus *)status
+                             history:(nullable OCCTShapeHistory *)history;
++ (nullable OCCTShape *)defeaturedShape:(OCCTShape *)shape
+                          atWorldPoints:(NSData *)worldPoints
+                              tolerance:(double)tolerance
+                                 status:(nullable OCCTOpStatus *)status
+                                history:(nullable OCCTShapeHistory *)history;
 
 /// Every edge with exactly two distinct adjacent faces, as packed int32
 /// triples `(edgeIndex, faceA, faceB)` — 1-based indexed-map numbering

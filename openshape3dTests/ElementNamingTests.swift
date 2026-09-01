@@ -174,7 +174,7 @@ final class ElementNamingTests: XCTestCase {
             faceRow(5, ordinal: 1, sub: 1, .modified),    // …and tool wall
             faceRow(6, ordinal: 0, sub: 9, .modified),    // unnamed parent
         ])
-        let names = ElementNaming.booleanNames(
+        let names = ElementNaming.composeNames(
             operation: op, ancestry: ancestry,
             inputNames: [[1: capA, 2: capB], [1: wall]])
 
@@ -837,6 +837,219 @@ final class ElementNamingTests: XCTestCase {
         XCTAssertGreaterThan(try chamferSideX(bySignature), 0,
                              "without the name, the drifted signature rebinds "
                              + "to hole B — the bug class this step closes")
+    }
+
+    // MARK: - Modifier-op history (step 5): names survive blends/shell/deleteFace
+
+    /// One slab + one square through-hole, with stable ids — the base every
+    /// modifier test builds on.
+    private struct ModifierFixture {
+        let slabFeature = FeatureID()
+        let cutFeature = FeatureID()
+        let slabID = BodyID()
+        let slabSketch = SketchID(), cutSketch = SketchID()
+        let slabRect = UUID(), cutRect = UUID()
+
+        var nodes: [FeatureNode] {
+            [FeatureNode(
+                id: slabFeature, name: "Slab",
+                kind: .extrude(
+                    profile: ProfileRef(sketchID: slabSketch, entityIDs: [slabRect],
+                                        holeEntityIDs: [], seedPoint: .zero),
+                    plane: PlaneRef(source: .sketch(slabSketch)),
+                    distance: Expr(value: 2), symmetric: true,
+                    boolean: BooleanIntent(op: .newBody, resolvedTargets: []),
+                    extraProfiles: []),
+                outputBodyIDs: [slabID]),
+             FeatureNode(
+                id: cutFeature, name: "Hole",
+                kind: .extrude(
+                    profile: ProfileRef(sketchID: cutSketch, entityIDs: [cutRect],
+                                        holeEntityIDs: [], seedPoint: SIMD2(-3, 0)),
+                    plane: PlaneRef(source: .sketch(cutSketch)),
+                    distance: Expr(value: 3), symmetric: true,
+                    boolean: BooleanIntent(
+                        op: .subtract,
+                        resolvedTargets: [BodyRef(producer: slabFeature,
+                                                  bodyID: slabID)]),
+                    extraProfiles: []),
+                outputBodyIDs: [])]
+        }
+        var sketches: [Sketch] {
+            [Sketch(id: slabSketch, name: "S", plane: .ground, entities: [
+                .rect(id: slabRect, min: SIMD2(-5, -3), max: SIMD2(5, 3))]),
+             Sketch(id: cutSketch, name: "C", plane: .ground, entities: [
+                .rect(id: cutRect, min: SIMD2(-4, -1), max: SIMD2(-2, 1))])]
+        }
+        var bodyRef: BodyRef { BodyRef(producer: slabFeature, bodyID: slabID) }
+        var bottomCap: ElementName {
+            ElementName(creator: slabFeature, source: .profileCap(end: false))
+        }
+        var topCap: ElementName {
+            ElementName(creator: slabFeature, source: .profileCap(end: true))
+        }
+    }
+
+    private func evaluate(_ nodes: [FeatureNode],
+                          _ sketches: [Sketch]) -> EvalResult {
+        var revision: UInt64 = 0
+        return FeatureGraph(nodes: nodes).evaluate(
+            sketches: sketches, planes: [], naming: SignatureNaming(),
+            nextRevision: { revision += 1; return revision })
+    }
+
+    /// A named rim edge of the fixture's hole plus a fresh chamfer node for it.
+    private func chamferNode(for fixture: ModifierFixture,
+                             from base: EvalResult) throws
+        -> (node: FeatureNode, ridge: EdgeName) {
+        let body = try XCTUnwrap(base.bodies.first { $0.id == fixture.slabID })
+        let names = try XCTUnwrap(base.kernelNames[fixture.slabID])
+        let edgeNames = ElementNaming.edgeNames(
+            adjacency: OCCTKernel.edgeFaceAdjacency(try XCTUnwrap(body.brep)),
+            names: names)
+        let ridge = try XCTUnwrap(edgeNames.values.first { name in
+            let pair = [name.faceA, name.faceB]
+            return pair.contains(fixture.topCap) && pair.contains { other in
+                guard case .profileWall = other.source else { return false }
+                return other.creator == fixture.cutFeature
+            }
+        }, "no named top-rim edge on the hole")
+        let available = EdgeTopology.selectableEdges(from: body.render)
+        let anyEdge = try XCTUnwrap(available.first)
+        let node = FeatureNode(
+            name: "Chamfer",
+            kind: .chamfer(
+                body: fixture.bodyRef,
+                edges: [EdgeRef(body: fixture.bodyRef,
+                                signature: EdgeTopology.signature(of: anyEdge),
+                                faceNames: ridge)],
+                setback: Expr(value: 0.3)),
+            outputBodyIDs: [fixture.slabID])
+        return (node, ridge)
+    }
+
+    /// THE step-5 regression: a blend used to relabel everything `.generic`
+    /// and erase every name. Now untouched faces INHERIT through it and the
+    /// chamfer face is named FOR ITS CREASE.
+    func testNamesSurviveABlend() throws {
+        let fixture = ModifierFixture()
+        let base = evaluate(fixture.nodes, fixture.sketches)
+        XCTAssertTrue(base.errors.isEmpty, "\(base.errors)")
+        let (chamfer, ridge) = try chamferNode(for: fixture, from: base)
+
+        let result = evaluate(fixture.nodes + [chamfer], fixture.sketches)
+        XCTAssertTrue(result.errors.isEmpty, "\(result.errors)")
+        let names = try XCTUnwrap(result.faceTables[fixture.slabID])
+            .entries.compactMap(\.elementName)
+        XCTAssertTrue(names.contains(fixture.bottomCap),
+                      "the untouched bottom cap keeps its identity through the blend")
+        let creaseFaces = names.filter { name in
+            guard case let .opFace(operation, parents, _) = name.source,
+                  operation == chamfer.id else { return false }
+            return parents.contains(ridge.faceA) && parents.contains(ridge.faceB)
+        }
+        XCTAssertEqual(creaseFaces.count, 1,
+                       "the chamfer face is named for its crease: \(names)")
+    }
+
+    /// Names flow THROUGH the blend into later ops: a second cut after the
+    /// chamfer still composes — its own hole walls named, the slab's bottom
+    /// cap still carrying its original identity two ops later.
+    func testNamesFlowThroughABlendIntoLaterBooleans() throws {
+        let fixture = ModifierFixture()
+        let base = evaluate(fixture.nodes, fixture.sketches)
+        let (chamfer, _) = try chamferNode(for: fixture, from: base)
+
+        let lateSketch = SketchID(), lateRect = UUID()
+        let lateCut = FeatureID()
+        let late = FeatureNode(
+            id: lateCut, name: "LateHole",
+            kind: .extrude(
+                profile: ProfileRef(sketchID: lateSketch, entityIDs: [lateRect],
+                                    holeEntityIDs: [], seedPoint: SIMD2(3, 0)),
+                plane: PlaneRef(source: .sketch(lateSketch)),
+                distance: Expr(value: 3), symmetric: true,
+                boolean: BooleanIntent(op: .subtract,
+                                       resolvedTargets: [fixture.bodyRef]),
+                extraProfiles: []),
+            outputBodyIDs: [])
+        let sketches = fixture.sketches + [
+            Sketch(id: lateSketch, name: "L", plane: .ground, entities: [
+                .rect(id: lateRect, min: SIMD2(2, -1), max: SIMD2(4, 1))])]
+
+        let result = evaluate(fixture.nodes + [chamfer, late], sketches)
+        XCTAssertTrue(result.errors.isEmpty, "\(result.errors)")
+        let names = try XCTUnwrap(result.faceTables[fixture.slabID])
+            .entries.compactMap(\.elementName)
+        XCTAssertTrue(names.contains(fixture.bottomCap),
+                      "the bottom cap's identity survives cut → blend → cut")
+        let lateWalls = names.filter { name in
+            guard name.creator == lateCut,
+                  case let .profileWall(entity, _) = name.source else { return false }
+            return entity == lateRect
+        }
+        XCTAssertEqual(lateWalls.count, 4,
+                       "the late cut composes against post-blend names: \(names)")
+    }
+
+    /// A closed hollow keeps every OUTER identity; the new inner faces stay
+    /// honestly unnamed (the composite offset+cut branch reports survival
+    /// only).
+    func testAClosedHollowShellKeepsOuterIdentities() throws {
+        let fixture = ModifierFixture()
+        let shellNode = FeatureNode(
+            name: "Shell",
+            kind: .shell(body: fixture.bodyRef, openFaces: [],
+                         thickness: Expr(value: 0.5)),
+            outputBodyIDs: [fixture.slabID])
+        // Slab only (no hole) — the simplest closed hollow.
+        let result = evaluate([fixture.nodes[0], shellNode], fixture.sketches)
+        XCTAssertTrue(result.errors.isEmpty, "\(result.errors)")
+        let entries = try XCTUnwrap(result.faceTables[fixture.slabID]).entries
+        let named = entries.compactMap(\.elementName)
+        XCTAssertEqual(named.count, 6, "all six outer faces keep identities")
+        XCTAssertTrue(named.contains(fixture.bottomCap))
+        XCTAssertTrue(named.contains(fixture.topCap))
+        XCTAssertEqual(entries.count, 12, "6 outer + 6 unnamed inner")
+    }
+
+    /// Delete Face heals the hole away and the surviving faces keep their
+    /// names — including the caps, whose hole boundaries the heal rewrote.
+    func testDeleteFaceHealsAndKeepsNames() throws {
+        let fixture = ModifierFixture()
+        let base = evaluate(fixture.nodes, fixture.sketches)
+        let table = try XCTUnwrap(base.faceTables[fixture.slabID])
+        // ALL FOUR hole walls — a square hole only heals as a whole feature
+        // (the cylindrical-bore case is one face; this one is four).
+        let wallEntries = table.entries.filter {
+            guard let name = $0.elementName,
+                  case .profileWall = name.source else { return false }
+            return name.creator == fixture.cutFeature
+        }
+        XCTAssertEqual(wallEntries.count, 4)
+        let deleteNode = FeatureNode(
+            name: "Delete Face",
+            kind: .deleteFace(
+                body: fixture.bodyRef,
+                faces: wallEntries.map {
+                    FaceRef(body: fixture.bodyRef,
+                            creator: fixture.cutFeature,
+                            role: $0.role,
+                            signature: $0.signature,
+                            elementName: $0.elementName)
+                }),
+            outputBodyIDs: [fixture.slabID])
+        let result = evaluate(fixture.nodes + [deleteNode], fixture.sketches)
+        XCTAssertTrue(result.errors.isEmpty, "\(result.errors)")
+        let body = try XCTUnwrap(result.bodies.first { $0.id == fixture.slabID })
+        // The heal restores the full 10×4×6 slab.
+        XCTAssertEqual(MeasureKit.bodyVolume(body.render, scale: 1), 240,
+                       accuracy: 1e-6)
+        let names = try XCTUnwrap(result.faceTables[fixture.slabID])
+            .entries.compactMap(\.elementName)
+        XCTAssertTrue(names.contains(fixture.bottomCap))
+        XCTAssertTrue(names.contains(fixture.topCap),
+                      "the healed caps keep their identities: \(names)")
     }
 
     // MARK: - Detector identity arrays

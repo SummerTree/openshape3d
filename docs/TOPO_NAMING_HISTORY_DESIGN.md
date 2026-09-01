@@ -1,6 +1,25 @@
 # Kernel-history element naming — design (to land as its own mission)
 
-Status: **STEPS 1–4 LANDED** (2026-08-31). Step 4's EDGE half (4b) shipped
+Status: **STEPS 1–5a LANDED** (2026-08-31). Step 5's modifier-op history
+shipped: fillet/chamfer (identity path), shell and delete-face now REPORT
+ancestry instead of erasing every name downstream. One generalized
+collector (`OS3DCollectMakerHistory` over any `BRepBuilderAPI_MakeShape`)
+plus `OS3DFillModifierHistory` serve all of them; `ElementNaming.
+composeNames` (née `booleanNames`) gained `edgeParents`, so a blend face is
+named FOR ITS CREASE — `opFace(parents: the crease's two face names)` —
+identity, not an accident of geometry. Delete-face keeps the history OCCT
+reports and FreeCAD drops. The closed-hollow shell branch reports survival
+only (inner faces honestly unnamed); the point-based blend fallback and
+replace-face still relabel `.generic` (replace-face is a composite
+fuse+unify — needs its own composition pass). Pinned: names survive
+cut → blend → cut with the bottom cap's identity intact three ops later; a
+closed hollow keeps all six outer identities; delete-face heals a
+four-wall hole and the rewritten caps keep their names. STILL OPEN (5b):
+opportunistic ref upgrade — legacy refs gaining names during rebuilds
+touches the undo/persistence machinery and is deliberately its own slice —
+plus revolve/sweep/loft naming and replace-face composition.
+
+Step 4's EDGE half (4b) shipped
 on top of 4a: `EdgeName` (unordered adjacent-face-name pair + occurrence,
 custom order-insensitive ==/hash), `EdgeRef.faceNames` (optional, omitted
 when nil — old documents unchanged), bridge identity addressing

@@ -92,6 +92,7 @@
 #include <ShapeAnalysis_ShapeTolerance.hxx>
 #include <BRepExtrema_DistShapeShape.hxx>
 #include <BRepBuilderAPI_MakeVertex.hxx>
+#include <BRepBuilderAPI_MakeShape.hxx>
 #include <Precision.hxx>
 #include <Standard_Failure.hxx>
 #include <GeomAbs_Shape.hxx>
@@ -992,8 +993,10 @@ struct OS3DHistEdge {
 
 static const size_t kOS3DMaxHistoryRows = 4096;
 
-// Harvest the builder's own history while the builder is still alive.
-static void OS3DCollectMakerHistory(BRepAlgoAPI_BooleanOperation &builder,
+// Harvest a maker's own history while it is still alive. Works for ANY
+// BRepBuilderAPI_MakeShape descendant — booleans, blends, thick-solid,
+// defeaturing — which is what lets every modifier op reuse one collector.
+static void OS3DCollectMakerHistory(BRepBuilderAPI_MakeShape &builder,
                                     const std::vector<TopoDS_Shape> &inputs,
                                     std::vector<OS3DHistEdge> &edges) {
     for (int32_t ordinal = 0; ordinal < (int32_t)inputs.size(); ++ordinal) {
@@ -1115,6 +1118,13 @@ static void OS3DFillHistory(OCCTShapeHistory *history,
                                   length:packed.size() * sizeof(int32_t)];
     history.truncatedByHeal = truncatedByHeal;
 }
+
+// Defined with the blend machinery below; declared here because the
+// single-input modifier ops (defeaturing, shell) sit between the two.
+static void OS3DFillModifierHistory(OCCTShapeHistory *history,
+                                    BRepBuilderAPI_MakeShape &maker,
+                                    const TopoDS_Shape &input,
+                                    const TopoDS_Shape &finalShape);
 
 // Same-domain unification, exposing the unifier's own history for the
 // ancestry composition above. Mirrors OS3DUnified (which stays the plain
@@ -1325,6 +1335,15 @@ static std::set<Standard_Integer> OS3DNearestFaces(
                                  atWorldPoints:(NSData *)worldPoints
                                      tolerance:(double)tolerance
                                         status:(nullable OCCTOpStatus *)status {
+    return [self defeaturedShape:shape atWorldPoints:worldPoints
+                       tolerance:tolerance status:status history:nil];
+}
+
++ (nullable OCCTShape *)defeaturedShape:(OCCTShape *)shape
+                          atWorldPoints:(NSData *)worldPoints
+                              tolerance:(double)tolerance
+                                 status:(nullable OCCTOpStatus *)status
+                                history:(nullable OCCTShapeHistory *)history {
     OS3DSetStatus(status, OCCTOpCodeKernelRefused, @"no input");
     if (shape == nil) return nil;
     const NSUInteger count = worldPoints.length / (3 * sizeof(double));
@@ -1370,6 +1389,11 @@ static std::set<Standard_Integer> OS3DNearestFaces(
         }
 
         OS3DSetStatus(status, OCCTOpCodeOK, nil);
+        // Ancestry: OCCT's Defeaturing DOES report history — FreeCAD drops
+        // it and loses all names at every delete-face; we keep it (step 5).
+        if (history != nil) {
+            OS3DFillModifierHistory(history, defeat, shape->_shape, valid);
+        }
         OCCTShape *out = [OCCTShape new];
         out->_shape = valid;
         return out;
@@ -1596,11 +1620,33 @@ static OCCTShape *OS3DFinishBlend(BRepFilletAPI_LocalOperation &mk,
 // IDENTICAL kernel decisions (pre-qualification, per-edge Generated check,
 // single-solid, heal-and-validate). MakeChamfer has no NbFaultyContours;
 // the per-edge Generated() check in OS3DFinishBlend is its signal.
+// Post-finish ancestry for a single-input modifier op: harvest the maker's
+// history, validate every row against the RETURNED shape (the phantom gate
+// again — the finish path may have healed), and pack. Shared by blends,
+// shell and defeaturing so they all report identity the same way.
+static void OS3DFillModifierHistory(OCCTShapeHistory *history,
+                                    BRepBuilderAPI_MakeShape &maker,
+                                    const TopoDS_Shape &input,
+                                    const TopoDS_Shape &finalShape) {
+    if (history == nil || finalShape.IsNull()) return;
+    std::vector<OS3DHistEdge> edges;
+    const std::vector<TopoDS_Shape> inputs = {input};
+    OS3DCollectMakerHistory(maker, inputs, edges);
+    // The finish paths heal only an invalid result; when they did, rows for
+    // rebuilt faces simply fail the final-shape lookup and drop out.
+    int solidCount = 0;
+    const TopoDS_Shape raw = OS3DExtractSingleSolid(maker.Shape(), solidCount);
+    const BOOL healed = solidCount == 1 && !finalShape.IsSame(raw);
+    OS3DFillHistory(history, edges, inputs, Handle(BRepTools_History)(),
+                    finalShape, healed);
+}
+
 static OCCTShape *OS3DBlendEdgeSet(const TopoDS_Shape &shape,
                                    const TopTools_IndexedMapOfShape &edgeMap,
                                    const std::set<Standard_Integer> &chosen,
                                    double amount, bool isFillet,
-                                   OCCTOpStatus *status) {
+                                   OCCTOpStatus *status,
+                                   OCCTShapeHistory *history) {
     NSString *reason = nil;
     const std::set<Standard_Integer> qualified =
         OS3DBlendableEdges(shape, edgeMap, chosen, &reason);
@@ -1614,9 +1660,11 @@ static OCCTShape *OS3DBlendEdgeSet(const TopoDS_Shape &shape,
             mk.Add(amount, TopoDS::Edge(edgeMap(i)));
         }
         mk.Build();
-        return OS3DFinishBlend(mk, edgeMap, qualified,
-                               mk.IsDone() ? mk.NbFaultyContours() : -1,
-                               status);
+        OCCTShape *out = OS3DFinishBlend(mk, edgeMap, qualified,
+                                         mk.IsDone() ? mk.NbFaultyContours() : -1,
+                                         status);
+        if (out != nil) OS3DFillModifierHistory(history, mk, shape, out->_shape);
+        return out;
     }
     BRepFilletAPI_MakeChamfer mk(shape);
     for (Standard_Integer i : qualified) {
@@ -1624,7 +1672,9 @@ static OCCTShape *OS3DBlendEdgeSet(const TopoDS_Shape &shape,
         mk.Add(amount, TopoDS::Edge(edgeMap(i)));
     }
     mk.Build();
-    return OS3DFinishBlend(mk, edgeMap, qualified, -1, status);
+    OCCTShape *out = OS3DFinishBlend(mk, edgeMap, qualified, -1, status);
+    if (out != nil) OS3DFillModifierHistory(history, mk, shape, out->_shape);
+    return out;
 }
 
 // Shared entry for the identity-addressed blends: 1-based edge indices into
@@ -1633,7 +1683,8 @@ static OCCTShape *OS3DBlendEdgeSet(const TopoDS_Shape &shape,
 // that silently blended a subset would be worse than failing.
 static OCCTShape *OS3DBlendByIndices(OCCTShape *shape, NSData *edgeIndices,
                                      double amount, bool isFillet,
-                                     OCCTOpStatus *status) {
+                                     OCCTOpStatus *status,
+                                     OCCTShapeHistory *history) {
     OS3DSetStatus(status, OCCTOpCodeKernelRefused, @"no input");
     if (shape == nil || amount <= 0.0) return nil;
     const NSUInteger count = edgeIndices.length / sizeof(int32_t);
@@ -1657,7 +1708,7 @@ static OCCTShape *OS3DBlendByIndices(OCCTShape *shape, NSData *edgeIndices,
             chosen.insert((Standard_Integer)indices[i]);
         }
         return OS3DBlendEdgeSet(shape->_shape, edgeMap, chosen,
-                                amount, isFillet, status);
+                                amount, isFillet, status, history);
     } catch (Standard_Failure &e) {
         OS3DSetStatus(status, OCCTOpCodeKernelRefused,
                       [NSString stringWithFormat:@"%s", e.GetMessageString()]);
@@ -1671,15 +1722,17 @@ static OCCTShape *OS3DBlendByIndices(OCCTShape *shape, NSData *edgeIndices,
 + (nullable OCCTShape *)filletedShape:(OCCTShape *)shape
                           edgeIndices:(NSData *)edgeIndices
                                radius:(double)radius
-                               status:(nullable OCCTOpStatus *)status {
-    return OS3DBlendByIndices(shape, edgeIndices, radius, true, status);
+                               status:(nullable OCCTOpStatus *)status
+                              history:(nullable OCCTShapeHistory *)history {
+    return OS3DBlendByIndices(shape, edgeIndices, radius, true, status, history);
 }
 
 + (nullable OCCTShape *)chamferedShape:(OCCTShape *)shape
                            edgeIndices:(NSData *)edgeIndices
                               distance:(double)distance
-                                status:(nullable OCCTOpStatus *)status {
-    return OS3DBlendByIndices(shape, edgeIndices, distance, false, status);
+                                status:(nullable OCCTOpStatus *)status
+                               history:(nullable OCCTShapeHistory *)history {
+    return OS3DBlendByIndices(shape, edgeIndices, distance, false, status, history);
 }
 
 + (nullable NSData *)edgeFaceAdjacencyOfShape:(OCCTShape *)shape {
@@ -1772,7 +1825,7 @@ static OCCTShape *OS3DBlendByIndices(OCCTShape *shape, NSData *edgeIndices,
             return nil;
         }
         return OS3DBlendEdgeSet(shape->_shape, edgeMap, chosen,
-                                radius, /*isFillet*/ true, status);
+                                radius, /*isFillet*/ true, status, nil);
     } catch (Standard_Failure &e) {
         OS3DSetStatus(status, OCCTOpCodeKernelRefused,
                       [NSString stringWithFormat:@"%s", e.GetMessageString()]);
@@ -1914,7 +1967,7 @@ static bool OS3DFilletBuilds(const TopoDS_Shape &shape,
             return nil;
         }
         return OS3DBlendEdgeSet(shape->_shape, edgeMap, chosen,
-                                distance, /*isFillet*/ false, status);
+                                distance, /*isFillet*/ false, status, nil);
     } catch (Standard_Failure &e) {
         OS3DSetStatus(status, OCCTOpCodeKernelRefused,
                       [NSString stringWithFormat:@"%s", e.GetMessageString()]);
@@ -1943,6 +1996,17 @@ static double OS3DVolume(const TopoDS_Shape &shape) {
                            thickness:(double)thickness
                            tolerance:(double)tolerance
                               status:(nullable OCCTOpStatus *)status {
+    return [self shelledShape:shape atWorldPoints:worldPoints
+                    thickness:thickness tolerance:tolerance
+                       status:status history:nil];
+}
+
++ (nullable OCCTShape *)shelledShape:(OCCTShape *)shape
+                       atWorldPoints:(NSData *)worldPoints
+                           thickness:(double)thickness
+                           tolerance:(double)tolerance
+                              status:(nullable OCCTOpStatus *)status
+                             history:(nullable OCCTShapeHistory *)history {
     OS3DSetStatus(status, OCCTOpCodeKernelRefused, @"no input");
     if (shape == nil || thickness == 0.0) return nil;
     const NSUInteger count = worldPoints.length / (3 * sizeof(double));
@@ -1986,6 +2050,7 @@ static double OS3DVolume(const TopoDS_Shape &shape) {
         }
 
         TopoDS_Shape built;
+        std::vector<OS3DHistEdge> histEdges;
         if (openFaces.IsEmpty()) {
             // Fully-enclosed hollow: offset the solid inward and SUBTRACT the
             // shrunken copy. (ByJoin with an empty closing-face list hands
@@ -2022,6 +2087,10 @@ static double OS3DVolume(const TopoDS_Shape &shape) {
                 return nil;
             }
             built = mk.Shape();
+            // Harvest before mk dies with this scope.
+            if (history != nil) {
+                OS3DCollectMakerHistory(mk, {input}, histEdges);
+            }
         }
 
         int solidCount = 0;
@@ -2045,6 +2114,15 @@ static double OS3DVolume(const TopoDS_Shape &shape) {
         }
 
         OS3DSetStatus(status, OCCTOpCodeOK, nil);
+        // Same-face survival plus whatever the thick-solid maker reported;
+        // the closed-hollow branch harvests nothing, so its OUTER faces
+        // inherit via the survival pass and the new inner faces stay
+        // honestly unnamed.
+        if (history != nil) {
+            OS3DFillHistory(history, histEdges, {input},
+                            Handle(BRepTools_History)(), valid,
+                            /*truncatedByHeal*/ !valid.IsSame(result));
+        }
         OCCTShape *out = [OCCTShape new];
         out->_shape = valid;
         return out;

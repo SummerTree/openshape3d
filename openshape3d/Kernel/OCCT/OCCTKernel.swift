@@ -668,7 +668,7 @@ nonisolated enum OCCTKernel {
         let status = OCCTOpStatus()
         guard let shape = OCCTBridge.filletedShape(
             handle.shape, edgeIndices: packIndices(edgeIndices),
-            radius: radius, status: status) else {
+            radius: radius, status: status, history: nil) else {
             let error = OCCTOpError(status)
             KernelCapture.recordFailure(
                 op: "fillet", inputs: [("shape", handle)],
@@ -687,7 +687,7 @@ nonisolated enum OCCTKernel {
         let status = OCCTOpStatus()
         guard let shape = OCCTBridge.chamferedShape(
             handle.shape, edgeIndices: packIndices(edgeIndices),
-            distance: distance, status: status) else {
+            distance: distance, status: status, history: nil) else {
             let error = OCCTOpError(status)
             KernelCapture.recordFailure(
                 op: "chamfer", inputs: [("shape", handle)],
@@ -698,7 +698,9 @@ nonisolated enum OCCTKernel {
         return .success(BRepHandle(shape))
     }
 
-    private static func packIndices(_ indices: [Int]) -> Data {
+    /// Internal (not private): the ancestry variants in ShapeAncestry.swift
+    /// share these packers.
+    static func packIndices(_ indices: [Int]) -> Data {
         indices.map(Int32.init).withUnsafeBytes { Data($0) }
     }
 
@@ -770,7 +772,7 @@ nonisolated enum OCCTKernel {
             10 * OCCTBridge.maxTolerance(of: handle.shape))
     }
 
-    private static func pack(_ points: [SIMD3<Double>]) -> Data {
+    static func pack(_ points: [SIMD3<Double>]) -> Data {
         var flat = [Double](); flat.reserveCapacity(points.count * 3)
         for p in points { flat.append(p.x); flat.append(p.y); flat.append(p.z) }
         return flat.withUnsafeBytes { Data($0) }

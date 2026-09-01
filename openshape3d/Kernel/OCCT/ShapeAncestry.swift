@@ -122,6 +122,99 @@ nonisolated extension OCCTKernel {
         return booleanResultWithAncestry(a, b, op: booleanOp(kind))
     }
 
+    // MARK: Modifier-op ancestry (step 5) — the ops that used to erase names
+
+    /// Identity-addressed fillet that also reports ancestry: untouched faces
+    /// `same`, resized faces `modified`, and each blend face `generated`
+    /// from its crease's edge index.
+    static func filletResultWithAncestry(
+        _ handle: BRepHandle, edgeIndices: [Int], radius: Double
+    ) -> Result<(handle: BRepHandle, ancestry: ShapeAncestry), OCCTOpError> {
+        guard !edgeIndices.isEmpty, radius > 0 else {
+            return .failure(.kernelRefused("nothing to fillet"))
+        }
+        let status = OCCTOpStatus()
+        let history = OCCTShapeHistory()
+        guard let shape = OCCTBridge.filletedShape(
+            handle.shape, edgeIndices: packIndices(edgeIndices),
+            radius: radius, status: status, history: history) else {
+            let error = OCCTOpError(status)
+            KernelCapture.recordFailure(
+                op: "fillet", inputs: [("shape", handle)],
+                params: ["radius": radius, "edgeIndices": edgeIndices],
+                error: error)
+            return .failure(error)
+        }
+        return .success((BRepHandle(shape), ShapeAncestry(history)))
+    }
+
+    static func chamferResultWithAncestry(
+        _ handle: BRepHandle, edgeIndices: [Int], distance: Double
+    ) -> Result<(handle: BRepHandle, ancestry: ShapeAncestry), OCCTOpError> {
+        guard !edgeIndices.isEmpty, distance > 0 else {
+            return .failure(.kernelRefused("nothing to chamfer"))
+        }
+        let status = OCCTOpStatus()
+        let history = OCCTShapeHistory()
+        guard let shape = OCCTBridge.chamferedShape(
+            handle.shape, edgeIndices: packIndices(edgeIndices),
+            distance: distance, status: status, history: history) else {
+            let error = OCCTOpError(status)
+            KernelCapture.recordFailure(
+                op: "chamfer", inputs: [("shape", handle)],
+                params: ["distance": distance, "edgeIndices": edgeIndices],
+                error: error)
+            return .failure(error)
+        }
+        return .success((BRepHandle(shape), ShapeAncestry(history)))
+    }
+
+    static func shellResultWithAncestry(
+        _ handle: BRepHandle, openingAt points: [SIMD3<Double>],
+        thickness: Double, tolerance: Double
+    ) -> Result<(handle: BRepHandle, ancestry: ShapeAncestry), OCCTOpError> {
+        guard thickness > 0 else {
+            return .failure(.kernelRefused("thickness must be positive"))
+        }
+        let status = OCCTOpStatus()
+        let history = OCCTShapeHistory()
+        guard let shape = OCCTBridge.shelledShape(
+            handle.shape, atWorldPoints: pack(points),
+            thickness: thickness, tolerance: tolerance,
+            status: status, history: history) else {
+            let error = OCCTOpError(status)
+            KernelCapture.recordFailure(
+                op: "shell", inputs: [("shape", handle)],
+                params: ["thickness": thickness, "tolerance": tolerance,
+                         "points": points.map { [$0.x, $0.y, $0.z] }],
+                error: error)
+            return .failure(error)
+        }
+        return .success((BRepHandle(shape), ShapeAncestry(history)))
+    }
+
+    static func removingFacesResultWithAncestry(
+        _ handle: BRepHandle, at points: [SIMD3<Double>], tolerance: Double
+    ) -> Result<(handle: BRepHandle, ancestry: ShapeAncestry), OCCTOpError> {
+        guard !points.isEmpty else {
+            return .failure(.noTargetMatched("no face was picked"))
+        }
+        let status = OCCTOpStatus()
+        let history = OCCTShapeHistory()
+        guard let shape = OCCTBridge.defeaturedShape(
+            handle.shape, atWorldPoints: pack(points),
+            tolerance: tolerance, status: status, history: history) else {
+            let error = OCCTOpError(status)
+            KernelCapture.recordFailure(
+                op: "removeFaces", inputs: [("shape", handle)],
+                params: ["tolerance": tolerance,
+                         "points": points.map { [$0.x, $0.y, $0.z] }],
+                error: error)
+            return .failure(error)
+        }
+        return .success((BRepHandle(shape), ShapeAncestry(history)))
+    }
+
     /// `booleanResult` that also reports each result face's kernel-history
     /// ancestry (input ordinal 0 = `a`, 1 = `b`). Identical geometry to
     /// `booleanResult` for identical inputs — ancestry is observation only.

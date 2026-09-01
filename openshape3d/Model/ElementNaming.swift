@@ -201,22 +201,38 @@ nonisolated enum ElementNaming {
     ///   walls) → `opFace` with all parents.
     /// - no named parents and nothing generated → unnamed; signatures
     ///   remain the fallback, per the design's migration story.
-    static func booleanNames(operation: FeatureID, ancestry: ShapeAncestry,
-                             inputNames: [[Int: ElementName]]) -> [Int: ElementName] {
+    /// `edgeParents` extends the composition to single-input MODIFIER ops
+    /// (step 5): a face GENERATED from input edge `i` (a fillet face from
+    /// its crease) claims `edgeParents[i]` — the crease's two adjacent-face
+    /// names — as its parents, so "the fillet of the cap/wall crease" is an
+    /// identity, not an accident of geometry. Booleans pass nothing here.
+    static func composeNames(operation: FeatureID, ancestry: ShapeAncestry,
+                             inputNames: [[Int: ElementName]],
+                             edgeParents: [Int: [ElementName]] = [:]) -> [Int: ElementName] {
         struct Claim {
             var parents: [ElementName] = []
             var hasGenerated = false
         }
         var claims: [Int: Claim] = [:]
-        for row in ancestry.rows where row.inputKind == .face {
-            var claim = claims[row.resultFace] ?? Claim()
-            if row.relation == .generated { claim.hasGenerated = true }
-            if row.inputOrdinal < inputNames.count,
-               let parent = inputNames[row.inputOrdinal][row.inputSubshape],
-               !claim.parents.contains(parent) {
-                claim.parents.append(parent)
+        for row in ancestry.rows {
+            if row.inputKind == .face {
+                var claim = claims[row.resultFace] ?? Claim()
+                if row.relation == .generated { claim.hasGenerated = true }
+                if row.inputOrdinal < inputNames.count,
+                   let parent = inputNames[row.inputOrdinal][row.inputSubshape],
+                   !claim.parents.contains(parent) {
+                    claim.parents.append(parent)
+                }
+                claims[row.resultFace] = claim
+            } else if row.inputKind == .edge, row.relation == .generated,
+                      let parents = edgeParents[row.inputSubshape] {
+                var claim = claims[row.resultFace] ?? Claim()
+                claim.hasGenerated = true
+                for parent in parents where !claim.parents.contains(parent) {
+                    claim.parents.append(parent)
+                }
+                claims[row.resultFace] = claim
             }
-            claims[row.resultFace] = claim
         }
 
         // Who would inherit what, before knowing about collisions.

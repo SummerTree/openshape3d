@@ -599,7 +599,7 @@ nonisolated extension FeatureGraph {
                 case let .success((outcome, ancestry)):
                     if result.adoptBRep(outcome.handle) {
                         resultHandle = outcome.handle
-                        resultNames = ElementNaming.booleanNames(
+                        resultNames = ElementNaming.composeNames(
                             operation: node.id, ancestry: ancestry,
                             inputNames: [state.kernelNames[target.id] ?? [:],
                                          toolNames])
@@ -679,7 +679,7 @@ nonisolated extension FeatureGraph {
                     // Inherit / mint through this hop's ancestry; a face
                     // with no named ancestors stays unnamed and signatures
                     // remain its fallback.
-                    accNames = ElementNaming.booleanNames(
+                    accNames = ElementNaming.composeNames(
                         operation: node.id, ancestry: ancestry,
                         inputNames: [accNames,
                                      state.kernelNames[tool.id] ?? [:]])
@@ -958,12 +958,12 @@ nonisolated extension FeatureGraph {
             }
             if indices.count == edgeRefs.count {
                 let blended = isFillet
-                    ? OCCTKernel.filletResult(brep, edgeIndices: indices,
-                                              radius: amount)
-                    : OCCTKernel.chamferResult(brep, edgeIndices: indices,
-                                               distance: amount)
+                    ? OCCTKernel.filletResultWithAncestry(
+                        brep, edgeIndices: indices, radius: amount)
+                    : OCCTKernel.chamferResultWithAncestry(
+                        brep, edgeIndices: indices, distance: amount)
                 switch blended {
-                case let .success(handle):
+                case let .success((handle, ancestry)):
                     var result = Body(
                         id: body.id, name: body.name, transform: .identity,
                         primitive: nil, euclidMesh: body.euclidMesh(),
@@ -972,9 +972,27 @@ nonisolated extension FeatureGraph {
                         state.errors[node.id] = .emptyGeometry
                         return
                     }
-                    let table = state.naming.faceTable(
+                    // Names survive the blend (step 5): untouched faces
+                    // inherit, and each blend face is named FOR ITS CREASE —
+                    // opFace(parents: the crease's two face names).
+                    let edgeParents = Dictionary(uniqueKeysWithValues:
+                        indices.compactMap { index -> (Int, [ElementName])? in
+                            edgeNames[index].map { (index, [$0.faceA, $0.faceB]) }
+                        })
+                    let outNames = ElementNaming.composeNames(
+                        operation: node.id, ancestry: ancestry,
+                        inputNames: [names], edgeParents: edgeParents)
+                    var table = state.naming.faceTable(
                         for: result, createdBy: node.id, scheme: .generic)
+                    if !outNames.isEmpty {
+                        table = ElementNaming.attach(
+                            outNames, to: table,
+                            channel: OCCTKernel.renderMeshFaceChannel(from: handle))
+                    }
                     state.put(result, table: table)
+                    if !outNames.isEmpty {
+                        state.kernelNames[result.id] = outNames
+                    }
                     return
                 case let .failure(error):
                     // The named edges EXIST — the blend itself failed
@@ -1124,10 +1142,10 @@ nonisolated extension FeatureGraph {
                 let c = face.outline.reduce(SIMD2<Double>.zero, +) / n
                 return face.origin + face.basisX * c.x + face.basisY * c.y
             }
-            switch OCCTKernel.shellResult(
+            switch OCCTKernel.shellResultWithAncestry(
                 brep, openingAt: openPoints, thickness: thickness,
                 tolerance: OCCTKernel.matchTolerance(for: brep)) {
-            case let .success(hollow):
+            case let .success((hollow, ancestry)):
                 var result = Body(
                     id: body.id, name: body.name, transform: .identity, primitive: nil,
                     euclidMesh: body.euclidMesh(), revision: nextRevision())
@@ -1135,9 +1153,21 @@ nonisolated extension FeatureGraph {
                     state.errors[node.id] = .emptyGeometry
                     return
                 }
-                let newTable = state.naming.faceTable(
+                // Surviving outer faces keep their identities through the
+                // hollow (step 5); the new inner faces mint from their
+                // parents or stay honestly unnamed.
+                let outNames = ElementNaming.composeNames(
+                    operation: node.id, ancestry: ancestry,
+                    inputNames: [state.kernelNames[body.id] ?? [:]])
+                var newTable = state.naming.faceTable(
                     for: result, createdBy: node.id, scheme: .generic)
+                if !outNames.isEmpty {
+                    newTable = ElementNaming.attach(
+                        outNames, to: newTable,
+                        channel: OCCTKernel.renderMeshFaceChannel(from: hollow))
+                }
                 state.put(result, table: newTable)
+                if !outNames.isEmpty { state.kernelNames[result.id] = outNames }
             case let .failure(error):
                 state.errors[node.id] = .kernelFailure("shell: \(error.message)")
             }
@@ -1202,10 +1232,12 @@ nonisolated extension FeatureGraph {
         }
 
         let healed: BRepHandle
-        switch OCCTKernel.removingFacesResult(
+        let ancestry: ShapeAncestry
+        switch OCCTKernel.removingFacesResultWithAncestry(
             brep, at: points, tolerance: OCCTKernel.matchTolerance(for: brep)) {
-        case let .success(handle):
+        case let .success((handle, history)):
             healed = handle
+            ancestry = history
         case let .failure(error):
             // Defeaturing legitimately fails when the neighbours cannot close
             // (§4.16: those deletions leave sheet bodies). Report rather than
@@ -1220,9 +1252,20 @@ nonisolated extension FeatureGraph {
             state.errors[node.id] = .emptyGeometry
             return
         }
-        // Every remaining face may have been re-trimmed; relabel by geometry.
-        let newTable = state.naming.faceTable(for: result, createdBy: node.id, scheme: .generic)
+        // Every remaining face may have been re-trimmed; relabel roles by
+        // geometry — but IDENTITIES survive through the defeaturing history
+        // (step 5; OCCT reports it, FreeCAD drops it, we keep it).
+        let outNames = ElementNaming.composeNames(
+            operation: node.id, ancestry: ancestry,
+            inputNames: [state.kernelNames[body.id] ?? [:]])
+        var newTable = state.naming.faceTable(for: result, createdBy: node.id, scheme: .generic)
+        if !outNames.isEmpty {
+            newTable = ElementNaming.attach(
+                outNames, to: newTable,
+                channel: OCCTKernel.renderMeshFaceChannel(from: healed))
+        }
         state.put(result, table: newTable)
+        if !outNames.isEmpty { state.kernelNames[result.id] = outNames }
     }
 
     // MARK: Replace Face (direct modeling, spec §4.12)
