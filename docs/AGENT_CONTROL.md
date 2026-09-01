@@ -251,6 +251,9 @@ graph, and shows up in History like any other feature.
 | `feature.pattern` | `bodyID`, `count`; optional `kind` (circular), `axis`, `center`, `spacing`, `totalAngleDegrees`, `rotateInstances` |
 | `feature.loft` | `sections[]` (≥2 `{sketchID, seedPoint}`, each a profile on its OWN sketch plane, lofted in order); optional `boolean`, `booleanTargets` |
 | `feature.pushPull` | `bodyID`, `face` (one 1-based index from `/v1/faces`), `distance` (mm, negative pushes in); optional `mode` (`planarAxial` default / `cylinderRadial`) |
+| `feature.moveFace` | `bodyID`, `face`, `delta` `[du, dv, dn]` in the face's own basis (mm — du/dv shear, dn along the normal) |
+| `feature.scaleFace` | `bodyID`, `face`, `factor` (>0; scales the face about its centre, tapering the solid) |
+| `feature.rotateFace` | `bodyID`, `face`, `angleDegrees` (±360); optional `axis` `[u, v, n]` in the face's basis (default the normal, which twists in place) |
 | `feature.mirror` | `bodyID`, `planeOrigin`, `planeNormal`; optional `keepOriginal` |
 | `feature.boolean` | `kind` (union/subtract/intersect), `targetBodyID`, `toolBodyIDs[]` |
 

@@ -100,6 +100,16 @@ nonisolated enum AgentExecOp: Sendable, Equatable {
     /// kernel index from `GET /v1/faces?body=`. `radial` picks the
     /// cylinder-radial mode (resize a bore/boss) over the default planar-axial.
     case pushPull(body: BodyID, face: Int, distance: Double, radial: Bool)
+    /// Face translate (spec §5): move one face by `[du, dv, dn]` in its OWN
+    /// (u, v, n) basis, mm — a normal move grows/shrinks, a lateral move
+    /// shears the solid.
+    case moveFace(body: BodyID, face: Int, delta: SIMD3<Double>)
+    /// Face scale (spec §5): scale one face about its centre by `factor`
+    /// (> 0), tapering the solid.
+    case scaleFace(body: BodyID, face: Int, factor: Double)
+    /// Face rotate (spec §5): rotate one face by `angleDegrees` about a line
+    /// through its centre, `axis` in the face's own (u, v, n) basis.
+    case rotateFace(body: BodyID, face: Int, angleDegrees: Double, axis: SIMD3<Double>)
     /// Faces are 1-based kernel indices from `GET /v1/faces?body=` — OCCT
     /// heals the surrounding faces over the removed ones (spec §4.16).
     case deleteFace(body: BodyID, faces: [Int])
@@ -122,6 +132,7 @@ nonisolated enum AgentExec {
         "feature.pattern", "feature.mirror", "feature.boolean",
         "feature.fillet", "feature.chamfer", "feature.shell",
         "feature.sweep", "feature.loft", "feature.pushPull",
+        "feature.moveFace", "feature.scaleFace", "feature.rotateFace",
         "feature.deleteFace", "feature.replaceFace",
     ]
 
@@ -153,6 +164,9 @@ nonisolated enum AgentExec {
         case "feature.sweep":      return parseSweep(args)
         case "feature.loft":       return parseLoft(args)
         case "feature.pushPull":   return parsePushPull(args)
+        case "feature.moveFace":   return parseMoveFace(args)
+        case "feature.scaleFace":  return parseScaleFace(args)
+        case "feature.rotateFace": return parseRotateFace(args)
         case "feature.deleteFace": return parseDeleteFace(args)
         case "feature.replaceFace": return parseReplaceFace(args)
         default:
@@ -408,6 +422,67 @@ nonisolated enum AgentExec {
             }
             return .success(.pushPull(body: body, face: faces[0], distance: distance,
                                       radial: mode == "cylinderRadial"))
+        } catch let e as AgentExecError { return .failure(e) } catch { return .failure(unexpected) }
+    }
+
+    /// Body + exactly one 1-based face index — the front half of every
+    /// single-face op (push/pull, move/scale/rotate face).
+    private static func oneFace(_ a: [String: Any]) throws -> (BodyID, Int) {
+        let body = BodyID(raw: try uuid(a, "bodyID"))
+        let faces = try edgeIndices(a, "face", allowEmpty: false)
+        guard faces.count == 1 else {
+            throw AgentExecError(code: "one_face_only", message: "this op acts on exactly one \"face\".")
+        }
+        return (body, faces[0])
+    }
+
+    private static func parseMoveFace(_ a: [String: Any]) -> Result<AgentExecOp, AgentExecError> {
+        do {
+            let (body, face) = try oneFace(a)
+            guard a["delta"] != nil else {
+                return .failure(.init(code: "missing_delta",
+                                      message: "\"delta\" must be [du, dv, dn] in the face's own "
+                                      + "basis (mm): du/dv shear, dn moves along the normal."))
+            }
+            let delta = try vector3(a, "delta", default: .zero)
+            guard simd_length(delta) > 1e-9 else {
+                return .failure(.init(code: "zero_delta", message: "a zero move does nothing."))
+            }
+            return .success(.moveFace(body: body, face: face, delta: delta))
+        } catch let e as AgentExecError { return .failure(e) } catch { return .failure(unexpected) }
+    }
+
+    private static func parseScaleFace(_ a: [String: Any]) -> Result<AgentExecOp, AgentExecError> {
+        do {
+            let (body, face) = try oneFace(a)
+            let factor = try double(a, "factor")
+            guard factor > 1e-9 else {
+                return .failure(.init(code: "bad_factor",
+                                      message: "\"factor\" must be > 0 (1.0 is no change)."))
+            }
+            return .success(.scaleFace(body: body, face: face, factor: factor))
+        } catch let e as AgentExecError { return .failure(e) } catch { return .failure(unexpected) }
+    }
+
+    private static func parseRotateFace(_ a: [String: Any]) -> Result<AgentExecOp, AgentExecError> {
+        do {
+            let (body, face) = try oneFace(a)
+            let angle = try angleDegrees(a, "angleDegrees", default: .nan)
+            guard angle.isFinite else {
+                return .failure(.init(code: "missing_angleDegrees",
+                                      message: "\"angleDegrees\" is required (±360)."))
+            }
+            guard abs(angle) > 1e-9 else {
+                return .failure(.init(code: "zero_angle", message: "a zero rotation does nothing."))
+            }
+            // axis in the face's own (u, v, n) basis; defaults to the normal (n),
+            // which twists the face in place.
+            let axis = try vector3(a, "axis", default: SIMD3(0, 0, 1))
+            guard simd_length(axis) > 1e-9 else {
+                return .failure(.init(code: "degenerate_axis", message: "\"axis\" must be non-zero."))
+            }
+            return .success(.rotateFace(body: body, face: face,
+                                        angleDegrees: angle, axis: axis))
         } catch let e as AgentExecError { return .failure(e) } catch { return .failure(unexpected) }
     }
 

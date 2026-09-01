@@ -72,6 +72,29 @@ final class AgentExecTests: XCTestCase {
         XCTAssertEqual(code(#"{"op":"feature.pushPull","args":{"bodyID":"\#(id)","face":[1],"distance":2,"mode":"wat"}}"#), "bad_mode")
     }
 
+    func testFaceTransformOpsParseAndValidate() throws {
+        let id = UUID().uuidString
+        guard case let .moveFace(_, f, delta)? = op(#"{"op":"feature.moveFace","args":{"bodyID":"\#(id)","face":[2],"delta":[0,0,5]}}"#) else {
+            return XCTFail("expected .moveFace")
+        }
+        XCTAssertEqual(f, 2); XCTAssertEqual(delta, SIMD3(0, 0, 5))
+        guard case let .scaleFace(_, _, factor)? = op(#"{"op":"feature.scaleFace","args":{"bodyID":"\#(id)","face":[2],"factor":0.5}}"#) else {
+            return XCTFail("expected .scaleFace")
+        }
+        XCTAssertEqual(factor, 0.5)
+        guard case let .rotateFace(_, _, deg, axis)? = op(#"{"op":"feature.rotateFace","args":{"bodyID":"\#(id)","face":[2],"angleDegrees":15}}"#) else {
+            return XCTFail("expected .rotateFace")
+        }
+        XCTAssertEqual(deg, 15)
+        XCTAssertEqual(axis, SIMD3(0, 0, 1), "axis defaults to the face normal (n)")
+        // refusals
+        XCTAssertEqual(code(#"{"op":"feature.moveFace","args":{"bodyID":"\#(id)","face":[1]}}"#), "missing_delta")
+        XCTAssertEqual(code(#"{"op":"feature.moveFace","args":{"bodyID":"\#(id)","face":[1],"delta":[0,0,0]}}"#), "zero_delta")
+        XCTAssertEqual(code(#"{"op":"feature.scaleFace","args":{"bodyID":"\#(id)","face":[1],"factor":0}}"#), "bad_factor")
+        XCTAssertEqual(code(#"{"op":"feature.rotateFace","args":{"bodyID":"\#(id)","face":[1]}}"#), "missing_angleDegrees")
+        XCTAssertEqual(code(#"{"op":"feature.rotateFace","args":{"bodyID":"\#(id)","face":[1,2],"angleDegrees":10}}"#), "one_face_only")
+    }
+
     // MARK: Delete/replace face
 
     func testDeleteFaceParsesAndRejectsEmpty() throws {

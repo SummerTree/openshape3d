@@ -315,8 +315,27 @@ final class AgentBridge {
                              openFaces: openFaces, on: viewModel)
 
         case let .pushPull(bodyID, face, distance, radial):
-            return execPushPull(body: bodyID, face: face, distance: distance,
-                                radial: radial, on: viewModel)
+            return execSingleFace(body: bodyID, face: face, name: "Push/Pull",
+                                  on: viewModel) { ref in
+                .pushPull(face: ref, distance: Expr(value: distance),
+                          mode: radial ? .cylinderRadial : .planarAxial)
+            }
+
+        case let .moveFace(bodyID, face, delta):
+            return execSingleFace(body: bodyID, face: face, name: "Move Face",
+                                  on: viewModel) { .moveFace(face: $0, delta: PointWrapper(delta)) }
+
+        case let .scaleFace(bodyID, face, factor):
+            return execSingleFace(body: bodyID, face: face, name: "Scale Face",
+                                  on: viewModel) { .scaleFace(face: $0, factor: Expr(value: factor)) }
+
+        case let .rotateFace(bodyID, face, angleDegrees, axis):
+            return execSingleFace(body: bodyID, face: face, name: "Rotate Face",
+                                  on: viewModel) { ref in
+                // FeatureKind.rotateFace's Expr is RADIANS; the wire is degrees.
+                .rotateFace(face: ref, angle: Expr(value: angleDegrees * .pi / 180),
+                            axis: PointWrapper(axis))
+            }
 
         case let .deleteFace(bodyID, faces):
             return execDeleteFace(body: bodyID, faces: faces, on: viewModel)
@@ -677,11 +696,14 @@ final class AgentBridge {
         return record(node, on: viewModel)
     }
 
-    /// feature.pushPull: move one face by a distance, growing or shrinking the
-    /// solid — the direct-modeling op, recorded through the same graph path and
-    /// face-minting as delete/replace-face.
-    private func execPushPull(body bodyID: BodyID, face: Int, distance: Double,
-                              radial: Bool, on viewModel: EditorViewModel) -> AgentResponse {
+    /// The direct-modeling single-face ops (push/pull, move/scale/rotate face)
+    /// share this: resolve the identity context, mint a real FaceRef for the
+    /// one kernel face index, and record a node the `kind` closure builds from
+    /// it. Same face-minting as delete/replace-face; `outputBodyIDs:[bodyID]`
+    /// because these modify the body in place.
+    private func execSingleFace(body bodyID: BodyID, face: Int, name: String,
+                                on viewModel: EditorViewModel,
+                                _ kind: (FaceRef) -> FeatureKind) -> AgentResponse {
         let session = viewModel.session
         let context: (body: Body, brep: BRepHandle)
         switch identityContext(bodyID, session) {
@@ -694,11 +716,8 @@ final class AgentBridge {
         case let .ok(minted): refs = minted
         case let .reply(reply): return reply
         }
-        return record(FeatureNode(
-            name: "Push/Pull",
-            kind: .pushPull(face: refs[0], distance: Expr(value: distance),
-                            mode: radial ? .cylinderRadial : .planarAxial),
-            outputBodyIDs: [bodyID]), on: viewModel)
+        return record(FeatureNode(name: name, kind: kind(refs[0]),
+                                  outputBodyIDs: [bodyID]), on: viewModel)
     }
 
     /// feature.deleteFace: remove the named kernel faces and let OCCT heal
