@@ -382,8 +382,6 @@ final class DocumentSession {
         lastEvalErrors = result.errors
         lastFaceTables = result.faceTables
         lastKernelNames = result.kernelNames
-        lastNamingRevisions = Dictionary(uniqueKeysWithValues:
-            result.bodies.map { ($0.id, $0.meshRevision) })
 
         // Every BodyID any node owns — the pre-edit graph too, so a node removed
         // in `editedGraph` still has its now-orphaned body diffed (and deleted).
@@ -431,8 +429,27 @@ final class DocumentSession {
             commands.append(DeleteBodiesCommand(ids: toDelete, document: document))
         }
 
-        guard !commands.isEmpty else { return }
+        guard !commands.isEmpty else {
+            captureNamingRevisions(for: resultByID.keys)
+            return
+        }
         perform(CompositeCommand(title: title, commands: commands))
+        // AFTER the commands: ReplaceBodyCommand.apply re-mints meshRevision,
+        // so revisions captured from `result.bodies` would mark every
+        // replace-path rebuild stale and silently disable name minting (found
+        // live: the guard tripped right after a successful exec fillet). The
+        // retained tables/names describe these bodies exactly — the replay
+        // built them — only the revision stamps had moved.
+        captureNamingRevisions(for: resultByID.keys)
+    }
+
+    /// Stamp which body revisions `lastFaceTables`/`lastKernelNames`
+    /// describe, from the DOCUMENT's post-apply state.
+    private func captureNamingRevisions<S: Sequence>(for ids: S) where S.Element == BodyID {
+        let wanted = Set(ids)
+        lastNamingRevisions = Dictionary(uniqueKeysWithValues:
+            document.bodies.filter { wanted.contains($0.id) }
+                .map { ($0.id, $0.meshRevision) })
     }
 
     /// Convenience for the editor/VM: change a feature node's parameters and

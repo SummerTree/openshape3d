@@ -111,6 +111,12 @@ final class AgentBridge {
         case let .check(bodyID, runBOPCheck):
             return check(bodyID: bodyID, runBOPCheck: runBOPCheck, on: viewModel)
 
+        case let .edges(bodyID):
+            return listEdges(bodyID: bodyID, on: viewModel)
+
+        case let .faces(bodyID):
+            return listFaces(bodyID: bodyID, on: viewModel)
+
         case let .capture(note):
             let analytic = viewModel.session.document.bodies.compactMap { body in
                 body.brep.map { (label: body.name, handle: $0) }
@@ -268,6 +274,14 @@ final class AgentBridge {
                                target: bodyRef(target, session),
                                tools: tools.map { bodyRef($0, session) }),
                 outputBodyIDs: [BodyID()]), on: viewModel)
+
+        case let .blend(bodyID, isFillet, amount, edges):
+            return execBlend(body: bodyID, isFillet: isFillet, amount: amount,
+                             edgeIndices: edges, on: viewModel)
+
+        case let .shell(bodyID, thickness, openFaces):
+            return execShell(body: bodyID, thickness: thickness,
+                             openFaces: openFaces, on: viewModel)
         }
     }
 
@@ -349,6 +363,256 @@ final class AgentBridge {
         var payload = snapshot(of: viewModel)
         for (k, v) in extra { payload[k] = v }
         return .ok(payload)
+    }
+
+    // MARK: - Kernel sub-shape discovery + identity-addressed exec ops
+    // (/v1/edges, /v1/faces, feature.fillet/chamfer/shell — step 4b/5 wiring)
+
+    /// The analytic body with FRESH identity maps, or the reply explaining
+    /// why not. Blends/shell over the wire address kernel indices, and an
+    /// index against a stale build would blend the wrong thing — the same
+    /// revision guard the interactive mint sites use.
+    private enum IdentityContext {
+        case ok(body: Body, brep: BRepHandle)
+        case reply(AgentResponse)
+    }
+
+    private func identityContext(_ bodyID: BodyID,
+                                 _ session: DocumentSession) -> IdentityContext {
+        guard let body = session.document.bodies.first(where: { $0.id == bodyID }) else {
+            return .reply(execMissing("body", bodyID.raw.uuidString))
+        }
+        guard let brep = body.brep else {
+            return .reply(.failure(409, "Conflict", error: "mesh_only_body",
+                message: "'\(body.name)' carries no analytic kernel shape, so it has "
+                       + "no addressable edges or faces. Only brep bodies blend/shell over exec."))
+        }
+        guard session.lastNamingRevisions[bodyID] == body.meshRevision else {
+            return .reply(.failure(409, "Conflict", error: "stale_identity",
+                message: "'\(body.name)' changed since the last rebuild, so kernel "
+                       + "indices may be stale. Run any exec feature op (or edit a "
+                       + "feature) to rebuild, then GET /v1/edges|/v1/faces again."))
+        }
+        return .ok(body: body, brep: brep)
+    }
+
+    /// JSON-safe rendering of an Encodable identity value.
+    private func jsonObject<T: Encodable>(_ value: T) -> Any? {
+        guard let data = try? JSONEncoder().encode(value) else { return nil }
+        return try? JSONSerialization.jsonObject(with: data)
+    }
+
+    private func listEdges(bodyID: String, on viewModel: EditorViewModel) -> AgentResponse {
+        guard let uuid = UUID(uuidString: bodyID) else {
+            return execMissing("body", bodyID)
+        }
+        let session = viewModel.session
+        let context: (body: Body, brep: BRepHandle)
+        switch identityContext(BodyID(raw: uuid), session) {
+        case let .ok(body, brep): context = (body, brep)
+        case let .reply(reply): return reply
+        }
+        let adjacency = OCCTKernel.edgeFaceAdjacency(context.brep)
+        let names = session.lastKernelNames[context.body.id] ?? [:]
+        let edgeNames = ElementNaming.edgeNames(adjacency: adjacency, names: names)
+
+        // Geometry per kernel edge, recovered from the mesh side: every
+        // selectable mesh edge maps to its nearest kernel edge, and arc
+        // chains that tessellate into several segments accumulate length.
+        let tolerance = OCCTKernel.matchTolerance(for: context.brep)
+        var midpointByEdge: [Int: SIMD3<Float>] = [:]
+        var lengthByEdge: [Int: Double] = [:]
+        var convexByEdge: [Int: Bool] = [:]
+        for edge in EdgeTopology.selectableEdges(from: context.body.render) {
+            let mid = edge.midpoint
+            guard let index = OCCTKernel.nearestEdgeIndex(
+                context.brep,
+                to: SIMD3(Double(mid.x), Double(mid.y), Double(mid.z)),
+                tolerance: tolerance) else { continue }
+            if midpointByEdge[index] == nil {
+                midpointByEdge[index] = mid
+                convexByEdge[index] = edge.isConvex
+            }
+            lengthByEdge[index, default: 0] += Double(edge.length)
+        }
+
+        let rows = adjacency.sorted { $0.edge < $1.edge }.map { triple -> [String: Any] in
+            var row: [String: Any] = [
+                "index": triple.edge,
+                "faces": [triple.faceA, triple.faceB],
+            ]
+            if let mid = midpointByEdge[triple.edge] {
+                row["midpoint"] = [Double(mid.x), Double(mid.y), Double(mid.z)]
+            }
+            if let length = lengthByEdge[triple.edge] { row["lengthMM"] = length }
+            if let convex = convexByEdge[triple.edge] { row["convex"] = convex }
+            if let name = edgeNames[triple.edge], let encoded = jsonObject(name) {
+                row["name"] = encoded
+            }
+            return row
+        }
+        return .ok([
+            "body": context.body.id.raw.uuidString,
+            "count": rows.count,
+            "edges": rows,
+            "message": "Indices feed feature.fillet/chamfer's args.edges. "
+                     + "Edges without a name still blend; ones missing "
+                     + "entirely are seams/borders, which never blend.",
+        ])
+    }
+
+    private func listFaces(bodyID: String, on viewModel: EditorViewModel) -> AgentResponse {
+        guard let uuid = UUID(uuidString: bodyID) else {
+            return execMissing("body", bodyID)
+        }
+        let session = viewModel.session
+        let context: (body: Body, brep: BRepHandle)
+        switch identityContext(BodyID(raw: uuid), session) {
+        case let .ok(body, brep): context = (body, brep)
+        case let .reply(reply): return reply
+        }
+        guard let table = session.lastFaceTables[context.body.id] else {
+            return .failure(409, "Conflict", error: "stale_identity",
+                            message: "No face table retained for '\(context.body.name)' "
+                                   + "— rebuild first (any exec feature op).")
+        }
+        let channel = OCCTKernel.renderMeshFaceChannel(from: context.brep)
+        let rows = table.entries.compactMap { entry -> [String: Any]? in
+            guard let index = ElementNaming.kernelFace(of: entry, channel: channel)
+            else { return nil }
+            var row: [String: Any] = [
+                "index": index,
+                "role": String(describing: entry.role),
+                "areaMM2": entry.signature.area,
+                "centroid": [entry.signature.centroid.x,
+                             entry.signature.centroid.y,
+                             entry.signature.centroid.z],
+                "normal": [entry.signature.normal.x,
+                           entry.signature.normal.y,
+                           entry.signature.normal.z],
+            ]
+            if case let .cylindrical(radius) = entry.signature.kind {
+                row["kind"] = "cylindrical"
+                row["radiusMM"] = radius
+            } else {
+                row["kind"] = "planar"
+            }
+            if let name = entry.elementName, let encoded = jsonObject(name) {
+                row["name"] = encoded
+            }
+            return row
+        }.sorted { ($0["index"] as? Int ?? 0) < ($1["index"] as? Int ?? 0) }
+        return .ok([
+            "body": context.body.id.raw.uuidString,
+            "count": rows.count,
+            "faces": rows,
+            "message": "Indices feed feature.shell's args.openFaces.",
+        ])
+    }
+
+    /// feature.fillet / feature.chamfer: mint real EdgeRefs — mesh-side
+    /// signature for the fallback, EdgeName for identity — and record the
+    /// node through the same path as a hand-picked blend, so the feature
+    /// replays identically.
+    private func execBlend(body bodyID: BodyID, isFillet: Bool, amount: Double,
+                           edgeIndices: [Int],
+                           on viewModel: EditorViewModel) -> AgentResponse {
+        let session = viewModel.session
+        let context: (body: Body, brep: BRepHandle)
+        switch identityContext(bodyID, session) {
+        case let .ok(body, brep): context = (body, brep)
+        case let .reply(reply): return reply
+        }
+        let adjacency = OCCTKernel.edgeFaceAdjacency(context.brep)
+        let known = Set(adjacency.map(\.edge))
+        for index in edgeIndices where !known.contains(index) {
+            return .failure(404, "Not Found", error: "unknown_edge",
+                            message: "No blendable kernel edge \(index) on "
+                                   + "'\(context.body.name)'. GET /v1/edges?body=… for the list.")
+        }
+        let names = session.lastKernelNames[bodyID] ?? [:]
+        let edgeNames = ElementNaming.edgeNames(adjacency: adjacency, names: names)
+
+        // Signatures come from the mesh side, exactly as an interactive pick
+        // would mint them — inverse-mapped through the same nearest-edge
+        // matching. All-or-nothing: a ref without a signature could not fall
+        // back if its name later misses.
+        let tolerance = OCCTKernel.matchTolerance(for: context.brep)
+        let wanted = Set(edgeIndices)
+        var signatureByEdge: [Int: EdgeSignature] = [:]
+        for edge in EdgeTopology.selectableEdges(from: context.body.render) {
+            let mid = edge.midpoint
+            guard let index = OCCTKernel.nearestEdgeIndex(
+                context.brep,
+                to: SIMD3(Double(mid.x), Double(mid.y), Double(mid.z)),
+                tolerance: tolerance),
+                wanted.contains(index), signatureByEdge[index] == nil
+            else { continue }
+            signatureByEdge[index] = EdgeTopology.signature(of: edge)
+            if signatureByEdge.count == wanted.count { break }
+        }
+        let ref = bodyRef(bodyID, session)
+        var refs: [EdgeRef] = []
+        for index in edgeIndices {
+            guard let signature = signatureByEdge[index] else {
+                return .failure(409, "Conflict", error: "unaddressable_edge",
+                                message: "Kernel edge \(index) has no mesh-side "
+                                       + "signature to fall back on — pick a different "
+                                       + "edge from /v1/edges.")
+            }
+            refs.append(EdgeRef(body: ref, signature: signature,
+                                faceNames: edgeNames[index]))
+        }
+        let node = FeatureNode(
+            name: isFillet ? "Fillet" : "Chamfer",
+            kind: isFillet
+                ? .fillet(body: ref, edges: refs, radius: Expr(value: amount))
+                : .chamfer(body: ref, edges: refs, setback: Expr(value: amount)),
+            outputBodyIDs: [bodyID])
+        return record(node, on: viewModel)
+    }
+
+    /// feature.shell: open faces by kernel index, minted into FaceRefs with
+    /// both signature and name.
+    private func execShell(body bodyID: BodyID, thickness: Double,
+                           openFaces: [Int],
+                           on viewModel: EditorViewModel) -> AgentResponse {
+        let session = viewModel.session
+        let context: (body: Body, brep: BRepHandle)
+        switch identityContext(bodyID, session) {
+        case let .ok(body, brep): context = (body, brep)
+        case let .reply(reply): return reply
+        }
+        guard let table = session.lastFaceTables[bodyID] else {
+            return .failure(409, "Conflict", error: "stale_identity",
+                            message: "No face table retained for '\(context.body.name)' "
+                                   + "— rebuild first (any exec feature op).")
+        }
+        let channel = OCCTKernel.renderMeshFaceChannel(from: context.brep)
+        var entryByKernelFace: [Int: FaceTable.Entry] = [:]
+        for entry in table.entries {
+            if let index = ElementNaming.kernelFace(of: entry, channel: channel) {
+                entryByKernelFace[index] = entry
+            }
+        }
+        let ref = bodyRef(bodyID, session)
+        var refs: [FaceRef] = []
+        for index in openFaces {
+            guard let entry = entryByKernelFace[index] else {
+                return .failure(404, "Not Found", error: "unknown_face",
+                                message: "No kernel face \(index) on "
+                                       + "'\(context.body.name)'. GET /v1/faces?body=… for the list.")
+            }
+            refs.append(FaceRef(body: ref, creator: ref.producer,
+                                role: entry.role, signature: entry.signature,
+                                elementName: entry.elementName))
+        }
+        let node = FeatureNode(
+            name: "Shell",
+            kind: .shell(body: ref, openFaces: refs,
+                         thickness: Expr(value: thickness)),
+            outputBodyIDs: [bodyID])
+        return record(node, on: viewModel)
     }
 
     // MARK: - Geometry health (/v1/check — docs/FREECAD_PLAYBOOK.md D1)

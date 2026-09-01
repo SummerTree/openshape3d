@@ -161,6 +161,40 @@ against a parent (a wire can be fine alone and self-intersecting in its face).
 A mesh-only body comes back as `{"meshOnly": true}` — losing the brep
 somewhere in a chain is itself a finding. `invalid` counts sick breps only.
 
+### `GET /v1/edges?body=<uuid>` and `GET /v1/faces?body=<uuid>`
+
+Kernel sub-shape discovery — the vocabulary for identity-addressed exec ops.
+Edges: 1-based kernel index, adjacent-face pair, midpoint/length/convexity
+(recovered mesh-side), and the durable `EdgeName` when the identity layer has
+one. Faces: index, role, kind (planar/cylindrical + radius), area, centroid,
+normal, `ElementName`. 409 `mesh_only_body` for bodies without a brep; 409
+`stale_identity` when the body changed since the last applied rebuild (undo
+does this) — run any exec feature op to rebuild, then re-query. Edges missing
+from the list are seams/borders, which never blend anyway.
+
+### `POST /v1/exec` — `feature.fillet` / `feature.chamfer` / `feature.shell`
+
+The ops that used to be inexpressible over the wire (they take topological
+refs, not numbers) — the `EdgeName`/`ElementName` vocabulary closed that:
+
+```json
+{"op":"feature.fillet","args":{"bodyID":"…","radius":1,"edges":[1,3]}}
+{"op":"feature.chamfer","args":{"bodyID":"…","setback":0.5,"edges":[7]}}
+{"op":"feature.shell","args":{"bodyID":"…","thickness":0.5,"openFaces":[6]}}
+```
+
+`edges`/`openFaces` are the 1-based kernel indices `/v1/edges`//v1/faces`
+report; omitted/empty `openFaces` hollows fully enclosed. The recorded
+feature carries REAL refs — mesh-side signature plus the durable name — so
+it replays by identity exactly like a hand-picked blend. Verified live:
+extrude → fillet → fillet chained by re-discovery, and an open-face shell
+landing the exact analytic volume. Failures are typed: 404
+`unknown_edge`/`unknown_face` (with a pointer to the discovery endpoint),
+409 `mesh_only_body`/`stale_identity`/`unaddressable_edge`, and a blend the
+kernel refuses (radius too big, degenerate offset) comes back as the
+feature's `evalErrors` entry with `failed: true` — undo twice to remove the
+recorded node, exactly like any failed exec feature.
+
 ### `POST /v1/capture`
 
 Body optional: `{"note":"wheel hub looks wrong"}`. Snapshots every analytic
@@ -285,14 +319,14 @@ an unexplained failure.
 
 ## What this cannot do yet
 
-`/v1/exec` covers sketching plus extrude, revolve, pattern, mirror and boolean —
-enough to build a real parametric model end to end. What is still missing:
+`/v1/exec` covers sketching plus extrude, revolve, pattern, mirror, boolean —
+and, since the topological-naming mission landed its edge/face identity
+vocabulary, **fillet, chamfer and shell** (see their section above). What is
+still missing:
 
-- **Fillet, chamfer, shell and the face ops** (`deleteFace`, `offsetFace`,
-  `replaceFace`). These take `EdgeRef`/`FaceRef`, which are topological
-  signatures rather than plain numbers, so exposing them needs a way to NAME an
-  edge or face over the wire. That is a genuine design question, not a
-  mechanical addition.
+- **The remaining face ops** (`deleteFace`, `offsetFace`, `replaceFace`) —
+  now a mechanical addition on the same `/v1/faces` vocabulary, no longer a
+  design question.
 - **Align**, which has no `FeatureKind` at all.
 - **Importing a body.** Several of the Shapr3D tutorial models lean on
   `MaterializeImportedBodies`, and those bodies are Parasolid, which OCCT cannot

@@ -19,6 +19,56 @@ import simd
 
 final class AgentExecTests: XCTestCase {
 
+    // MARK: Blends + shell (identity-addressed, step 4b/5 wiring)
+
+    func testFilletParsesEdgesAndRadius() throws {
+        let id = UUID().uuidString
+        let parsed = op(#"{"op":"feature.fillet","args":{"bodyID":"\#(id)","radius":1.5,"edges":[3,7]}}"#)
+        guard case let .blend(body, isFillet, amount, edges)? = parsed else {
+            return XCTFail("expected .blend, got \(String(describing: parsed))")
+        }
+        XCTAssertEqual(body.raw.uuidString, id)
+        XCTAssertTrue(isFillet)
+        XCTAssertEqual(amount, 1.5)
+        XCTAssertEqual(edges, [3, 7])
+    }
+
+    func testChamferUsesSetbackAndFilletUsesRadius() {
+        let id = UUID().uuidString
+        XCTAssertEqual(code(#"{"op":"feature.chamfer","args":{"bodyID":"\#(id)","radius":1,"edges":[1]}}"#),
+                       "missing_setback", "chamfer must not accept radius")
+        XCTAssertEqual(code(#"{"op":"feature.fillet","args":{"bodyID":"\#(id)","setback":1,"edges":[1]}}"#),
+                       "missing_radius")
+    }
+
+    func testBlendRefusesEmptyZeroOrNegativeIndices() {
+        let id = UUID().uuidString
+        XCTAssertEqual(code(#"{"op":"feature.fillet","args":{"bodyID":"\#(id)","radius":1,"edges":[]}}"#),
+                       "missing_edges")
+        XCTAssertEqual(code(#"{"op":"feature.fillet","args":{"bodyID":"\#(id)","radius":1,"edges":[0]}}"#),
+                       "bad_index", "indices are 1-based; 0 is a typo")
+        XCTAssertEqual(code(#"{"op":"feature.fillet","args":{"bodyID":"\#(id)","radius":-2,"edges":[1]}}"#),
+                       "bad_radius")
+    }
+
+    func testShellParsesAndAllowsAClosedHollow() throws {
+        let id = UUID().uuidString
+        let open = op(#"{"op":"feature.shell","args":{"bodyID":"\#(id)","thickness":0.5,"openFaces":[2]}}"#)
+        guard case let .shell(_, thickness, faces)? = open else {
+            return XCTFail("expected .shell")
+        }
+        XCTAssertEqual(thickness, 0.5)
+        XCTAssertEqual(faces, [2])
+        // Absent openFaces = fully-enclosed hollow, not an error.
+        let closed = op(#"{"op":"feature.shell","args":{"bodyID":"\#(id)","thickness":0.5}}"#)
+        guard case let .shell(_, _, none)? = closed else {
+            return XCTFail("expected .shell")
+        }
+        XCTAssertTrue(none.isEmpty)
+        XCTAssertEqual(code(#"{"op":"feature.shell","args":{"bodyID":"\#(id)","thickness":0}}"#),
+                       "bad_thickness")
+    }
+
     // MARK: Helpers
 
     private func parse(_ json: String) -> Result<AgentExecOp, AgentExecError> {

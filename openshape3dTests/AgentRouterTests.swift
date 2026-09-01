@@ -96,6 +96,21 @@ final class AgentRouterTests: XCTestCase {
         XCTAssertTrue(AgentRoute.capture(note: "").needsEditor)
     }
 
+    func testEdgeAndFaceDiscoveryRequireABodyParam() {
+        XCTAssertEqual(route("GET", "/v1/edges?body=AB12"), .edges(bodyID: "AB12"))
+        XCTAssertEqual(route("GET", "/v1/faces?body=AB12"), .faces(bodyID: "AB12"))
+        for path in ["/v1/edges", "/v1/faces"] {
+            guard case let .reply(status, error, message) = route("GET", path) else {
+                return XCTFail("expected a reply for \(path) without ?body=")
+            }
+            XCTAssertEqual(status, 400)
+            XCTAssertEqual(error, "missing_body_param")
+            XCTAssertTrue(message.contains("/v1/state"), message)
+        }
+        XCTAssertTrue(AgentRoute.edges(bodyID: "x").needsEditor)
+        XCTAssertTrue(AgentRoute.faces(bodyID: "x").needsEditor)
+    }
+
     func testUnknownPathIs404() {
         guard case let .reply(status, error, _) = route("GET", "/v1/nope") else {
             return XCTFail("expected a reply")

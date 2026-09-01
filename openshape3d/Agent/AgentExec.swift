@@ -69,6 +69,15 @@ nonisolated enum AgentExecOp: Sendable, Equatable {
     /// `AgentBridge` maps it on the far side of the hop. Validated here anyway,
     /// so a typo is a 400 and never a silent no-op.
     case boolean(kind: String, target: BodyID, tools: [BodyID])
+    /// Edges are 1-based kernel edge indices from `GET /v1/edges?body=` —
+    /// the same numbering the whole identity layer shares
+    /// (TOPO_NAMING_HISTORY_DESIGN step 4b unblocked expressing this over
+    /// the wire: the recorded refs carry durable `EdgeName`s, so the feature
+    /// replays by identity like a hand-picked blend).
+    case blend(body: BodyID, isFillet: Bool, amount: Double, edges: [Int])
+    /// Open faces are 1-based kernel face indices from `GET /v1/faces?body=`;
+    /// EMPTY means a fully-enclosed hollow.
+    case shell(body: BodyID, thickness: Double, openFaces: [Int])
 }
 
 // MARK: - Parsing
@@ -81,6 +90,7 @@ nonisolated enum AgentExec {
         "sketch.create", "sketch.addEntities",
         "feature.extrude", "feature.revolve",
         "feature.pattern", "feature.mirror", "feature.boolean",
+        "feature.fillet", "feature.chamfer", "feature.shell",
     ]
 
     static let booleanKinds = ["union", "subtract", "intersect"]
@@ -105,6 +115,9 @@ nonisolated enum AgentExec {
         case "feature.pattern":    return parsePattern(args)
         case "feature.mirror":     return parseMirror(args)
         case "feature.boolean":    return parseBoolean(args)
+        case "feature.fillet":     return parseBlend(args, isFillet: true)
+        case "feature.chamfer":    return parseBlend(args, isFillet: false)
+        case "feature.shell":      return parseShell(args)
         default:
             return .failure(.init(code: "unknown_op",
                                   message: "No exec op '\(op)'. Known ops: \(opNames.joined(separator: ", "))."))
@@ -264,6 +277,63 @@ nonisolated enum AgentExec {
             }
             return .success(.boolean(kind: kind, target: target, tools: tools))
         } catch let e as AgentExecError { return .failure(e) } catch { return .failure(unexpected) }
+    }
+
+    // MARK: Blends + shell (identity-addressed, step 4b/5)
+
+    private static func parseBlend(_ a: [String: Any],
+                                   isFillet: Bool) -> Result<AgentExecOp, AgentExecError> {
+        do {
+            let body = BodyID(raw: try uuid(a, "bodyID"))
+            let key = isFillet ? "radius" : "setback"
+            let amount = try double(a, key)
+            guard amount > 0 else {
+                return .failure(.init(code: "bad_\(key)",
+                                      message: "args.\(key) must be > 0 mm."))
+            }
+            let edges = try edgeIndices(a, "edges", allowEmpty: false)
+            return .success(.blend(body: body, isFillet: isFillet,
+                                   amount: amount, edges: edges))
+        } catch let e as AgentExecError { return .failure(e) } catch { return .failure(unexpected) }
+    }
+
+    private static func parseShell(_ a: [String: Any]) -> Result<AgentExecOp, AgentExecError> {
+        do {
+            let body = BodyID(raw: try uuid(a, "bodyID"))
+            let thickness = try double(a, "thickness")
+            guard thickness > 0 else {
+                return .failure(.init(code: "bad_thickness",
+                                      message: "args.thickness must be > 0 mm."))
+            }
+            // Empty (or absent) openFaces = a fully-enclosed hollow.
+            let openFaces = try edgeIndices(a, "openFaces", allowEmpty: true)
+            return .success(.shell(body: body, thickness: thickness,
+                                   openFaces: openFaces))
+        } catch let e as AgentExecError { return .failure(e) } catch { return .failure(unexpected) }
+    }
+
+    /// 1-based kernel sub-shape indices (the numbering /v1/edges and
+    /// /v1/faces report). Zero and negatives are refused HERE so a typo'd
+    /// index is a 400 with a pointer, never a kernel-side mystery.
+    private static func edgeIndices(_ a: [String: Any], _ key: String,
+                                    allowEmpty: Bool) throws -> [Int] {
+        let raw = a[key]
+        if raw == nil, allowEmpty { return [] }
+        guard let values = raw as? [Int] else {
+            throw AgentExecError(code: "missing_\(key)",
+                                 message: "args.\(key) must be an array of "
+                                 + "1-based kernel indices (GET /v1/edges or /v1/faces).")
+        }
+        guard allowEmpty || !values.isEmpty else {
+            throw AgentExecError(code: "missing_\(key)",
+                                 message: "args.\(key) must name at least one index.")
+        }
+        guard values.allSatisfy({ $0 >= 1 }) else {
+            throw AgentExecError(code: "bad_index",
+                                 message: "args.\(key) indices are 1-based; "
+                                 + "0 or negative is a typo.")
+        }
+        return values
     }
 
     // MARK: Sketch entities

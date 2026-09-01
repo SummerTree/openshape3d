@@ -284,15 +284,8 @@ nonisolated enum ElementNaming {
         var out: [Int: ElementName] = [:]
         var conflicted: Set<Int> = []
         for entry in table.entries {
-            guard let name = entry.elementName else { continue }
-            var votes: [UInt32: Int] = [:]
-            for triangle in entry.triangles where triangle < channel.count {
-                votes[channel[triangle], default: 0] += 1
-            }
-            guard let winner = votes.max(by: { $0.value < $1.value }),
-                  winner.key != 0,
-                  winner.value * 2 > entry.triangles.count else { continue }
-            let face = Int(winner.key)
+            guard let name = entry.elementName,
+                  let face = kernelFace(of: entry, channel: channel) else { continue }
             if let existing = out[face], existing != name {
                 conflicted.insert(face)
                 continue
@@ -301,6 +294,21 @@ nonisolated enum ElementNaming {
         }
         for face in conflicted { out.removeValue(forKey: face) }
         return out
+    }
+
+    /// The kernel face a table entry describes, by strict majority over its
+    /// triangles' channel labels — nil when the entry straddles faces or the
+    /// channel doesn't cover it (a stale or non-adopted render).
+    static func kernelFace(of entry: FaceTable.Entry,
+                           channel: [UInt32]) -> Int? {
+        var votes: [UInt32: Int] = [:]
+        for triangle in entry.triangles where triangle < channel.count {
+            votes[channel[triangle], default: 0] += 1
+        }
+        guard let winner = votes.max(by: { $0.value < $1.value }),
+              winner.key != 0,
+              winner.value * 2 > entry.triangles.count else { return nil }
+        return Int(winner.key)
     }
 
     /// Names for a primitive's table entries: the role is the identity, so

@@ -82,8 +82,10 @@ history instead of erasing names: cut → blend → cut keeps identities intact
 and a fillet face is named for its crease). What's left of the mission:
 **5b opportunistic ref upgrade** (legacy refs gain names during rebuilds —
 touches undo/persistence, design it against DocumentSession's command flow
-before coding), revolve/sweep/loft naming, replace-face composition, and
-wiring fillet/shell over /v1/exec with the new edge-name vocabulary.
+before coding), revolve/sweep/loft naming, and replace-face composition.
+**Fillet/chamfer/shell over /v1/exec LANDED** with `GET /v1/edges|/v1/faces`
+discovery — the Motorcycle-cover tutorial rebuild (§4b) is now unblocked;
+deleteFace/replaceFace over exec are a mechanical follow-on.
 Earlier progress detail below is HISTORY:
 
 **Steps 1–4 landed 2026-08-31**

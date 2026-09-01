@@ -73,13 +73,21 @@ nonisolated enum AgentRoute: Sendable, Equatable {
     /// Snapshot every analytic body into a replayable capture bundle —
     /// the "op succeeded but the geometry looks wrong" repro path (D2).
     case capture(note: String)
+    /// Kernel edge discovery for identity-addressed exec blends: indices,
+    /// adjacent-face pairs, names, and enough geometry to pick by.
+    case edges(bodyID: String)
+    /// Kernel face discovery — the shell/fillet counterpart of /v1/state's
+    /// body list, one level deeper.
+    case faces(bodyID: String)
     /// Already-decided replies.
     case reply(status: Int, error: String, message: String)
 
     /// Whether serving this needs a hop to the main actor.
     var needsEditor: Bool {
         switch self {
-        case .state, .runCommand, .exec, .screenshot, .check, .capture: return true
+        case .state, .runCommand, .exec, .screenshot, .check, .capture,
+             .edges, .faces:
+            return true
         case .health, .commands, .reply: return false
         }
     }
@@ -119,6 +127,15 @@ nonisolated enum AgentRouter {
             if let bad = get(request) { return bad }
             return .check(bodyID: request.query["body"],
                           runBOPCheck: request.query["bop"] == "1")
+
+        case "/v1/edges", "/v1/faces":
+            if let bad = get(request) { return bad }
+            guard let body = request.query["body"], !body.isEmpty else {
+                return .reply(status: 400, error: "missing_body_param",
+                              message: "\(request.path) needs ?body=<uuid> — ids come from /v1/state.")
+            }
+            return request.path == "/v1/edges"
+                ? .edges(bodyID: body) : .faces(bodyID: body)
 
         case "/v1/capture":
             guard request.method == "POST" else {
