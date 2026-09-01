@@ -209,6 +209,35 @@ final class AgentExecTests: XCTestCase {
         guard case .spline = entities[3] else { return XCTFail("3 should be a spline") }
     }
 
+    func testClosedPrimitiveEntitiesParse() {
+        guard case let .addEntities(_, entities, _)? = op("""
+        {"op":"sketch.addEntities","args":{"sketchID":"\(sketchUUID)","entities":[
+          {"kind":"rect","min":[10,8],"max":[0,0]},
+          {"kind":"polygon","center":[0,0],"radius":13.856,"sides":6},
+          {"kind":"ellipse","center":[1,2],"radiusX":5,"radiusY":3}
+        ]}}
+        """) else { return }
+        XCTAssertEqual(entities.count, 3)
+        // rect normalizes corners so min is the lower-left regardless of order.
+        guard case let .rect(_, mn, mx) = entities[0] else { return XCTFail("0 rect") }
+        XCTAssertEqual(mn, SIMD2(0, 0))
+        XCTAssertEqual(mx, SIMD2(10, 8))
+        guard case let .polygon(_, _, r, sides, rot) = entities[1] else { return XCTFail("1 polygon") }
+        XCTAssertEqual(sides, 6)
+        XCTAssertEqual(r, 13.856, accuracy: 1e-9)
+        XCTAssertEqual(rot, 0, "rotation defaults to 0")
+        guard case let .ellipse(_, _, rx, ry, _) = entities[2] else { return XCTFail("2 ellipse") }
+        XCTAssertEqual(rx, 5); XCTAssertEqual(ry, 3)
+    }
+
+    func testClosedPrimitivesRejectDegenerateArgs() {
+        let head = #"{"op":"sketch.addEntities","args":{"sketchID":"\#(sketchUUID)","entities":["#
+        XCTAssertEqual(code(head + #"{"kind":"rect","min":[0,0],"max":[0,5]}]}}"#), "degenerate_rect")
+        XCTAssertEqual(code(head + #"{"kind":"polygon","center":[0,0],"radius":2,"sides":2}]}}"#), "bad_sides")
+        XCTAssertEqual(code(head + #"{"kind":"polygon","center":[0,0],"radius":2,"sides":5.5}]}}"#), "bad_sides")
+        XCTAssertEqual(code(head + #"{"kind":"ellipse","center":[0,0],"radiusX":0,"radiusY":3}]}}"#), "bad_radius")
+    }
+
     func testConstructionIndicesAreKeptAndBoundsChecked() {
         guard case let .addEntities(_, entities, construction)? = op("""
         {"op":"sketch.addEntities","args":{"sketchID":"\(sketchUUID)",

@@ -252,11 +252,16 @@ graph, and shows up in History like any other feature.
 | `feature.mirror` | `bodyID`, `planeOrigin`, `planeNormal`; optional `keepOriginal` |
 | `feature.boolean` | `kind` (union/subtract/intersect), `targetBodyID`, `toolBodyIDs[]` |
 
-Entity kinds are `line` (`a`,`b`), `circle` (`center`,`radius`), `arc`
-(`center`,`radius`,`startAngle`,`endAngle`) and `spline` (`points[]`,`closed`) —
-the four the Shapr3D sketch format uses. `SketchEntity` also has
-rect/ellipse/polygon; they are simply not wired yet and say so
-(`unknown_entity_kind`).
+Entity kinds: `line` (`a`,`b`), `circle` (`center`,`radius`), `arc`
+(`center`,`radius`,`startAngle`,`endAngle`), `spline` (`points[]`,`closed`),
+`rect` (`min`,`max` — two opposite corners, normalized), `polygon`
+(`center`,`radius`,`sides`; optional `rotation`) and `ellipse`
+(`center`,`radiusX`,`radiusY`; optional `rotation`). The closed primitives
+(rect/polygon/ellipse) save spelling a box or hex out as a line loop — a
+regular hex is `{"kind":"polygon","center":[0,0],"radius":13.856,"sides":6}`
+(radius is the circumscribed circle, so across-flats = 2·radius·cos(π/n)).
+Arc/polygon/ellipse angles are RADIANS (unlike the degrees a feature takes);
+`unknown_entity_kind` names the full set.
 
 **Profiles are found by seed point.** `seedPoint` is a point INSIDE the closed
 region you want, in sketch-local mm; `ProfileDetector` resolves the innermost

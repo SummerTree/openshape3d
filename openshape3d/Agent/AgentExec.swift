@@ -405,10 +405,11 @@ nonisolated enum AgentExec {
 
     // MARK: Sketch entities
 
-    /// Only the four kinds the Shapr3D sketch format actually uses (line, arc,
-    /// circle, spline). `SketchEntity` also has rect/ellipse/polygon; they are
-    /// omitted rather than guessed at, and `unknown_entity_kind` names what IS
-    /// supported so the gap is visible instead of mysterious.
+    /// Every `SketchEntity` kind: the four the Shapr3D format uses (line, arc,
+    /// circle, spline) plus rect/polygon/ellipse — the closed primitives that
+    /// let a caller draw a box or a hex without spelling out its edges as a
+    /// line loop. `unknown_entity_kind` still names the full set so an
+    /// unsupported kind is visible instead of mysterious.
     private static func entity(_ a: [String: Any], index: Int) -> Result<SketchEntity, AgentExecError> {
         func fail(_ code: String, _ message: String) -> Result<SketchEntity, AgentExecError> {
             .failure(.init(code: code, message: "entities[\(index)]: \(message)"))
@@ -446,9 +447,49 @@ nonisolated enum AgentExec {
                 }
                 return .success(.spline(id: UUID(), points: points, closed: a["closed"] as? Bool ?? false))
 
+            case "rect":
+                // Two opposite corners; normalize so `min` is the lower-left,
+                // which the model and ProfileDetector both expect.
+                let c0 = try vector2(a, "min"), c1 = try vector2(a, "max")
+                guard abs(c1.x - c0.x) > 1e-9, abs(c1.y - c0.y) > 1e-9 else {
+                    return fail("degenerate_rect",
+                                "\"min\" and \"max\" must differ in both x and y.")
+                }
+                return .success(.rect(
+                    id: UUID(),
+                    min: SIMD2(Swift.min(c0.x, c1.x), Swift.min(c0.y, c1.y)),
+                    max: SIMD2(Swift.max(c0.x, c1.x), Swift.max(c0.y, c1.y))))
+
+            case "polygon":
+                let r = try double(a, "radius")
+                guard r > 1e-12 else { return fail("bad_radius", "radius must be > 0.") }
+                let sidesValue = try double(a, "sides")
+                let sides = Int(sidesValue.rounded())
+                guard sides >= 3, Double(sides) == sidesValue else {
+                    return fail("bad_sides", "\"sides\" must be a whole number ≥ 3.")
+                }
+                // `radius` is the circumscribed-circle radius (vertices lie on
+                // it); `rotation` (optional, radians, like arc angles) places
+                // the first vertex. Across-flats = 2·radius·cos(π/sides).
+                return .success(.polygon(
+                    id: UUID(), center: try vector2(a, "center"), radius: r,
+                    sides: sides, rotation: try optionalDouble(a, "rotation") ?? 0))
+
+            case "ellipse":
+                let rx = try double(a, "radiusX"), ry = try double(a, "radiusY")
+                guard rx > 1e-12, ry > 1e-12 else {
+                    return fail("bad_radius", "\"radiusX\" and \"radiusY\" must be > 0.")
+                }
+                // `rotation` (optional, radians) turns the axis-aligned radii.
+                return .success(.ellipse(
+                    id: UUID(), center: try vector2(a, "center"),
+                    radiusX: rx, radiusY: ry,
+                    rotation: try optionalDouble(a, "rotation") ?? 0))
+
             default:
                 return fail("unknown_entity_kind",
-                            "kind '\(kind)' is not supported. Use line, circle, arc or spline.")
+                            "kind '\(kind)' is not supported. Use line, circle, arc, "
+                            + "spline, rect, polygon or ellipse.")
             }
         } catch let e as AgentExecError {
             return fail(e.code, e.message)
