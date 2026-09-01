@@ -440,6 +440,8 @@ private nonisolated func sketchPoint(_ entity: SketchEntity, role: PointRole) ->
     switch (entity, role) {
     case let (.line(_, a, _), .endpointA): return a
     case let (.line(_, _, b), .endpointB): return b
+    case let (.rect(_, mn, _), .endpointA): return mn
+    case let (.rect(_, _, mx), .endpointB): return mx
     case let (.circle(_, c, _), .center): return c
     case let (.arc(_, c, r, sa, _), .endpointA): return c + r * SIMD2(cos(sa), sin(sa))
     case let (.arc(_, c, r, _, ea), .endpointB): return c + r * SIMD2(cos(ea), sin(ea))
@@ -507,9 +509,10 @@ struct RemoveSketchEntitiesCommand: DocumentCommand {
 /// Constraints and dimensions on the trimmed entity are handled in the SAME
 /// command (review R2-2): a point-role ref re-anchors to whichever fragment
 /// has a point at the same position; a `.whole` ref transfers when exactly
-/// one fragment survives; anything that can't transfer is dropped (and
-/// restored by undo) rather than left dangling with a displayed value that
-/// drives nothing.
+/// one fragment survives — or when every fragment is an arc of the SAME
+/// supporting circle, where the statement stays unambiguous; anything that
+/// can't transfer is dropped (and restored by undo) rather than left
+/// dangling with a displayed value that drives nothing.
 struct TrimCommand: DocumentCommand {
     let title = "Trim"
     let sketchID: SketchID
@@ -546,8 +549,25 @@ struct TrimCommand: DocumentCommand {
             if ref.role == .whole {
                 // "The line is horizontal" transfers cleanly to a single
                 // surviving piece; with two pieces the statement is ambiguous.
-                return fragments.count == 1
-                    ? ConstraintRef(entityID: fragments[0].id, role: .whole) : nil
+                if fragments.count == 1 {
+                    return ConstraintRef(entityID: fragments[0].id, role: .whole)
+                }
+                // EXCEPT for same-circle arcs: a whole-entity statement about
+                // a circle or arc (tangent, equal radius, a radius dimension)
+                // is a statement about its SUPPORTING CIRCLE — center plus
+                // radius — and every arc fragment of one trim carries that
+                // circle identically, so the transfer is unambiguous. Anchor
+                // the first fragment.
+                if case let .arc(_, c0, r0, _, _)? = fragments.first,
+                   fragments.allSatisfy({
+                       if case let .arc(_, c, r, _, _) = $0 {
+                           return simd_length(c - c0) < 1e-6 && abs(r - r0) < 1e-6
+                       }
+                       return false
+                   }) {
+                    return ConstraintRef(entityID: fragments[0].id, role: .whole)
+                }
+                return nil
             }
             guard let oldPoint = sketchPoint(removed, role: ref.role) else { return nil }
             for fragment in fragments {

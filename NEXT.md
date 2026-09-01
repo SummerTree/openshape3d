@@ -148,9 +148,12 @@ assign-vs-adopt render split). Also still open: wiring fillet/shell over
    and mm distances respectively; angle stays radians (bounded, 1e-3 rad
    ≈ 0.057° is a sane conflict threshold). No solver-behavior fallout —
    full suite green unchanged.
-3. **Trim re-anchor for curved fragments** — the PR #22 rule re-anchors by
-   point-weld and single-fragment `.whole` transfer; extend to arc/circle
-   fragment cases (`TrimCommand` in `openshape3d/Model/Commands.swift`).
+3. **Trim re-anchor for curved fragments — LANDED 2026-09-01**: a `.whole`
+   ref now also transfers across MULTIPLE fragments when every fragment is
+   an arc of the same supporting circle (tangency/radius statements stay
+   unambiguous — center+radius identical); mixed fragments still drop.
+   `sketchPoint` learned rect corners, so a corner-anchored constraint
+   survives a rect-explode trim. Pinned in `ConstraintLifecycleTests`.
 4. **UI-suite geometry assertions (review R3-D)** — no UI test asserts a
    geometry value; `SelectionInfoBar` exposes exact Volume/Bounds/Area
    strings as the hook. Also promote `docs/occt-fuzz-harness.swift.txt`
