@@ -23,6 +23,18 @@ naming remains deferred (multi-section wire correspondence is its own
 design problem); Euclid-owned sweeps (holed profiles on the mesh path)
 stay honestly unnamed.
 
+Same day, the Frame probe's naming-coverage check surfaced the next gap
+and it landed too: **mirror and pattern copies inherit their source's name
+map** (`evalMirror`/`evalPattern`). A pattern copy shares the source's
+solid outright (same `BRepHandle`), so names apply verbatim; a mirror is a
+copying isometry — subshape-for-subshape isomorphic — so names carry over
+BY INDEX, and the index alignment is pinned by a test asserting every copy
+face's centroid is the reflection of its same-index source face. Names are
+body-scoped, so copies sharing the source's names is unambiguous. Without
+this, every boolean over a mirrored tool minted unnamed faces (the Frame's
+windowed slab: 12 of 22 faces bare, exactly the walls punched by the three
+mirror-copy plugs).
+
 Previous status: **STEPS 1–5a LANDED** (2026-08-31). Step 5's modifier-op history
 shipped: fillet/chamfer (identity path), shell and delete-face now REPORT
 ancestry instead of erasing every name downstream. One generalized

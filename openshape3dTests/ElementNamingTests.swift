@@ -1263,6 +1263,101 @@ final class ElementNamingTests: XCTestCase {
         }, "\(names)")
     }
 
+    // MARK: - Mirror/pattern name inheritance
+
+    /// A mirror is a copying isometry, so names carry over BY INDEX — and the
+    /// index alignment is pinned geometrically: face k of the copy sits at
+    /// the reflection of face k of the source.
+    func testAMirrorCopyInheritsNamesByIndex() throws {
+        let sketchID = SketchID(), rectEntity = UUID()
+        let extrude = FeatureID(), mirror = FeatureID()
+        let sourceID = BodyID(), copyID = BodyID()
+        let graph = FeatureGraph(nodes: [
+            FeatureNode(
+                id: extrude, name: "Block",
+                kind: .extrude(
+                    profile: ProfileRef(sketchID: sketchID, entityIDs: [rectEntity],
+                                        holeEntityIDs: [], seedPoint: SIMD2(5, 5)),
+                    plane: PlaneRef(source: .sketch(sketchID)),
+                    distance: Expr(value: 10), symmetric: false,
+                    boolean: BooleanIntent(op: .newBody, resolvedTargets: []),
+                    extraProfiles: []),
+                outputBodyIDs: [sourceID]),
+            FeatureNode(
+                id: mirror, name: "Block Mirror",
+                kind: .mirror(body: BodyRef(producer: extrude, bodyID: sourceID),
+                              plane: PlaneRef(source: .sketch(sketchID)),
+                              keepOriginal: true),
+                outputBodyIDs: [copyID]),
+        ])
+        let sketch = Sketch(id: sketchID, name: "S", plane: .ground, entities: [
+            .rect(id: rectEntity, min: SIMD2(2, 2), max: SIMD2(9, 8))])
+        var revision: UInt64 = 0
+        let result = graph.evaluate(sketches: [sketch], planes: [],
+                                    naming: SignatureNaming(),
+                                    nextRevision: { revision += 1; return revision })
+        XCTAssertTrue(result.errors.isEmpty, "\(result.errors)")
+        let sourceNames = try XCTUnwrap(result.kernelNames[sourceID])
+        XCTAssertEqual(result.kernelNames[copyID], sourceNames,
+                       "the reflected copy shares its source's name map")
+        let sourceBrep = try XCTUnwrap(
+            result.bodies.first { $0.id == sourceID }?.brep)
+        let copyBrep = try XCTUnwrap(
+            result.bodies.first { $0.id == copyID }?.brep)
+        let sourceFaces = Dictionary(
+            uniqueKeysWithValues: OCCTKernel.faceInfo(sourceBrep)
+                .map { ($0.index, $0.centroid) })
+        let copyFaces = Dictionary(
+            uniqueKeysWithValues: OCCTKernel.faceInfo(copyBrep)
+                .map { ($0.index, $0.centroid) })
+        XCTAssertEqual(sourceFaces.count, copyFaces.count)
+        for (index, c) in sourceFaces {
+            // Ground-plane mirror: y -> -y.
+            let reflected = SIMD3(c.x, -c.y, c.z)
+            let got = try XCTUnwrap(copyFaces[index])
+            XCTAssertLessThan(simd_distance(reflected, got), 1e-6,
+                              "face \(index) drifted: the by-index inherit "
+                              + "would name the wrong face")
+        }
+    }
+
+    /// A pattern copy shares the source's solid outright, so its names are
+    /// the source's, verbatim.
+    func testAPatternCopyInheritsNames() throws {
+        let sketchID = SketchID(), rectEntity = UUID()
+        let extrude = FeatureID(), pattern = FeatureID()
+        let sourceID = BodyID(), copyID = BodyID()
+        let graph = FeatureGraph(nodes: [
+            FeatureNode(
+                id: extrude, name: "Block",
+                kind: .extrude(
+                    profile: ProfileRef(sketchID: sketchID, entityIDs: [rectEntity],
+                                        holeEntityIDs: [], seedPoint: SIMD2(5, 5)),
+                    plane: PlaneRef(source: .sketch(sketchID)),
+                    distance: Expr(value: 10), symmetric: false,
+                    boolean: BooleanIntent(op: .newBody, resolvedTargets: []),
+                    extraProfiles: []),
+                outputBodyIDs: [sourceID]),
+            FeatureNode(
+                id: pattern, name: "Row",
+                kind: .pattern(body: BodyRef(producer: extrude, bodyID: sourceID),
+                               spec: PatternSpec(kind: .linear,
+                                                 axis: SIMD3(1, 0, 0),
+                                                 count: 2, spacing: 50)),
+                outputBodyIDs: [copyID]),
+        ])
+        let sketch = Sketch(id: sketchID, name: "S", plane: .ground, entities: [
+            .rect(id: rectEntity, min: SIMD2(2, 2), max: SIMD2(9, 8))])
+        var revision: UInt64 = 0
+        let result = graph.evaluate(sketches: [sketch], planes: [],
+                                    naming: SignatureNaming(),
+                                    nextRevision: { revision += 1; return revision })
+        XCTAssertTrue(result.errors.isEmpty, "\(result.errors)")
+        let sourceNames = try XCTUnwrap(result.kernelNames[sourceID])
+        XCTAssertEqual(sourceNames.count, 6, "4 walls + 2 caps: \(sourceNames)")
+        XCTAssertEqual(result.kernelNames[copyID], sourceNames)
+    }
+
     // MARK: - Detector identity arrays
 
     func testTheDetectorEmitsEdgeEntitiesInLoopOrder() throws {

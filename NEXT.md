@@ -189,12 +189,12 @@ own UI, as a real workout for the modeling stack. Where it got to:
   edge), and Boolean 01's op code 2 decoded as SUBTRACT by volume assert
   (slab − 4 window plugs, 0.003% drift — union of coincident slabs would
   have erased the windows). Head tube (Extrusion 05) green too. The probe
-  also live-checks naming coverage and surfaced the next gap: **mirror
-  bodies carry no element names** (`evalMirror` has no naming pass), and
-  the gap propagates — the windowed slab's 12 bare faces are exactly the
-  walls punched by the three mirror-copy plugs, while the original plug's
-  walls got names through the boolean composition. Mirror is a copying
-  isometry, so names should copy 1:1 — a small follow-on slice. Frame
+  also live-checks naming coverage and surfaced the next gap — mirror
+  bodies carried no element names, propagating bare faces through
+  booleans — **closed the same day**: `evalMirror`/`evalPattern` copies now
+  inherit their source's name map (see the naming design doc; centroid-
+  reflection test pins the by-index alignment). After the fix the Frame
+  document reads 100% coverage: every face of every body carries a name. Frame
   remaining: Shell 01 + Boolean 02 (Parasolid face refs undecodable and
   geometry does not pin which six faces open — needs the tutorial's visual
   intent); OffsetFace/Align/Import excluded with reasons. Block casting

@@ -1731,6 +1731,15 @@ nonisolated extension FeatureGraph {
         }
         let table = state.naming.faceTable(for: body, createdBy: node.id, scheme: .generic)
         state.put(body, table: table)
+        // A mirror is a copying isometry: the reflected shape is
+        // subshape-for-subshape isomorphic to its source, so element names
+        // carry over BY INDEX (pinned by the centroid-reflection test).
+        // Names are body-scoped, so the copy sharing the source's names is
+        // unambiguous.
+        if body.brep != nil, let sourceNames = state.kernelNames[bodyRef.bodyID],
+           !sourceNames.isEmpty {
+            state.kernelNames[id] = sourceNames
+        }
     }
 
     // MARK: Pattern
@@ -1788,6 +1797,13 @@ nonisolated extension FeatureGraph {
             copy.brep = source.brep
             let table = state.naming.faceTable(for: copy, createdBy: node.id, scheme: .generic)
             state.put(copy, table: table)
+            // The copy IS the source solid (shared handle, placement in
+            // `transform`), so its element names are the source's, verbatim.
+            if copy.brep != nil,
+               let sourceNames = state.kernelNames[bodyRef.bodyID],
+               !sourceNames.isEmpty {
+                state.kernelNames[copy.id] = sourceNames
+            }
         }
     }
 
