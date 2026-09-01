@@ -262,6 +262,18 @@ rect/ellipse/polygon; they are simply not wired yet and say so
 region you want, in sketch-local mm; `ProfileDetector` resolves the innermost
 enclosing loop. There is no need to enumerate the loop's entity ids.
 
+**`boolean` is a STRING; targets go in `booleanTargets`.** The inline boolean
+on `feature.extrude`/`revolve`/`sweep`/`loft` is `"boolean":"subtract"` (one of
+`newBody`/`union`/`subtract`/`intersect`) plus `"booleanTargets":["<bodyID>",…]`
+— NOT a nested object. Writing `"boolean":{"kind":"subtract"}` is refused with
+`bad_boolean_type` (it used to fall silently to `newBody`, producing a stray
+solid where a cut was meant). The standalone `feature.boolean` op is different:
+it takes `targetBodyID` + `toolBodyIDs[]`.
+
+**`symmetric` extrudes ±distance** — a symmetric extrude of `distance: d` is
+`2d` tall (d each way from the sketch plane). For a part that must be `L` long
+symmetric, pass `distance: L/2` (or an asymmetric `distance: L`).
+
 **UNITS: millimetres and degrees.** Note that `FeatureKind.revolve` stores
 DEGREES and `FeatureGraph` converts to radians once at the OCCT boundary
 (`angle.value * .pi / 180`). Converting on the way in as well yields a
@@ -273,7 +285,8 @@ Failures are named rather than lumped into one code, because an agent cannot
 see a disabled button and will otherwise retry the wrong thing forever:
 `unknown_op`, `missing_op`, `unknown_entity_kind` (named by index),
 `degenerate_line` / `bad_radius` / `bad_spline`, `zero_distance`,
-`missing_boolean_targets`, `degenerate_axis`, `degenerate_plane`,
+`missing_boolean_targets`, `bad_boolean_type`, `unknown_boolean_op`,
+`degenerate_axis`, `degenerate_plane`,
 `angle_out_of_range`, `bad_count`, `self_boolean`, `bad_uuid`,
 `unknown_sketch` / `unknown_body` (404).
 

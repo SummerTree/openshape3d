@@ -471,7 +471,26 @@ nonisolated enum AgentExec {
     }
 
     private static func booleanIntent(_ a: [String: Any]) throws -> (BooleanIntent.Op, [BodyID]) {
-        let name = a["boolean"] as? String ?? "newBody"
+        // Distinguish "boolean absent" (the intended newBody default) from
+        // "boolean present but the wrong TYPE". A caller who writes
+        // {"boolean":{"kind":"subtract",...}} or {"boolean":1} used to get a
+        // silent newBody — a cut that quietly became a stray solid — because
+        // `as? String` on a non-string yields nil and fell to the default.
+        // Refuse it loudly instead; the op is a bare string, targets go in
+        // "booleanTargets".
+        let name: String
+        if let present = a["boolean"] {
+            guard let s = present as? String else {
+                throw AgentExecError(
+                    code: "bad_boolean_type",
+                    message: "\"boolean\" must be a string — one of "
+                           + "\(booleanOps.joined(separator: ", ")). Put the bodies "
+                           + "it acts on in \"booleanTargets\", not inside \"boolean\".")
+            }
+            name = s
+        } else {
+            name = "newBody"
+        }
         let op: BooleanIntent.Op
         switch name {
         case "newBody":   op = .newBody

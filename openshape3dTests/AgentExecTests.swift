@@ -283,6 +283,27 @@ final class AgentExecTests: XCTestCase {
         XCTAssertEqual(targets.map(\.raw.uuidString), [bodyUUID])
     }
 
+    func testBooleanAsAnObjectIsRefusedNotSilentlyANewBody() {
+        // The FreeCAD-tutorial footgun: writing the op as a nested object
+        // {"boolean":{"kind":"subtract"}} used to fail the string cast and
+        // fall to the newBody default — a cut that silently became a stray
+        // solid. It must be a typed refusal now, distinct from a bad op name.
+        XCTAssertEqual(code("""
+        {"op":"feature.extrude","args":{"sketchID":"\(sketchUUID)","seedPoint":[0,0],
+         "distance":5,"boolean":{"kind":"subtract"},"booleanTargets":["\(bodyUUID)"]}}
+        """), "bad_boolean_type")
+        // A number is equally wrong-typed.
+        XCTAssertEqual(code("""
+        {"op":"feature.extrude","args":{"sketchID":"\(sketchUUID)","seedPoint":[0,0],
+         "distance":5,"boolean":1}}
+        """), "bad_boolean_type")
+        // A bad STRING op stays its own distinct error (not conflated).
+        XCTAssertEqual(code("""
+        {"op":"feature.extrude","args":{"sketchID":"\(sketchUUID)","seedPoint":[0,0],
+         "distance":5,"boolean":"nope"}}
+        """), "unknown_boolean_op")
+    }
+
     // MARK: feature.revolve
 
     func testRevolveKeepsDegreesAndNormalizesTheAxis() {
