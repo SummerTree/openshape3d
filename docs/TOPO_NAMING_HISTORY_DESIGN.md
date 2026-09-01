@@ -188,7 +188,20 @@ realthunder's topological-naming docs, FreeCAD wiki "Topological naming problem"
    instead of midpoint-within-tolerance. This is the single biggest
    "rebuild broke my fillet" fix.
 
-## Step 5b design — opportunistic ref upgrade (agreed 2026-09-01, not yet built)
+## Step 5b — opportunistic ref upgrade (BUILT 2026-09-01, as designed below)
+
+Landed exactly per the design that follows: `ResolvedFace` gained
+`elementName`/`margin`, all seven FaceRef eval sites propose through one
+central kind-rewriter (`FeatureGraph.kind(_:replacing:with:)` — a kind
+missing from that switch never upgrades, which fails SAFE), proposals ride
+`EvalResult.proposedUpgrades` into `performRebuild`, which appends one
+`EditFeatureCommand` per earned upgrade to the rebuild's own composite.
+Bars: `upgradeConfidence` 0.85 + `nameMissMargin`. Pinned: a legacy
+push-pull ref earns the top cap's name in one replay and never proposes
+again; a near-tie between identical candidates resolves (legacy behavior
+frozen) but never upgrades. Edge-ref upgrades remain deferred as below.
+
+## Step 5b design — opportunistic ref upgrade (agreed 2026-09-01)
 
 Legacy refs (no `elementName`/`faceNames`) that resolve STRONGLY by
 signature during a rebuild get their names written back, so the next

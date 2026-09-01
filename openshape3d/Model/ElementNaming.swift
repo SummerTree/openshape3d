@@ -311,6 +311,22 @@ nonisolated enum ElementNaming {
         return Int(winner.key)
     }
 
+    /// Step 5b: the upgraded copy of a legacy ref, when this resolution
+    /// EARNED it — the ref had no name, the matched face carries one, and
+    /// the signature match was both confident and decisively unambiguous.
+    /// The name comes from the exact entry the signature chose, so an
+    /// upgrade can never re-bind; it only pins what already resolved.
+    static func upgraded(_ ref: FaceRef, from resolved: ResolvedFace) -> FaceRef? {
+        guard ref.elementName == nil,
+              let name = resolved.elementName,
+              resolved.confidence >= SignatureNaming.upgradeConfidence,
+              (resolved.margin ?? .infinity) >= SignatureNaming.nameMissMargin
+        else { return nil }
+        var out = ref
+        out.elementName = name
+        return out
+    }
+
     /// Names for a primitive's table entries: the role is the identity, so
     /// no kernel channel is needed — which also covers the box, whose render
     /// deliberately stays Euclid. `.derived` roles carry no identity and

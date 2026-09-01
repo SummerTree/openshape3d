@@ -62,6 +62,14 @@ nonisolated struct ResolvedFace: Sendable {
     var planar: FaceTopology.PlanarFace?
     var cylinder: FaceTopology.CylindricalFace?
     var confidence: Double
+    /// The matched table entry's kernel-history name, when the table has one
+    /// for the matched face — what the step-5b opportunistic upgrade writes
+    /// back onto legacy refs. Nil is normal (no table, unnamed face).
+    var elementName: ElementName? = nil
+    /// How decisively the signature match beat its runner-up; nil when there
+    /// was no other candidate. Upgrades require a clear margin — pinning a
+    /// name onto a near-tie would bake in a coin flip.
+    var margin: Double? = nil
 }
 
 /// Swappable topological-naming strategy. Tranche 1 = `SignatureNaming`.
@@ -102,6 +110,12 @@ nonisolated struct SignatureNaming: TopoNaming {
     /// Applies only to name-bearing refs — legacy refs resolve as they
     /// always did.
     static let nameMissMargin: Double = 0.05
+
+    /// Bar for the 5b opportunistic upgrade: a legacy ref only gains a name
+    /// when its signature resolution was this confident (well above the 0.6
+    /// acceptance bar) AND cleared `nameMissMargin`. Upgrading a marginal
+    /// match would bake today's coin flip into tomorrow's identity.
+    static let upgradeConfidence: Double = 0.85
     /// An output face must score at least this to inherit an input entry's role.
     static let propagateThreshold: Double = 0.55
 
@@ -177,13 +191,14 @@ nonisolated struct SignatureNaming: TopoNaming {
                 else { break }
                 return ResolvedFace(planar: face.planar,
                                     cylinder: face.cylinder,
-                                    confidence: 1)
+                                    confidence: 1,
+                                    elementName: name)
             }
         }
 
-        var best: (score: Double, face: EnumeratedFace)?
+        var best: (score: Double, index: Int, face: EnumeratedFace)?
         var runnerUpScore: Double?
-        for face in faces {
+        for (index, face) in faces.enumerated() {
             // The ref knows what KIND of surface it referenced, and until now
             // nothing read it (review R4-N4): a cylindrical ref could bind a
             // planar cap whenever centroid and area happened to line up, and
@@ -212,25 +227,34 @@ nonisolated struct SignatureNaming: TopoNaming {
             }
             if best == nil || s > best!.score {
                 runnerUpScore = best?.score
-                best = (s, face)
+                best = (s, index, face)
             } else if runnerUpScore == nil || s > runnerUpScore! {
                 runnerUpScore = s
             }
         }
         guard let best, best.score >= Self.resolveThreshold else { return nil }
+        let margin = runnerUpScore.map { best.score - $0 }
         // A ref that CARRIED a name and missed it is on notice: something
         // structural changed. It may still resolve by signature, but only
         // when the answer is unambiguous — two near-tied candidates after a
         // name miss is exactly the silent mis-bind this whole design exists
         // to prevent. Legacy refs (no name) keep today's behavior untouched.
-        if ref.elementName != nil, let runnerUpScore,
-           best.score - runnerUpScore < Self.nameMissMargin {
+        if ref.elementName != nil, let margin, margin < Self.nameMissMargin {
             return nil
+        }
+        // Surface the matched entry's name (rows align with enumerate,
+        // verified by triangles) — the raw material of the 5b upgrade.
+        var matchedName: ElementName?
+        if let table, best.index < table.entries.count,
+           table.entries[best.index].triangles == best.face.triangles {
+            matchedName = table.entries[best.index].elementName
         }
         return ResolvedFace(
             planar: best.face.planar,
             cylinder: best.face.cylinder,
-            confidence: min(1, best.score)
+            confidence: min(1, best.score),
+            elementName: matchedName,
+            margin: margin
         )
     }
 

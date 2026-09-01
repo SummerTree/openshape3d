@@ -429,6 +429,19 @@ final class DocumentSession {
             commands.append(DeleteBodiesCommand(ids: toDelete, document: document))
         }
 
+        // Step 5b: legacy refs that EARNED names during this replay are
+        // upgraded HERE, inside the same undo step as the rebuild that
+        // justified them — one undo reverts geometry and upgrades together,
+        // and the load/undo error replay (refreshEvalErrors) never sees this
+        // path, so it can never mutate. `before` is the edited graph's kind:
+        // the leading edit command has already applied by the time these run.
+        for (featureID, kind) in result.proposedUpgrades
+            .sorted(by: { $0.key.raw.uuidString < $1.key.raw.uuidString }) {
+            guard let node = editedGraph.node(featureID) else { continue }
+            commands.append(EditFeatureCommand(
+                featureID: featureID, before: node.kind, after: kind))
+        }
+
         guard !commands.isEmpty else {
             captureNamingRevisions(for: resultByID.keys)
             return

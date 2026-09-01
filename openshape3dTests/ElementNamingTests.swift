@@ -1052,6 +1052,96 @@ final class ElementNamingTests: XCTestCase {
                       "the healed caps keep their identities: \(names)")
     }
 
+    // MARK: - Opportunistic ref upgrade (step 5b)
+
+    private func slabPushGraph(ref: FaceRef, slabFeature: FeatureID,
+                               pushFeature: FeatureID, slabID: BodyID,
+                               sketch: SketchID, rect: UUID)
+        -> ([FeatureNode], [Sketch]) {
+        let nodes = [
+            FeatureNode(
+                id: slabFeature, name: "Slab",
+                kind: .extrude(
+                    profile: ProfileRef(sketchID: sketch, entityIDs: [rect],
+                                        holeEntityIDs: [], seedPoint: .zero),
+                    plane: PlaneRef(source: .sketch(sketch)),
+                    distance: Expr(value: 2), symmetric: true,
+                    boolean: BooleanIntent(op: .newBody, resolvedTargets: []),
+                    extraProfiles: []),
+                outputBodyIDs: [slabID]),
+            FeatureNode(
+                id: pushFeature, name: "Push",
+                kind: .pushPull(face: ref, distance: Expr(value: 2),
+                                mode: .planarAxial),
+                outputBodyIDs: []),
+        ]
+        let sketches = [Sketch(id: sketch, name: "S", plane: .ground, entities: [
+            .rect(id: rect, min: SIMD2(-5, -3), max: SIMD2(5, 3))])]
+        return (nodes, sketches)
+    }
+
+    /// A legacy ref that resolves strongly EARNS its name during replay —
+    /// and once upgraded, never proposes again.
+    func testALegacyRefEarnsItsNameDuringReplay() throws {
+        let slabFeature = FeatureID(), pushFeature = FeatureID()
+        let slabID = BodyID(), sketch = SketchID(), rect = UUID()
+        // A legacy ref carrying the top cap's honest signature and NO name.
+        let legacyRef = FaceRef(
+            body: BodyRef(producer: slabFeature, bodyID: slabID),
+            creator: slabFeature, role: .derived(index: 0),
+            signature: FaceSignature(kind: .planar, normal: SIMD3(0, 1, 0),
+                                     centroid: SIMD3(0, 2, 0),
+                                     area: 60, planeOffset: 2))
+        let (legacyNodes, sketches) = slabPushGraph(
+            ref: legacyRef, slabFeature: slabFeature, pushFeature: pushFeature,
+            slabID: slabID, sketch: sketch, rect: rect)
+        let base = evaluate(legacyNodes, sketches)
+        XCTAssertTrue(base.errors.isEmpty, "\(base.errors)")
+
+        // The legacy ref earned an upgrade naming the slab's top cap.
+        let proposal = try XCTUnwrap(base.proposedUpgrades[pushFeature],
+                                     "a strong legacy resolution must propose")
+        guard case let .pushPull(face, distance, mode) = proposal else {
+            return XCTFail("expected an upgraded .pushPull, got \(proposal)")
+        }
+        XCTAssertEqual(face.elementName,
+                       ElementName(creator: slabFeature,
+                                   source: .profileCap(end: true)))
+        XCTAssertEqual(distance.value, 2, "payload preserved")
+        XCTAssertEqual(mode, .planarAxial)
+        XCTAssertEqual(base.proposedUpgrades.count, 1,
+                       "nothing else has a legacy ref to upgrade")
+
+        // Idempotence: replaying WITH the upgraded kind proposes nothing.
+        let (upgradedNodes, _) = slabPushGraph(
+            ref: face, slabFeature: slabFeature, pushFeature: pushFeature,
+            slabID: slabID, sketch: sketch, rect: rect)
+        let again = evaluate(upgradedNodes, sketches)
+        XCTAssertTrue(again.errors.isEmpty)
+        XCTAssertTrue(again.proposedUpgrades.isEmpty,
+                      "an upgraded ref must never propose again")
+    }
+
+    /// A legacy ref sitting between two identical candidates still resolves
+    /// (legacy behavior is frozen) but must NOT bake the coin flip into an
+    /// identity.
+    func testANearTieResolvesButNeverUpgrades() throws {
+        let (body, table, _, cutB) = try twoHoleFixture()
+        let wallB = try plusXWall(of: cutB, in: table)
+        var midway = wallB.signature
+        midway.centroid.x = 0
+        midway.planeOffset = simd_dot(midway.normal, midway.centroid)
+        let legacyRef = FaceRef(
+            body: BodyRef(producer: cutB, bodyID: body.id), creator: cutB,
+            role: .derived(index: 0), signature: midway)
+        let naming = SignatureNaming()
+        let resolved = try XCTUnwrap(naming.resolve(legacyRef, in: body,
+                                                    table: table))
+        XCTAssertNil(ElementNaming.upgraded(legacyRef, from: resolved),
+                     "margin \(String(describing: resolved.margin)) is a "
+                     + "near-tie — no upgrade")
+    }
+
     // MARK: - Detector identity arrays
 
     func testTheDetectorEmitsEdgeEntitiesInLoopOrder() throws {

@@ -262,17 +262,22 @@ nonisolated struct EvalResult: Sendable {
     /// Per-body kernel-face name maps (step 3/4) — retained by
     /// `DocumentSession` so live picks can mint edge identities.
     var kernelNames: [BodyID: [Int: ElementName]]
+    /// Step 5b: kinds whose legacy refs earned names this replay. Advisory —
+    /// only `performRebuild` acts on them, inside its own undo step.
+    var proposedUpgrades: [FeatureID: FeatureKind]
     var errors: [FeatureID: FeatureError]
 
     init(
         bodies: [Body] = [],
         faceTables: [BodyID: FaceTable] = [:],
         kernelNames: [BodyID: [Int: ElementName]] = [:],
+        proposedUpgrades: [FeatureID: FeatureKind] = [:],
         errors: [FeatureID: FeatureError] = [:]
     ) {
         self.bodies = bodies
         self.faceTables = faceTables
         self.kernelNames = kernelNames
+        self.proposedUpgrades = proposedUpgrades
         self.errors = errors
     }
 }
@@ -309,6 +314,7 @@ nonisolated extension FeatureGraph {
             bodies: state.order.compactMap { state.bodies[$0] },
             faceTables: state.faceTables,
             kernelNames: state.kernelNames,
+            proposedUpgrades: state.proposedUpgrades,
             errors: state.errors
         )
     }
@@ -731,6 +737,49 @@ nonisolated extension FeatureGraph {
         if !accNames.isEmpty { state.kernelNames[acc.id] = accNames }
     }
 
+    // MARK: Opportunistic ref upgrade (step 5b)
+
+    /// Record an upgrade proposal when this resolution EARNED one. Layered
+    /// onto any earlier proposal for the same node, so multi-ref kinds
+    /// (shell, deleteFace) accumulate per-ref upgrades into one edit.
+    private func proposeUpgrade(_ node: FeatureNode, ref: FaceRef,
+                                resolved: ResolvedFace,
+                                into state: inout EvalState) {
+        guard let upgraded = ElementNaming.upgraded(ref, from: resolved) else { return }
+        let base = state.proposedUpgrades[node.id] ?? node.kind
+        guard let kind = Self.kind(base, replacing: ref, with: upgraded) else { return }
+        state.proposedUpgrades[node.id] = kind
+    }
+
+    /// `kind` with one FaceRef swapped for its upgraded copy — the central
+    /// switch, so a new ref-carrying kind that forgets to appear here simply
+    /// never upgrades (safe) rather than upgrading wrongly.
+    private static func kind(_ kind: FeatureKind, replacing ref: FaceRef,
+                             with upgraded: FaceRef) -> FeatureKind? {
+        switch kind {
+        case let .pushPull(face, distance, mode) where face == ref:
+            return .pushPull(face: upgraded, distance: distance, mode: mode)
+        case let .moveFace(face, delta) where face == ref:
+            return .moveFace(face: upgraded, delta: delta)
+        case let .scaleFace(face, factor) where face == ref:
+            return .scaleFace(face: upgraded, factor: factor)
+        case let .rotateFace(face, angle, axis) where face == ref:
+            return .rotateFace(face: upgraded, angle: angle, axis: axis)
+        case let .replaceFace(face, origin, normal, flip) where face == ref:
+            return .replaceFace(face: upgraded, targetOrigin: origin,
+                                targetNormal: normal, flip: flip)
+        case let .shell(body, openFaces, thickness) where openFaces.contains(ref):
+            return .shell(body: body,
+                          openFaces: openFaces.map { $0 == ref ? upgraded : $0 },
+                          thickness: thickness)
+        case let .deleteFace(body, faces) where faces.contains(ref):
+            return .deleteFace(body: body,
+                               faces: faces.map { $0 == ref ? upgraded : $0 })
+        default:
+            return nil
+        }
+    }
+
     // MARK: Push/pull
 
     private func evalPushPull(
@@ -758,6 +807,7 @@ nonisolated extension FeatureGraph {
             state.errors[node.id] = .brokenRef("pushPull face did not resolve")
             return
         }
+        proposeUpgrade(node, ref: face, resolved: resolved, into: &state)
         let mesh = KernelOps.pushPullPlanarFace(
             mesh: body.euclidMesh(), face: planar, distance: distance.value)
         guard !mesh.polygons.isEmpty else {
@@ -799,6 +849,7 @@ nonisolated extension FeatureGraph {
             state.errors[node.id] = .brokenRef("moveFace face did not resolve")
             return
         }
+        proposeUpgrade(node, ref: face, resolved: resolved, into: &state)
         // (u, v, n) in the resolved face's own basis → a local-space delta, so
         // the move is intrinsic to the face even after the geometry shifted.
         let bx = simd_normalize(planar.basisX)
@@ -847,6 +898,7 @@ nonisolated extension FeatureGraph {
             state.errors[node.id] = .brokenRef("scaleFace face did not resolve")
             return
         }
+        proposeUpgrade(node, ref: face, resolved: resolved, into: &state)
         let mesh = KernelOps.scaleFace(
             mesh: body.euclidMesh(), face: planar, factor: factor)
         guard !mesh.polygons.isEmpty else {
@@ -889,6 +941,7 @@ nonisolated extension FeatureGraph {
             state.errors[node.id] = .brokenRef("rotateFace face did not resolve")
             return
         }
+        proposeUpgrade(node, ref: face, resolved: resolved, into: &state)
         // (u, v, n) in the resolved face's own basis → a world-space axis.
         let bx = simd_normalize(planar.basisX)
         let by = simd_normalize(planar.basisY)
@@ -1123,6 +1176,7 @@ nonisolated extension FeatureGraph {
                 state.errors[node.id] = .brokenRef("shell open face did not resolve")
                 return
             }
+            proposeUpgrade(node, ref: ref, resolved: resolved, into: &state)
             openFaces.append(planar)
         }
         // B-rep shell: when the body is analytic, hollow it with
@@ -1228,6 +1282,7 @@ nonisolated extension FeatureGraph {
                 state.errors[node.id] = .brokenRef("delete-face target did not resolve")
                 return
             }
+            proposeUpgrade(node, ref: ref, resolved: resolved, into: &state)
             points.append(point)
         }
 
@@ -1296,6 +1351,7 @@ nonisolated extension FeatureGraph {
             state.errors[node.id] = .brokenRef("replace-face target did not resolve")
             return
         }
+        proposeUpgrade(node, ref: faceRef, resolved: resolved, into: &state)
         let plan: ReplaceFaceKit.Plan
         do {
             plan = try ReplaceFaceKit.plan(
@@ -1722,6 +1778,11 @@ private struct EvalState {
     /// through (step 3). Transient like `faceTables`; `put` clears a
     /// replaced body's map so staleness is impossible by construction.
     var kernelNames: [BodyID: [Int: ElementName]] = [:]
+    /// Step 5b: kinds whose legacy refs EARNED names this replay — applied
+    /// by `DocumentSession.performRebuild` as `EditFeatureCommand`s inside
+    /// the rebuild's own undo step, and deliberately ignored by the
+    /// load/undo error replay, which must never mutate the document.
+    var proposedUpgrades: [FeatureID: FeatureKind] = [:]
     var errors: [FeatureID: FeatureError] = [:]
 
     /// Insert or replace a body (keeping its slot on replace) with its face table.
