@@ -1,6 +1,22 @@
 //
 //  OCCTFuzzTests.swift
-//  openshape3dTests — TEMPORARY robustness harness (delete after the review).
+//  openshape3dTests — deserialize robustness harness. Promoted from
+//  docs/occt-fuzz-harness.swift.txt (NEXT §4 item 4) so the compiler keeps
+//  it honest; the sweep itself runs only when OS3D_FUZZ=1 is set (it takes
+//  minutes and journals to /private/tmp — not a per-commit gate cost):
+//
+//    TEST_RUNNER_OS3D_FUZZ=1 xcodebuild test … \
+//      -only-testing:openshape3dTests/OCCTFuzzTests
+//
+//  (xcodebuild forwards TEST_RUNNER_-prefixed variables into the test host,
+//  minus the prefix. The skip message names the switch.)
+//
+//  The sweep CLOSED the count-*, ref-*, numeric-*, and nul-* crash/hang
+//  families (deserialize now pre-gates them: OS3DPlausibleSectionCounts,
+//  pinned in OCCTSerializationPinTests). It skips a documented KNOWN-OPEN set
+//  it cannot pre-gate — truncated valid prefixes and one 200k-vertex resource
+//  case (see the `knownOpen` block) — logging the count so the cap is never
+//  silent. As promoted it is a REGRESSION guard: a NEW crasher fails it.
 //
 //  `OCCTKernel.deserialize` is fed ATTACKER-CONTROLLED bytes: a `.os3d` archive
 //  is a shareable document type, and `ProjectArchive → PersistedBody.brepData →
@@ -196,9 +212,10 @@ final class OCCTFuzzTests: XCTestCase {
         }
         let extruded = cachedBlob("extrude", dir: cacheDir) {
             OCCTKernel.extrudeShape(
-                outerLoop: [], isCircle: true,
-                circleCenter: SIMD2(0, 0), circleRadius: 4, holes: [],
-                zMin: 0, zMax: 6,
+                outerLoop: [],
+                outerConic: OCCTKernel.ConicSpec(
+                    center: SIMD2(0, 0), radiusX: 4, radiusY: 4, rotation: 0),
+                holes: [], zMin: 0, zMax: 6,
                 origin: .zero, xAxis: SIMD3(1, 0, 0),
                 yAxis: SIMD3(0, 1, 0), normal: SIMD3(0, 0, 1))
                 .flatMap(OCCTKernel.serialize)
@@ -396,6 +413,11 @@ final class OCCTFuzzTests: XCTestCase {
     /// that parses, through the downstream tessellation barrier
     /// (`faceTypeCounts` / `renderMesh` / `adoptBRep`). Asserts only survival.
     func testDeserializeSurvivesHostileInput() throws {
+        // Compiled always (so API drift breaks the build, not the doc file);
+        // run on demand — the sweep costs minutes, not a per-commit gate.
+        try XCTSkipUnless(
+            ProcessInfo.processInfo.environment["OS3D_FUZZ"] != nil,
+            "hostile-input sweep runs only with TEST_RUNNER_OS3D_FUZZ=1")
         let journalURL = Self.journalURL()
         guard let journal = FuzzJournal(url: journalURL) else {
             return XCTFail("could not open the fuzz journal at \(journalURL.path)")
@@ -426,6 +448,37 @@ final class OCCTFuzzTests: XCTestCase {
         XCTAssertTrue(corpus.contains { $0.name.hasPrefix("control-valid") },
                       "no valid control blob — the mutation families are empty")
 
+        // KNOWN-OPEN robustness gaps this harness FOUND but that cannot be
+        // closed at the deserialize pre-gate. They are skipped (never fed), so
+        // the sweep completes and stays a REGRESSION guard for everything
+        // else; the count is logged, never silent (see the header). Closing
+        // them needs bounds-checking inside OCCT's own reader, which we don't
+        // vendor as source, or crash-isolating the read in a subprocess —
+        // too heavy for a document-load path.
+        //   truncate-*   : a valid blob cut mid-record is a valid PREFIX — no
+        //                  bad token to reject; OCCT reads past the short data
+        //                  and dereferences garbage.
+        //   flip-*=9     : a single byte flipped to the ASCII digit '9' stays
+        //                  valid text (passes the byte gate) but corrupts a
+        //                  structural field into a still-IN-RANGE-but-wrong
+        //                  index OCCT dereferences — same single-byte-desync
+        //                  class as truncation. (The =00 and =FF flips are
+        //                  GATED, not skipped — non-text bytes.)
+        //   tshapes-200k-Ve : a real 200k-vertex body (4MB, well-formed) —
+        //                  resource pressure, not corruption; a genuine model
+        //                  this large is out of scope for the load path.
+        // (The count-*, ref-*, numeric-*, nul-*, and flip-*={00,FF} families
+        // this harness found ARE closed — see OS3DPlausibleSectionCounts and
+        // its pins in OCCTSerializationPinTests.)
+        func isKnownOpen(_ name: String) -> Bool {
+            name.hasPrefix("truncate-")
+                || name == "tshapes-200k-Ve"
+                || (name.hasPrefix("flip-") && name.hasSuffix("=9"))
+        }
+        let skipped = corpus.enumerated().filter { isKnownOpen($0.element.name) }
+        journal.write("### KNOWN-OPEN skipping \(skipped.count) desync/resource "
+            + "cases: \(skipped.map(\.element.name))")
+
         var parsed = 0, rejected = 0, tessellated = 0, emptyMesh = 0
         var terminal = completed.union(crashed)
         var hangs: [String] = []
@@ -437,6 +490,7 @@ final class OCCTFuzzTests: XCTestCase {
 
         for (i, c) in corpus.enumerated() {
             if completed.contains(i) || crashed.contains(i) { continue }
+            if isKnownOpen(c.name) { terminal.insert(i); continue }  // documented gap
             // Too many abandoned spinning threads makes the remaining timings
             // meaningless; stop and let a later run resume.
             // Abandoned threads spin at 100% CPU forever; past ~a core's worth

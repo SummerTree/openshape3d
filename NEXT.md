@@ -154,10 +154,25 @@ assign-vs-adopt render split). Also still open: wiring fillet/shell over
    unambiguous — center+radius identical); mixed fragments still drop.
    `sketchPoint` learned rect corners, so a corner-anchored constraint
    survives a rect-explode trim. Pinned in `ConstraintLifecycleTests`.
-4. **UI-suite geometry assertions (review R3-D)** — no UI test asserts a
-   geometry value; `SelectionInfoBar` exposes exact Volume/Bounds/Area
-   strings as the hook. Also promote `docs/occt-fuzz-harness.swift.txt`
-   into a real target.
+4. **UI-suite geometry assertions + fuzz harness — LANDED 2026-09-01.**
+   `MeasureUITests.testSeededBoxReportsExactGeometryValues` drives the app
+   and asserts the 4×4×4 seed's EXACT readout strings (64.00 mm³,
+   4.00 × 4.00 × 4.00 mm, 16.00 mm² face, 16.00 mm perimeter) — a kernel or
+   tessellation regression now fails a UI test, not just a unit one (R3-D).
+   `docs/occt-fuzz-harness.swift.txt` is promoted to
+   `openshape3dTests/OCCTFuzzTests.swift` (compiled always so API drift
+   breaks the build — it already caught a fillet/extrude signature drift;
+   the sweep itself runs only under `TEST_RUNNER_OS3D_FUZZ=1`). Running it
+   found and CLOSED four real crash/hang families on attacker-controlled
+   deserialize input — inflated section/record counts (hang), out-of-range
+   & negative sub-shape refs (segfault), non-finite/hex coordinates, and
+   non-text bytes — via one structural pre-gate
+   (`OCCTBridge.OS3DPlausibleSectionCounts`, pinned in
+   `OCCTSerializationPinTests`). The remaining single-byte-desync class
+   (truncated prefixes, `flip-*=9`, one 200k-vertex resource case) is an
+   inherited OCCT-reader gap with no clean pre-gate; the harness skips it
+   as a LOGGED known-open set and stands as a regression guard for
+   everything else. Playbook H2.
 5. **Pre-existing review backlog** (unchanged by PR #22, listed in
    `docs/ARCHITECTURE_REVIEW_2026-08-25.md` / STATUS §4.5): off-main
    eval/preview service (S1), scene caching + GPU buffer pooling (S2),

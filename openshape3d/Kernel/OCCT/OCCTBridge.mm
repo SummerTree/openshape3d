@@ -2730,8 +2730,165 @@ static const NSUInteger kOS3DMaxFindings = 200;
     return report;
 }
 
+// Trust-boundary pre-check (fuzz family "count-*"): the ASCII brep format is
+// full of declared counts — section headers ("Curve2ds 2147483647") AND
+// per-record fields deep inside the data — and OCCT's readers loop or
+// allocate on the DECLARED value without consulting the progress indicator,
+// so the read deadline cannot fire: an inflated section count spins a 2KB
+// blob for minutes, and an inflated in-record count crashes the process
+// outright (both found by OCCTFuzzTests). Two tiers, both structural:
+//
+//  1. A NAMED section's count is the number of serialized records, each at
+//     least a byte, so a count above the blob's byte length is impossible.
+//  2. Any OTHER pure-integer token is an index, a per-record count, or a
+//     flag — or a coordinate that happened to print without a fraction
+//     ("5000" for a 5m part), which is why the strict length bound cannot
+//     apply globally. The loose ceiling max(length, 10^7) is above any
+//     legitimate coordinate/index this app can produce (10^7 mm = 10 km;
+//     counts of 10^7 need 10^7 bytes, which raises the ceiling with them)
+//     and below every crash/hang value the fuzz corpus found (>= 10^9).
+//
+// Floats never match either tier — their tokens carry '.' or an exponent.
+// TShapes' signed refs ("-3") parse negative and pass; OCCT rejects those
+// cheaply on its own. One pass, reject before OCCT parses.
+static bool OS3DPlausibleSectionCounts(NSData *data) {
+    static const char *const kSections[] = {
+        "Locations", "Curve2ds", "Curves", "Polygon3D",
+        "PolygonOnTriangulations", "Surfaces", "Triangulations", "TShapes",
+    };
+    const char *bytes = (const char *)data.bytes;
+    const long long length = (long long)data.length;
+    // NON-TEXT bytes: `BRepTools::Write` emits pure printable ASCII plus
+    // whitespace, so any other byte is structurally impossible in a valid
+    // blob — but istringstream passes it straight through, where a NUL splits
+    // a numeric token mid-value and a high byte (0xFF) derails the tokenizer,
+    // both into crashes (fuzz nul-at-*, flip-*=FF). Reject anything outside
+    // {tab, LF, CR, 0x20–0x7E} in one pass, before OCCT sees a byte of it.
+    for (long long k = 0; k < length; ++k) {
+        const unsigned char ch = (unsigned char)bytes[k];
+        if (ch == '\t' || ch == '\n' || ch == '\r') continue;
+        if (ch < 0x20 || ch > 0x7E) return false;
+    }
+    const long long looseCeiling = length > 10'000'000 ? length : 10'000'000;
+    long long i = 0;
+    bool atLineStart = true;
+    while (i < length) {
+        if (isspace((unsigned char)bytes[i])) {
+            atLineStart = (bytes[i] == '\n');
+            ++i;
+            continue;
+        }
+        const long long start = i;
+        while (i < length && !isspace((unsigned char)bytes[i])) ++i;
+        const long long tokenLen = i - start;
+
+        // A section keyword at line start arms the strict bound for the
+        // integer token that follows it on the same line.
+        bool strict = false;
+        if (atLineStart) {
+            for (const char *section : kSections) {
+                if (tokenLen == (long long)strlen(section)
+                    && memcmp(bytes + start, section, (size_t)tokenLen) == 0) {
+                    strict = true;
+                    break;
+                }
+            }
+        }
+        atLineStart = false;
+        if (strict) {
+            // Peek the next token on this line; a non-integer just falls
+            // through to the normal scan.
+            long long j = i;
+            while (j < length && (bytes[j] == ' ' || bytes[j] == '\t')) ++j;
+            long long numStart = j;
+            while (j < length && isdigit((unsigned char)bytes[j])) ++j;
+            const long long numLen = j - numStart;
+            if (numLen > 0 && numLen < 20
+                && (j == length || isspace((unsigned char)bytes[j]))) {
+                char buffer[24];
+                memcpy(buffer, bytes + numStart, (size_t)numLen);
+                buffer[numLen] = '\0';
+                errno = 0;
+                const long long count = strtoll(buffer, nullptr, 10);
+                if (errno == ERANGE || count > length) return false;
+                i = j;
+                continue;
+            }
+            if (numLen >= 20) return false;  // absurd digit run
+        }
+
+        // TShapes references are an ORIENTATION MARKER ({*,+,-}) glued to a
+        // table index: "+3", "-3", "*2". OCCT indexes the shape table with
+        // that number UNCHECKED, so an out-of-range or NEGATIVE index is a
+        // straight segfault (fuzz cases ref-*-huge, ref-+-big, ref-+-neg).
+        // The index counts serialized records, so it is bounded by the blob's
+        // byte length — the STRICT bound, tighter than the loose ceiling a
+        // bare integer coordinate gets. Distinguish them by the marker: a
+        // marked token is a ref (strict), a bare integer is a
+        // count/coordinate (loose). A valid blob never doubles a sign/marker
+        // ("+-5") nor uses a negative index, so both are rejected
+        // structurally — magnitude alone can't catch index -5.
+        long long p = start;
+        const bool markedRef =
+            (bytes[p] == '*' || bytes[p] == '+' || bytes[p] == '-');
+        if (markedRef) ++p;
+        bool negativeIndex = false;
+        if (p < i && (bytes[p] == '+' || bytes[p] == '-')) {
+            negativeIndex = (bytes[p] == '-');
+            ++p;
+        }
+        if (p == i) continue;  // only markers/signs, no digits
+        bool digitsOnly = true;
+        for (long long j = p; j < i; ++j) {
+            if (!isdigit((unsigned char)bytes[j])) { digitsOnly = false; break; }
+        }
+        if (!digitsOnly) {
+            // Not a pure integer. Two narrow, unambiguous rejections; anything
+            // else (keywords, well-formed finite floats, and OCCT's own glued
+            // codes like "4CN" edge-continuity) is left for OCCT to read:
+            //   - A "0x…" HEX prefix: strtod parses it as a hex float but
+            //     OCCT's istream>> reads only the leading "0" and chokes on
+            //     'x', desyncing the tokenizer into reading a count/index from
+            //     garbage — a crash records later (fuzz numeric-hex). No valid
+            //     BRep token is hex.
+            //   - A token strtod consumes WHOLLY into a NON-FINITE double
+            //     ("1e999" → inf, bare "inf"/"nan"): inf coordinates crash
+            //     geometry reconstruction inside BRepTools::Read, before the
+            //     finite-bounds guard sees the shape (fuzz numeric-1e999). A
+            //     partial parse ("4CN" → 4, stops at 'C') is finite and kept.
+            long long h = start;
+            if (bytes[h] == '+' || bytes[h] == '-') ++h;
+            if (h + 1 < i && bytes[h] == '0'
+                && (bytes[h + 1] == 'x' || bytes[h + 1] == 'X')) {
+                return false;
+            }
+            if (tokenLen < 64) {
+                char fbuf[64];
+                memcpy(fbuf, bytes + start, (size_t)tokenLen);
+                fbuf[tokenLen] = '\0';
+                char *fend = nullptr;
+                const double d = strtod(fbuf, &fend);
+                if (fend == fbuf + tokenLen && !isfinite(d)) return false;
+            }
+            continue;  // words, finite floats, OCCT glued codes
+        }
+        if (negativeIndex) return false;  // a negative index/ref is invalid
+        const long long numLen = i - p;
+        if (numLen >= 20) return false;   // > 19 digits: overflow by size
+        char buffer[24];
+        memcpy(buffer, bytes + p, (size_t)numLen);
+        buffer[numLen] = '\0';
+        errno = 0;
+        const long long value = strtoll(buffer, nullptr, 10);
+        const long long ceiling = markedRef ? length : looseCeiling;
+        if (errno == ERANGE || value > ceiling) return false;
+    }
+    return true;
+}
+
 + (nullable OCCTShape *)rawShapeFromSerialized:(NSData *)data {
     if (data.length == 0) return nil;
+    if (!OS3DPlausibleSectionCounts(data)) return nil;
     try {
         std::istringstream is(std::string((const char *)data.bytes, data.length));
         TopoDS_Shape shape;
@@ -2800,6 +2957,9 @@ static const NSUInteger kOS3DMaxFindings = 200;
 
 + (nullable OCCTShape *)shapeFromSerialized:(NSData *)data {
     if (data.length == 0) return nil;
+    // See OS3DPlausibleSectionCounts: inflated declared counts hang OCCT's
+    // reader in loops the deadline cannot interrupt.
+    if (!OS3DPlausibleSectionCounts(data)) return nil;
     try {
         std::istringstream is(std::string((const char *)data.bytes, data.length));
         TopoDS_Shape shape;

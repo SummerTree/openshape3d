@@ -26,6 +26,40 @@ final class MeasureUITests: XCTestCase {
         return app
     }
 
+    /// Review R3-D: assert geometry VALUES through the UI, not just that a
+    /// label appears. The seeded box is exactly 4×4×4 mm, so every readout
+    /// is a closed-form constant: volume 64.00 mm³, bounds 4.00 × 4.00 ×
+    /// 4.00 mm, top-face area 16.00 mm², perimeter 16.00 mm. A kernel,
+    /// tessellation, or measurement regression that changes any digit of
+    /// these fails here even when the happy-path flow still "works".
+    func testSeededBoxReportsExactGeometryValues() throws {
+        let app = launchSeeded()
+        let window = app.windows.firstMatch
+
+        // Whole-body selection: exact volume + bounds strings.
+        XCTAssertTrue(
+            app.staticTexts["64.00 mm³"].waitForExistence(timeout: 5),
+            "a 4×4×4 seeded box must measure exactly 64.00 mm³"
+        )
+        XCTAssertTrue(
+            app.staticTexts["4.00 × 4.00 × 4.00 mm"].exists,
+            "bounds must read the box's exact edge lengths"
+        )
+
+        // Deselect, then tap the top face: exact area + perimeter strings.
+        window.coordinate(withNormalizedOffset: CGVector(dx: 0.85, dy: 0.85)).tap()
+        sleep(1) // stay clear of the double-tap window
+        window.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.35)).tap()
+        XCTAssertTrue(
+            app.staticTexts["16.00 mm²"].waitForExistence(timeout: 5),
+            "the 4×4 top face must measure exactly 16.00 mm²"
+        )
+        XCTAssertTrue(
+            app.staticTexts["16.00 mm"].exists,
+            "the top face's perimeter is exactly 16.00 mm"
+        )
+    }
+
     func testFaceSelectionShowsAreaInInfoBar() throws {
         let app = launchSeeded()
         let window = app.windows.firstMatch
