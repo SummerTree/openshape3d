@@ -216,6 +216,22 @@ mesh-only. The lesson stands: Euclid CSG on coincident faces is fragile,
 and it is only reachable when OCCT declines for a brep body — which the B1
 hardening now surfaces as an error rather than silently falling through.
 
+**Also checked: FreeCAD Basic Part Design Tutorial** (a multi-feature part:
+pad-symmetric → pocket-through → mirror → pad-reversed → mirror → pocket on
+a sloped face → refine). Every operation it uses maps 1:1 onto an
+openshape3d exec op, and each produces valid geometry. Verified live: the
+base trapezoid solid (bottom 26, right 26, top 5, sloped left → 403 mm²,
+padded symmetric to 53 mm) lands EXACTLY on 21,359 mm³; an inline
+extrude-subtract pocket removes material cleanly; a mirror across a plane
+is valid; `/v1/check` stays at 0 invalid. Full 1:1 of the finished part is
+blocked ONLY by the drawing image (external-geometry-relative placements +
+final dims live in a raster the text doesn't spell out), NOT by any
+openshape3d capability gap. Two exec notes confirmed while doing it:
+`feature.extrude` `symmetric:true` extrudes ±distance (total = 2×distance,
+so 53 mm total needs distance 26.5); the inline boolean is
+`"boolean":"subtract"` + `"booleanTargets":[id]` (a STRING op + id array,
+not a nested object — a wrong shape silently defaults to newBody).
+
 ## 4b. The Shapr3D tutorial-model thread (paused, 2026-08-31)
 
 Goal as posed: import the tutorial models and rebuild them through the app's
