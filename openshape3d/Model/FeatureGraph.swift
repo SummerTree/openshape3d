@@ -563,23 +563,27 @@ nonisolated extension FeatureGraph {
             id: BodyID(), name: "\(node.name) tool", transform: .identity, primitive: nil,
             euclidMesh: toolMesh, revision: 0)
         let toolTable = state.naming.faceTable(for: toolBody, createdBy: node.id, scheme: .extrude(outer))
-        let resultMesh = KernelOps.boolean(kind, target: target, tool: toolBody)
-        guard !resultMesh.polygons.isEmpty else {
-            state.errors[node.id] = .emptyGeometry
-            return
-        }
-        var result = Body(
-            id: target.id, name: target.name, transform: .identity, primitive: nil,
-            euclidMesh: resultMesh, revision: nextRevision())
+        // OCCT FIRST, Euclid only when OCCT declines — the same §3b decision
+        // evalBoolean got, applied late to this branch: the Euclid CSG here
+        // ran UNCONDITIONALLY and was thrown away whenever OCCT succeeded,
+        // and on a dense adopted tessellation it is not merely slow but
+        // UNBOUNDED (the Motorcycle-cover nub union wedged the MainActor
+        // here at 99% CPU, past every kernel deadline, because the spin was
+        // never in the kernel).
+        //
         // B-rep source of truth: when the target is analytic and the tool is
-        // a single-profile extrude, compose the boolean in OCCT too, so a cut
+        // a single-profile extrude, compose the boolean in OCCT, so a cut
         // into a cylinder stays round. This branch previously rebuilt the
         // target mesh-only, and the next save silently dropped its brep — a
         // PERMANENT smooth→faceted degrade (2026-08-25 review, C4). The OCCT
         // tool is the EXACT prism (no overlap padding — analytic booleans
         // merge coincident faces robustly without it).
+        var result = Body(
+            id: target.id, name: target.name, transform: .identity, primitive: nil,
+            euclidMesh: Euclid.Mesh([]), revision: nextRevision())
         var resultNames: [Int: ElementName] = [:]
         var resultHandle: BRepHandle?
+        var occtOwned = false
         if OCCTKernel.useOCCTAsSourceOfTruth,
            let targetBrep = target.brep,
            let a = OCCTKernel.transformed(targetBrep, by: target.transform) {
@@ -604,6 +608,7 @@ nonisolated extension FeatureGraph {
                     a, toolBrep, op: OCCTKernel.booleanOp(kind)) {
                 case let .success((outcome, ancestry)):
                     if result.adoptBRep(outcome.handle) {
+                        occtOwned = true
                         resultHandle = outcome.handle
                         resultNames = ElementNaming.composeNames(
                             operation: node.id, ancestry: ancestry,
@@ -618,6 +623,19 @@ nonisolated extension FeatureGraph {
                     return
                 }
             }
+        }
+        if !occtOwned {
+            // Either the target is mesh-only or OCCT declined the tool
+            // (multi-profile with a failed piece, holed loft…). Euclid
+            // legitimately owns the result.
+            let resultMesh = KernelOps.boolean(kind, target: target, tool: toolBody)
+            guard !resultMesh.polygons.isEmpty else {
+                state.errors[node.id] = .emptyGeometry
+                return
+            }
+            result = Body(
+                id: target.id, name: target.name, transform: .identity, primitive: nil,
+                euclidMesh: resultMesh, revision: nextRevision())
         }
         let inputTables = [state.faceTables[target.id], toolTable].compactMap { $0 }
         var table = state.naming.propagate(inputs: inputTables, output: result, op: .boolean(kind))

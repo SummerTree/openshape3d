@@ -83,6 +83,25 @@ worked example of the bundle format.
   the document and restores them on load. Our `refreshEvalErrors()` replays
   errors-only on load instead (S3) — equivalent outcome, different mechanism.
 
+## 3b. When the app wedges at 99% CPU: SAMPLE it, don't theorize
+
+`/v1/health` still answering while everything else hangs means the MainActor
+is spinning (health serves off the listener queue by design). The Motorcycle-
+cover rebuild produced exactly that, and two rounds of plausible kernel-side
+fixes (op deadlines — kept, they close a real gap) did not move it, because
+the spin was never in the kernel:
+
+```bash
+sample $(pgrep -f "openshape3d.app/openshape3d" | head -1) 2 | sed -n '/Call graph/,/^$/p' | head -50
+```
+
+named the exact frame in one step: `SignatureNaming.propagate`, quadratic
+over a tangent-fuse's sliver tessellation. One `sample` beats an afternoon of
+theory — same lesson as the gizmo-debug print, one level lower. Also learned:
+a HANG evades failure capture entirely (nothing returns), which is why
+constructive builders now run under `kOS3DOpDeadlineSeconds` and quadratic
+naming passes under `SignatureNaming.propagateBudget`.
+
 ## 4. Machine notes that bit during this pass
 
 - Port 8787 can be occupied by an unrelated local service (on this machine: a

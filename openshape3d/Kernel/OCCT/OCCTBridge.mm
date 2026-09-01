@@ -241,6 +241,16 @@ private:
 // against a hang the user would otherwise force-quit out of.
 static const double kOS3DKernelDeadlineSeconds = 5.0;
 
+// Deadline for CONSTRUCTIVE builders (boolean/fillet/chamfer/defeaturing).
+// Separate from the mesher/read deadline because a legitimately huge model's
+// boolean deserves more rope than a tessellation — but not infinite rope:
+// the Motorcycle-cover rebuild found a tangent union spinning the MainActor
+// FOREVER at 99% CPU (health kept answering — it runs off the listener queue
+// — which is exactly the wedge H1 exists to prevent). A hang also never
+// returns, so it evades failure capture entirely; a deadline turns it into a
+// typed, captured, reproducible failure.
+static const double kOS3DOpDeadlineSeconds = 30.0;
+
 // Same-domain unification, shared by unifiedShape: and the boolean result
 // path. (unifyEdges, unifyFaces, concatBSplines) — faces and edges, but do
 // NOT merge B-spline geometry: that would change analytic surfaces into
@@ -1218,7 +1228,15 @@ static TopoDS_Shape OS3DUnifiedWithHistory(const TopoDS_Shape &shape,
             // TShapes — handles are aliased by undo snapshots.
             builder.SetNonDestructive(Standard_True);
             builder.SetFuzzyValue(fuzzy);
-            builder.Build();
+            OS3DDeadlineProgress *deadline =
+                new OS3DDeadlineProgress(kOS3DOpDeadlineSeconds);
+            Handle(Message_ProgressIndicator) progress(deadline);
+            builder.Build(progress->Start());
+            if (deadline->Fired()) {
+                // A hang is not cured by more fuzz — abandon the ladder.
+                errorDump = "the operation exceeded the kernel deadline";
+                break;
+            }
             if (builder.IsDone() && !builder.HasErrors()) {
                 result = builder.Shape();
                 // Harvest ancestry NOW — the builder owns its history and
@@ -1371,7 +1389,15 @@ static std::set<Standard_Integer> OS3DNearestFaces(
         BRepAlgoAPI_Defeaturing defeat;
         defeat.SetShape(shape->_shape);
         defeat.AddFacesToRemove(toRemove);
-        defeat.Build();
+        OS3DDeadlineProgress *deadline =
+            new OS3DDeadlineProgress(kOS3DOpDeadlineSeconds);
+        Handle(Message_ProgressIndicator) progress(deadline);
+        defeat.Build(progress->Start());
+        if (deadline->Fired()) {
+            OS3DSetStatus(status, OCCTOpCodeKernelRefused,
+                          @"the operation exceeded the kernel deadline");
+            return nil;
+        }
         if (!defeat.IsDone() || defeat.HasErrors()) {
             std::ostringstream os;
             defeat.DumpErrors(os);
@@ -1659,7 +1685,15 @@ static OCCTShape *OS3DBlendEdgeSet(const TopoDS_Shape &shape,
         for (Standard_Integer i : qualified) {
             mk.Add(amount, TopoDS::Edge(edgeMap(i)));
         }
-        mk.Build();
+        OS3DDeadlineProgress *deadline =
+            new OS3DDeadlineProgress(kOS3DOpDeadlineSeconds);
+        Handle(Message_ProgressIndicator) progress(deadline);
+        mk.Build(progress->Start());
+        if (deadline->Fired()) {
+            OS3DSetStatus(status, OCCTOpCodeKernelRefused,
+                          @"the operation exceeded the kernel deadline");
+            return nil;
+        }
         OCCTShape *out = OS3DFinishBlend(mk, edgeMap, qualified,
                                          mk.IsDone() ? mk.NbFaultyContours() : -1,
                                          status);
@@ -1671,7 +1705,15 @@ static OCCTShape *OS3DBlendEdgeSet(const TopoDS_Shape &shape,
         // Symmetric chamfer: equal setback on both adjacent faces.
         mk.Add(amount, TopoDS::Edge(edgeMap(i)));
     }
-    mk.Build();
+    OS3DDeadlineProgress *deadline =
+        new OS3DDeadlineProgress(kOS3DOpDeadlineSeconds);
+    Handle(Message_ProgressIndicator) progress(deadline);
+    mk.Build(progress->Start());
+    if (deadline->Fired()) {
+        OS3DSetStatus(status, OCCTOpCodeKernelRefused,
+                      @"the operation exceeded the kernel deadline");
+        return nil;
+    }
     OCCTShape *out = OS3DFinishBlend(mk, edgeMap, qualified, -1, status);
     if (out != nil) OS3DFillModifierHistory(history, mk, shape, out->_shape);
     return out;
@@ -1849,7 +1891,13 @@ static bool OS3DFilletBuilds(const TopoDS_Shape &shape,
         for (Standard_Integer i : edges) {
             mk.Add(radius, TopoDS::Edge(edgeMap(i)));
         }
-        mk.Build();
+        // The SHORT deadline: a drag clamp runs ~7 of these probes, and one
+        // hanging probe would wedge the drag exactly like the boolean hang.
+        OS3DDeadlineProgress *deadline =
+            new OS3DDeadlineProgress(kOS3DKernelDeadlineSeconds);
+        Handle(Message_ProgressIndicator) progress(deadline);
+        mk.Build(progress->Start());
+        if (deadline->Fired()) return false;
         if (!mk.IsDone() || mk.NbFaultyContours() > 0) return false;
         for (Standard_Integer i : edges) {
             if (mk.Generated(edgeMap(i)).IsEmpty()) return false;

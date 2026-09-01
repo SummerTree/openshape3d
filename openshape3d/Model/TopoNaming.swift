@@ -119,6 +119,11 @@ nonisolated struct SignatureNaming: TopoNaming {
     /// An output face must score at least this to inherit an input entry's role.
     static let propagateThreshold: Double = 0.55
 
+    /// Max `faces × inputEntries` score evaluations one propagate may spend
+    /// before degrading wholesale to area-rank roles. ~250k scores is tens
+    /// of milliseconds; a degenerate tessellation blows far past it.
+    static let propagateBudget = 250_000
+
     // Base weights sum to 1.0, so a candidate whose normal is orthogonal to the
     // target (n·refN = 0) caps at wCentroid + wArea = 0.5 < resolveThreshold —
     // i.e. a face pointing the wrong way can never resolve. An aligned face
@@ -147,6 +152,21 @@ nonisolated struct SignatureNaming: TopoNaming {
         let areaOrder = faces.indices.sorted { faces[$0].signature.area > faces[$1].signature.area }
         var rankOf = [Int: Int]()
         for (rank, idx) in areaOrder.enumerated() { rankOf[idx] = rank }
+
+        // PATHOLOGY BUDGET. This pass is O(faces × inputs), which is fine
+        // for the tens-of-faces bodies it was built for — and wedged the
+        // MainActor for MINUTES when a tangent-contact fuse tessellated
+        // into tens of thousands of sliver faces (Motorcycle-cover nub,
+        // 2026-09-01, found by sampling the spin). Past the budget every
+        // face takes the area-rank fallback role: roles are a resolve
+        // TIEBREAK, honest degradation is bounded time, and element names
+        // (attached separately) are unaffected.
+        if faces.count * max(inputEntries.count, 1) > Self.propagateBudget {
+            return FaceTable(entries: faces.enumerated().map { i, face in
+                .init(role: .derived(index: rankOf[i] ?? i),
+                      signature: face.signature, triangles: face.triangles)
+            })
+        }
 
         var entries: [FaceTable.Entry] = []
         entries.reserveCapacity(faces.count)

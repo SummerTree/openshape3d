@@ -160,12 +160,19 @@ own UI, as a real workout for the modeling stack. Where it got to:
   Piston / Piston rod are frozen imported solids (one body, zero sketches);
   Motorcycle ships as a Parasolid TEXT `.x_t`. Block casting is unreachable
   anyway — 7 of its 27 steps are `MaterializeImportedBodies`.
-- **What blocks the rest:** the Motorcycle cover needs Fillet and Shell, and
-  `/v1/exec` cannot express those. They take `EdgeRef`/`FaceRef` — topological
-  signatures, not numbers — so exec needs a way to NAME an edge or face over
-  the wire. That is the same identity problem §3 is about, so it is probably
-  cheaper AFTER the topological-naming mission, not before. The wheel itself is
-  also not 1:1 yet: its Mirror, second Boolean and 12.7 mm bolt holes are undone.
+- **The Motorcycle cover is REBUILT (2026-09-01)** — `scripts/rebuild_cover.py`
+  drives the full main sequence over exec (blank 0.01% off analytic, boss ring
+  with its HOLE, fillet 1.8 propagating the whole rim tangent chain, shell 1.3
+  bottom-open, tangent nub union), exactly as §3's mission predicted: the
+  identity vocabulary made Fillet/Shell expressible. Excluded and why: the two
+  10° taper angles (no draft-extrude), the spline engraving (splines never
+  become profiles), Import 01 (Parasolid). The rebuild found and fixed THREE
+  real bugs in one pass: exec dropped profile HOLES (rings extruded as full
+  discs), constructive kernel builders had no deadline (a hang evades capture
+  AND wedges the MainActor), and `propagate`'s O(faces×inputs) role pass spun
+  for minutes on a tangent-fuse's sliver tessellation (found by SAMPLING the
+  wedged pid — see KERNEL_DEBUG_TOOLING). The wheel is still not 1:1 (Mirror,
+  second Boolean, 12.7 mm bolt holes undone).
 
 ## 5. What PR #22 changed (so new work builds on it, not around it)
 

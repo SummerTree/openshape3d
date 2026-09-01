@@ -218,8 +218,8 @@ final class AgentBridge {
             return record(FeatureNode(
                 name: "Extrude",
                 kind: .extrude(
-                    profile: ProfileRef(sketchID: sketchID, entityIDs: [],
-                                        holeEntityIDs: [], seedPoint: seed),
+                    profile: execProfileRef(sketchID: sketchID, seed: seed,
+                                            in: session),
                     plane: PlaneRef(source: .sketch(sketchID)),
                     distance: Expr(value: distance),
                     symmetric: symmetric,
@@ -236,8 +236,8 @@ final class AgentBridge {
             return record(FeatureNode(
                 name: "Revolve",
                 kind: .revolve(
-                    profile: ProfileRef(sketchID: sketchID, entityIDs: [],
-                                        holeEntityIDs: [], seedPoint: seed),
+                    profile: execProfileRef(sketchID: sketchID, seed: seed,
+                                            in: session),
                     plane: PlaneRef(source: .sketch(sketchID)),
                     axis: AxisRef(source: .explicit(axis)),
                     angle: Expr(value: angleDegrees),
@@ -339,6 +339,32 @@ final class AgentBridge {
                 + "intersect the target."
         }
         return execOK(viewModel, payload)
+    }
+
+    /// The ProfileRef an exec'd profile feature records — minted the way the
+    /// interactive commit mints one: the innermost region at the seed, with
+    /// its HOLES detected and recorded explicitly. `resolveProfile` only
+    /// punches holes named in `holeEntityIDs` (a persisted empty list must
+    /// keep meaning "no holes" for old documents), so leaving them off here
+    /// silently extruded a ring as its full outer disc — found live by the
+    /// Motorcycle cover's boss band overshooting its volume by exactly the
+    /// hole's area.
+    private func execProfileRef(sketchID: SketchID, seed: SIMD2<Double>,
+                                in session: DocumentSession) -> ProfileRef {
+        guard let sketch = session.document.sketches.first(where: { $0.id == sketchID }),
+              let outer = ProfileDetector.profiles(at: seed, in: sketch).first else {
+            // No region at the seed: record the seed-only ref, and replay
+            // reports the honest "seed point outside any closed region".
+            return ProfileRef(sketchID: sketchID, entityIDs: [],
+                              holeEntityIDs: [], seedPoint: seed)
+        }
+        let holes = ProfileDetector.holes(
+            of: outer, among: ProfileDetector.detectProfiles(in: sketch))
+        return ProfileRef(
+            sketchID: sketchID,
+            entityIDs: Array(outer.sourceEntityIDs),
+            holeEntityIDs: holes.map { Array($0.sourceEntityIDs) },
+            seedPoint: seed)
     }
 
     private func bodyRef(_ id: BodyID, _ session: DocumentSession) -> BodyRef {
