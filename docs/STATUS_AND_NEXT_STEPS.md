@@ -10,18 +10,20 @@ design), and — new — `FREECAD_PLAYBOOK.md` (the FreeCAD-derived hardening
 ledger: every OCCT defensive pattern mined from the reference checkout at
 `~/projects/reference/FreeCAD`, its licensing rules, and where each landed).
 
-**Current test baseline (2026-08-31): 1042 unit tests in ~18s** — the
-debug-tooling tranche (§4 mission 0c) added 21 (shape health, kernel capture
-+ replay, /v1/check + /v1/capture routing) and topo-naming step 1 added 8
-(render-mesh face channel, boolean ancestry incl. the two-hop unify case) on
-top of the 1013 the FreeCAD-hardening tranches left, which had added 42
-geometry-value tests (typed blend diagnostics, boolean normalization,
-exact-volume oracles, constraint lifecycle). Previous baseline (2026-08-30): 920 unit tests in 18s — down from
-~100 s after booleans stopped running both kernels (see §3b). Full UI suite last
-measured at the analytic-ellipses commit: 103 executed, 2 skipped, 0 failures,
-44m28s — 0 idle-timeouts, 0 field-clear retries, store pinned at
-1 project. The skips are `CompactWidthBarUITests`, which skip by design on the
-iPad destination.
+**Current test baseline (2026-09-01): 1074 unit tests in ~17s** — the
+debug-tooling tranche (§4 mission 0c) added 21, topo-naming steps 1–5a added
+~35 (ancestry, element naming, name-first resolve, identity blends,
+modifier-op history), and the exec identity ops added the rest, on top of
+the 1013 the FreeCAD-hardening tranches left. Previous baseline (2026-08-30):
+920 unit tests in 18s — down from ~100 s after booleans stopped running both
+kernels (see §3b). **Full UI suite last measured 2026-09-01** (covering all
+of the above): 104 executed, 2 skipped, 46m19s — 1 failure
+(`DragSolveUITests.testDragTopCornerKeepsHorizontalEdgeAndCoalesces`, passed
+clean in isolation immediately after: the documented long-run-flake pattern,
+and a sketch-solver test unrelated to the naming work), 2 idle-timeouts,
+0 field-clear retries. The ~2 min over the prior 44m28s tracks the two 60 s
+idle-waits plus one more executed test. The skips are
+`CompactWidthBarUITests`, which skip by design on the iPad destination.
 
 UI wall clock is flat across the whole of mission 2 (44m18s → 44m10s →
 44m28s): it added 29 unit tests and no UI tests. The run before THAT was 43m14s, and the minute

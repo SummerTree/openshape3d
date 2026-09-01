@@ -50,9 +50,10 @@ bridge with `SIMCTL_CHILD_OS3D_AGENT_PORT=8899`.
   the combined `main` was verified on 2026-08-31: **1013 unit tests,
   0 failures, ~18.6 s**, with `docs/STATUS_AND_NEXT_STEPS.md` carrying
   both new sections. Nothing to re-check there.
-- The full **UI suite has not run** since the hardening landed (only the
-  6 blend UI tests, all green). Kick off the ~44 min suite once and check
-  the four health signals listed at the top of STATUS §"test baseline".
+- ~~The full **UI suite has not run** since the hardening landed~~ — **RAN
+  2026-09-01** covering the debug tranche + topo-naming 1–5a + exec identity
+  ops: 104 executed, one long-run flake (clean in isolation), 2
+  idle-timeouts, 46m19s. Measurement + reading in STATUS §"test baseline".
 
 ## 2b. Debug-tooling tranche — LANDED 2026-08-31 (this machine's first work)
 
