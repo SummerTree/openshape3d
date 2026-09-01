@@ -100,6 +100,66 @@ final class ShapeHealthTests: XCTestCase {
         XCTAssertFalse(health.bopCheckRan)
     }
 
+    // MARK: - Kernel-side face info (the identity source for assigned renders)
+
+    func testFaceInfoDescribesABoxWithOutwardNormals() throws {
+        let box = try box(10)
+        let infos = OCCTKernel.faceInfo(box)
+        XCTAssertEqual(infos.count, 6)
+        XCTAssertEqual(Set(infos.map(\.index)), Set(1...6), "dense 1-based")
+        for info in infos {
+            let signature = try XCTUnwrap(info.signature)
+            XCTAssertEqual(signature.kind, .planar)
+            XCTAssertEqual(info.area, 100, accuracy: 1e-9)
+            // Outward: the normal agrees with centroid-minus-body-centre.
+            let centre = SIMD3<Double>(0, 5, 0)  // box is centred x/z, base y=0
+            XCTAssertGreaterThan(simd_dot(info.normal, info.centroid - centre),
+                                 4.9, "normal must point OUT at \(info.centroid)")
+        }
+    }
+
+    func testFaceInfoDescribesACylinderWall() throws {
+        let cylinder = try XCTUnwrap(OCCTKernel.primitiveShape(
+            .cylinder(radius: 4, height: 6), placement: .identity))
+        let infos = OCCTKernel.faceInfo(cylinder)
+        XCTAssertEqual(infos.count, 3)
+        let wall = try XCTUnwrap(infos.first {
+            if case .cylindrical = $0.signature?.kind { return true }
+            return false
+        })
+        guard case let .cylindrical(radius)? = wall.signature?.kind else {
+            return XCTFail("expected cylindrical")
+        }
+        XCTAssertEqual(radius, 4, accuracy: 1e-9)
+        XCTAssertEqual(abs(wall.normal.y), 1, accuracy: 1e-9,
+                       "a cylinder wall's \"normal\" is its axis")
+        XCTAssertEqual(wall.area, 2 * .pi * 4 * 6, accuracy: 1e-6)
+    }
+
+    /// The regression that motivated faceInfo: a revolved washer's render is
+    /// NOT the kernel tessellation, so the mesh-channel path served
+    /// duplicate kernel indices. Kernel-side info must be dense and sane.
+    func testFaceInfoIsDenseAndDistinctForARevolvedWasher() throws {
+        let plane = SketchPlane(origin: .zero, xAxis: SIMD3(1, 0, 0),
+                                yAxis: SIMD3(0, 1, 0))
+        let profile = Profile(
+            loop: [SIMD2(4, 0), SIMD2(6, 0), SIMD2(6, 3), SIMD2(4, 3)],
+            kind: .polygonal, sourceEntityIDs: [])
+        let washer = try XCTUnwrap(OCCTKernel.revolveSolid(
+            outer: profile, holes: [], plane: plane,
+            axisOrigin: .zero, axisDirection: SIMD3(0, 1, 0),
+            angleRadians: 2 * .pi))
+        let infos = OCCTKernel.faceInfo(washer)
+        XCTAssertEqual(infos.count, 4, "2 annular caps + 2 cylindrical walls")
+        XCTAssertEqual(Set(infos.map(\.index)).count, 4,
+                       "indices are DISTINCT — the duplicated-index bug class")
+        let radii = infos.compactMap { info -> Double? in
+            if case let .cylindrical(radius)? = info.signature?.kind { return radius }
+            return nil
+        }
+        XCTAssertEqual(Set(radii.map { ($0 * 1e9).rounded() / 1e9 }), [4, 6])
+    }
+
     // MARK: - Transport
 
     /// The raw dictionary is served verbatim by /v1/check, so it must be

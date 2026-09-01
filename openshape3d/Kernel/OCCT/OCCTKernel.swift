@@ -563,6 +563,56 @@ nonisolated enum OCCTKernel {
         return (c.planar, c.cylindrical, c.other)
     }
 
+    /// One kernel face's geometry, straight from the shape — the identity
+    /// source when the body's RENDER is not the kernel tessellation
+    /// (revolve/sweep/loft assign their brep), where the mesh-table channel
+    /// votes garbage against a different tessellation.
+    nonisolated struct KernelFaceInfo: Sendable {
+        let index: Int
+        /// Nil for surface kinds `FaceSignature` cannot express (torus,
+        /// sphere, swept surfaces) — listed for discovery, not
+        /// referenceable by a FaceRef.
+        let signature: FaceSignature?
+        let normal: SIMD3<Double>
+        let centroid: SIMD3<Double>
+        let area: Double
+    }
+
+    /// Per-kernel-face geometry in the shared 1-based numbering. Planar
+    /// normals point OUT of the solid; a cylindrical face's "normal" is its
+    /// axis direction, matching `FaceSignature` conventions.
+    static func faceInfo(_ handle: BRepHandle) -> [KernelFaceInfo] {
+        guard let data = OCCTBridge.faceInfo(of: handle.shape) else { return [] }
+        let values: [Double] = data.withUnsafeBytes {
+            Array($0.bindMemory(to: Double.self))
+        }
+        var out: [KernelFaceInfo] = []
+        out.reserveCapacity(values.count / 10)
+        for base in stride(from: 0, to: (values.count / 10) * 10, by: 10) {
+            let normal = SIMD3(values[base + 2], values[base + 3], values[base + 4])
+            let centroid = SIMD3(values[base + 5], values[base + 6], values[base + 7])
+            let area = values[base + 8]
+            let signature: FaceSignature?
+            switch values[base + 1] {
+            case 0:
+                signature = FaceSignature(kind: .planar, normal: normal,
+                                          centroid: centroid, area: area,
+                                          planeOffset: values[base + 9])
+            case 1:
+                signature = FaceSignature(kind: .cylindrical(radius: values[base + 9]),
+                                          normal: normal, centroid: centroid,
+                                          area: area,
+                                          planeOffset: simd_dot(normal, centroid))
+            default:
+                signature = nil
+            }
+            out.append(KernelFaceInfo(index: Int(values[base]),
+                                      signature: signature, normal: normal,
+                                      centroid: centroid, area: area))
+        }
+        return out
+    }
+
     /// Round the analytic edges nearest `points` to `radius`. `points` are
     /// world positions on the edges to blend (mesh-edge midpoints from the
     /// picker); pass `matchTolerance(for:)` as `tolerance`.

@@ -1777,6 +1777,51 @@ static OCCTShape *OS3DBlendByIndices(OCCTShape *shape, NSData *edgeIndices,
     return OS3DBlendByIndices(shape, edgeIndices, distance, false, status, history);
 }
 
++ (nullable NSData *)faceInfoOfShape:(OCCTShape *)shape {
+    if (shape == nil || shape->_shape.IsNull()) return nil;
+    try {
+        TopTools_IndexedMapOfShape faceMap;
+        TopExp::MapShapes(shape->_shape, TopAbs_FACE, faceMap);
+        std::vector<double> rows;
+        rows.reserve((size_t)faceMap.Extent() * 10);
+        for (Standard_Integer i = 1; i <= faceMap.Extent(); ++i) {
+            const TopoDS_Face face = TopoDS::Face(faceMap(i));
+            GProp_GProps props;
+            BRepGProp::SurfaceProperties(face, props);
+            const gp_Pnt centroid = props.CentreOfMass();
+            const double area = props.Mass();
+            BRepAdaptor_Surface surf(face);
+            double kind = 2.0, extra = 0.0;
+            gp_Dir normal(0.0, 0.0, 1.0);
+            if (surf.GetType() == GeomAbs_Plane) {
+                kind = 0.0;
+                normal = surf.Plane().Axis().Direction();
+                // The geometric axis ignores which side the material is on;
+                // the face ORIENTATION says. An outward normal is what the
+                // signature conventions store.
+                if (face.Orientation() == TopAbs_REVERSED) normal.Reverse();
+                extra = normal.X() * centroid.X() + normal.Y() * centroid.Y()
+                      + normal.Z() * centroid.Z();
+            } else if (surf.GetType() == GeomAbs_Cylinder) {
+                kind = 1.0;
+                normal = surf.Cylinder().Axis().Direction();
+                extra = surf.Cylinder().Radius();
+            }
+            const double row[10] = {
+                (double)i, kind,
+                normal.X(), normal.Y(), normal.Z(),
+                centroid.X(), centroid.Y(), centroid.Z(),
+                area, extra,
+            };
+            rows.insert(rows.end(), row, row + 10);
+        }
+        return [NSData dataWithBytes:rows.data()
+                              length:rows.size() * sizeof(double)];
+    } catch (...) {
+        return nil;
+    }
+}
+
 + (nullable NSData *)edgeFaceAdjacencyOfShape:(OCCTShape *)shape {
     if (shape == nil || shape->_shape.IsNull()) return nil;
     try {

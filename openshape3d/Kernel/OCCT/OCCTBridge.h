@@ -412,6 +412,18 @@ typedef NS_ENUM(NSInteger, OCCTOpCode) {
                                  status:(nullable OCCTOpStatus *)status
                                 history:(nullable OCCTShapeHistory *)history;
 
+/// Per-kernel-face geometry, straight from the shape: packed doubles, 10
+/// per face — `index, kindCode, normal xyz, centroid xyz, area, extra` —
+/// in 1-based indexed-map order. `kindCode`: 0 planar (`extra` = plane
+/// offset n·centroid), 1 cylindrical (`normal` = axis direction, `extra` =
+/// radius), 2 other (`extra` = 0). Face-orientation is honoured, so a
+/// planar normal points OUT of the solid. This is the identity source for
+/// bodies whose RENDER is not the kernel tessellation (revolve/sweep/loft
+/// assign their brep) — the mesh-table channel votes garbage against a
+/// different tessellation, and /v1/faces served duplicate indices for a
+/// revolved washer exactly that way (measured 2026-09-01).
++ (nullable NSData *)faceInfoOfShape:(OCCTShape *)shape;
+
 /// Every edge with exactly two distinct adjacent faces, as packed int32
 /// triples `(edgeIndex, faceA, faceB)` — 1-based indexed-map numbering
 /// shared with the render mesh's face channel and the ancestry rows; the

@@ -166,11 +166,15 @@ somewhere in a chain is itself a finding. `invalid` counts sick breps only.
 Kernel sub-shape discovery — the vocabulary for identity-addressed exec ops.
 Edges: 1-based kernel index, adjacent-face pair, midpoint/length/convexity
 (recovered mesh-side), and the durable `EdgeName` when the identity layer has
-one. Faces: index, role, kind (planar/cylindrical + radius), area, centroid,
-normal, `ElementName`. 409 `mesh_only_body` for bodies without a brep; 409
-`stale_identity` when the body changed since the last applied rebuild (undo
-does this) — run any exec feature op to rebuild, then re-query. Edges missing
-from the list are seams/borders, which never blend anyway.
+one. Faces come KERNEL-SIDE (`faceInfo`, straight from the brep — never
+stale, and correct for revolve/sweep/loft bodies whose render is not the
+kernel tessellation): index, kind (planar / cylindrical + radius / "other"
+with `referenceable: false` for torus-class surfaces), area, centroid,
+normal, `ElementName` when the retained name maps are fresh. 409
+`mesh_only_body` for bodies without a brep. Sub-shape GEOMETRY can never be
+stale; only NAMES go missing after an undo (refs then mint name-less), so
+there is no `stale_identity` refusal on these endpoints. Edges missing from
+the list are seams/borders, which never blend anyway.
 
 ### `POST /v1/exec` — `feature.fillet` / `feature.chamfer` / `feature.shell`
 

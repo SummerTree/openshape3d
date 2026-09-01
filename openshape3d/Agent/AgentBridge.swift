@@ -437,13 +437,23 @@ final class AgentBridge {
                 message: "'\(body.name)' carries no analytic kernel shape, so it has "
                        + "no addressable edges or faces. Only brep bodies blend/shell over exec."))
         }
-        guard session.lastNamingRevisions[bodyID] == body.meshRevision else {
-            return .reply(.failure(409, "Conflict", error: "stale_identity",
-                message: "'\(body.name)' changed since the last rebuild, so kernel "
-                       + "indices may be stale. Run any exec feature op (or edit a "
-                       + "feature) to rebuild, then GET /v1/edges|/v1/faces again."))
-        }
+        // NO revision guard here: sub-shape GEOMETRY (adjacency, face info)
+        // is read from the CURRENT brep and cannot be stale. Only the
+        // retained NAME maps can be, and `freshNames` handles that — a
+        // stale map yields refs without names, never wrong geometry. (The
+        // old blanket stale_identity 409 made every undo a dead end.)
         return .ok(body: body, brep: brep)
+    }
+
+    /// The body's kernel-face names ONLY when they describe its current
+    /// revision — the same staleness rule the interactive mint sites use. A
+    /// stale map yields [:], and refs simply go name-less.
+    private func freshNames(for body: Body,
+                            _ session: DocumentSession) -> [Int: ElementName] {
+        guard session.lastNamingRevisions[body.id] == body.meshRevision else {
+            return [:]
+        }
+        return session.lastKernelNames[body.id] ?? [:]
     }
 
     /// JSON-safe rendering of an Encodable identity value.
@@ -463,7 +473,7 @@ final class AgentBridge {
         case let .reply(reply): return reply
         }
         let adjacency = OCCTKernel.edgeFaceAdjacency(context.brep)
-        let names = session.lastKernelNames[context.body.id] ?? [:]
+        let names = freshNames(for: context.body, session)
         let edgeNames = ElementNaming.edgeNames(adjacency: adjacency, names: names)
 
         // Geometry per kernel edge, recovered from the mesh side: every
@@ -521,42 +531,43 @@ final class AgentBridge {
         case let .ok(body, brep): context = (body, brep)
         case let .reply(reply): return reply
         }
-        guard let table = session.lastFaceTables[context.body.id] else {
-            return .failure(409, "Conflict", error: "stale_identity",
-                            message: "No face table retained for '\(context.body.name)' "
-                                   + "— rebuild first (any exec feature op).")
-        }
-        let channel = OCCTKernel.renderMeshFaceChannel(from: context.brep)
-        let rows = table.entries.compactMap { entry -> [String: Any]? in
-            guard let index = ElementNaming.kernelFace(of: entry, channel: channel)
-            else { return nil }
+        // KERNEL-SIDE, not the mesh table: the table's triangle sets index
+        // the body's RENDER, and for assigned-render bodies (revolve/sweep/
+        // loft) that is a DIFFERENT tessellation than the channel's — the
+        // vote then produced duplicate/wrong indices for a revolved washer
+        // (measured 2026-09-01, two faces both claiming index 1). Face
+        // geometry from the brep itself cannot misalign and cannot go stale.
+        let names = freshNames(for: context.body, session)
+        let rows = OCCTKernel.faceInfo(context.brep).map { info -> [String: Any] in
             var row: [String: Any] = [
-                "index": index,
-                "role": String(describing: entry.role),
-                "areaMM2": entry.signature.area,
-                "centroid": [entry.signature.centroid.x,
-                             entry.signature.centroid.y,
-                             entry.signature.centroid.z],
-                "normal": [entry.signature.normal.x,
-                           entry.signature.normal.y,
-                           entry.signature.normal.z],
+                "index": info.index,
+                "areaMM2": info.area,
+                "centroid": [info.centroid.x, info.centroid.y, info.centroid.z],
+                "normal": [info.normal.x, info.normal.y, info.normal.z],
             ]
-            if case let .cylindrical(radius) = entry.signature.kind {
+            switch info.signature?.kind {
+            case .planar:
+                row["kind"] = "planar"
+            case let .cylindrical(radius):
                 row["kind"] = "cylindrical"
                 row["radiusMM"] = radius
-            } else {
-                row["kind"] = "planar"
+            case nil:
+                // Torus/sphere/swept surfaces: listed for discovery, but a
+                // FaceRef cannot express them — say so up front.
+                row["kind"] = "other"
+                row["referenceable"] = false
             }
-            if let name = entry.elementName, let encoded = jsonObject(name) {
+            if let name = names[info.index], let encoded = jsonObject(name) {
                 row["name"] = encoded
             }
             return row
-        }.sorted { ($0["index"] as? Int ?? 0) < ($1["index"] as? Int ?? 0) }
+        }
         return .ok([
             "body": context.body.id.raw.uuidString,
             "count": rows.count,
             "faces": rows,
-            "message": "Indices feed feature.shell's args.openFaces.",
+            "message": "Indices feed feature.shell/deleteFace/replaceFace. "
+                     + "kind \"other\" faces are listed but not referenceable.",
         ])
     }
 
@@ -580,7 +591,7 @@ final class AgentBridge {
                             message: "No blendable kernel edge \(index) on "
                                    + "'\(context.body.name)'. GET /v1/edges?body=… for the list.")
         }
-        let names = session.lastKernelNames[bodyID] ?? [:]
+        let names = freshNames(for: context.body, session)
         let edgeNames = ElementNaming.edgeNames(adjacency: adjacency, names: names)
 
         // Signatures come from the mesh side, exactly as an interactive pick
@@ -709,28 +720,29 @@ final class AgentBridge {
                               context: (body: Body, brep: BRepHandle),
                               bodyRef ref: BodyRef,
                               _ session: DocumentSession) -> MintedRefs {
-        guard let table = session.lastFaceTables[context.body.id] else {
-            return .reply(.failure(409, "Conflict", error: "stale_identity",
-                                   message: "No face table retained for '\(context.body.name)' "
-                                          + "— rebuild first (any exec feature op)."))
-        }
-        let channel = OCCTKernel.renderMeshFaceChannel(from: context.brep)
-        var entryByKernelFace: [Int: FaceTable.Entry] = [:]
-        for entry in table.entries {
-            if let index = ElementNaming.kernelFace(of: entry, channel: channel) {
-                entryByKernelFace[index] = entry
-            }
-        }
+        // KERNEL-SIDE minting: signatures come from the brep's own face
+        // geometry (never stale, never misaligned — the mesh-table channel
+        // served wrong indices for assigned-render bodies), and names ride
+        // along only when the retained maps are fresh.
+        let infos = Dictionary(uniqueKeysWithValues:
+            OCCTKernel.faceInfo(context.brep).map { ($0.index, $0) })
+        let names = freshNames(for: context.body, session)
         var refs: [FaceRef] = []
         for index in indices {
-            guard let entry = entryByKernelFace[index] else {
+            guard let info = infos[index] else {
                 return .reply(.failure(404, "Not Found", error: "unknown_face",
                                        message: "No kernel face \(index) on "
                                               + "'\(context.body.name)'. GET /v1/faces?body=… for the list."))
             }
+            guard let signature = info.signature else {
+                return .reply(.failure(409, "Conflict", error: "unreferenceable_face",
+                                       message: "Kernel face \(index) is a surface kind a FaceRef "
+                                              + "cannot express (torus/sphere/swept) — pick a planar "
+                                              + "or cylindrical face from /v1/faces."))
+            }
             refs.append(FaceRef(body: ref, creator: ref.producer,
-                                role: entry.role, signature: entry.signature,
-                                elementName: entry.elementName))
+                                role: .derived(index: 0), signature: signature,
+                                elementName: names[index]))
         }
         return .ok(refs)
     }
