@@ -238,6 +238,113 @@ final class SketchSolverBridgeTests: XCTestCase {
         XCTAssertTrue(blame.constraintIDs.isEmpty, "\(blame.constraintIDs)")
     }
 
+    // MARK: - Conflict partners (diagnosis stage 3, add-time)
+
+    /// The dueling-lengths sketch, asked from dim-120's point of view: the
+    /// one partner whose removal lets the rest solve is dim-100 — not the
+    /// satisfied horizontal, not the lock.
+    func testConflictPartnersOfADuelingLengthNameTheOtherLength() {
+        let line = UUID()
+        var sketch = Sketch(plane: .ground, entities: [
+            .line(id: line, a: SIMD2(0, 0), b: SIMD2(100, 0)),
+        ])
+        sketch.constraints = [
+            SketchConstraint(kind: .horizontal,
+                             refs: [ConstraintRef(entityID: line, role: .whole)]),
+            SketchConstraint(kind: .fixed,
+                             refs: [ConstraintRef(entityID: line, role: .endpointA)]),
+        ]
+        let want100 = SketchDimension(
+            kind: .distance,
+            refs: [ConstraintRef(entityID: line, role: .endpointA),
+                   ConstraintRef(entityID: line, role: .endpointB)],
+            value: 100)
+        let want120 = SketchDimension(
+            kind: .distance,
+            refs: [ConstraintRef(entityID: line, role: .endpointA),
+                   ConstraintRef(entityID: line, role: .endpointB)],
+            value: 120)
+        sketch.dimensions = [want100, want120]
+
+        let partners = SketchSolverBridge.conflictPartners(
+            in: sketch, excludingDimensions: [want120.id])
+        XCTAssertEqual(partners.dimensionIDs, [want100.id])
+        XCTAssertTrue(partners.constraintIDs.isEmpty, "\(partners.constraintIDs)")
+    }
+
+    /// A wrong dimension on a line whose endpoints are both locked: the
+    /// partners are the two locks (removing either lets the line stretch);
+    /// the satisfied horizontal is not implicated.
+    func testConflictPartnersOfALockedLineAreTheLocks() {
+        let line = UUID()
+        var sketch = Sketch(plane: .ground, entities: [
+            .line(id: line, a: SIMD2(0, 0), b: SIMD2(100, 0)),
+        ])
+        let horizontal = SketchConstraint(
+            kind: .horizontal, refs: [ConstraintRef(entityID: line, role: .whole)])
+        let lockA = SketchConstraint(
+            kind: .fixed, refs: [ConstraintRef(entityID: line, role: .endpointA)])
+        let lockB = SketchConstraint(
+            kind: .fixed, refs: [ConstraintRef(entityID: line, role: .endpointB)])
+        sketch.constraints = [horizontal, lockA, lockB]
+        let wrong = SketchDimension(
+            kind: .distance,
+            refs: [ConstraintRef(entityID: line, role: .endpointA),
+                   ConstraintRef(entityID: line, role: .endpointB)],
+            value: 120)
+        sketch.dimensions = [wrong]
+
+        let partners = SketchSolverBridge.conflictPartners(
+            in: sketch, excludingDimensions: [wrong.id])
+        XCTAssertEqual(partners.constraintIDs, [lockA.id, lockB.id])
+        XCTAssertTrue(partners.dimensionIDs.isEmpty, "\(partners.dimensionIDs)")
+    }
+
+    /// The refusal message names partners in document order, with dimension
+    /// values, and keeps the generic wording when there are none.
+    func testTheRefusalMessageNamesThePartners() {
+        let line = UUID()
+        var sketch = Sketch(plane: .ground, entities: [
+            .line(id: line, a: SIMD2(0, 0), b: SIMD2(100, 0)),
+        ])
+        let horizontal = SketchConstraint(
+            kind: .horizontal, refs: [ConstraintRef(entityID: line, role: .whole)])
+        let dim = SketchDimension(
+            kind: .distance,
+            refs: [ConstraintRef(entityID: line, role: .endpointA),
+                   ConstraintRef(entityID: line, role: .endpointB)],
+            value: 100)
+        sketch.constraints = [horizontal]
+        sketch.dimensions = [dim]
+
+        var partners = SketchSolverBridge.ConflictAttribution()
+        partners.constraintIDs = [horizontal.id]
+        partners.dimensionIDs = [dim.id]
+        XCTAssertEqual(
+            EditorViewModel.conflictRefusalMessage(
+                adding: "Vertical", partners: partners, in: sketch),
+            "Vertical conflicts with Horizontal, Distance 100.00 mm — not added.")
+        XCTAssertEqual(
+            EditorViewModel.conflictRefusalMessage(
+                adding: "Vertical", partners: .init(), in: sketch),
+            "Vertical conflicts with the existing constraints — not added.")
+    }
+
+    /// A sketch that solves has no partners to report.
+    func testConflictPartnersOfASatisfiableSketchAreEmpty() {
+        let line = UUID()
+        var sketch = Sketch(plane: .ground, entities: [
+            .line(id: line, a: SIMD2(0, 0), b: SIMD2(100, 0)),
+        ])
+        sketch.dimensions = [
+            SketchDimension(kind: .distance,
+                            refs: [ConstraintRef(entityID: line, role: .endpointA),
+                                   ConstraintRef(entityID: line, role: .endpointB)],
+                            value: 100),
+        ]
+        XCTAssertTrue(SketchSolverBridge.conflictPartners(in: sketch).isEmpty)
+    }
+
     /// A satisfiable sketch attributes nothing — the red paint only ever
     /// appears on a genuine conflict.
     func testASatisfiableSketchAttributesNothing() {

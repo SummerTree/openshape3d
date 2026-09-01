@@ -9049,7 +9049,13 @@ final class EditorViewModel {
         // conflict and is exempt.
         if kind != .fixed,
            SketchSolverBridge.residualNorm(proposed) > Self.overConstraintTolerance {
-            errorMessage = "\(Self.constraintTitle(kind)) conflicts with the existing constraints — not added."
+            // Stage 3: name the partners of the clash, not just the fact of it.
+            let partners = SketchSolverBridge.conflictPartners(
+                in: proposed,
+                excludingConstraints: Set(newConstraints.map(\.id)),
+                tolerance: Self.overConstraintTolerance)
+            errorMessage = Self.conflictRefusalMessage(
+                adding: Self.constraintTitle(kind), partners: partners, in: proposed)
             return
         }
 
@@ -9074,7 +9080,40 @@ final class EditorViewModel {
         session.save()
     }
 
-    static func constraintTitle(_ kind: SketchConstraintKind) -> String {
+    /// Human name of a dimension, value included ("Distance 120.00 mm") —
+    /// the items panel row and the stage-3 refusal message share it.
+    nonisolated static func dimensionTitle(_ d: SketchDimension) -> String {
+        switch d.kind {
+        case .distance: "Distance " + String(format: "%.2f mm", d.value)
+        case .radius: "Radius " + String(format: "%.2f mm", d.value)
+        case .diameter: "Diameter " + String(format: "%.2f mm", d.value)
+        case .angle: "Angle " + String(format: "%.1f°", d.value * 180 / .pi)
+        }
+    }
+
+    /// Stage-3 refusal message: name the partners of the clash the refused
+    /// add would create, in document order ("Vertical conflicts with
+    /// Horizontal, Distance 100.00 mm — not added."). Falls back to the
+    /// generic wording when diagnosis produced no partners.
+    nonisolated static func conflictRefusalMessage(
+        adding title: String,
+        partners: SketchSolverBridge.ConflictAttribution,
+        in sketch: Sketch
+    ) -> String {
+        var names: [String] = []
+        for c in sketch.constraints where partners.constraintIDs.contains(c.id) {
+            names.append(constraintTitle(c.kind))
+        }
+        for d in sketch.dimensions where partners.dimensionIDs.contains(d.id) {
+            names.append(dimensionTitle(d))
+        }
+        guard !names.isEmpty else {
+            return "\(title) conflicts with the existing constraints — not added."
+        }
+        return "\(title) conflicts with \(names.joined(separator: ", ")) — not added."
+    }
+
+    nonisolated static func constraintTitle(_ kind: SketchConstraintKind) -> String {
         switch kind {
         case .coincident: "Coincident"
         case .horizontal: "Horizontal"
@@ -9355,13 +9394,7 @@ final class EditorViewModel {
         _ = session.changeCount
         guard let sketch = activeSketch else { return [] }
         return sketch.dimensions.map { d in
-            let title: String
-            switch d.kind {
-            case .distance: title = "Distance " + String(format: "%.2f mm", d.value)
-            case .radius: title = "Radius " + String(format: "%.2f mm", d.value)
-            case .diameter: title = "Diameter " + String(format: "%.2f mm", d.value)
-            case .angle: title = "Angle " + String(format: "%.1f°", d.value * 180 / .pi)
-            }
+            let title = Self.dimensionTitle(d)
             let code: String
             switch d.kind {
             case .distance: code = "↔"
@@ -9676,6 +9709,7 @@ final class EditorViewModel {
 
         var proposed = sketch
         var setup: DocumentCommand
+        let candidateDimensionID: UUID
         if let dimID = edit.dimensionID,
            let idx = proposed.dimensions.firstIndex(where: { $0.id == dimID }) {
             let before = proposed.dimensions[idx]
@@ -9683,18 +9717,26 @@ final class EditorViewModel {
             after.value = stored
             after.formula = formula
             proposed.dimensions[idx] = after
+            candidateDimensionID = dimID
             setup = UpdateSketchDimensionCommand(sketchID: sketchID, before: before, after: after)
         } else {
             let dim = SketchDimension(kind: edit.kind, refs: edit.refs, value: stored, formula: formula)
             proposed.dimensions.append(dim)
+            candidateDimensionID = dim.id
             setup = AddSketchDimensionCommand(sketchID: sketchID, dimension: dim)
         }
 
         // Over-constraint guard (spec §2.2): the solver refuses a dimension on
         // an already fully-solved region / one that conflicts with existing
-        // dimensions. Don't apply — never corrupt the sketch.
+        // dimensions. Don't apply — never corrupt the sketch. Stage 3 names
+        // the partners of the clash.
         if SketchSolverBridge.residualNorm(proposed) > Self.overConstraintTolerance {
-            errorMessage = "That value over-constrains the sketch — it conflicts with the existing dimensions."
+            let partners = SketchSolverBridge.conflictPartners(
+                in: proposed,
+                excludingDimensions: [candidateDimensionID],
+                tolerance: Self.overConstraintTolerance)
+            errorMessage = Self.conflictRefusalMessage(
+                adding: "That value", partners: partners, in: proposed)
             return
         }
 

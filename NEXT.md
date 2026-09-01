@@ -131,12 +131,17 @@ assign-vs-adopt render split). Also still open: wiring fillet/shell over
    up (dueling lengths both go red), which is right; but a cluster whose
    compromise happens to satisfy one member (H+V+length: the solver keeps
    the direction and shrinks) flags only the rows still carrying error.
-   **Stage 3 remains**: rank-based add-time diagnosis à la planegcs
-   `diagnose()` (re-implemented, not ported), so "refused:
-   over-constrained" can name the minimal clashing subset. Refs:
-   `src/Mod/Sketcher/App/planegcs/GCS.cpp` in the reference checkout. The
-   mixed-units residual caveat (item 2) applies to the per-row tolerance
-   too.
+   **Stage 3 LANDED 2026-09-01 too**: add-time diagnosis names the
+   partners of a refused add ("Vertical conflicts with Horizontal,
+   Distance 100.00 mm — not added"). Implemented as a leave-one-out probe
+   (`SketchSolverBridge.conflictPartners`) rather than porting planegcs's
+   QR `diagnose()`: one small solve per source, run once at refusal time,
+   and the answer is directly actionable — removal of any named partner
+   makes the sketch solvable. Multi-clash edge (no single removal
+   resolves) and >64-source sketches fall back to stage-2 attribution
+   minus the candidate. Both refusal sites (constraint add, dimension
+   add/edit) use it. The residual normalization (item 2) made the
+   underlying tolerance scale-honest first.
 2. **Residual normalization — LANDED 2026-09-01** (playbook S7): the four
    mm² residuals (parallel/perpendicular via raw cross/dot, colinear/
    symmetric via unnormalized directions) now read sin/cos of the angle

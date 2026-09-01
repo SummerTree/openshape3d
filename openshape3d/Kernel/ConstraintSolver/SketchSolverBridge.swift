@@ -144,6 +144,47 @@ nonisolated enum SketchSolverBridge {
         return out
     }
 
+    /// Stage 3 (add-time diagnosis): given a CONFLICTING sketch and the
+    /// candidate that made it so (passed via the exclusion sets), find the
+    /// existing constraints/dimensions whose INDIVIDUAL removal lets the rest
+    /// solve — the partners of the clash. Leave-one-out probe, re-derived
+    /// rather than ported from planegcs's QR-based `diagnose()`: one small
+    /// solve per source, run once at add time, and the answer is directly
+    /// actionable ("delete any of these and the sketch solves"). Two honest
+    /// edges: a multi-clash system where no single removal resolves falls
+    /// back to residual attribution minus the candidate, and a sketch too
+    /// large for the probe (probe cost is quadratic-ish in sources) skips
+    /// straight to that fallback. Empty when the sketch is not conflicting.
+    static func conflictPartners(
+        in sketch: Sketch,
+        excludingConstraints: Set<UUID> = [],
+        excludingDimensions: Set<UUID> = [],
+        tolerance: Double = 1e-3
+    ) -> ConflictAttribution {
+        guard residualNorm(sketch) > tolerance else { return ConflictAttribution() }
+        func attributionFallback() -> ConflictAttribution {
+            var blame = conflictAttribution(sketch, tolerance: tolerance)
+            blame.constraintIDs.subtract(excludingConstraints)
+            blame.dimensionIDs.subtract(excludingDimensions)
+            return blame
+        }
+        guard sketch.constraints.count + sketch.dimensions.count <= 64 else {
+            return attributionFallback()
+        }
+        var out = ConflictAttribution()
+        for c in sketch.constraints where !excludingConstraints.contains(c.id) {
+            var probe = sketch
+            probe.constraints.removeAll { $0.id == c.id }
+            if residualNorm(probe) <= tolerance { out.constraintIDs.insert(c.id) }
+        }
+        for d in sketch.dimensions where !excludingDimensions.contains(d.id) {
+            var probe = sketch
+            probe.dimensions.removeAll { $0.id == d.id }
+            if residualNorm(probe) <= tolerance { out.dimensionIDs.insert(d.id) }
+        }
+        return out.isEmpty ? attributionFallback() : out
+    }
+
     /// Residual norm of the sketch's structural constraint/dimension system at
     /// its solved state. ~0 means every constraint is mutually satisfiable; a
     /// value above a small tolerance signals a CONFLICTING (over-constrained)
