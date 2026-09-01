@@ -95,6 +95,11 @@ nonisolated enum AgentExecOp: Sendable, Equatable {
     /// section is on its OWN sketch/plane — that is the whole point of a loft.
     case loft(sections: [LoftSection],
               boolean: BooleanIntent.Op, targets: [BodyID])
+    /// Push/pull one planar (or cylindrical) face by `distance` mm — the
+    /// direct-modeling move that grows or shrinks the solid. Face is a 1-based
+    /// kernel index from `GET /v1/faces?body=`. `radial` picks the
+    /// cylinder-radial mode (resize a bore/boss) over the default planar-axial.
+    case pushPull(body: BodyID, face: Int, distance: Double, radial: Bool)
     /// Faces are 1-based kernel indices from `GET /v1/faces?body=` — OCCT
     /// heals the surrounding faces over the removed ones (spec §4.16).
     case deleteFace(body: BodyID, faces: [Int])
@@ -116,7 +121,8 @@ nonisolated enum AgentExec {
         "feature.extrude", "feature.revolve",
         "feature.pattern", "feature.mirror", "feature.boolean",
         "feature.fillet", "feature.chamfer", "feature.shell",
-        "feature.sweep", "feature.loft", "feature.deleteFace", "feature.replaceFace",
+        "feature.sweep", "feature.loft", "feature.pushPull",
+        "feature.deleteFace", "feature.replaceFace",
     ]
 
     static let booleanKinds = ["union", "subtract", "intersect"]
@@ -146,6 +152,7 @@ nonisolated enum AgentExec {
         case "feature.shell":      return parseShell(args)
         case "feature.sweep":      return parseSweep(args)
         case "feature.loft":       return parseLoft(args)
+        case "feature.pushPull":   return parsePushPull(args)
         case "feature.deleteFace": return parseDeleteFace(args)
         case "feature.replaceFace": return parseReplaceFace(args)
         default:
@@ -377,6 +384,30 @@ nonisolated enum AgentExec {
             }
             let (op, targets) = try booleanIntent(a)
             return .success(.loft(sections: sections, boolean: op, targets: targets))
+        } catch let e as AgentExecError { return .failure(e) } catch { return .failure(unexpected) }
+    }
+
+    private static func parsePushPull(_ a: [String: Any]) -> Result<AgentExecOp, AgentExecError> {
+        do {
+            let body = BodyID(raw: try uuid(a, "bodyID"))
+            let faces = try edgeIndices(a, "face", allowEmpty: false)
+            guard faces.count == 1 else {
+                return .failure(.init(code: "one_face_only",
+                                      message: "push/pull acts on exactly one \"face\"."))
+            }
+            let distance = try double(a, "distance")
+            guard abs(distance) > 1e-9 else {
+                return .failure(.init(code: "zero_distance",
+                                      message: "A zero-distance push/pull does nothing. "
+                                      + "Give a non-zero \"distance\" in mm (negative pushes in)."))
+            }
+            let mode = a["mode"] as? String ?? "planarAxial"
+            guard mode == "planarAxial" || mode == "cylinderRadial" else {
+                return .failure(.init(code: "bad_mode",
+                                      message: #""mode" must be "planarAxial" or "cylinderRadial"."#))
+            }
+            return .success(.pushPull(body: body, face: faces[0], distance: distance,
+                                      radial: mode == "cylinderRadial"))
         } catch let e as AgentExecError { return .failure(e) } catch { return .failure(unexpected) }
     }
 

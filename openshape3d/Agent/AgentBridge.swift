@@ -314,6 +314,10 @@ final class AgentBridge {
             return execShell(body: bodyID, thickness: thickness,
                              openFaces: openFaces, on: viewModel)
 
+        case let .pushPull(bodyID, face, distance, radial):
+            return execPushPull(body: bodyID, face: face, distance: distance,
+                                radial: radial, on: viewModel)
+
         case let .deleteFace(bodyID, faces):
             return execDeleteFace(body: bodyID, faces: faces, on: viewModel)
 
@@ -671,6 +675,30 @@ final class AgentBridge {
                          thickness: Expr(value: thickness)),
             outputBodyIDs: [bodyID])
         return record(node, on: viewModel)
+    }
+
+    /// feature.pushPull: move one face by a distance, growing or shrinking the
+    /// solid — the direct-modeling op, recorded through the same graph path and
+    /// face-minting as delete/replace-face.
+    private func execPushPull(body bodyID: BodyID, face: Int, distance: Double,
+                              radial: Bool, on viewModel: EditorViewModel) -> AgentResponse {
+        let session = viewModel.session
+        let context: (body: Body, brep: BRepHandle)
+        switch identityContext(bodyID, session) {
+        case let .ok(body, brep): context = (body, brep)
+        case let .reply(reply): return reply
+        }
+        let ref = bodyRef(bodyID, session)
+        let refs: [FaceRef]
+        switch mintFaceRefs([face], context: context, bodyRef: ref, session) {
+        case let .ok(minted): refs = minted
+        case let .reply(reply): return reply
+        }
+        return record(FeatureNode(
+            name: "Push/Pull",
+            kind: .pushPull(face: refs[0], distance: Expr(value: distance),
+                            mode: radial ? .cylinderRadial : .planarAxial),
+            outputBodyIDs: [bodyID]), on: viewModel)
     }
 
     /// feature.deleteFace: remove the named kernel faces and let OCCT heal

@@ -54,6 +54,24 @@ final class AgentExecTests: XCTestCase {
                        "missing_seedPoint")
     }
 
+    func testPushPullParsesFaceDistanceAndMode() throws {
+        let id = UUID().uuidString
+        guard case let .pushPull(_, face, distance, radial)? = op(#"{"op":"feature.pushPull","args":{"bodyID":"\#(id)","face":[3],"distance":-4,"mode":"cylinderRadial"}}"#) else {
+            return XCTFail("expected .pushPull")
+        }
+        XCTAssertEqual(face, 3)
+        XCTAssertEqual(distance, -4, "negative distance pushes in")
+        XCTAssertTrue(radial)
+        // mode defaults to planar-axial
+        guard case let .pushPull(_, _, _, r2)? = op(#"{"op":"feature.pushPull","args":{"bodyID":"\#(id)","face":[1],"distance":2}}"#) else {
+            return XCTFail("expected .pushPull default mode")
+        }
+        XCTAssertFalse(r2)
+        XCTAssertEqual(code(#"{"op":"feature.pushPull","args":{"bodyID":"\#(id)","face":[1],"distance":0}}"#), "zero_distance")
+        XCTAssertEqual(code(#"{"op":"feature.pushPull","args":{"bodyID":"\#(id)","face":[1,2],"distance":2}}"#), "one_face_only")
+        XCTAssertEqual(code(#"{"op":"feature.pushPull","args":{"bodyID":"\#(id)","face":[1],"distance":2,"mode":"wat"}}"#), "bad_mode")
+    }
+
     // MARK: Delete/replace face
 
     func testDeleteFaceParsesAndRejectsEmpty() throws {

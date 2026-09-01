@@ -250,6 +250,7 @@ graph, and shows up in History like any other feature.
 | `feature.revolve` | `sketchID`, `seedPoint`, `axisPoint`, `axisDirection`; optional `angleDegrees` (360), `boolean`, `booleanTargets` |
 | `feature.pattern` | `bodyID`, `count`; optional `kind` (circular), `axis`, `center`, `spacing`, `totalAngleDegrees`, `rotateInstances` |
 | `feature.loft` | `sections[]` (≥2 `{sketchID, seedPoint}`, each a profile on its OWN sketch plane, lofted in order); optional `boolean`, `booleanTargets` |
+| `feature.pushPull` | `bodyID`, `face` (one 1-based index from `/v1/faces`), `distance` (mm, negative pushes in); optional `mode` (`planarAxial` default / `cylinderRadial`) |
 | `feature.mirror` | `bodyID`, `planeOrigin`, `planeNormal`; optional `keepOriginal` |
 | `feature.boolean` | `kind` (union/subtract/intersect), `targetBodyID`, `toolBodyIDs[]` |
 
