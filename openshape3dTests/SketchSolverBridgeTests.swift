@@ -173,4 +173,92 @@ final class SketchSolverBridgeTests: XCTestCase {
         XCTAssertEqual(legacy.dimensions, [])
         XCTAssertEqual(legacy.entities.count, 3)
     }
+
+    // MARK: - Conflict attribution (diagnosis stage 2)
+
+    /// Two dueling lengths on the same line: the solver's compromise (110)
+    /// leaves both rows carrying error, so BOTH dimensions are attributed —
+    /// there is no innocent party until the user picks one. The satisfied
+    /// horizontal constraint stays clean.
+    func testDuelingLengthsAttributeBothDimensionsOnly() {
+        let line = UUID()
+        var sketch = Sketch(plane: .ground, entities: [
+            .line(id: line, a: SIMD2(0, 0), b: SIMD2(100, 0)),
+        ])
+        let horizontal = SketchConstraint(
+            kind: .horizontal, refs: [ConstraintRef(entityID: line, role: .whole)])
+        sketch.constraints = [
+            horizontal,
+            SketchConstraint(kind: .fixed,
+                             refs: [ConstraintRef(entityID: line, role: .endpointA)]),
+        ]
+        let want100 = SketchDimension(
+            kind: .distance,
+            refs: [ConstraintRef(entityID: line, role: .endpointA),
+                   ConstraintRef(entityID: line, role: .endpointB)],
+            value: 100)
+        let want120 = SketchDimension(
+            kind: .distance,
+            refs: [ConstraintRef(entityID: line, role: .endpointA),
+                   ConstraintRef(entityID: line, role: .endpointB)],
+            value: 120)
+        sketch.dimensions = [want100, want120]
+
+        let blame = SketchSolverBridge.conflictAttribution(sketch)
+        XCTAssertEqual(blame.dimensionIDs, [want100.id, want120.id])
+        XCTAssertTrue(blame.constraintIDs.isEmpty,
+                      "the horizontal constraint is satisfied: \(blame.constraintIDs)")
+    }
+
+    /// A line whose two endpoints are LOCKED at 100 apart, dimensioned 120:
+    /// the dimension alone carries the whole error and is attributed alone.
+    func testAWrongDimensionOnLockedGeometryIsAttributedAlone() {
+        let line = UUID()
+        var sketch = Sketch(plane: .ground, entities: [
+            .line(id: line, a: SIMD2(0, 0), b: SIMD2(100, 0)),
+        ])
+        let horizontal = SketchConstraint(
+            kind: .horizontal, refs: [ConstraintRef(entityID: line, role: .whole)])
+        sketch.constraints = [
+            horizontal,
+            SketchConstraint(kind: .fixed,
+                             refs: [ConstraintRef(entityID: line, role: .endpointA)]),
+            SketchConstraint(kind: .fixed,
+                             refs: [ConstraintRef(entityID: line, role: .endpointB)]),
+        ]
+        let wrong = SketchDimension(
+            kind: .distance,
+            refs: [ConstraintRef(entityID: line, role: .endpointA),
+                   ConstraintRef(entityID: line, role: .endpointB)],
+            value: 120)
+        sketch.dimensions = [wrong]
+
+        let blame = SketchSolverBridge.conflictAttribution(sketch)
+        XCTAssertEqual(blame.dimensionIDs, [wrong.id])
+        XCTAssertTrue(blame.constraintIDs.isEmpty, "\(blame.constraintIDs)")
+    }
+
+    /// A satisfiable sketch attributes nothing — the red paint only ever
+    /// appears on a genuine conflict.
+    func testASatisfiableSketchAttributesNothing() {
+        let l0 = UUID(), l1 = UUID(), l2 = UUID(), l3 = UUID()
+        var sketch = Sketch(plane: .ground, entities: [
+            .line(id: l0, a: SIMD2(0, 0), b: SIMD2(10, 0)),
+            .line(id: l1, a: SIMD2(10, 0), b: SIMD2(10, 5)),
+            .line(id: l2, a: SIMD2(10, 5), b: SIMD2(0, 5)),
+            .line(id: l3, a: SIMD2(0, 5), b: SIMD2(0, 0)),
+        ])
+        sketch.constraints = [
+            SketchConstraint(kind: .horizontal, refs: [ConstraintRef(entityID: l0, role: .whole)]),
+            SketchConstraint(kind: .vertical, refs: [ConstraintRef(entityID: l1, role: .whole)]),
+            SketchConstraint(kind: .fixed, refs: [ConstraintRef(entityID: l0, role: .endpointA)]),
+        ]
+        sketch.dimensions = [
+            SketchDimension(kind: .distance,
+                            refs: [ConstraintRef(entityID: l0, role: .endpointA),
+                                   ConstraintRef(entityID: l0, role: .endpointB)],
+                            value: 10),
+        ]
+        XCTAssertTrue(SketchSolverBridge.conflictAttribution(sketch).isEmpty)
+    }
 }

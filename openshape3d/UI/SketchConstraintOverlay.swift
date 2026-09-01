@@ -36,6 +36,13 @@ struct SketchConstraintOverlay: View {
     private func glyphView(_ glyph: EditorViewModel.SketchConstraintGlyph) -> some View {
         if let anchor = viewModel.cameraControl?.worldToScreenPoint(glyph.worldAnchor) {
             let selected = viewModel.selectedConstraintID == glyph.id
+            // Stage-2 conflict attribution: this constraint is one the solver
+            // could not satisfy — paint it red so the chip's "Constraints
+            // conflict" has a WHERE. Tap-to-select still works (that is how
+            // the user deletes their way out of the conflict).
+            let conflicting =
+                viewModel.sketchConflictAttribution.constraintIDs.contains(glyph.id)
+            let tint = conflicting ? Color.red : Color.blue
             // Fan out glyphs that share an anchor so each stays tappable.
             let offset = CGFloat(glyph.slot) * 22
             Button {
@@ -43,21 +50,22 @@ struct SketchConstraintOverlay: View {
             } label: {
                 Text(glyph.code)
                     .font(.caption2.weight(.bold))
-                    .foregroundStyle(selected ? Color.white : Color.blue)
+                    .foregroundStyle(selected ? Color.white : tint)
                     .frame(minWidth: 18, minHeight: 18)
                     .padding(2)
                     .background(
-                        selected ? Color.blue : Color(.systemBackground).opacity(0.9),
+                        selected ? tint : Color(.systemBackground).opacity(0.9),
                         in: RoundedRectangle(cornerRadius: 5)
                     )
                     .overlay(
                         RoundedRectangle(cornerRadius: 5)
-                            .stroke(Color.blue, lineWidth: 1)
+                            .stroke(tint, lineWidth: conflicting ? 2 : 1)
                     )
             }
             .buttonStyle(.plain)
             .position(x: anchor.x, y: anchor.y + offset)
-            .accessibilityIdentifier("ConstraintGlyph")
+            .accessibilityIdentifier(
+                conflicting ? "ConstraintGlyphConflict" : "ConstraintGlyph")
         }
     }
 }

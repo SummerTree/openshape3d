@@ -118,15 +118,25 @@ assign-vs-adopt render split). Also still open: wiring fillet/shell over
 
 ## 4. Smaller follow-ups, in rough priority order
 
-1. **Sketch conflict diagnosis, stage 2** — residual attribution: record
-   residual-row → constraint/dimension UUID provenance in
-   `SketchSolverBridge.buildSystem`, surface RED glyphs on the conflicting
-   constraints in `SketchConstraintOverlay` (the chip from PR #22 says
-   *that* there's a conflict; this says *which*). Then stage 3: rank-based
-   add-time diagnosis à la planegcs `diagnose()` (re-implemented, not
-   ported), so "refused: over-constrained" can name the two clashing
-   dimensions. Refs: `src/Mod/Sketcher/App/planegcs/GCS.cpp` in the
-   reference checkout.
+1. **Sketch conflict diagnosis, stage 2 — LANDED 2026-09-01.** Residual
+   attribution: `buildSystem` records residual-row → constraint/dimension
+   UUID provenance, `SketchSolverBridge.conflictAttribution(_:)` reports
+   every source whose row the solver could not drive to zero, and the
+   glyph/dimension overlays paint those red (a11y ids
+   `ConstraintGlyphConflict`/`DimensionLabelConflict`). Computed once per
+   conflict episode (on the drag path's false→true transition — the
+   structural system is drag-invariant), cleared with the chip. Honesty
+   caveat, documented on the API: attribution reflects where the LM
+   compromise parks the error — every member of a clashing cluster lights
+   up (dueling lengths both go red), which is right; but a cluster whose
+   compromise happens to satisfy one member (H+V+length: the solver keeps
+   the direction and shrinks) flags only the rows still carrying error.
+   **Stage 3 remains**: rank-based add-time diagnosis à la planegcs
+   `diagnose()` (re-implemented, not ported), so "refused:
+   over-constrained" can name the minimal clashing subset. Refs:
+   `src/Mod/Sketcher/App/planegcs/GCS.cpp` in the reference checkout. The
+   mixed-units residual caveat (item 2) applies to the per-row tolerance
+   too.
 2. **Residual normalization** in `Constraints.swift` — the solver-gate
    tolerance (1e-3) compares mixed-unit residuals; normalize so the gate
    is scale-honest (noted as a fast-follow in playbook S1).

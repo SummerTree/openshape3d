@@ -99,6 +99,51 @@ nonisolated enum SketchSolverBridge {
         return (outcome.entities, outcome.dof)
     }
 
+    /// Conflict diagnosis stage 2: WHICH constraints/dimensions the solver
+    /// could not satisfy. The clashing rows of a conflicting cluster share the
+    /// solver's compromise error, so every member of the cluster is attributed
+    /// (two dueling lengths both light up — there is no innocent party until
+    /// the user picks one); rows the solve satisfies stay at ~0 residual and
+    /// are never attributed. Stage 3 (rank analysis à la planegcs
+    /// `diagnose()`) is the future refinement that separates redundant from
+    /// conflicting at add time.
+    struct ConflictAttribution: Equatable, Sendable {
+        var constraintIDs: Set<UUID> = []
+        var dimensionIDs: Set<UUID> = []
+        var isEmpty: Bool { constraintIDs.isEmpty && dimensionIDs.isEmpty }
+    }
+
+    /// Attribute a conflicting sketch's unsatisfied residual rows to their
+    /// source constraint/dimension UUIDs. Solves the STRUCTURAL system only
+    /// (no drag), evaluates each lowered residual at the solution, and
+    /// reports every source whose row norm exceeds `tolerance` — the same
+    /// scale as `EditorViewModel.overConstraintTolerance`, and subject to the
+    /// same mixed-units caveat until residual normalization lands.
+    static func conflictAttribution(
+        _ sketch: Sketch, tolerance: Double = 1e-3
+    ) -> ConflictAttribution {
+        let sys = buildSystem(from: sketch, movingEntity: nil, dragTarget: nil)
+        guard !sys.initial.isEmpty, !sys.structural.isEmpty else {
+            return ConflictAttribution()
+        }
+        let solved = ConstraintSolver.solve(
+            initial: sys.initial,
+            fixed: sys.fixed,
+            constraints: sys.structural
+        ).variables
+        var out = ConflictAttribution()
+        for (i, constraint) in sys.structural.enumerated() {
+            var sumSquares = 0.0
+            for r in constraint.residuals(solved) { sumSquares += r * r }
+            guard sumSquares.squareRoot() > tolerance else { continue }
+            switch sys.structuralSources[i] {
+            case .constraint(let id): out.constraintIDs.insert(id)
+            case .dimension(let id): out.dimensionIDs.insert(id)
+            }
+        }
+        return out
+    }
+
     /// Residual norm of the sketch's structural constraint/dimension system at
     /// its solved state. ~0 means every constraint is mutually satisfiable; a
     /// value above a small tolerance signals a CONFLICTING (over-constrained)
@@ -153,6 +198,14 @@ nonisolated enum SketchSolverBridge {
         let endpointLike: Bool
     }
 
+    /// Which document object a lowered residual came from — the provenance
+    /// that lets a conflict be attributed back to something the user can see
+    /// and delete (stage 2 of conflict diagnosis).
+    private enum ConflictSource {
+        case constraint(UUID)
+        case dimension(UUID)
+    }
+
     /// The lowered numeric problem plus the maps needed to write results back
     /// and to analyse per-entity DOF.
     private struct System {
@@ -163,6 +216,9 @@ nonisolated enum SketchSolverBridge {
         var radiusVar: [UUID: Int]
         /// Residuals for constraints + dimensions ONLY (no transient drag).
         var structural: [any ConstraintResidual]
+        /// Source object per `structural` entry (same indices). A constraint
+        /// that lowers to several residuals repeats its source.
+        var structuralSources: [ConflictSource]
         /// `structural` plus the transient drag constraint (used for the solve).
         var solveConstraints: [any ConstraintResidual]
         var entityPoints: [UUID: [Int]]
@@ -334,27 +390,35 @@ nonisolated enum SketchSolverBridge {
             }
         }
 
-        // 9. Lower constraints + dimensions to residuals.
+        // 9. Lower constraints + dimensions to residuals, recording each
+        // row's source object so a conflict can be attributed back to the
+        // constraint/dimension the user sees (stage 2).
         var structural: [any ConstraintResidual] = []
+        var structuralSources: [ConflictSource] = []
+        var currentSource = ConflictSource.constraint(UUID()) // set per loop turn
+        func lower(_ residual: any ConstraintResidual) {
+            structural.append(residual)
+            structuralSources.append(currentSource)
+        }
         func appendAlign(_ refs: [ConstraintRef], horizontal: Bool) {
             let wholeLines = refs.filter { $0.role == .whole }
             if !wholeLines.isEmpty {
                 for r in wholeLines where linePair(r.entityID) != nil {
                     let (a, b) = linePair(r.entityID)!
-                    structural.append(horizontal
+                    lower(horizontal
                         ? HorizontalConstraint(pA: a, pB: b)
                         : VerticalConstraint(pA: a, pB: b))
                 }
             } else if refs.count == 2,
                       let a = pointOperand(refs[0]), let b = pointOperand(refs[1]) {
-                structural.append(horizontal
+                lower(horizontal
                     ? HorizontalConstraint(pA: a, pB: b)
                     : VerticalConstraint(pA: a, pB: b))
             }
         }
         func appendColinear(_ point: ConstraintRef, _ line: ConstraintRef) {
             if let p = pointOperand(point), let (la, lb) = linePair(line.entityID) {
-                structural.append(ColinearPointConstraint(p: p, lA: la, lB: lb))
+                lower(ColinearPointConstraint(p: p, lA: la, lB: lb))
             }
         }
         func appendTangent(_ refs: [ConstraintRef]) {
@@ -369,25 +433,26 @@ nonisolated enum SketchSolverBridge {
                let (a, b) = linePair(l.entityID),
                let center = pIdx(cRef.entityID, .center),
                let rv = radiusVar[cRef.entityID] {
-                structural.append(TangentLineCircleConstraint(lA: a, lB: b, center: center, radiusVar: rv))
+                lower(TangentLineCircleConstraint(lA: a, lB: b, center: center, radiusVar: rv))
             }
         }
         func appendDistance(_ refs: [ConstraintRef], value: Double) {
             guard refs.count == 2 else { return }
             let r0 = refs[0], r1 = refs[1]
             if let p0 = pointOperand(r0), let p1 = pointOperand(r1) {
-                structural.append(DistanceConstraint(pA: p0, pB: p1, distance: value))
+                lower(DistanceConstraint(pA: p0, pB: p1, distance: value))
             } else if let p = pointOperand(r0), r1.role == .whole, let (la, lb) = linePair(r1.entityID) {
-                structural.append(PointDistanceToLineConstraint(p: p, lA: la, lB: lb, distance: value))
+                lower(PointDistanceToLineConstraint(p: p, lA: la, lB: lb, distance: value))
             } else if let p = pointOperand(r1), r0.role == .whole, let (la, lb) = linePair(r0.entityID) {
-                structural.append(PointDistanceToLineConstraint(p: p, lA: la, lB: lb, distance: value))
+                lower(PointDistanceToLineConstraint(p: p, lA: la, lB: lb, distance: value))
             } else if r0.role == .whole, r1.role == .whole,
                       let (la, lb) = linePair(r0.entityID), let (a2, _) = linePair(r1.entityID) {
-                structural.append(PointDistanceToLineConstraint(p: a2, lA: la, lB: lb, distance: value))
+                lower(PointDistanceToLineConstraint(p: a2, lA: la, lB: lb, distance: value))
             }
         }
 
         for c in sketch.constraints {
+            currentSource = .constraint(c.id)
             switch c.kind {
             case .fixed:
                 break // handled via the fixed set
@@ -399,7 +464,7 @@ nonisolated enum SketchSolverBridge {
                 } else if r0.role == .whole {
                     appendColinear(r1, r0)
                 } else if let a = pointOperand(r0), let b = pointOperand(r1), a != b {
-                    structural.append(CoincidentConstraint(pA: a, pB: b))
+                    lower(CoincidentConstraint(pA: a, pB: b))
                 }
             case .horizontal:
                 appendAlign(c.refs, horizontal: true)
@@ -407,40 +472,40 @@ nonisolated enum SketchSolverBridge {
                 appendAlign(c.refs, horizontal: false)
             case .parallel:
                 if let (a1, b1, a2, b2) = twoLines(c.refs) {
-                    structural.append(ParallelConstraint(l1A: a1, l1B: b1, l2A: a2, l2B: b2))
+                    lower(ParallelConstraint(l1A: a1, l1B: b1, l2A: a2, l2B: b2))
                 }
             case .perpendicular:
                 if let (a1, b1, a2, b2) = twoLines(c.refs) {
-                    structural.append(PerpendicularConstraint(l1A: a1, l1B: b1, l2A: a2, l2B: b2))
+                    lower(PerpendicularConstraint(l1A: a1, l1B: b1, l2A: a2, l2B: b2))
                 }
             case .equalLength:
                 if let (a1, b1, a2, b2) = twoLines(c.refs) {
-                    structural.append(EqualLengthConstraint(l1A: a1, l1B: b1, l2A: a2, l2B: b2))
+                    lower(EqualLengthConstraint(l1A: a1, l1B: b1, l2A: a2, l2B: b2))
                 }
             case .equalRadius:
                 if c.refs.count == 2,
                    let rv1 = radiusVar[c.refs[0].entityID],
                    let rv2 = radiusVar[c.refs[1].entityID] {
-                    structural.append(EqualRadiusConstraint(rVar1: rv1, rVar2: rv2))
+                    lower(EqualRadiusConstraint(rVar1: rv1, rVar2: rv2))
                 }
             case .concentric:
                 if c.refs.count == 2,
                    let a = pIdx(c.refs[0].entityID, .center),
                    let b = pIdx(c.refs[1].entityID, .center), a != b {
-                    structural.append(ConcentricConstraint(cA: a, cB: b))
+                    lower(ConcentricConstraint(cA: a, cB: b))
                 }
             case .midpoint:
                 if c.refs.count == 2,
                    let p = pointOperand(c.refs[0]),
                    let (la, lb) = linePair(c.refs[1].entityID) {
-                    structural.append(MidpointConstraint(p: p, lA: la, lB: lb))
+                    lower(MidpointConstraint(p: p, lA: la, lB: lb))
                 }
             case .symmetric:
                 if c.refs.count == 3,
                    let a = pointOperand(c.refs[0]),
                    let b = pointOperand(c.refs[1]),
                    let (la, lb) = linePair(c.refs[2].entityID) {
-                    structural.append(SymmetricConstraint(pA: a, pB: b, lA: la, lB: lb))
+                    lower(SymmetricConstraint(pA: a, pB: b, lA: la, lB: lb))
                 }
             case .tangent:
                 appendTangent(c.refs)
@@ -453,27 +518,28 @@ nonisolated enum SketchSolverBridge {
                     appendColinear(r1, r0)
                 } else if r0.role == .whole, r1.role == .whole,
                           let (la, lb) = linePair(r0.entityID), let (a2, b2) = linePair(r1.entityID) {
-                    structural.append(ColinearPointConstraint(p: a2, lA: la, lB: lb))
-                    structural.append(ColinearPointConstraint(p: b2, lA: la, lB: lb))
+                    lower(ColinearPointConstraint(p: a2, lA: la, lB: lb))
+                    lower(ColinearPointConstraint(p: b2, lA: la, lB: lb))
                 }
             }
         }
 
         for d in sketch.dimensions {
+            currentSource = .dimension(d.id)
             switch d.kind {
             case .distance:
                 appendDistance(d.refs, value: d.value)
             case .radius:
                 if let ref = d.refs.first, let rv = radiusVar[ref.entityID] {
-                    structural.append(RadiusConstraint(radiusVar: rv, radius: d.value))
+                    lower(RadiusConstraint(radiusVar: rv, radius: d.value))
                 }
             case .diameter:
                 if let ref = d.refs.first, let rv = radiusVar[ref.entityID] {
-                    structural.append(RadiusConstraint(radiusVar: rv, radius: d.value / 2))
+                    lower(RadiusConstraint(radiusVar: rv, radius: d.value / 2))
                 }
             case .angle:
                 if let (a1, b1, a2, b2) = twoLines(d.refs) {
-                    structural.append(AngleConstraint(l1A: a1, l1B: b1, l2A: a2, l2B: b2, angle: d.value))
+                    lower(AngleConstraint(l1A: a1, l1B: b1, l2A: a2, l2B: b2, angle: d.value))
                 }
             }
         }
@@ -499,6 +565,7 @@ nonisolated enum SketchSolverBridge {
             pointIndex: pointIndex,
             radiusVar: radiusVar,
             structural: structural,
+            structuralSources: structuralSources,
             solveConstraints: solveConstraints,
             entityPoints: entityPoints
         )

@@ -7862,10 +7862,18 @@ final class EditorViewModel {
         // and badge the conflict instead, the same gate planegcs applies
         // before updating geometry (docs/FREECAD_PLAYBOOK.md S1).
         guard outcome.structuralResidual <= Self.overConstraintTolerance else {
+            // Attribute once per conflict episode: the structural system does
+            // not change while dragging (only geometry moves), so the guilty
+            // set is stable until the flag clears.
+            if !sketchSolveConflict {
+                sketchConflictAttribution = SketchSolverBridge.conflictAttribution(
+                    baselineSketch, tolerance: Self.overConstraintTolerance)
+            }
             sketchSolveConflict = true
             return
         }
         sketchSolveConflict = false
+        if !sketchConflictAttribution.isEmpty { sketchConflictAttribution = .init() }
         let (solved, dof) = (outcome.entities, outcome.dof)
 
         // Rigid sketch: refuse to move (no-op / spring back to baseline).
@@ -8047,6 +8055,13 @@ final class EditorViewModel {
     /// a red chip in the sketch pill.
     var sketchSolveConflict = false
 
+    /// Stage-2 conflict attribution: WHICH constraints/dimensions the solver
+    /// could not satisfy (every member of the clashing cluster — two dueling
+    /// lengths both light up). Computed when a drag first detects the
+    /// conflict, cleared with `sketchSolveConflict`; the glyph and dimension
+    /// overlays paint these red.
+    var sketchConflictAttribution = SketchSolverBridge.ConflictAttribution()
+
     func startSketch(tool: SketchTool) {
         if case .sketching(let id, _) = mode {
             commitPendingArc()
@@ -8189,6 +8204,7 @@ final class EditorViewModel {
         sketchGizmoDrag = nil
         sketchCopyOnDrag = false
         sketchSolveConflict = false
+        sketchConflictAttribution = .init()
         selectedSketchEntityIDs.removeAll()
         selectedSketchPoints.removeAll()
         selectedConstraintID = nil

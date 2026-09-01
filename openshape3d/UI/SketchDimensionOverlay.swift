@@ -83,6 +83,13 @@ struct SketchDimensionOverlay: View {
                 DimensionField(viewModel: viewModel)
                     .position(anchor)
             } else {
+                // Stage-2 conflict attribution: a dimension the solver could
+                // not satisfy paints red — dueling lengths are the archetypal
+                // sketch conflict, and the value badge is where the user
+                // looks first.
+                let conflicting = label.dimensionID.map {
+                    viewModel.sketchConflictAttribution.dimensionIDs.contains($0)
+                } ?? false
                 Button {
                     viewModel.beginDimensionEdit(label)
                 } label: {
@@ -94,14 +101,19 @@ struct SketchDimensionOverlay: View {
                         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 5))
                         .overlay(
                             RoundedRectangle(cornerRadius: 5)
-                                .stroke(label.dimensionID == nil
-                                        ? Color.blue.opacity(0.4) : Color.blue, lineWidth: 1)
+                                .stroke(conflicting ? Color.red
+                                        : label.dimensionID == nil
+                                        ? Color.blue.opacity(0.4) : Color.blue,
+                                        lineWidth: conflicting ? 2 : 1)
                         )
-                        .foregroundStyle(label.dimensionID == nil ? Color.secondary : Color.blue)
+                        .foregroundStyle(conflicting ? Color.red
+                                         : label.dimensionID == nil
+                                         ? Color.secondary : Color.blue)
                 }
                 .buttonStyle(.plain)
                 .position(clearOfGizmo(anchor, along: start, end))
-                .accessibilityIdentifier("DimensionLabel")
+                .accessibilityIdentifier(
+                    conflicting ? "DimensionLabelConflict" : "DimensionLabel")
             }
         }
     }
