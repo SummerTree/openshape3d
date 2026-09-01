@@ -1052,6 +1052,54 @@ final class ElementNamingTests: XCTestCase {
                       "the healed caps keep their identities: \(names)")
     }
 
+    /// A loft between two squares names its two caps (FirstShape/LastShape)
+    /// and its four walls from the FIRST section's profile edges — the
+    /// tractable half of loft naming; a wall spans all sections, so later
+    /// sections' identities stay deferred.
+    func testALoftNamesItsCapsAndFirstSectionWalls() throws {
+        let loftFeature = FeatureID(), bodyID = BodyID()
+        let sketchA = SketchID(), sketchB = SketchID()
+        let rectA = UUID(), rectB = UUID()
+        let nodes = [
+            FeatureNode(
+                id: loftFeature, name: "Loft",
+                kind: .loft(
+                    sections: [
+                        ProfileRef(sketchID: sketchA, entityIDs: [rectA],
+                                   holeEntityIDs: [], seedPoint: .zero),
+                        ProfileRef(sketchID: sketchB, entityIDs: [rectB],
+                                   holeEntityIDs: [], seedPoint: .zero),
+                    ],
+                    boolean: BooleanIntent(op: .newBody, resolvedTargets: [])),
+                outputBodyIDs: [bodyID]),
+        ]
+        let sketches = [
+            Sketch(id: sketchA, name: "A", plane: .ground, entities: [
+                .rect(id: rectA, min: SIMD2(-5, -5), max: SIMD2(5, 5))]),
+            Sketch(id: sketchB, name: "B", plane: .offsetGround(y: 10), entities: [
+                .rect(id: rectB, min: SIMD2(-3, -3), max: SIMD2(3, 3))]),
+        ]
+        let result = evaluate(nodes, sketches)
+        XCTAssertTrue(result.errors.isEmpty, "\(result.errors)")
+
+        let names = try XCTUnwrap(result.kernelNames[bodyID],
+                                  "a loft must populate the name layer")
+        XCTAssertTrue(
+            names.values.contains(ElementName(creator: loftFeature,
+                                              source: .profileCap(end: false))),
+            "bottom cap named: \(names.values)")
+        XCTAssertTrue(
+            names.values.contains(ElementName(creator: loftFeature,
+                                              source: .profileCap(end: true))),
+            "top cap named: \(names.values)")
+        let wallCount = names.values.filter {
+            if case .profileWall(rectA, _) = $0.source { return true }
+            return false
+        }.count
+        XCTAssertEqual(wallCount, 4,
+                       "all four walls named from the first section: \(names.values)")
+    }
+
     /// Replace-face is a boolean under the hood, so the faces it does NOT
     /// touch must keep their identities: extend the top cap of a named slab
     /// and the bottom cap plus all four walls still carry their names (a

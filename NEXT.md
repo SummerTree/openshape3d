@@ -88,10 +88,15 @@ recovered via the ungated `Revol().Shape(edge)` — see the design doc).
 prism, so it reuses `booleanResultWithAncestry`
 (`ReplaceFaceKit.applyBRepWithAncestry`) and composes names exactly like a
 boolean; the untouched faces keep their identities (pinned: extend a
-slab's top cap, the bottom cap and all four walls stay named). Still open,
-all explicitly deferred with reasons in the design doc: loft naming
-(multi-section wire correspondence) and EdgeRef upgrades. The UI suite ran
-clean over the whole mission (one long-run flake, passed in isolation).
+slab's top cap, the bottom cap and all four walls stay named).
+**Loft naming landed 2026-09-01** — `ThruSections.GeneratedFace` +
+FirstShape/LastShape caps, walls named from the first section's profile
+(a wall spans all sections, so later-section identities are correctly
+deferred). **Every creation and modifier op now composes element names.**
+Still open, deferred with reasons in the design doc: EdgeRef opportunistic
+upgrades (needs blend eval to expose input-body edge adjacency). The UI
+suite ran clean over the whole mission (one long-run flake, passed in
+isolation).
 
 **Steps 1–5a landed 2026-08-31**
 (eleven commits, e1506cd…5730e5e — 5a made blends/shell/deleteFace REPORT

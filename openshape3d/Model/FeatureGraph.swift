@@ -1693,11 +1693,26 @@ nonisolated extension FeatureGraph {
         // OCCT's ThruSections takes ONE wire per section, so a section with
         // holes cannot be expressed; those keep the mesh result rather than
         // silently losing their inner loops.
-        let brep = (OCCTKernel.useOCCTAsSourceOfTruth && sections.allSatisfy { $0.holes.isEmpty })
-            ? OCCTKernel.loftSolid(sections: sections.map { ($0.profile, $0.plane) })
+        let analytic = OCCTKernel.useOCCTAsSourceOfTruth
+            && sections.allSatisfy { $0.holes.isEmpty }
+        let history: OCCTShapeHistory? = analytic ? OCCTShapeHistory() : nil
+        let brep = analytic
+            ? OCCTKernel.loftSolid(sections: sections.map { ($0.profile, $0.plane) },
+                                   history: history)
             : nil
-        emitFullSolid(node, mesh: mesh, brep: brep, boolean: boolean,
-                      scheme: .generic, into: &state, next: nextRevision)
+        // Walls are named for the FIRST section's profile edges (ThruSections
+        // makes one lateral face per corresponding edge column); the two caps
+        // come from FirstShape/LastShape. Later sections' identities are not
+        // separately expressible — a wall spans them all — which is the
+        // deferred half of loft naming the design doc records.
+        let names = (brep != nil ? history : nil).map {
+            ElementNaming.extrudeNames(creator: node.id,
+                                       ancestry: ShapeAncestry($0),
+                                       outer: sections[0].profile, holes: [])
+        } ?? [:]
+        emitFullSolid(node, mesh: mesh, brep: brep, kernelNames: names,
+                      boolean: boolean, scheme: .generic,
+                      into: &state, next: nextRevision)
     }
 
     // MARK: Mirror

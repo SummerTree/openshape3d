@@ -890,6 +890,59 @@ static void OS3DFillSweepHistory(OCCTShapeHistory *history,
     history.truncatedByHeal = NO;
 }
 
+// Ancestry for a ThruSections loft. Same row convention as the sweep family
+// (ordinal = loop 0, kind 1 = edge, subIndex = wire-edge construction ordinal,
+// relation generated), so `extrudeNames` names the walls from the FIRST
+// section's profile edges and the caps from FirstShape/LastShape. ThruSections
+// exposes `GeneratedFace(edge)` directly (one lateral face per section edge —
+// no per-edge Generated list), so we query it on the first placed wire's
+// edges; the in-result gate drops anything ThruSections rebuilt past
+// recognition, leaving that wall to signatures.
+static void OS3DFillLoftHistory(OCCTShapeHistory *history,
+                                BRepOffsetAPI_ThruSections &mk,
+                                const TopoDS_Wire &firstPlacedWire,
+                                const TopoDS_Shape &finalShape) {
+    if (history == nil || finalShape.IsNull()) return;
+    TopTools_IndexedMapOfShape finalFaces;
+    TopExp::MapShapes(finalShape, TopAbs_FACE, finalFaces);
+    std::set<std::array<int32_t, 5>> rowSet;
+    auto emit = [&](const TopoDS_Shape &shape, int32_t ordinal, int32_t kind,
+                    int32_t subIndex, int32_t relation) {
+        if (shape.IsNull() || rowSet.size() >= kOS3DMaxHistoryRows) return;
+        if (shape.ShapeType() == TopAbs_FACE) {
+            const int32_t index = (int32_t)finalFaces.FindIndex(shape);
+            if (index > 0) rowSet.insert({index, ordinal, kind, subIndex, relation});
+        } else if (shape.ShapeType() < TopAbs_FACE) {
+            for (TopExp_Explorer ex(shape, TopAbs_FACE); ex.More(); ex.Next()) {
+                const int32_t index = (int32_t)finalFaces.FindIndex(ex.Current());
+                if (index > 0 && rowSet.size() < kOS3DMaxHistoryRows) {
+                    rowSet.insert({index, ordinal, kind, subIndex, relation});
+                }
+            }
+        }
+    };
+    try { emit(mk.FirstShape(), 0, 0, 1, 1); } catch (...) {}
+    try { emit(mk.LastShape(), 0, 0, 2, 1); } catch (...) {}
+    int32_t subIndex = 1;
+    for (TopExp_Explorer edges(firstPlacedWire, TopAbs_EDGE); edges.More();
+         edges.Next(), ++subIndex) {
+        try {
+            emit(mk.GeneratedFace(edges.Current()), 0, 1, subIndex, 2);
+        } catch (...) {
+            // "No face for this edge" — never an error.
+        }
+    }
+    std::vector<int32_t> packed;
+    packed.reserve(rowSet.size() * 5);
+    for (const auto &row : rowSet) {
+        packed.insert(packed.end(), row.begin(), row.end());
+    }
+    history.rowCount = (NSInteger)rowSet.size();
+    history.rows = [NSData dataWithBytes:packed.data()
+                                  length:packed.size() * sizeof(int32_t)];
+    history.truncatedByHeal = NO;
+}
+
 + (nullable OCCTShape *)revolvedShapeWithOuterLoop:(NSData *)outerLoop
                                         outerConic:(nullable NSData *)outerConic
                                              holes:(NSArray<NSData *> *)holes
@@ -953,9 +1006,19 @@ static void OS3DFillSweepHistory(OCCTShapeHistory *history,
                                       outerConics:(NSArray<NSData *> *)outerConics
                                     outerSegments:(NSArray<NSData *> *)outerSegments
                                            bases:(NSArray<OCCTPlaneBasis *> *)bases {
+    return [self loftedShapeWithOuterLoops:outerLoops outerConics:outerConics
+                             outerSegments:outerSegments bases:bases history:nil];
+}
+
++ (nullable OCCTShape *)loftedShapeWithOuterLoops:(NSArray<NSData *> *)outerLoops
+                                      outerConics:(NSArray<NSData *> *)outerConics
+                                    outerSegments:(NSArray<NSData *> *)outerSegments
+                                           bases:(NSArray<OCCTPlaneBasis *> *)bases
+                                          history:(nullable OCCTShapeHistory *)history {
     if (outerLoops.count < 2 || bases.count != outerLoops.count) return nil;
     try {
         BRepOffsetAPI_ThruSections mk(Standard_True /* solid */, Standard_False /* ruled */);
+        TopoDS_Wire firstPlacedWire;
         for (NSUInteger i = 0; i < outerLoops.count; ++i) {
             NSData *conic = (i < outerConics.count && outerConics[i].length > 0)
                 ? outerConics[i] : nil;
@@ -973,12 +1036,15 @@ static void OS3DFillSweepHistory(OCCTShapeHistory *history,
             if (wire.IsNull()) return nil;
             const TopoDS_Shape placed = BRepBuilderAPI_Transform(
                 wire, OS3DBasisTransform(bases[i]), Standard_True).Shape();
-            mk.AddWire(TopoDS::Wire(placed));
+            const TopoDS_Wire placedWire = TopoDS::Wire(placed);
+            if (i == 0) firstPlacedWire = placedWire;
+            mk.AddWire(placedWire);
         }
         mk.Build();
         if (!mk.IsDone()) return nil;
         const TopoDS_Shape solid = mk.Shape();
         if (solid.IsNull()) return nil;
+        OS3DFillLoftHistory(history, mk, firstPlacedWire, solid);
         OCCTShape *out = [OCCTShape new];
         out->_shape = solid;
         return out;

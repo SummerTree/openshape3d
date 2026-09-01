@@ -58,10 +58,20 @@ fresh. Pinned: names survive cut → blend → cut with the bottom cap's
 identity intact three ops later; a closed hollow keeps all six outer
 identities; delete-face heals a four-wall hole and the rewritten caps keep
 their names; extending a slab's top cap leaves the bottom cap and all four
-walls named. STILL OPEN (5b): opportunistic ref upgrade — legacy refs
-gaining names during rebuilds touches the undo/persistence machinery and is
-deliberately its own slice — plus loft naming (multi-section wire
-correspondence) and EdgeRef upgrades.
+walls named. **Loft naming landed 2026-09-01** — `ThruSections` exposes
+`GeneratedFace(edge)` (one lateral face per section edge) and
+`FirstShape`/`LastShape` caps, so `OS3DFillLoftHistory` builds the same
+row convention the sweep family uses and `extrudeNames` names the two caps
+plus the walls FROM THE FIRST SECTION's profile edges (`evalLoft` passes
+`sections[0].profile` as `outer`). The multi-section half stays deferred
+and is deferred FOR GOOD: a wall spans every section, so there is no single
+later-section identity to give it — naming it for the base profile is the
+honest, useful choice (a fillet on a lofted wall stays bound to the sketch
+edge that seeded it). STILL OPEN (5b): opportunistic ref upgrade — legacy
+refs gaining names during rebuilds touches the undo/persistence machinery
+and is deliberately its own slice — plus EdgeRef upgrades (blends resolve
+against a mid-chain input body whose kernel adjacency the eval site would
+have to expose).
 
 Step 4's EDGE half (4b) shipped
 on top of 4a: `EdgeName` (unordered adjacent-face-name pair + occurrence,

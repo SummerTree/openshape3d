@@ -263,6 +263,12 @@ typedef NS_ENUM(NSInteger, OCCTOpCode) {
                                     outerSegments:(NSArray<NSData *> *)outerSegments
                                            bases:(NSArray<OCCTPlaneBasis *> *)bases;
 
++ (nullable OCCTShape *)loftedShapeWithOuterLoops:(NSArray<NSData *> *)outerLoops
+                                      outerConics:(NSArray<NSData *> *)outerConics
+                                    outerSegments:(NSArray<NSData *> *)outerSegments
+                                           bases:(NSArray<OCCTPlaneBasis *> *)bases
+                                          history:(nullable OCCTShapeHistory *)history;
+
 /// Sweep a profile along a polyline spine.
 ///
 /// `spine` is 3 doubles per point in WORLD space. The profile is built on its
