@@ -36,6 +36,24 @@ final class AgentExecTests: XCTestCase {
                        "missing_spine", "a one-point spine is no path")
     }
 
+    func testLoftParsesSectionsAndRejectsFewerThanTwo() throws {
+        let a = UUID().uuidString, b = UUID().uuidString
+        let parsed = op(#"{"op":"feature.loft","args":{"sections":[{"sketchID":"\#(a)","seedPoint":[0,0]},{"sketchID":"\#(b)","seedPoint":[1,1]}]}}"#)
+        guard case let .loft(sections, boolean, targets)? = parsed else {
+            return XCTFail("expected .loft, got \(String(describing: parsed))")
+        }
+        XCTAssertEqual(sections.count, 2)
+        XCTAssertEqual(sections[0].sketch.raw.uuidString, a)
+        XCTAssertEqual(sections[1].seed, SIMD2(1, 1))
+        XCTAssertEqual(boolean, .newBody)
+        XCTAssertTrue(targets.isEmpty)
+        // One section is not a loft; a bad seed is named by section index.
+        XCTAssertEqual(code(#"{"op":"feature.loft","args":{"sections":[{"sketchID":"\#(a)","seedPoint":[0,0]}]}}"#),
+                       "missing_sections")
+        XCTAssertEqual(code(#"{"op":"feature.loft","args":{"sections":[{"sketchID":"\#(a)","seedPoint":[0,0]},{"sketchID":"\#(b)"}]}}"#),
+                       "missing_seedPoint")
+    }
+
     // MARK: Delete/replace face
 
     func testDeleteFaceParsesAndRejectsEmpty() throws {

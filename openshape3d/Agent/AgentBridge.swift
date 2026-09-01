@@ -291,6 +291,21 @@ final class AgentBridge {
                     boolean: intent),
                 outputBodyIDs: [BodyID()]), on: viewModel)
 
+        case let .loft(sections, booleanOp, targets):
+            for section in sections where !session.document.sketches.contains(where: { $0.id == section.sketch }) {
+                return execMissing("sketch", section.sketch.raw.uuidString)
+            }
+            if let bad = missingBody(targets, session) { return bad }
+            let intent = BooleanIntent(op: booleanOp, resolvedTargets: targets.map { bodyRef($0, session) })
+            return record(FeatureNode(
+                name: "Loft",
+                kind: .loft(
+                    sections: sections.map {
+                        execProfileRef(sketchID: $0.sketch, seed: $0.seed, in: session)
+                    },
+                    boolean: intent),
+                outputBodyIDs: [BodyID()]), on: viewModel)
+
         case let .blend(bodyID, isFillet, amount, edges):
             return execBlend(body: bodyID, isFillet: isFillet, amount: amount,
                              edgeIndices: edges, on: viewModel)

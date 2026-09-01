@@ -51,6 +51,13 @@ nonisolated struct AgentExecError: Error, Sendable, Equatable {
 
 // MARK: - What was asked for
 
+/// One ordered section of a loft: which sketch, and a seed point inside the
+/// closed region on it. A struct (not a tuple) so `AgentExecOp` stays `Equatable`.
+nonisolated struct LoftSection: Sendable, Equatable {
+    let sketch: SketchID
+    let seed: SIMD2<Double>
+}
+
 nonisolated enum AgentExecOp: Sendable, Equatable {
     case createSketch(name: String, plane: SketchPlane)
     case addEntities(sketch: SketchID, entities: [SketchEntity], constructionIndices: Set<Int>)
@@ -83,6 +90,11 @@ nonisolated enum AgentExecOp: Sendable, Equatable {
     /// different plane than its profile, so plane-local would be ambiguous).
     case sweep(sketch: SketchID, seed: SIMD2<Double>, spine: [SIMD3<Double>],
                boolean: BooleanIntent.Op, targets: [BodyID])
+    /// ≥2 ordered sections, each a (sketch, seed) that resolves to a profile
+    /// on that sketch's plane; OCCT lofts a solid through them in order. Each
+    /// section is on its OWN sketch/plane — that is the whole point of a loft.
+    case loft(sections: [LoftSection],
+              boolean: BooleanIntent.Op, targets: [BodyID])
     /// Faces are 1-based kernel indices from `GET /v1/faces?body=` — OCCT
     /// heals the surrounding faces over the removed ones (spec §4.16).
     case deleteFace(body: BodyID, faces: [Int])
@@ -104,7 +116,7 @@ nonisolated enum AgentExec {
         "feature.extrude", "feature.revolve",
         "feature.pattern", "feature.mirror", "feature.boolean",
         "feature.fillet", "feature.chamfer", "feature.shell",
-        "feature.sweep", "feature.deleteFace", "feature.replaceFace",
+        "feature.sweep", "feature.loft", "feature.deleteFace", "feature.replaceFace",
     ]
 
     static let booleanKinds = ["union", "subtract", "intersect"]
@@ -133,6 +145,7 @@ nonisolated enum AgentExec {
         case "feature.chamfer":    return parseBlend(args, isFillet: false)
         case "feature.shell":      return parseShell(args)
         case "feature.sweep":      return parseSweep(args)
+        case "feature.loft":       return parseLoft(args)
         case "feature.deleteFace": return parseDeleteFace(args)
         case "feature.replaceFace": return parseReplaceFace(args)
         default:
@@ -343,6 +356,27 @@ nonisolated enum AgentExec {
             let (op, targets) = try booleanIntent(a)
             return .success(.sweep(sketch: sketch, seed: seed, spine: spine,
                                    boolean: op, targets: targets))
+        } catch let e as AgentExecError { return .failure(e) } catch { return .failure(unexpected) }
+    }
+
+    private static func parseLoft(_ a: [String: Any]) -> Result<AgentExecOp, AgentExecError> {
+        do {
+            guard let raw = a["sections"] as? [[String: Any]], raw.count >= 2 else {
+                return .failure(.init(code: "missing_sections",
+                                      message: "args.sections must be ≥2 "
+                                      + #"{"sketchID":…,"seedPoint":[x,y]} entries."#))
+            }
+            var sections: [LoftSection] = []
+            for (i, s) in raw.enumerated() {
+                do {
+                    sections.append(LoftSection(sketch: SketchID(raw: try uuid(s, "sketchID")),
+                                                seed: try vector2(s, "seedPoint")))
+                } catch let e as AgentExecError {
+                    return .failure(.init(code: e.code, message: "sections[\(i)]: \(e.message)"))
+                }
+            }
+            let (op, targets) = try booleanIntent(a)
+            return .success(.loft(sections: sections, boolean: op, targets: targets))
         } catch let e as AgentExecError { return .failure(e) } catch { return .failure(unexpected) }
     }
 
