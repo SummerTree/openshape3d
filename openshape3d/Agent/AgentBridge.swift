@@ -275,6 +275,22 @@ final class AgentBridge {
                                tools: tools.map { bodyRef($0, session) }),
                 outputBodyIDs: [BodyID()]), on: viewModel)
 
+        case let .sweep(sketchID, seed, spine, booleanOp, targets):
+            guard session.document.sketches.contains(where: { $0.id == sketchID }) else {
+                return execMissing("sketch", sketchID.raw.uuidString)
+            }
+            if let bad = missingBody(targets, session) { return bad }
+            let intent = BooleanIntent(op: booleanOp, resolvedTargets: targets.map { bodyRef($0, session) })
+            return record(FeatureNode(
+                name: "Sweep",
+                kind: .sweep(
+                    profile: execProfileRef(sketchID: sketchID, seed: seed,
+                                            in: session),
+                    plane: PlaneRef(source: .sketch(sketchID)),
+                    spine: spine.map(PointWrapper.init),
+                    boolean: intent),
+                outputBodyIDs: [BodyID()]), on: viewModel)
+
         case let .blend(bodyID, isFillet, amount, edges):
             return execBlend(body: bodyID, isFillet: isFillet, amount: amount,
                              edgeIndices: edges, on: viewModel)

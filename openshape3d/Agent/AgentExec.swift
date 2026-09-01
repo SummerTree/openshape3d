@@ -78,6 +78,11 @@ nonisolated enum AgentExecOp: Sendable, Equatable {
     /// Open faces are 1-based kernel face indices from `GET /v1/faces?body=`;
     /// EMPTY means a fully-enclosed hollow.
     case shell(body: BodyID, thickness: Double, openFaces: [Int])
+    /// Spine points are WORLD-space mm, ≥2 — the same representation
+    /// `FeatureKind.sweep` stores (a sweep's path is routinely drawn on a
+    /// different plane than its profile, so plane-local would be ambiguous).
+    case sweep(sketch: SketchID, seed: SIMD2<Double>, spine: [SIMD3<Double>],
+               boolean: BooleanIntent.Op, targets: [BodyID])
 }
 
 // MARK: - Parsing
@@ -91,6 +96,7 @@ nonisolated enum AgentExec {
         "feature.extrude", "feature.revolve",
         "feature.pattern", "feature.mirror", "feature.boolean",
         "feature.fillet", "feature.chamfer", "feature.shell",
+        "feature.sweep",
     ]
 
     static let booleanKinds = ["union", "subtract", "intersect"]
@@ -118,6 +124,7 @@ nonisolated enum AgentExec {
         case "feature.fillet":     return parseBlend(args, isFillet: true)
         case "feature.chamfer":    return parseBlend(args, isFillet: false)
         case "feature.shell":      return parseShell(args)
+        case "feature.sweep":      return parseSweep(args)
         default:
             return .failure(.init(code: "unknown_op",
                                   message: "No exec op '\(op)'. Known ops: \(opNames.joined(separator: ", "))."))
@@ -309,6 +316,23 @@ nonisolated enum AgentExec {
             let openFaces = try edgeIndices(a, "openFaces", allowEmpty: true)
             return .success(.shell(body: body, thickness: thickness,
                                    openFaces: openFaces))
+        } catch let e as AgentExecError { return .failure(e) } catch { return .failure(unexpected) }
+    }
+
+    private static func parseSweep(_ a: [String: Any]) -> Result<AgentExecOp, AgentExecError> {
+        do {
+            let sketch = SketchID(raw: try uuid(a, "sketchID"))
+            let seed = try vector2(a, "seedPoint")
+            guard let raw = a["spine"] as? [[Double]], raw.count >= 2,
+                  raw.allSatisfy({ $0.count == 3 && $0.allSatisfy(\.isFinite) }) else {
+                return .failure(.init(code: "missing_spine",
+                                      message: "args.spine must be ≥2 world-space "
+                                      + "[x, y, z] points in mm."))
+            }
+            let spine = raw.map { SIMD3($0[0], $0[1], $0[2]) }
+            let (op, targets) = try booleanIntent(a)
+            return .success(.sweep(sketch: sketch, seed: seed, spine: spine,
+                                   boolean: op, targets: targets))
         } catch let e as AgentExecError { return .failure(e) } catch { return .failure(unexpected) }
     }
 

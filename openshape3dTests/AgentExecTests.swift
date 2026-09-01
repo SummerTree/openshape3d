@@ -19,6 +19,23 @@ import simd
 
 final class AgentExecTests: XCTestCase {
 
+    // MARK: Sweep
+
+    func testSweepParsesSpineAndRejectsShortOnes() throws {
+        let id = UUID().uuidString
+        let parsed = op(#"{"op":"feature.sweep","args":{"sketchID":"\#(id)","seedPoint":[1,2],"spine":[[0,0,0],[10,0,0],[10,5,0]]}}"#)
+        guard case let .sweep(_, seed, spine, boolean, targets)? = parsed else {
+            return XCTFail("expected .sweep, got \(String(describing: parsed))")
+        }
+        XCTAssertEqual(seed, SIMD2(1, 2))
+        XCTAssertEqual(spine.count, 3)
+        XCTAssertEqual(spine[1], SIMD3(10, 0, 0))
+        XCTAssertEqual(boolean, .newBody)
+        XCTAssertTrue(targets.isEmpty)
+        XCTAssertEqual(code(#"{"op":"feature.sweep","args":{"sketchID":"\#(id)","seedPoint":[0,0],"spine":[[0,0,0]]}}"#),
+                       "missing_spine", "a one-point spine is no path")
+    }
+
     // MARK: Blends + shell (identity-addressed, step 4b/5 wiring)
 
     func testFilletParsesEdgesAndRadius() throws {
