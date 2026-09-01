@@ -117,13 +117,16 @@ nonisolated enum ElementNaming {
                              outer: Profile, holes: [Profile]) -> [Int: ElementName] {
         // Wall-edge counts per loop pick which boundary description built
         // the wire (conic / exact segments / polyline) — see
-        // `Profile.boundaryIdentity`. A phantom-dropped row makes the count
-        // match nothing and the loop's walls stay honestly unnamed.
-        var wallCount: [Int: Int] = [:]
+        // `Profile.boundaryIdentity`. DISTINCT edges, not rows: a sweep
+        // generates one face per spine segment from the same edge. A
+        // phantom-dropped edge makes the count match nothing and the loop's
+        // walls stay honestly unnamed.
+        var wallEdges: [Int: Set<Int>] = [:]
         for row in ancestry.rows where row.inputKind == .edge
             && row.relation == .generated {
-            wallCount[row.inputOrdinal, default: 0] += 1
+            wallEdges[row.inputOrdinal, default: []].insert(row.inputSubshape)
         }
+        let wallCount = wallEdges.mapValues(\.count)
 
         var names: [Int: ElementName] = [:]
         var ambiguous: Set<Int> = []
@@ -135,7 +138,17 @@ nonisolated enum ElementNaming {
             names[face] = name
         }
 
-        for row in ancestry.rows {
+        // One wire edge can generate SEVERAL result faces — a sweep makes
+        // one wall per spine segment from the same profile edge. Stamping
+        // them all with the wall name would duplicate it, so the FIRST face
+        // (lowest result index — deterministic) inherits the wall identity
+        // and its siblings mint as opFace children of it.
+        var wallSiblings: [ElementName: Int] = [:]
+
+        for row in ancestry.rows.sorted(by: {
+            ($0.inputOrdinal, $0.inputSubshape, $0.resultFace)
+                < ($1.inputOrdinal, $1.inputSubshape, $1.resultFace)
+        }) {
             if row.inputKind == .face, row.inputOrdinal == 0 {
                 claim(row.resultFace, ElementName(
                     creator: creator,
@@ -150,10 +163,20 @@ nonisolated enum ElementNaming {
                       let identity = profile.boundaryIdentity(
                           wireEdge: row.inputSubshape, wireEdgeCount: count)
                 else { continue }
-                claim(row.resultFace, ElementName(
+                let wall = ElementName(
                     creator: creator,
                     source: .profileWall(entity: identity.entity,
-                                         occurrence: identity.occurrence)))
+                                         occurrence: identity.occurrence))
+                if let sibling = wallSiblings[wall] {
+                    claim(row.resultFace, ElementName(
+                        creator: creator,
+                        source: .opFace(operation: creator, parents: [wall],
+                                        index: sibling)))
+                    wallSiblings[wall] = sibling + 1
+                } else {
+                    claim(row.resultFace, wall)
+                    wallSiblings[wall] = 0
+                }
             }
         }
         for face in ambiguous { names.removeValue(forKey: face) }

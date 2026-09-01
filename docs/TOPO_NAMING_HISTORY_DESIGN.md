@@ -1,6 +1,29 @@
 # Kernel-history element naming — design (to land as its own mission)
 
-Status: **STEPS 1–5a LANDED** (2026-08-31). Step 5's modifier-op history
+Status: **STEPS 1–5a LANDED** (2026-08-31), **revolve/sweep naming LANDED**
+(2026-09-01). The sweep-family builders (`revolvedShape…`/`sweptShape…`)
+gained `history:` variants sharing one harvest (`OS3DFillSweepHistory`):
+walls Generated per profile wire edge (mapped through the copying placer's
+`ModifiedShape` because the axis/spine live in world space), caps from
+`FirstShape`/`LastShape` as relation modified, everything through the same
+in-result phantom gate. The naming layer reuses `extrudeNames` unchanged in
+convention, with one addition forced by sweeps: a spine with N segments
+generates N faces from ONE wire edge, so the first face per wall identity
+inherits it and later siblings mint `opFace(parents: [wall], index: k)` —
+never a duplicated name. OCCT gotcha worth remembering:
+`BRepPrimAPI_MakeRevol::Generated()` gates on `BRepSweep… IsUsed()`, which
+is FALSE for edges of a CLOSED (full-360°) sweep whose lateral face was
+built but never flagged used — a washer's planar annuli, so HALF its walls.
+The public `Revol()` accessor exposes the ungated
+`BRepSweep_Revol::Shape(edge)`; we query it only when `Generated()` is
+empty, and the phantom gate keeps hallucinated faces out. `evalRevolve`/
+`evalSweep` feed the names through `emitFullSolid(kernelNames:)`, so
+revolved/swept bodies now carry name layers exactly like extrudes. Loft
+naming remains deferred (multi-section wire correspondence is its own
+design problem); Euclid-owned sweeps (holed profiles on the mesh path)
+stay honestly unnamed.
+
+Previous status: **STEPS 1–5a LANDED** (2026-08-31). Step 5's modifier-op history
 shipped: fillet/chamfer (identity path), shell and delete-face now REPORT
 ancestry instead of erasing every name downstream. One generalized
 collector (`OS3DCollectMakerHistory` over any `BRepBuilderAPI_MakeShape`)
@@ -17,7 +40,8 @@ closed hollow keeps all six outer identities; delete-face heals a
 four-wall hole and the rewritten caps keep their names. STILL OPEN (5b):
 opportunistic ref upgrade — legacy refs gaining names during rebuilds
 touches the undo/persistence machinery and is deliberately its own slice —
-plus revolve/sweep/loft naming and replace-face composition.
+plus revolve/sweep naming (landed 2026-09-01, above), loft naming, and
+replace-face composition.
 
 Step 4's EDGE half (4b) shipped
 on top of 4a: `EdgeName` (unordered adjacent-face-name pair + occurrence,
@@ -38,7 +62,9 @@ Payoff pinned end to end: a chamfer ref whose signature drifted onto hole
 B's rim but whose name says hole A blends hole A; the same ref without the
 name blends hole B. Remaining: step 5 (opportunistic ref upgrade,
 modifier-op history so blends/shells stop erasing downstream names) and
-revolve/sweep/loft naming (blocked on their adopt-vs-assign render split).
+revolve/sweep/loft naming (was blocked on the adopt-vs-assign render split
+until kernel-side `faceInfo` made identity independent of render adoption;
+revolve/sweep landed 2026-09-01).
 
 Step 4's FACE half shipped:
 `FaceRef.elementName` (optional; synthesized Codable omits nil and

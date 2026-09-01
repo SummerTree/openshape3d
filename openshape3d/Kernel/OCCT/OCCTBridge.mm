@@ -809,6 +809,87 @@ static gp_Trsf OS3DBasisTransform(OCCTPlaneBasis *basis) {
     }
 }
 
+// Ancestry for the sweep-family makers (revolve, pipe): walls are Generated
+// from the profile's wire edges — the SAME row convention the extrude
+// documents (ordinal = loop, kind 1, subIndex = wire-edge construction
+// ordinal, relation generated) — and the caps are the profile face's
+// start/end images (FirstShape/LastShape; a full 360° revolve has none,
+// which the in-result gate handles for free). The profile face went through
+// a COPYING transform before the maker, so input edges map through the
+// placer's ModifiedShape first. The result shape is the maker's own output
+// (no unify/heal hop here).
+//
+// revolMaker: MakeRevol::Generated() gates on BRepSweep IsUsed(), which is
+// FALSE for edges of a CLOSED (full 360°) sweep whose lateral face was built
+// but never flagged used — the planar annuli of a washer, for one. The
+// underlying BRepSweep_Revol::Shape(edge) has no such gate, so when
+// Generated() comes back empty we query it directly; the in-result check in
+// emit() keeps phantom shapes out, same as everywhere else.
+static void OS3DFillSweepHistory(OCCTShapeHistory *history,
+                                 BRepPrimAPI_MakeSweep &mk,
+                                 BRepBuilderAPI_Transform &placer,
+                                 const TopoDS_Face &localFace,
+                                 const TopoDS_Shape &finalShape,
+                                 BRepPrimAPI_MakeRevol *revolMaker = nullptr) {
+    if (history == nil || finalShape.IsNull()) return;
+    TopTools_IndexedMapOfShape finalFaces;
+    TopExp::MapShapes(finalShape, TopAbs_FACE, finalFaces);
+    std::set<std::array<int32_t, 5>> rowSet;
+    auto emit = [&](const TopoDS_Shape &shape, int32_t ordinal, int32_t kind,
+                    int32_t subIndex, int32_t relation) {
+        if (shape.IsNull() || rowSet.size() >= kOS3DMaxHistoryRows) return;
+        if (shape.ShapeType() == TopAbs_FACE) {
+            const int32_t index = (int32_t)finalFaces.FindIndex(shape);
+            if (index > 0) rowSet.insert({index, ordinal, kind, subIndex, relation});
+        } else if (shape.ShapeType() < TopAbs_FACE) {
+            // Higher-level report: demote to faces, as everywhere.
+            for (TopExp_Explorer ex(shape, TopAbs_FACE); ex.More(); ex.Next()) {
+                const int32_t index = (int32_t)finalFaces.FindIndex(ex.Current());
+                if (index > 0 && rowSet.size() < kOS3DMaxHistoryRows) {
+                    rowSet.insert({index, ordinal, kind, subIndex, relation});
+                }
+            }
+        }
+    };
+    try { emit(mk.FirstShape(), 0, 0, 1, 1); } catch (...) {}
+    try { emit(mk.LastShape(), 0, 0, 2, 1); } catch (...) {}
+    int32_t ordinal = 0;
+    for (TopExp_Explorer wires(localFace, TopAbs_WIRE); wires.More();
+         wires.Next(), ++ordinal) {
+        int32_t subIndex = 1;
+        for (TopExp_Explorer edges(wires.Current(), TopAbs_EDGE);
+             edges.More(); edges.Next(), ++subIndex) {
+            try {
+                const TopoDS_Shape placed = placer.ModifiedShape(edges.Current());
+                if (placed.IsNull()) continue;
+                const TopTools_ListOfShape &generated = mk.Generated(placed);
+                for (TopTools_ListIteratorOfListOfShape it(generated);
+                     it.More(); it.Next()) {
+                    emit(it.Value(), ordinal, 1, subIndex, 2);
+                }
+                if (generated.IsEmpty() && revolMaker != nullptr) {
+                    // Shape(aGenS) is non-const only because it can build
+                    // lazily; post-Build it is a lookup.
+                    emit(const_cast<BRepSweep_Revol &>(revolMaker->Revol())
+                             .Shape(placed),
+                         ordinal, 1, subIndex, 2);
+                }
+            } catch (...) {
+                // "No history for this edge" — never an error.
+            }
+        }
+    }
+    std::vector<int32_t> packed;
+    packed.reserve(rowSet.size() * 5);
+    for (const auto &row : rowSet) {
+        packed.insert(packed.end(), row.begin(), row.end());
+    }
+    history.rowCount = (NSInteger)rowSet.size();
+    history.rows = [NSData dataWithBytes:packed.data()
+                                  length:packed.size() * sizeof(int32_t)];
+    history.truncatedByHeal = NO;
+}
+
 + (nullable OCCTShape *)revolvedShapeWithOuterLoop:(NSData *)outerLoop
                                         outerConic:(nullable NSData *)outerConic
                                              holes:(NSArray<NSData *> *)holes
@@ -818,6 +899,23 @@ static gp_Trsf OS3DBasisTransform(OCCTPlaneBasis *basis) {
                                              basis:(OCCTPlaneBasis *)basis
                                               axis:(NSData *)axis
                                              angle:(double)angle {
+    return [self revolvedShapeWithOuterLoop:outerLoop outerConic:outerConic
+                                      holes:holes holeConics:holeConics
+                              outerSegments:outerSegments
+                               holeSegments:holeSegments basis:basis
+                                       axis:axis angle:angle history:nil];
+}
+
++ (nullable OCCTShape *)revolvedShapeWithOuterLoop:(NSData *)outerLoop
+                                        outerConic:(nullable NSData *)outerConic
+                                             holes:(NSArray<NSData *> *)holes
+                                        holeConics:(nullable NSData *)holeConics
+                                     outerSegments:(nullable NSData *)outerSegments
+                                      holeSegments:(nullable NSArray<NSData *> *)holeSegments
+                                             basis:(OCCTPlaneBasis *)basis
+                                              axis:(NSData *)axis
+                                             angle:(double)angle
+                                           history:(nullable OCCTShapeHistory *)history {
     if (axis.length < 6 * sizeof(double)) return nil;
     if (!(fabs(angle) > 1e-9)) return nil;
     const double *a = (const double *)axis.bytes;
@@ -831,14 +929,16 @@ static gp_Trsf OS3DBasisTransform(OCCTPlaneBasis *basis) {
         // Into world space first, because the axis is given in world space —
         // cheaper and less error-prone than mapping the axis into the profile's
         // own frame.
-        const TopoDS_Shape worldFace = BRepBuilderAPI_Transform(
-            face, OS3DBasisTransform(basis), Standard_True).Shape();
+        BRepBuilderAPI_Transform placer(face, OS3DBasisTransform(basis),
+                                        Standard_True);
+        const TopoDS_Shape worldFace = placer.Shape();
         gp_Ax1 ax(gp_Pnt(a[0], a[1], a[2]), gp_Dir(a[3]/dl, a[4]/dl, a[5]/dl));
         BRepPrimAPI_MakeRevol mk(worldFace, ax, angle);
         mk.Build();
         if (!mk.IsDone()) return nil;
         const TopoDS_Shape solid = mk.Shape();
         if (solid.IsNull()) return nil;
+        OS3DFillSweepHistory(history, mk, placer, face, solid, &mk);
         OCCTShape *out = [OCCTShape new];
         out->_shape = solid;
         return out;
@@ -895,6 +995,22 @@ static gp_Trsf OS3DBasisTransform(OCCTPlaneBasis *basis) {
                                    holeSegments:(nullable NSArray<NSData *> *)holeSegments
                                           basis:(OCCTPlaneBasis *)basis
                                           spine:(NSData *)spine {
+    return [self sweptShapeWithOuterLoop:outerLoop outerConic:outerConic
+                                   holes:holes holeConics:holeConics
+                           outerSegments:outerSegments
+                            holeSegments:holeSegments basis:basis
+                                   spine:spine history:nil];
+}
+
++ (nullable OCCTShape *)sweptShapeWithOuterLoop:(NSData *)outerLoop
+                                     outerConic:(nullable NSData *)outerConic
+                                          holes:(NSArray<NSData *> *)holes
+                                     holeConics:(nullable NSData *)holeConics
+                                  outerSegments:(nullable NSData *)outerSegments
+                                   holeSegments:(nullable NSArray<NSData *> *)holeSegments
+                                          basis:(OCCTPlaneBasis *)basis
+                                          spine:(NSData *)spine
+                                        history:(nullable OCCTShapeHistory *)history {
     const NSUInteger points = spine.length / (3 * sizeof(double));
     if (points < 2) return nil;
     const double *s = (const double *)spine.bytes;
@@ -903,8 +1019,9 @@ static gp_Trsf OS3DBasisTransform(OCCTPlaneBasis *basis) {
                                                  holeConics, outerSegments,
                                                  holeSegments, 0.0);
         if (face.IsNull()) return nil;
-        const TopoDS_Shape worldFace = BRepBuilderAPI_Transform(
-            face, OS3DBasisTransform(basis), Standard_True).Shape();
+        BRepBuilderAPI_Transform placer(face, OS3DBasisTransform(basis),
+                                        Standard_True);
+        const TopoDS_Shape worldFace = placer.Shape();
 
         BRepBuilderAPI_MakePolygon poly;
         for (NSUInteger i = 0; i < points; ++i) {
@@ -919,6 +1036,7 @@ static gp_Trsf OS3DBasisTransform(OCCTPlaneBasis *basis) {
         if (!mk.IsDone()) return nil;
         const TopoDS_Shape solid = mk.Shape();
         if (solid.IsNull()) return nil;
+        OS3DFillSweepHistory(history, mk, placer, face, solid);
         OCCTShape *out = [OCCTShape new];
         out->_shape = solid;
         return out;

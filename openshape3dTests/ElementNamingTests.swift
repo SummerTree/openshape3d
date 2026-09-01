@@ -1142,6 +1142,127 @@ final class ElementNamingTests: XCTestCase {
                      + "near-tie — no upgrade")
     }
 
+    // MARK: - Revolve/sweep naming (the last naming-mission deferral)
+
+    /// A full-revolve washer: every wall face named for its profile entity;
+    /// no caps (a 360° revolve has none — the in-result gate eats
+    /// FirstShape/LastShape for free).
+    func testARevolveNamesItsWallsFromTheProfile() throws {
+        let entities = [UUID(), UUID(), UUID(), UUID()]
+        let plane = SketchPlane(origin: .zero, xAxis: SIMD3(1, 0, 0),
+                                yAxis: SIMD3(0, 1, 0))
+        let profile = Profile(
+            loop: [SIMD2(4, 0), SIMD2(6, 0), SIMD2(6, 3), SIMD2(4, 3)],
+            kind: .polygonal, sourceEntityIDs: Set(entities),
+            edgeEntityIDs: entities)
+        let history = OCCTShapeHistory()
+        let washer = try XCTUnwrap(OCCTKernel.revolveSolid(
+            outer: profile, holes: [], plane: plane,
+            axisOrigin: .zero, axisDirection: SIMD3(0, 1, 0),
+            angleRadians: 2 * .pi, history: history))
+        _ = washer
+        let ancestry = ShapeAncestry(history)
+        let names = ElementNaming.extrudeNames(
+            creator: creator, ancestry: ancestry,
+            outer: profile, holes: [])
+        XCTAssertEqual(names.count, 4,
+                       "names=\(names) rows=\(ancestry.rows) rowCount=\(history.rowCount)")
+        let sources = Set(names.values.map(\.source))
+        for entity in entities {
+            XCTAssertTrue(sources.contains(
+                .profileWall(entity: entity, occurrence: 0)),
+                "each profile edge owns one revolved face")
+        }
+    }
+
+    /// A HALF revolve keeps its two profile-face caps, named start/end.
+    func testAPartialRevolveNamesItsCaps() throws {
+        let plane = SketchPlane(origin: .zero, xAxis: SIMD3(1, 0, 0),
+                                yAxis: SIMD3(0, 1, 0))
+        let profile = Profile(
+            loop: [SIMD2(4, 0), SIMD2(6, 0), SIMD2(6, 3), SIMD2(4, 3)],
+            kind: .polygonal, sourceEntityIDs: [UUID()])
+        let history = OCCTShapeHistory()
+        _ = try XCTUnwrap(OCCTKernel.revolveSolid(
+            outer: profile, holes: [], plane: plane,
+            axisOrigin: .zero, axisDirection: SIMD3(0, 1, 0),
+            angleRadians: .pi, history: history))
+        let names = ElementNaming.extrudeNames(
+            creator: creator, ancestry: ShapeAncestry(history),
+            outer: profile, holes: [])
+        let sources = Set(names.values.map(\.source))
+        XCTAssertTrue(sources.contains(.profileCap(end: false)), "\(sources)")
+        XCTAssertTrue(sources.contains(.profileCap(end: true)))
+    }
+
+    /// A sweep along a two-segment spine generates TWO faces from the one
+    /// circle edge: the first inherits the wall identity, the sibling mints
+    /// as its opFace child — never a duplicated name.
+    func testASweepSiblingFaceMintsInsteadOfDuplicating() throws {
+        let entity = UUID()
+        let circle = (0..<32).map { i -> SIMD2<Double> in
+            let a = Double(i) / 32 * 2 * .pi
+            return SIMD2(3 * cos(a), 3 * sin(a))
+        }
+        let plane = SketchPlane(origin: .zero, xAxis: SIMD3(0, 1, 0),
+                                yAxis: SIMD3(0, 0, 1))
+        let profile = Profile(loop: circle,
+                              kind: .circle(center: .zero, radius: 3),
+                              sourceEntityIDs: [entity])
+        let history = OCCTShapeHistory()
+        _ = try XCTUnwrap(OCCTKernel.sweepSolid(
+            outer: profile, holes: [], plane: plane,
+            spine: [SIMD3(0, 0, 0), SIMD3(20, 0, 0), SIMD3(20, 20, 0)],
+            history: history))
+        let names = ElementNaming.extrudeNames(
+            creator: creator, ancestry: ShapeAncestry(history),
+            outer: profile, holes: [])
+        XCTAssertEqual(Set(names.values).count, names.count,
+                       "no duplicate names: \(names)")
+        let wall = ElementName(creator: creator,
+                               source: .profileWall(entity: entity, occurrence: 0))
+        XCTAssertTrue(names.values.contains(wall))
+        XCTAssertTrue(names.values.contains { name in
+            guard case let .opFace(_, parents, _) = name.source else { return false }
+            return parents == [wall]
+        }, "the second segment's face is the wall's minted sibling: \(names)")
+    }
+
+    /// End to end: a revolve node's eval populates the composable name layer
+    /// even though its render stays Euclid (no table attach — the kernel-side
+    /// consumers key on indices).
+    func testARevolveEvalPopulatesKernelNames() throws {
+        let sketchID = SketchID(), rectEntity = UUID()
+        let feature = FeatureID(), bodyID = BodyID()
+        let graph = FeatureGraph(nodes: [
+            FeatureNode(
+                id: feature, name: "Washer",
+                kind: .revolve(
+                    profile: ProfileRef(sketchID: sketchID, entityIDs: [rectEntity],
+                                        holeEntityIDs: [], seedPoint: SIMD2(5, 1.5)),
+                    plane: PlaneRef(source: .sketch(sketchID)),
+                    axis: AxisRef(source: .explicit(RevolveAxis(
+                        point: .zero, direction: SIMD2(0, 1)))),
+                    angle: Expr(value: 360),
+                    boolean: BooleanIntent(op: .newBody, resolvedTargets: [])),
+                outputBodyIDs: [bodyID]),
+        ])
+        let sketch = Sketch(id: sketchID, name: "S", plane: .ground, entities: [
+            .rect(id: rectEntity, min: SIMD2(4, 0), max: SIMD2(6, 3))])
+        var revision: UInt64 = 0
+        let result = graph.evaluate(sketches: [sketch], planes: [],
+                                    naming: SignatureNaming(),
+                                    nextRevision: { revision += 1; return revision })
+        XCTAssertTrue(result.errors.isEmpty, "\(result.errors)")
+        let names = try XCTUnwrap(result.kernelNames[bodyID],
+                                  "a revolve must populate the name layer")
+        XCTAssertEqual(names.count, 4, "\(names)")
+        XCTAssertTrue(names.values.allSatisfy { name in
+            if case .profileWall(rectEntity, _) = name.source { return true }
+            return false
+        }, "\(names)")
+    }
+
     // MARK: - Detector identity arrays
 
     func testTheDetectorEmitsEdgeEntitiesInLoopOrder() throws {

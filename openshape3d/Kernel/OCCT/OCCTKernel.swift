@@ -331,7 +331,8 @@ nonisolated enum OCCTKernel {
     /// closes into a full solid — so the mistake would have looked correct.
     static func revolveSolid(outer: Profile, holes: [Profile], plane: SketchPlane,
                              axisOrigin: SIMD3<Double>, axisDirection: SIMD3<Double>,
-                             angleRadians: Double) -> BRepHandle? {
+                             angleRadians: Double,
+                             history: OCCTShapeHistory? = nil) -> BRepHandle? {
         let p = packedProfile(outer, holes: holes)
         var axis = [axisOrigin.x, axisOrigin.y, axisOrigin.z,
                     axisDirection.x, axisDirection.y, axisDirection.z]
@@ -340,7 +341,8 @@ nonisolated enum OCCTKernel {
             withOuterLoop: p.loop, outerConic: p.conic, holes: p.holeLoops,
             holeConics: p.holeConics, outerSegments: p.segments,
             holeSegments: p.holeSegments, basis: planeBasis(plane),
-            axis: axisData, angle: angleRadians).map(BRepHandle.init)
+            axis: axisData, angle: angleRadians,
+            history: history).map(BRepHandle.init)
     }
 
     /// Loft through ordered sections. Holes are dropped: OCCT's ThruSections
@@ -364,7 +366,8 @@ nonisolated enum OCCTKernel {
 
     /// Sweep a profile along a world-space polyline spine.
     static func sweepSolid(outer: Profile, holes: [Profile], plane: SketchPlane,
-                           spine: [SIMD3<Double>]) -> BRepHandle? {
+                           spine: [SIMD3<Double>],
+                           history: OCCTShapeHistory? = nil) -> BRepHandle? {
         guard spine.count >= 2 else { return nil }
         let p = packedProfile(outer, holes: holes)
         var flat = [Double](); flat.reserveCapacity(spine.count * 3)
@@ -374,7 +377,7 @@ nonisolated enum OCCTKernel {
             withOuterLoop: p.loop, outerConic: p.conic, holes: p.holeLoops,
             holeConics: p.holeConics, outerSegments: p.segments,
             holeSegments: p.holeSegments, basis: planeBasis(plane),
-            spine: spineData).map(BRepHandle.init)
+            spine: spineData, history: history).map(BRepHandle.init)
     }
 
     /// Turn resolved profile holes into extrude boundaries, keeping the ones

@@ -1466,6 +1466,7 @@ nonisolated extension FeatureGraph {
         _ node: FeatureNode,
         mesh: Euclid.Mesh,
         brep: BRepHandle? = nil,
+        kernelNames: [Int: ElementName] = [:],
         boolean: BooleanIntent,
         scheme: FaceScheme,
         into state: inout EvalState,
@@ -1500,6 +1501,14 @@ nonisolated extension FeatureGraph {
             }
             let table = state.naming.faceTable(for: body, createdBy: node.id, scheme: scheme)
             state.put(body, table: table)
+            // The COMPOSABLE identity layer (kernel-face indices → names).
+            // No table attach here: the render is NOT the kernel
+            // tessellation, so the triangle channel cannot align — but the
+            // kernel-side consumers (/v1/faces, identity blends, boolean
+            // composition) key on indices and work regardless.
+            if body.brep != nil, !kernelNames.isEmpty {
+                state.kernelNames[id] = kernelNames
+            }
             return
         }
 
@@ -1584,14 +1593,23 @@ nonisolated extension FeatureGraph {
             + plane.xAxis * axis.point.x + plane.yAxis * axis.point.y
         let axisWorldDirection =
             plane.xAxis * axis.direction.x + plane.yAxis * axis.direction.y
+        let history: OCCTShapeHistory? =
+            OCCTKernel.useOCCTAsSourceOfTruth ? OCCTShapeHistory() : nil
         let brep = OCCTKernel.useOCCTAsSourceOfTruth
             ? OCCTKernel.revolveSolid(
                 outer: outer, holes: holes, plane: plane,
                 axisOrigin: axisWorldOrigin, axisDirection: axisWorldDirection,
-                angleRadians: angle.value * .pi / 180)
+                angleRadians: angle.value * .pi / 180,
+                history: history)
             : nil
-        emitFullSolid(node, mesh: mesh, brep: brep, boolean: boolean,
-                      scheme: .revolve, into: &state, next: nextRevision)
+        let names = (brep != nil ? history : nil).map {
+            ElementNaming.extrudeNames(creator: node.id,
+                                       ancestry: ShapeAncestry($0),
+                                       outer: outer, holes: holes)
+        } ?? [:]
+        emitFullSolid(node, mesh: mesh, brep: brep, kernelNames: names,
+                      boolean: boolean, scheme: .revolve,
+                      into: &state, next: nextRevision)
     }
 
     private func evalSweep(
@@ -1613,11 +1631,20 @@ nonisolated extension FeatureGraph {
         }
         let spinePts = spine.map(\.point)   // WORLD-space 3D points
         let mesh = SweepLoftKit.sweep(profile: outer, holes: holes, in: plane, alongPath: spinePts)
+        let history: OCCTShapeHistory? =
+            OCCTKernel.useOCCTAsSourceOfTruth ? OCCTShapeHistory() : nil
         let brep = OCCTKernel.useOCCTAsSourceOfTruth
-            ? OCCTKernel.sweepSolid(outer: outer, holes: holes, plane: plane, spine: spinePts)
+            ? OCCTKernel.sweepSolid(outer: outer, holes: holes, plane: plane,
+                                    spine: spinePts, history: history)
             : nil
-        emitFullSolid(node, mesh: mesh, brep: brep, boolean: boolean,
-                      scheme: .generic, into: &state, next: nextRevision)
+        let names = (brep != nil ? history : nil).map {
+            ElementNaming.extrudeNames(creator: node.id,
+                                       ancestry: ShapeAncestry($0),
+                                       outer: outer, holes: holes)
+        } ?? [:]
+        emitFullSolid(node, mesh: mesh, brep: brep, kernelNames: names,
+                      boolean: boolean, scheme: .generic,
+                      into: &state, next: nextRevision)
     }
 
     private func evalLoft(

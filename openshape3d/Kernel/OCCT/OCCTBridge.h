@@ -228,6 +228,30 @@ typedef NS_ENUM(NSInteger, OCCTOpCode) {
                                               axis:(NSData *)axis
                                              angle:(double)angle;
 
+/// Revolve/sweep with ancestry (fill-only `history`, same extrude row
+/// convention: walls Generated per wire edge, caps = the profile face's
+/// start/end images — a full revolve has none, which the in-result gate
+/// handles for free).
++ (nullable OCCTShape *)revolvedShapeWithOuterLoop:(NSData *)outerLoop
+                                        outerConic:(nullable NSData *)outerConic
+                                             holes:(NSArray<NSData *> *)holes
+                                        holeConics:(nullable NSData *)holeConics
+                                     outerSegments:(nullable NSData *)outerSegments
+                                      holeSegments:(nullable NSArray<NSData *> *)holeSegments
+                                             basis:(OCCTPlaneBasis *)basis
+                                              axis:(NSData *)axis
+                                             angle:(double)angle
+                                           history:(nullable OCCTShapeHistory *)history;
++ (nullable OCCTShape *)sweptShapeWithOuterLoop:(NSData *)outerLoop
+                                     outerConic:(nullable NSData *)outerConic
+                                          holes:(NSArray<NSData *> *)holes
+                                     holeConics:(nullable NSData *)holeConics
+                                  outerSegments:(nullable NSData *)outerSegments
+                                   holeSegments:(nullable NSArray<NSData *> *)holeSegments
+                                          basis:(OCCTPlaneBasis *)basis
+                                          spine:(NSData *)spine
+                                        history:(nullable OCCTShapeHistory *)history;
+
 /// Loft through ordered section profiles, each on its own plane.
 ///
 /// `sections` is one dictionary-free parallel set of arrays: every index i
