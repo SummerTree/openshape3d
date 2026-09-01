@@ -10,11 +10,14 @@ design), and — new — `FREECAD_PLAYBOOK.md` (the FreeCAD-derived hardening
 ledger: every OCCT defensive pattern mined from the reference checkout at
 `~/projects/reference/FreeCAD`, its licensing rules, and where each landed).
 
-**Current test baseline (2026-09-01): 1074 unit tests in ~17s** — the
+**Current test baseline (2026-09-01): 1086 unit tests in ~17s** — the
 debug-tooling tranche (§4 mission 0c) added 21, topo-naming steps 1–5a added
 ~35 (ancestry, element naming, name-first resolve, identity blends,
-modifier-op history), and the exec identity ops added the rest, on top of
-the 1013 the FreeCAD-hardening tranches left. Previous baseline (2026-08-30):
+modifier-op history), the exec identity ops most of the rest, and
+revolve/sweep naming (landed 2026-09-01, commit 279a311 — including the
+OCCT full-revolve `Generated()` gap and its `Revol().Shape(edge)` recovery,
+see `TOPO_NAMING_HISTORY_DESIGN.md`) the last 4, on top of the 1013 the
+FreeCAD-hardening tranches left. Previous baseline (2026-08-30):
 920 unit tests in 18s — down from ~100 s after booleans stopped running both
 kernels (see §3b). **Full UI suite last measured 2026-09-01** (covering all
 of the above): 104 executed, 2 skipped, 46m19s — 1 failure
