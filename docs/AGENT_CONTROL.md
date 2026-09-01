@@ -323,12 +323,15 @@ an unexplained failure.
 **sweep** (`{"op":"feature.sweep","args":{"sketchID":…,"seedPoint":…,
 "spine":[[x,y,z],…]}}` — world-space spine, ≥2 points, same boolean/targets
 as extrude) — and, since the topological-naming mission landed its edge/face
-identity vocabulary, **fillet, chamfer and shell** (see their section above).
-What is still missing:
+identity vocabulary, **fillet, chamfer and shell** (see their section above),
+plus **deleteFace** (`{"bodyID":…,"faces":[i,…]}` — OCCT heals over the
+removed faces, spec §4.16) and **replaceFace** (`{"bodyID":…,"face":[i],
+"targetOrigin":[x,y,z],"targetNormal":[x,y,z],"flip":false}` — extend/trim
+onto a world plane, spec §4.12, same plane-not-ref v1 limitation as the
+interactive tool). What is still missing:
 
-- **The remaining face ops** (`deleteFace`, `offsetFace`, `replaceFace`) —
-  now a mechanical addition on the same `/v1/faces` vocabulary, no longer a
-  design question.
+- **`offsetFace`** over exec, and **loft** (multi-profile sections) — no
+  tutorial recipe needs either yet.
 - **Align**, which has no `FeatureKind` at all.
 - **Importing a body.** Several of the Shapr3D tutorial models lean on
   `MaterializeImportedBodies`, and those bodies are Parasolid, which OCCT cannot
