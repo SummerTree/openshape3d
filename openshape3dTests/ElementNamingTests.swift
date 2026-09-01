@@ -1247,6 +1247,70 @@ final class ElementNamingTests: XCTestCase {
                      + "near-tie — no upgrade")
     }
 
+    /// Step 5b for EDGES: a legacy blend `EdgeRef` (no faceNames) that
+    /// resolves by signature on a named body earns the crease's name pair —
+    /// so the next rebuild binds by identity, immune to signature drift. The
+    /// name comes from the kernel edge at the ref's own resolved midpoint, so
+    /// it pins exactly the edge blended, never re-binding.
+    func testALegacyBlendEdgeRefEarnsItsCreaseName() throws {
+        let fixture = ModifierFixture()
+        let base = evaluate(fixture.nodes, fixture.sketches)
+        XCTAssertTrue(base.errors.isEmpty, "\(base.errors)")
+        let body = try XCTUnwrap(base.bodies.first { $0.id == fixture.slabID })
+        let brep = try XCTUnwrap(body.brep)
+        let names = try XCTUnwrap(base.kernelNames[fixture.slabID])
+        let edgeNames = ElementNaming.edgeNames(
+            adjacency: OCCTKernel.edgeFaceAdjacency(brep), names: names)
+
+        // A selectable render edge whose midpoint maps to a NAMED kernel
+        // crease — the case a legacy fillet on it earns.
+        let available = EdgeTopology.selectableEdges(from: body.render)
+        let tol = OCCTKernel.matchTolerance(for: brep)
+        func mid(_ e: SelectableEdge) -> SIMD3<Double> {
+            let m = e.midpoint
+            return SIMD3(Double(m.x), Double(m.y), Double(m.z))
+        }
+        var chosen: (edge: SelectableEdge, name: EdgeName)?
+        for e in available {
+            if let idx = OCCTKernel.nearestEdgeIndex(brep, to: mid(e), tolerance: tol),
+               let name = edgeNames[idx] { chosen = (e, name); break }
+        }
+        let (edge, expected) = try XCTUnwrap(chosen, "no named selectable edge")
+
+        let legacy = FeatureNode(
+            id: FeatureID(), name: "Fillet",
+            kind: .fillet(body: fixture.bodyRef,
+                          edges: [EdgeRef(body: fixture.bodyRef,
+                                          signature: EdgeTopology.signature(of: edge),
+                                          faceNames: nil)],
+                          radius: Expr(value: 0.3)),
+            outputBodyIDs: [fixture.slabID])
+        let result = evaluate(fixture.nodes + [legacy], fixture.sketches)
+        XCTAssertTrue(result.errors.isEmpty, "\(result.errors)")
+
+        let proposal = try XCTUnwrap(result.proposedUpgrades[legacy.id],
+                                     "a legacy blend ref must earn its name")
+        guard case let .fillet(_, edges, _) = proposal else {
+            return XCTFail("upgrade must stay a fillet: \(proposal)")
+        }
+        XCTAssertEqual(try XCTUnwrap(edges.first?.faceNames), expected,
+                       "the earned name is the crease at the resolved edge")
+
+        // Idempotence: an already-named ref takes the identity path and
+        // proposes nothing.
+        let named = FeatureNode(
+            id: FeatureID(), name: "Fillet2",
+            kind: .fillet(body: fixture.bodyRef,
+                          edges: [EdgeRef(body: fixture.bodyRef,
+                                          signature: EdgeTopology.signature(of: edge),
+                                          faceNames: expected)],
+                          radius: Expr(value: 0.3)),
+            outputBodyIDs: [fixture.slabID])
+        let again = evaluate(fixture.nodes + [named], fixture.sketches)
+        XCTAssertNil(again.proposedUpgrades[named.id],
+                     "an already-named blend ref never proposes again")
+    }
+
     // MARK: - Revolve/sweep naming (the last naming-mission deferral)
 
     /// A full-revolve washer: every wall face named for its profile entity;

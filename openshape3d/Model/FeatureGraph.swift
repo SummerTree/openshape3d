@@ -798,6 +798,38 @@ nonisolated extension FeatureGraph {
         }
     }
 
+    /// Step 5b for edges: record an upgrade proposal when a legacy blend
+    /// `EdgeRef` earned its crease name during a rebuild. Layers onto any
+    /// earlier proposal for the same node, so a multi-edge fillet accumulates
+    /// per-edge upgrades into one edit.
+    private func proposeEdgeUpgrade(_ node: FeatureNode, ref: EdgeRef,
+                                    faceNames: EdgeName,
+                                    into state: inout EvalState) {
+        guard let upgraded = ElementNaming.upgraded(ref, faceNames: faceNames) else { return }
+        let base = state.proposedUpgrades[node.id] ?? node.kind
+        guard let kind = Self.kind(base, replacingEdge: ref, with: upgraded) else { return }
+        state.proposedUpgrades[node.id] = kind
+    }
+
+    /// `kind` with one blend `EdgeRef` swapped for its upgraded copy — the
+    /// edge twin of `kind(_:replacing:with:)`. Only fillet/chamfer carry
+    /// EdgeRefs; a kind missing here simply never upgrades (safe).
+    private static func kind(_ kind: FeatureKind, replacingEdge ref: EdgeRef,
+                             with upgraded: EdgeRef) -> FeatureKind? {
+        switch kind {
+        case let .fillet(body, edges, radius) where edges.contains(ref):
+            return .fillet(body: body,
+                           edges: edges.map { $0 == ref ? upgraded : $0 },
+                           radius: radius)
+        case let .chamfer(body, edges, setback) where edges.contains(ref):
+            return .chamfer(body: body,
+                            edges: edges.map { $0 == ref ? upgraded : $0 },
+                            setback: setback)
+        default:
+            return nil
+        }
+    }
+
     // MARK: Push/pull
 
     private func evalPushPull(
@@ -1088,14 +1120,17 @@ nonisolated extension FeatureGraph {
         }
 
         var specs = [BlendEdgeSpec]()
+        var resolvedRefs = [(ref: EdgeRef, midpoint: SIMD3<Double>)]()
         for ref in edgeRefs {
             guard let edge = EdgeTopology.resolve(
                 ref.signature, in: available, sizeScale: scale)
             else { continue }
-            specs.append(BlendEdgeSpec(
+            let spec = BlendEdgeSpec(
                 p0: d3(edge.start), p1: d3(edge.end),
                 normalA: d3(edge.normalA), normalB: d3(edge.normalB),
-                isConvex: edge.isConvex))
+                isConvex: edge.isConvex)
+            specs.append(spec)
+            resolvedRefs.append((ref, (spec.p0 + spec.p1) * 0.5))
         }
         guard !specs.isEmpty else {
             state.errors[node.id] = .brokenRef("no blend edge resolved")
@@ -1124,6 +1159,21 @@ nonisolated extension FeatureGraph {
             // the body is, and a body-scaled ball on a 100×1 mm plate was
             // wider than the wall it was picking across.
             let tolerance = OCCTKernel.matchTolerance(for: brep)
+            // Step 5b (edges): a legacy EdgeRef that resolved by signature
+            // earns the crease's name pair — from the kernel edge AT ITS OWN
+            // resolved midpoint, so this pins exactly the edge the blend is
+            // about to round, never re-binding. Only when the input body
+            // carries kernel names (otherwise there is nothing to earn).
+            if let names = state.kernelNames[body.id], !names.isEmpty {
+                let adjacency = OCCTKernel.edgeFaceAdjacency(brep)
+                let edgeNames = ElementNaming.edgeNames(adjacency: adjacency, names: names)
+                for (ref, midpoint) in resolvedRefs where ref.faceNames == nil {
+                    guard let index = OCCTKernel.nearestEdgeIndex(
+                            brep, to: midpoint, tolerance: tolerance),
+                          let name = edgeNames[index] else { continue }
+                    proposeEdgeUpgrade(node, ref: ref, faceNames: name, into: &state)
+                }
+            }
             let blended = isFillet
                 ? OCCTKernel.filletResult(brep, at: midpoints, radius: amount,
                                           tolerance: tolerance)

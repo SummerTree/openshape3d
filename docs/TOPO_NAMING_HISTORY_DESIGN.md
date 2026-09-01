@@ -67,11 +67,21 @@ plus the walls FROM THE FIRST SECTION's profile edges (`evalLoft` passes
 and is deferred FOR GOOD: a wall spans every section, so there is no single
 later-section identity to give it — naming it for the base profile is the
 honest, useful choice (a fillet on a lofted wall stays bound to the sketch
-edge that seeded it). STILL OPEN (5b): opportunistic ref upgrade — legacy
-refs gaining names during rebuilds touches the undo/persistence machinery
-and is deliberately its own slice — plus EdgeRef upgrades (blends resolve
-against a mid-chain input body whose kernel adjacency the eval site would
-have to expose).
+edge that seeded it). **EdgeRef upgrades landed 2026-09-01** — the deferral was waiting on the
+eval site being able to expose the input body's kernel edge→face
+adjacency, which `edgeFaceAdjacency` + `nearestEdgeIndex` now do. In the
+blend's signature-fallback path, a legacy `EdgeRef` (no `faceNames`) that
+resolved by signature earns the crease's name pair — read from the kernel
+edge AT ITS OWN resolved midpoint, so it pins exactly the edge the blend
+rounds and can never re-bind. It rides the SAME 5b machinery as FaceRefs:
+`proposeEdgeUpgrade` records an upgraded fillet/chamfer kind through a
+central `kind(_:replacingEdge:with:)` rewriter, `EvalResult.proposedUpgrades`
+carries it into `performRebuild`, and an upgraded ref takes the identity
+path next time and never proposes again. **With this, the naming mission
+is COMPLETE**: every creation and modifier op composes names, and both
+FaceRefs and EdgeRefs opportunistically upgrade. Pinned: a legacy fillet
+ref earns the crease at its resolved edge; an already-named one proposes
+nothing.
 
 Step 4's EDGE half (4b) shipped
 on top of 4a: `EdgeName` (unordered adjacent-face-name pair + occurrence,

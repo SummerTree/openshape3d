@@ -350,6 +350,19 @@ nonisolated enum ElementNaming {
         return out
     }
 
+    /// Step 5b for EDGES: a legacy `EdgeRef` (no `faceNames`) that resolved by
+    /// signature earns the crease's adjacent-face name PAIR, so the next blend
+    /// rebuild binds by identity and is immune to signature drift. `faceNames`
+    /// comes from the kernel edge at the SAME midpoint the signature resolved,
+    /// so this only PINS what already resolved — it can never re-bind. Nil when
+    /// the ref already has a name (upgraded once, never again).
+    static func upgraded(_ ref: EdgeRef, faceNames: EdgeName) -> EdgeRef? {
+        guard ref.faceNames == nil else { return nil }
+        var out = ref
+        out.faceNames = faceNames
+        return out
+    }
+
     /// Names for a primitive's table entries: the role is the identity, so
     /// no kernel channel is needed — which also covers the box, whose render
     /// deliberately stays Euclid. `.derived` roles carry no identity and
