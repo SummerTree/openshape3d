@@ -93,9 +93,8 @@ results["wheel mass"] = abs(mass - 2.5) / 2.5 < 0.03
 print("\n2. DIN 934 M16 hex nut (hexagon extrude + bore):")
 R = 24.0 / math.sqrt(3)  # circumradius for across-flats 24
 skn = sketch("Nut Hex")
-X({"op": "sketch.addEntities", "args": {"sketchID": skn, "entities": loop(
-    [[R * math.cos(math.radians(a)), R * math.sin(math.radians(a))]
-     for a in range(0, 360, 60)])}})
+X({"op": "sketch.addEntities", "args": {"sketchID": skn, "entities": [
+    {"kind": "polygon", "center": [0, 0], "radius": R, "sides": 6}]}})
 nut = X({"op": "feature.extrude", "args": {
     "sketchID": skn, "seedPoint": [0, 0], "distance": 13}})["producedBodyIDs"][0]
 skb = sketch("Nut Bore")
