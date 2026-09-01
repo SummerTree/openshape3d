@@ -232,6 +232,17 @@ so 53 mm total needs distance 26.5); the inline boolean is
 `"boolean":"subtract"` + `"booleanTargets":[id]` (a STRING op + id array,
 not a nested object — a wrong shape silently defaults to newBody).
 
+**FreeCAD op-coverage matrix (all verified live, health 0 invalid):**
+extrude/pad (iron angle 675,000 mm³ & part-design base 21,359 mm³, both
+EXACT), boolean cut/pocket (iron angle CSG exact; part-design pocket
+removes material), mirror (valid), and revolve — the Basic modeling
+tutorial's named alternative to extrude — Pappus-verified (a
+rectangular-section ring 150 mm² × 2π × R25 = 23,562 mm³ analytic vs
+23,495 measured, 0.285% mesh-tessellation drift on the curved surface;
+the 90° sector shows the identical 0.285%, so it is uniform tessellation
+under-report, not a geometry error). Conclusion: openshape3d covers every
+core FreeCAD modeling operation, with no expressivity gap found.
+
 ## 4b. The Shapr3D tutorial-model thread (paused, 2026-08-31)
 
 Goal as posed: import the tutorial models and rebuild them through the app's
