@@ -1,16 +1,60 @@
 # Status & Next Steps — Handoff Notes
 
-Last updated: 2026-08-31 (debug-tooling tranche, §4 mission 0c — after the
-FreeCAD-reference hardening tranches, §4 mission 0). This is the living
+Last updated: 2026-09-01 (naming-mission completion + real-part validation +
+exec-surface completion — see the mission log just below). This is the living
 handoff document: what is DONE, how the newest subsystems work, the dev
 workflow, and the prioritized next missions.
 Companions: `IMPLEMENTATION_PLAN.md` (original phase plan),
 `SHAPR3D_PARITY_SPEC.md` (feature spec), `PHASE_D_DESIGN.md` (feature-graph
-design), and — new — `FREECAD_PLAYBOOK.md` (the FreeCAD-derived hardening
-ledger: every OCCT defensive pattern mined from the reference checkout at
-`~/projects/reference/FreeCAD`, its licensing rules, and where each landed).
+design), `FREECAD_PLAYBOOK.md` (the FreeCAD-derived hardening ledger),
+`TOPO_NAMING_HISTORY_DESIGN.md` (element-naming design, now complete), and
+`AGENT_CONTROL.md` (the `/v1/exec` scripting surface).
 
-**Current test baseline (2026-09-01): 1086 unit tests in ~17s** — the
+## Mission log — 2026-09-01 (landed, all committed, 1115/1115 green)
+
+- **Topological-naming mission COMPLETE.** Every creation op (primitive,
+  extrude, revolve, sweep, loft, boolean) and every modifier (fillet,
+  chamfer, shell, push/pull, delete/replace-face, mirror, pattern) composes
+  element names; both FaceRefs and EdgeRefs opportunistically upgrade legacy
+  refs to identity. Revolve/sweep/loft naming and the EdgeRef upgrade were
+  the final deferrals. See `TOPO_NAMING_HISTORY_DESIGN.md`.
+- **Real-part validation.** openshape3d builds real CAD parts to spec,
+  verified against independent ground truth across three sources:
+  FreeCAD tutorials (iron angle exact both ways; op-coverage matrix,
+  `scripts/rebuild_freecad_angle.py`), TraceParts catalogue parts (a
+  RÄDER-VOGEL cast-iron wheel matched its datasheet weight to 0.7%; a
+  hex nut and bolt-circle flange to exact volumes — `rebuild_traceparts.py`),
+  and the Shapr3D models. A published comparison artifact shows five of them
+  reference-vs-render. Fillet/chamfer stress tests on curved revolved
+  geometry are robust (valid or graceful typed failure, never crash/hang).
+- **`/v1/exec` scripting surface COMPLETE.** Now exposes every FeatureKind
+  that has a live tool: all construction ops, all modifiers, the full
+  direct-modeling face family (push/pull, move/scale/rotate face), mirror,
+  pattern, and all seven sketch entity kinds (line/circle/arc/spline/rect/
+  polygon/ellipse). Also hardened: a wrong-typed `boolean` intent is refused
+  (`bad_boolean_type`) instead of silently making a stray body. Only
+  `primitive` (covered by sketch+extrude) and `transform` (deferred) remain
+  unexposed. See `AGENT_CONTROL.md`.
+- **Sketch conflict diagnosis stages 2–3 + scale-free residuals** (playbook
+  S6/S7): the conflict chip now names WHICH constraints clash (red glyphs)
+  and add-time refusals name the clashing partners; the four mm² residuals
+  read sin/cos/mm so the conflict gate is scale-honest.
+
+Next missions are genuinely different in kind — architectural refactors
+(§4.5: off-main eval/preview service, scene caching, `ToolLifecycle`
+registry) and new kernel capability (spline-as-profile, draft/taper angles
+for cast parts, transform-as-a-feature). Each warrants its own design pass,
+not incremental continuation.
+
+**Current test baseline (2026-09-01): 1115 unit tests in ~17s** (1 skipped:
+the on-demand `OCCTFuzzTests` hostile-input sweep, run with
+`TEST_RUNNER_OS3D_FUZZ=1`). Earlier this session: 1086 → the naming
+completions, real-part regressions, exec expansion, and conflict-diagnosis
+work added the rest. Historical: 1013 after the FreeCAD-hardening tranches,
+920 on 2026-08-30 (down from ~100 s once booleans stopped running both
+kernels, §3b). Prior baseline paragraph, for the record:
+
+**(historical) Current test baseline (2026-09-01): 1086 unit tests in ~17s** — the
 debug-tooling tranche (§4 mission 0c) added 21, topo-naming steps 1–5a added
 ~35 (ancestry, element naming, name-first resolve, identity blends,
 modifier-op history), the exec identity ops most of the rest, and
