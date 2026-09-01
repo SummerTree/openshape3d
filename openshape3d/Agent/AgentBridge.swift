@@ -298,6 +298,14 @@ final class AgentBridge {
         case let .shell(bodyID, thickness, openFaces):
             return execShell(body: bodyID, thickness: thickness,
                              openFaces: openFaces, on: viewModel)
+
+        case let .deleteFace(bodyID, faces):
+            return execDeleteFace(body: bodyID, faces: faces, on: viewModel)
+
+        case let .replaceFace(bodyID, face, origin, normal, flip):
+            return execReplaceFace(body: bodyID, face: face,
+                                   targetOrigin: origin, targetNormal: normal,
+                                   flip: flip, on: viewModel)
         }
     }
 
@@ -625,10 +633,86 @@ final class AgentBridge {
         case let .ok(body, brep): context = (body, brep)
         case let .reply(reply): return reply
         }
-        guard let table = session.lastFaceTables[bodyID] else {
-            return .failure(409, "Conflict", error: "stale_identity",
-                            message: "No face table retained for '\(context.body.name)' "
-                                   + "— rebuild first (any exec feature op).")
+        let ref = bodyRef(bodyID, session)
+        let refs: [FaceRef]
+        switch mintFaceRefs(openFaces, context: context, bodyRef: ref, session) {
+        case let .ok(minted): refs = minted
+        case let .reply(reply): return reply
+        }
+        let node = FeatureNode(
+            name: "Shell",
+            kind: .shell(body: ref, openFaces: refs,
+                         thickness: Expr(value: thickness)),
+            outputBodyIDs: [bodyID])
+        return record(node, on: viewModel)
+    }
+
+    /// feature.deleteFace: remove the named kernel faces and let OCCT heal
+    /// over them (spec §4.16) — recorded through the same graph path as the
+    /// interactive tool.
+    private func execDeleteFace(body bodyID: BodyID, faces: [Int],
+                                on viewModel: EditorViewModel) -> AgentResponse {
+        let session = viewModel.session
+        let context: (body: Body, brep: BRepHandle)
+        switch identityContext(bodyID, session) {
+        case let .ok(body, brep): context = (body, brep)
+        case let .reply(reply): return reply
+        }
+        let ref = bodyRef(bodyID, session)
+        let refs: [FaceRef]
+        switch mintFaceRefs(faces, context: context, bodyRef: ref, session) {
+        case let .ok(minted): refs = minted
+        case let .reply(reply): return reply
+        }
+        return record(FeatureNode(
+            name: "Delete Face",
+            kind: .deleteFace(body: ref, faces: refs),
+            outputBodyIDs: [bodyID]), on: viewModel)
+    }
+
+    /// feature.replaceFace: extend/trim one face onto a world plane
+    /// (spec §4.12). The target is a plane, not a ref — the same v1
+    /// limitation the interactive tool has, for the same reason.
+    private func execReplaceFace(body bodyID: BodyID, face: Int,
+                                 targetOrigin: SIMD3<Double>,
+                                 targetNormal: SIMD3<Double>, flip: Bool,
+                                 on viewModel: EditorViewModel) -> AgentResponse {
+        let session = viewModel.session
+        let context: (body: Body, brep: BRepHandle)
+        switch identityContext(bodyID, session) {
+        case let .ok(body, brep): context = (body, brep)
+        case let .reply(reply): return reply
+        }
+        let ref = bodyRef(bodyID, session)
+        let refs: [FaceRef]
+        switch mintFaceRefs([face], context: context, bodyRef: ref, session) {
+        case let .ok(minted): refs = minted
+        case let .reply(reply): return reply
+        }
+        return record(FeatureNode(
+            name: "Replace Face",
+            kind: .replaceFace(face: refs[0],
+                               targetOrigin: PointWrapper(targetOrigin),
+                               targetNormal: PointWrapper(targetNormal),
+                               flip: flip),
+            outputBodyIDs: [bodyID]), on: viewModel)
+    }
+
+    /// Mint real FaceRefs (signature + name) for kernel face indices — the
+    /// shared back half of shell / deleteFace / replaceFace over exec.
+    private enum MintedRefs {
+        case ok([FaceRef])
+        case reply(AgentResponse)
+    }
+
+    private func mintFaceRefs(_ indices: [Int],
+                              context: (body: Body, brep: BRepHandle),
+                              bodyRef ref: BodyRef,
+                              _ session: DocumentSession) -> MintedRefs {
+        guard let table = session.lastFaceTables[context.body.id] else {
+            return .reply(.failure(409, "Conflict", error: "stale_identity",
+                                   message: "No face table retained for '\(context.body.name)' "
+                                          + "— rebuild first (any exec feature op)."))
         }
         let channel = OCCTKernel.renderMeshFaceChannel(from: context.brep)
         var entryByKernelFace: [Int: FaceTable.Entry] = [:]
@@ -637,24 +721,18 @@ final class AgentBridge {
                 entryByKernelFace[index] = entry
             }
         }
-        let ref = bodyRef(bodyID, session)
         var refs: [FaceRef] = []
-        for index in openFaces {
+        for index in indices {
             guard let entry = entryByKernelFace[index] else {
-                return .failure(404, "Not Found", error: "unknown_face",
-                                message: "No kernel face \(index) on "
-                                       + "'\(context.body.name)'. GET /v1/faces?body=… for the list.")
+                return .reply(.failure(404, "Not Found", error: "unknown_face",
+                                       message: "No kernel face \(index) on "
+                                              + "'\(context.body.name)'. GET /v1/faces?body=… for the list."))
             }
             refs.append(FaceRef(body: ref, creator: ref.producer,
                                 role: entry.role, signature: entry.signature,
                                 elementName: entry.elementName))
         }
-        let node = FeatureNode(
-            name: "Shell",
-            kind: .shell(body: ref, openFaces: refs,
-                         thickness: Expr(value: thickness)),
-            outputBodyIDs: [bodyID])
-        return record(node, on: viewModel)
+        return .ok(refs)
     }
 
     // MARK: - Geometry health (/v1/check — docs/FREECAD_PLAYBOOK.md D1)

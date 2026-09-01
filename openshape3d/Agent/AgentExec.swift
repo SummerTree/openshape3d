@@ -83,6 +83,14 @@ nonisolated enum AgentExecOp: Sendable, Equatable {
     /// different plane than its profile, so plane-local would be ambiguous).
     case sweep(sketch: SketchID, seed: SIMD2<Double>, spine: [SIMD3<Double>],
                boolean: BooleanIntent.Op, targets: [BodyID])
+    /// Faces are 1-based kernel indices from `GET /v1/faces?body=` — OCCT
+    /// heals the surrounding faces over the removed ones (spec §4.16).
+    case deleteFace(body: BodyID, faces: [Int])
+    /// Extend/trim one face until it lies on the given world plane
+    /// (spec §4.12). The target is a PLANE, not a face ref — same v1
+    /// limitation as the interactive tool, for the same reason.
+    case replaceFace(body: BodyID, face: Int, targetOrigin: SIMD3<Double>,
+                     targetNormal: SIMD3<Double>, flip: Bool)
 }
 
 // MARK: - Parsing
@@ -96,7 +104,7 @@ nonisolated enum AgentExec {
         "feature.extrude", "feature.revolve",
         "feature.pattern", "feature.mirror", "feature.boolean",
         "feature.fillet", "feature.chamfer", "feature.shell",
-        "feature.sweep",
+        "feature.sweep", "feature.deleteFace", "feature.replaceFace",
     ]
 
     static let booleanKinds = ["union", "subtract", "intersect"]
@@ -125,6 +133,8 @@ nonisolated enum AgentExec {
         case "feature.chamfer":    return parseBlend(args, isFillet: false)
         case "feature.shell":      return parseShell(args)
         case "feature.sweep":      return parseSweep(args)
+        case "feature.deleteFace": return parseDeleteFace(args)
+        case "feature.replaceFace": return parseReplaceFace(args)
         default:
             return .failure(.init(code: "unknown_op",
                                   message: "No exec op '\(op)'. Known ops: \(opNames.joined(separator: ", "))."))
@@ -333,6 +343,39 @@ nonisolated enum AgentExec {
             let (op, targets) = try booleanIntent(a)
             return .success(.sweep(sketch: sketch, seed: seed, spine: spine,
                                    boolean: op, targets: targets))
+        } catch let e as AgentExecError { return .failure(e) } catch { return .failure(unexpected) }
+    }
+
+    private static func parseDeleteFace(_ a: [String: Any]) -> Result<AgentExecOp, AgentExecError> {
+        do {
+            let body = BodyID(raw: try uuid(a, "bodyID"))
+            let faces = try edgeIndices(a, "faces", allowEmpty: false)
+            return .success(.deleteFace(body: body, faces: faces))
+        } catch let e as AgentExecError { return .failure(e) } catch { return .failure(unexpected) }
+    }
+
+    private static func parseReplaceFace(_ a: [String: Any]) -> Result<AgentExecOp, AgentExecError> {
+        do {
+            let body = BodyID(raw: try uuid(a, "bodyID"))
+            let faces = try edgeIndices(a, "face", allowEmpty: false)
+            guard faces.count == 1 else {
+                return .failure(.init(code: "bad_face",
+                                      message: "args.face must be exactly ONE kernel face index."))
+            }
+            let origin = try vector3(a, "targetOrigin", default: .zero)
+            guard a["targetOrigin"] != nil else {
+                return .failure(.init(code: "missing_targetOrigin",
+                                      message: "args.targetOrigin must be a world [x, y, z] on the target plane."))
+            }
+            let normal = try vector3(a, "targetNormal", default: .zero)
+            guard simd_length(normal) > 1e-9 else {
+                return .failure(.init(code: "missing_targetNormal",
+                                      message: "args.targetNormal must be a non-zero world [x, y, z]."))
+            }
+            return .success(.replaceFace(body: body, face: faces[0],
+                                         targetOrigin: origin,
+                                         targetNormal: simd_normalize(normal),
+                                         flip: a["flip"] as? Bool ?? false))
         } catch let e as AgentExecError { return .failure(e) } catch { return .failure(unexpected) }
     }
 

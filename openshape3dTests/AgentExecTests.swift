@@ -36,6 +36,35 @@ final class AgentExecTests: XCTestCase {
                        "missing_spine", "a one-point spine is no path")
     }
 
+    // MARK: Delete/replace face
+
+    func testDeleteFaceParsesAndRejectsEmpty() throws {
+        let id = UUID().uuidString
+        let parsed = op(#"{"op":"feature.deleteFace","args":{"bodyID":"\#(id)","faces":[3,4]}}"#)
+        guard case let .deleteFace(_, faces)? = parsed else {
+            return XCTFail("expected .deleteFace")
+        }
+        XCTAssertEqual(faces, [3, 4])
+        XCTAssertEqual(code(#"{"op":"feature.deleteFace","args":{"bodyID":"\#(id)","faces":[]}}"#),
+                       "missing_faces")
+    }
+
+    func testReplaceFaceParsesPlaneAndRejectsDegenerateNormal() throws {
+        let id = UUID().uuidString
+        let parsed = op(#"{"op":"feature.replaceFace","args":{"bodyID":"\#(id)","face":[2],"targetOrigin":[0,5,0],"targetNormal":[0,2,0],"flip":true}}"#)
+        guard case let .replaceFace(_, face, origin, normal, flip)? = parsed else {
+            return XCTFail("expected .replaceFace")
+        }
+        XCTAssertEqual(face, 2)
+        XCTAssertEqual(origin, SIMD3(0, 5, 0))
+        XCTAssertEqual(normal, SIMD3(0, 1, 0), "normal comes back normalized")
+        XCTAssertTrue(flip)
+        XCTAssertEqual(code(#"{"op":"feature.replaceFace","args":{"bodyID":"\#(id)","face":[2],"targetOrigin":[0,5,0],"targetNormal":[0,0,0]}}"#),
+                       "missing_targetNormal")
+        XCTAssertEqual(code(#"{"op":"feature.replaceFace","args":{"bodyID":"\#(id)","face":[2,3],"targetOrigin":[0,5,0],"targetNormal":[0,1,0]}}"#),
+                       "bad_face", "exactly one face")
+    }
+
     // MARK: Blends + shell (identity-addressed, step 4b/5 wiring)
 
     func testFilletParsesEdgesAndRadius() throws {
