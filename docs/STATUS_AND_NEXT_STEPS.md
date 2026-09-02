@@ -107,8 +107,11 @@ design), `FREECAD_PLAYBOOK.md` (the FreeCAD-derived hardening ledger),
   finding: `BRepGProp`'s default volume rule is inexact on B-spline
   geometry** (0.4–1.3% depending on parameterisation alone); `OS3DVolume`
   now uses Gauss–Kronrod per knot span and matches to twelve figures —
-  gotcha 20. 1166/1166. Slices 2–3 (blend stress on spline walls, a real
-  splined part) remain.
+  gotcha 20. 1166/1166. **Slice 2 landed too:** blends on the spline wall
+  build or refuse typed across every edge and radius, a rim fillet adds a
+  blend face, a chamfer builds, oversize and out-of-range edge indices
+  refuse typed (`SplineBlendStressTests`). 1170/1170. Slice 3 (a real
+  splined part) remains.
 - Two app deaths mid-exec during this pass did NOT reproduce under
   controlled repeats (fresh doc ×2, then the heavy doc, all monitored):
   no crash report, no jetsam, RSS modest; the simulator-control helper
@@ -152,7 +155,7 @@ transform-as-a-feature). Draft/taper angles for cast parts landed
 the memoised replay landed 2026-09-02. Each remaining mission warrants its
 own design pass, not incremental continuation.
 
-**Current test baseline (2026-09-02): 1166 unit tests in ~20s** (draft/taper incl.
+**Current test baseline (2026-09-02): 1170 unit tests in ~20s** (draft/taper incl.
 arc profiles and non-tangent joints, spline profiles with exact B-spline walls, B-rep volume readback, memoised replay, rebuild planner all added on 2026-09-01/02; the
 previous line follows) — **(2026-09-01): 1115 unit tests in ~17s** (1 skipped:
 the on-demand `OCCTFuzzTests` hostile-input sweep, run with

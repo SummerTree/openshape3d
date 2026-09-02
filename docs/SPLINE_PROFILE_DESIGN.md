@@ -24,8 +24,17 @@ read 0.4–1.3% off depending only on the curve's parameterisation. The
 bridge's `OS3DVolume` now uses `VolumePropertiesGK` with `IsUseSpan`, and
 the B-rep volume matches the closed form to twelve figures. This affects
 every B-spline-walled body (lofts, sweeps, ruled draft walls), not just
-splines. Slices 2–3 (naming is already done by slice 1; stress + a real
-part) remain.
+splines.
+
+**Slice 2 LANDED (2026-09-02):** blends on a B-spline wall
+(`SplineBlendStressTests`) — every edge of the spline extrude × radii
+0.5/2/8/30 either builds a smaller valid solid or refuses with a typed
+error; a feasible rim fillet adds a blend face beside the wall and a
+chamfer builds; the oversize radius refuses (as the live app showed:
+"too large for the local geometry"); an out-of-range edge index — which
+`/v1/exec` will pass through from a script — refuses typed rather than
+indexing off the end. Naming was already done by slice 1. Slice 3 (a real
+catalogue part with a splined outline, volume-checked) remains.
 
 ## Today
 
