@@ -376,101 +376,43 @@ final class DocumentSession {
         isRebuilding = true
         defer { isRebuilding = false }
 
-        // Replay. `nextRevision` advances the REAL document counter so every
-        // emitted revision is globally unique (added bodies keep theirs; replaced
-        // bodies get a fresh one again in ReplaceBodyCommand.apply).
-        // `sketches` override: performWithSketchRebuild evaluates against a
-        // preview that already contains its (not-yet-performed) sketch edit.
-        // Memoised (docs/INCREMENTAL_EVAL_DESIGN.md): nodes whose inputs are
-        // unchanged are spliced from `evalCache` instead of re-run.
-        let result = editedGraph.evaluate(
+        // The pure core (RebuildPlanner, docs/OFF_MAIN_EVAL_DESIGN.md slice 0):
+        // replay against `evalCache` (memoised — unchanged nodes are spliced),
+        // diff against the live bodies, produce the commands. `nextRevision`
+        // advances the REAL document counter so every emitted revision is
+        // globally unique (added bodies keep theirs; replaced bodies get a
+        // fresh one again in ReplaceBodyCommand.apply). `sketches` override:
+        // performWithSketchRebuild evaluates against a preview that already
+        // contains its (not-yet-performed) sketch edit.
+        let plan = RebuildPlanner.plan(
+            editedGraph: editedGraph,
+            previousGraph: document.features,
+            document: document,
             sketches: sketches ?? document.sketches,
             planes: document.planes,
             naming: naming,
+            cache: &evalCache,
             nextRevision: { self.document.nextRevision() },
-            cache: &evalCache
+            leadingCommands: leadingCommands,
+            title: title
         )
-        lastEvalErrors = result.errors
-        lastFaceTables = result.faceTables
-        lastKernelNames = result.kernelNames
+        lastEvalErrors = plan.errors
+        lastFaceTables = plan.faceTables
+        lastKernelNames = plan.kernelNames
 
-        // Every BodyID any node owns — the pre-edit graph too, so a node removed
-        // in `editedGraph` still has its now-orphaned body diffed (and deleted).
-        let ownedIDs = Set(document.features.nodes.flatMap(\.outputBodyIDs))
-            .union(editedGraph.nodes.flatMap(\.outputBodyIDs))
-
-        var resultByID: [BodyID: Body] = [:]
-        for body in result.bodies { resultByID[body.id] = body }
-
-        var currentOwned: [BodyID: Body] = [:]
-        for body in document.bodies where ownedIDs.contains(body.id) {
-            currentOwned[body.id] = body
-        }
-
-        var commands: [DocumentCommand] = leadingCommands
-
-        // Replace bodies that still exist; add ones the graph newly produced.
-        // Preserve user-owned metadata the replay doesn't carry.
-        //
-        // NOTE: the transform is intentionally NOT preserved. `evaluate()` emits
-        // world-space meshes with an identity transform; carrying the live body's
-        // pivot transform (extrude/boolean/push-pull store a localized mesh +
-        // pivot translation) would double-offset the body by its pivot on every
-        // rebuild. So a rebuilt feature body adopts the replay's identity
-        // transform. Tranche-1 limitation: a post-creation gizmo MOVE on a
-        // feature body is reset when you edit that feature's parameters —
-        // transform-as-a-recorded-feature (which preserves moves through the
-        // graph) is tranche 2.
-        for body in result.bodies where ownedIDs.contains(body.id) {
-            if let existing = currentOwned[body.id] {
-                // Unchanged since the last apply: a spliced node's body carries
-                // the document's own revision (adopted below), so there is no
-                // replace — no re-mint, no GPU rebuild, no undo noise. A node
-                // that actually ran minted a fresh revision and still replaces.
-                if existing.meshRevision == body.meshRevision { continue }
-                var after = body
-                after.name = existing.name
-                after.isHidden = existing.isHidden
-                after.material = existing.material
-                commands.append(ReplaceBodyCommand(title: title, before: existing, after: after))
-            } else {
-                commands.append(AddBodyCommand(body: body, title: title))
-            }
-        }
-
-        // Feature-owned bodies the replay no longer produces were consumed
-        // (e.g. a boolean tool) or belonged to a deleted node — remove them.
-        let toDelete = Set(currentOwned.keys.filter { resultByID[$0] == nil })
-        if !toDelete.isEmpty {
-            commands.append(DeleteBodiesCommand(ids: toDelete, document: document))
-        }
-
-        // Step 5b: legacy refs that EARNED names during this replay are
-        // upgraded HERE, inside the same undo step as the rebuild that
-        // justified them — one undo reverts geometry and upgrades together,
-        // and the load/undo error replay (refreshEvalErrors) never sees this
-        // path, so it can never mutate. `before` is the edited graph's kind:
-        // the leading edit command has already applied by the time these run.
-        for (featureID, kind) in result.proposedUpgrades
-            .sorted(by: { $0.key.raw.uuidString < $1.key.raw.uuidString }) {
-            guard let node = editedGraph.node(featureID) else { continue }
-            commands.append(EditFeatureCommand(
-                featureID: featureID, before: node.kind, after: kind))
-        }
-
-        guard !commands.isEmpty else {
-            captureNamingRevisions(for: resultByID.keys)
+        guard !plan.commands.isEmpty else {
+            captureNamingRevisions(for: plan.resultBodyIDs)
             adoptCachedBodies()
             return
         }
-        perform(CompositeCommand(title: title, commands: commands))
+        perform(CompositeCommand(title: title, commands: plan.commands))
         // AFTER the commands: ReplaceBodyCommand.apply re-mints meshRevision,
-        // so revisions captured from `result.bodies` would mark every
+        // so revisions captured from the replay's bodies would mark every
         // replace-path rebuild stale and silently disable name minting (found
         // live: the guard tripped right after a successful exec fillet). The
         // retained tables/names describe these bodies exactly — the replay
         // built them — only the revision stamps had moved.
-        captureNamingRevisions(for: resultByID.keys)
+        captureNamingRevisions(for: plan.resultBodyIDs)
         adoptCachedBodies()
     }
 

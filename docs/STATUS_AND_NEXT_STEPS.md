@@ -69,6 +69,12 @@ design), `FREECAD_PLAYBOOK.md` (the FreeCAD-derived hardening ledger),
   suite (2026-09-02): 105 tests, 2 skipped, 1 failure — and that one was
   `DeleteFaceUITests` pinned to the old faceted 524.62 mm³; with the B-rep-
   exact 524.60 it passes (1a4d332).** No regression from the memo anywhere.
+  Then **off-main eval slice 0** (`OFF_MAIN_EVAL_DESIGN.md`): the rebuild
+  planner — replay, diff, commands — extracted from `performRebuild` as a
+  pure function (`RebuildPlanner.plan`) so the diff semantics are unit-
+  tested as values for the first time (`RebuildPlannerTests`, 7 cases,
+  incl. "unchanged rebuild → no commands"); verbatim, zero behaviour
+  change, 1146/1146. It is the seam the detached evaluate needs.
 - Two app deaths mid-exec during this pass did NOT reproduce under
   controlled repeats (fresh doc ×2, then the heavy doc, all monitored):
   no crash report, no jetsam, RSS modest; the simulator-control helper
@@ -109,8 +115,8 @@ registry) and new kernel capability (spline-as-profile, draft/taper angles
 for cast parts, transform-as-a-feature). Each warrants its own design pass,
 not incremental continuation.
 
-**Current test baseline (2026-09-02): 1139 unit tests in ~17s** (draft/taper,
-B-rep volume readback, memoised replay all added on 2026-09-01/02; the
+**Current test baseline (2026-09-02): 1146 unit tests in ~17s** (draft/taper,
+B-rep volume readback, memoised replay, rebuild planner all added on 2026-09-01/02; the
 previous line follows) — **(2026-09-01): 1115 unit tests in ~17s** (1 skipped:
 the on-demand `OCCTFuzzTests` hostile-input sweep, run with
 `TEST_RUNNER_OS3D_FUZZ=1`). Earlier this session: 1086 → the naming

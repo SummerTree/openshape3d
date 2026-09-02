@@ -1,8 +1,13 @@
 # Off-main evaluation (S1) — design note
 
-Status: **DESIGN ONLY (2026-09-02).** Written while the memoised-replay
-mission's UI-suite gate ran. Nothing here is implemented; this scopes the
-work so it can be sliced honestly.
+Status: **DESIGN + SLICE 0 LANDED (2026-09-02).** Slice 0 = the rebuild
+planner extracted from `performRebuild` as a pure function
+(`RebuildPlanner.plan`, `openshape3d/Model/RebuildPlanner.swift`) with
+`RebuildPlannerTests` pinning the diff semantics as values: fresh-document
+adds, unchanged rebuild → no commands, edit → one replace, removed node →
+delete, consumed tool never reaches the document, metadata preserved,
+leading commands first. Verbatim extraction, zero behaviour change; suite
+1146/1146. Slices 1–3 below are not started.
 
 ## Why now
 
