@@ -210,7 +210,20 @@ design), `FREECAD_PLAYBOOK.md` (the FreeCAD-derived hardening ledger),
   and each hole as its own tube, subtracts with ancestry and composes the
   names through every cut (the drafted bore's pattern), so a holed sweep's
   bore walls are named by the hole entity instead of coming out nameless
-  from the bridge's in-sweep cut. 1197/1197. Landed on the way:
+  from the bridge's in-sweep cut. 1197/1197. **Then spline slice 3 and two
+  hangs (`9ae2573`, `070b29f`):** the catalogue lever picked for a splined
+  outline (Fixtureworks WL100) proved to be lines and arcs, so the real
+  spline part is a plate cam with a cycloidal law — one closed 72-point
+  spline plus a Ø10 bore, 8 thick (`rebuild_cycloidal_cam.py`). It hung the
+  app twice for minutes, both times in Euclid CSG, never the kernel
+  (gotcha 24): the sketch fill's `Mesh.fill([paths])` union on the
+  MainActor, and the extrude's render prism subtracting the bore by BSP
+  before OCCT was asked. Fixed with `PolygonTriangulator` (hole bridging +
+  ear clipping, 5 ms on the 1,152-sample outline) and kernel-first extrudes
+  (Euclid only as the fallback; the boolean-into-target tool built lazily).
+  Live: 2 s, B-rep 17,083.915 mm³ = the interpolating spline's Gauss-exact
+  area × 8 less the bore to 1.8e-8, −0.0003 % against the true cam (the 5°
+  sampling), 4 faces, 0 invalid. 1203/1203. Landed on the way:
   `/v1/state` bodies now carry `bounds` (mesh min/max, mm); `feature.mirror`
   `keepOriginal:false` now CONSUMES the source (it was a documented no-op —
   `testMirrorWithoutKeepOriginalConsumesTheSource`); a draft extrude refuses
@@ -265,7 +278,7 @@ transform-as-a-feature). Draft/taper angles for cast parts landed
 the memoised replay landed 2026-09-02. Each remaining mission warrants its
 own design pass, not incremental continuation.
 
-**Current test baseline (2026-09-02, evening): 1197 unit tests in ~21s** — the
+**Current test baseline (2026-09-02, evening): 1203 unit tests in ~21s** — the
 day added the exact helix spine, the BEG 55 lineup's bounds/mirror fixes,
 transform-as-a-feature, consumed-edge drafts on both offset paths, plane
 sections (`SectionKit`, `KernelSectionTests`), and the exact face areas.
@@ -1006,6 +1019,25 @@ first differing frame is the one you want.
     signatures. `testClosedSplineExtrudesToOneSmoothWall` pins wall and caps
     to 1e-6. A trap inside the trap: a `tail -3` on the test output hid the
     wall's failure line behind the two caps' for one round.
+
+24. **Euclid CSG on a dense outline is not slow, it is UNBOUNDED — and two
+    of them were on the main path (2026-09-02).** A 72-point closed spline
+    with a Ø10 bore (a cycloidal cam) wedged the app for minutes twice, with
+    `/v1/health` alive and `/v1/state` dead: (a) the sketch FILL overlay,
+    `SketchTessellator.fillTriangles` → `Euclid.Mesh.fill([paths])`, a BSP
+    union of the filled loops (a subpath fill is a symmetric difference,
+    same thing) inside `EditorViewModel.scene` on the MainActor; (b) the
+    extrude's render mesh, `KernelOps.extrude` subtracting the bore by BSP
+    before OCCT was even asked, then thrown away by `adoptBRep`. The spline's
+    1,152 samples make the coplanar detessellation quadratic-plus. Fixes: a
+    real 2D triangulation for the fill (`PolygonTriangulator`, hole bridging
+    + ear clipping, 5 ms) and kernel-first extrudes with the Euclid prism only
+    as the fallback (the boolean-into-target tool is built lazily). The
+    signal to remember: `sample <pid> 3` on the simulator app shows the hot
+    frames — both times it was `Euclid … BSP.clip / coplanarDetessellate`,
+    never the kernel. `SweepLoftKit.sweep(profile:holes:)` and the loft still
+    build their render meshes in Euclid: the same hazard for holed spline
+    sweeps, unfixed.
 
 ---
 

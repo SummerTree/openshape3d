@@ -33,8 +33,20 @@ error; a feasible rim fillet adds a blend face beside the wall and a
 chamfer builds; the oversize radius refuses (as the live app showed:
 "too large for the local geometry"); an out-of-range edge index — which
 `/v1/exec` will pass through from a script — refuses typed rather than
-indexing off the end. Naming was already done by slice 1. Slice 3 (a real
-catalogue part with a splined outline, volume-checked) remains.
+indexing off the end. Naming was already done by slice 1. **Slice 3 landed
+2026-09-02 (`070b29f`)** — with a twist: the catalogue lever picked for it
+(Fixtureworks WL100, its phenolic grip) turned out to be lines and arcs
+(a cone, a Ø21 cylinder, chamfered ends — the vertex stations of its
+tessellation say so), so the real spline part is a plate cam with a
+cycloidal rise/dwell/return law, an outline that is a computed curve by
+definition: one closed 72-point spline plus a Ø10 bore, 8 thick
+(`scripts/rebuild_cycloidal_cam.py`, `testACycloidalCamWithABoreExtrudesExactlyAndFast`).
+Two checks: the B-rep volume equals the INTERPOLATING spline's Gauss-exact
+area × 8 less the bore to 1e-6 (the kernel built the curve it was given),
+and that spline's area is within 0.0003 % of the true cam's (½∮r²dφ) — the
+5° sampling error, reported. What it actually found: the part hung the app
+twice, in Euclid CSG on the sketch fill and on the extrude's render mesh
+(gotcha 24), both fixed on the way.
 
 ## Today
 
