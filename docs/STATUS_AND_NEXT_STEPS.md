@@ -75,6 +75,14 @@ design), `FREECAD_PLAYBOOK.md` (the FreeCAD-derived hardening ledger),
   tested as values for the first time (`RebuildPlannerTests`, 7 cases,
   incl. "unchanged rebuild → no commands"); verbatim, zero behaviour
   change, 1146/1146. It is the seam the detached evaluate needs.
+  Then **draft/taper slice 3, arcs** (`DRAFT_TAPER_DESIGN.md`): rounded
+  profiles — slots, rounded rectangles — now draft EXACTLY via
+  `SegmentOffset` (lines shift, arcs stay concentric, tangent joints
+  sealed, line–line corners mitred; both loft sections on the segments
+  channel so arc walls are true cones). Closed-form acceptance: the
+  drafted slot matches Steiner's A₀h − P₀·tanθ·h²/2 + π·tan²θ·h³/3 from
+  the B-rep to 1e-4. Non-tangent arc joints fall back to the polygon path
+  by design. 1154/1154.
 - Two app deaths mid-exec during this pass did NOT reproduce under
   controlled repeats (fresh doc ×2, then the heavy doc, all monitored):
   no crash report, no jetsam, RSS modest; the simulator-control helper
@@ -115,8 +123,8 @@ registry) and new kernel capability (spline-as-profile, draft/taper angles
 for cast parts, transform-as-a-feature). Each warrants its own design pass,
 not incremental continuation.
 
-**Current test baseline (2026-09-02): 1146 unit tests in ~17s** (draft/taper,
-B-rep volume readback, memoised replay, rebuild planner all added on 2026-09-01/02; the
+**Current test baseline (2026-09-02): 1154 unit tests in ~17s** (draft/taper incl.
+arc profiles, B-rep volume readback, memoised replay, rebuild planner all added on 2026-09-01/02; the
 previous line follows) — **(2026-09-01): 1115 unit tests in ~17s** (1 skipped:
 the on-demand `OCCTFuzzTests` hostile-input sweep, run with
 `TEST_RUNNER_OS3D_FUZZ=1`). Earlier this session: 1086 → the naming

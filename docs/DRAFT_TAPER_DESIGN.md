@@ -10,10 +10,21 @@ profile (or bore) drafts to an EXACT cone frustum — a single conical wall,
 not a 48-facet shell — because a circle's offset is a concentric circle
 (radius ± offset), which lofts conic→conic and sidesteps OCC's single-edge
 2D-offset gotcha. All end to end, valid B-rep, 0 invalid.
-STILL OPEN (slice 3, remainder): ARC / mixed-conic boundaries (the mitred
-polygon offset does not preserve arcs — those still tessellate) and
-composed hole-WALL naming (the subtraction relabels the holed result by
-geometry).
+**Slice 3 arcs LANDED (2026-09-02):** a boundary made of lines and ARCS
+(rounded rectangle, slot, obround) drafts exactly too — `SegmentOffset`
+offsets the exact segments (lines shift along their normal, arcs stay
+concentric at r ± d, tangent joints stay sealed, line–line corners mitre)
+and both loft sections ride the segments channel, so a drafted arc wall is
+a true cone. Acceptance is closed-form: for a fully rounded convex section
+the inward offset obeys Steiner, A(δ) = A₀ + P₀δ + πδ², so the drafted
+volume is A₀h − P₀·tanθ·h²/2 + π·tan²θ·h³/3 — the drafted slot matches it
+from the B-rep to 1e-4 (`testADraftedSlotIsExactWithConicalEnds`).
+A joint that is neither tangent nor line–line (an arc meeting a line at an
+angle) is refused by `SegmentOffset` (nil) and falls back to the polygon
+path — still valid geometry, just tessellated there.
+STILL OPEN: that non-tangent arc-joint case as an exact offset (it needs
+line–arc / arc–arc intersection trimming), and composed hole-WALL naming
+(the subtraction relabels the holed result by geometry).
 
 ## Why
 

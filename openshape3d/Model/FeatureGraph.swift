@@ -1982,6 +1982,21 @@ nonisolated extension FeatureGraph {
                 guard newRadius > 1e-6 else { return nil }
                 return (p, circleProfile(center: center, radius: newRadius, from: p))
             }
+            // A boundary WITH arcs (rounded rectangle, slot): offset the exact
+            // segments — lines shift, arcs stay concentric — and loft both
+            // sections on the segments channel, so a drafted arc wall is a true
+            // cone. Both sections are tessellated by the same sampler so the
+            // render loft pairs points 1:1. A joint that is not exactly
+            // offsettable (nil) falls through to the polygon path below.
+            if p.segments.contains(where: { $0.mid != nil }),
+               let off = SegmentOffset.offset(p.segments, by: dist) {
+                func exact(_ segs: [Profile.Segment]) -> Profile {
+                    Profile(loop: SegmentOffset.loop(from: segs), kind: .polygonal,
+                            sourceEntityIDs: p.sourceEntityIDs, segments: segs,
+                            segmentEntityIDs: p.segmentEntityIDs)
+                }
+                return (exact(p.segments), exact(off))
+            }
             guard let off = ProfileOffset.offsetLoop(p.loop, by: dist) else { return nil }
             return (polyProfile(p.loop, from: p), polyProfile(off, from: p))
         }

@@ -118,6 +118,55 @@ final class DraftExtrudeEvalTests: XCTestCase {
                        "cone frustum \(want) vs \(vol)")
     }
 
+    /// Slice 3 remainder: a SLOT (two lines, two semicircles) drafts exactly —
+    /// the arc walls are true cones, not facet ribbons, and the volume is the
+    /// closed form for a linearly offset rounded profile. For a fully rounded
+    /// convex section an inward offset obeys Steiner, A(δ) = A₀ + P₀δ + πδ²,
+    /// so with δ(z) = −tanθ·z the drafted volume is
+    /// A₀h − P₀·tanθ·h²/2 + π·tan²θ·h³/3. Read from the B-rep, so this is a
+    /// tight check, not a tessellation-tolerant one.
+    func testADraftedSlotIsExactWithConicalEnds() throws {
+        let feature = FeatureID(), bodyID = BodyID(), sketchID = SketchID()
+        let top = UUID(), right = UUID(), bottom = UUID(), left = UUID()
+        let r = 10.0, half = 15.0
+        let sketch = Sketch(id: sketchID, name: "Slot", plane: .ground, entities: [
+            .line(id: top, a: SIMD2(-half, r), b: SIMD2(half, r)),
+            .arc(id: right, center: SIMD2(half, 0), radius: r,
+                 startAngle: -Double.pi / 2, endAngle: Double.pi / 2),      // CCW through (25, 0)
+            .line(id: bottom, a: SIMD2(half, -r), b: SIMD2(-half, -r)),
+            .arc(id: left, center: SIMD2(-half, 0), radius: r,
+                 startAngle: Double.pi / 2, endAngle: 3 * Double.pi / 2)])   // CCW through (−25, 0)
+        let node = FeatureNode(
+            id: feature, name: "Draft",
+            kind: .draftExtrude(
+                profile: ProfileRef(sketchID: sketchID, entityIDs: [top, right, bottom, left],
+                                    holeEntityIDs: [], seedPoint: .zero),
+                plane: PlaneRef(source: .sketch(sketchID)),
+                distance: Expr(value: 20), taperAngle: Expr(value: 10),
+                symmetric: false,
+                boolean: BooleanIntent(op: .newBody, resolvedTargets: [])),
+            outputBodyIDs: [bodyID])
+        let result = evaluate([node], [sketch])
+        XCTAssertTrue(result.errors.isEmpty, "\(result.errors)")
+        let body = try XCTUnwrap(result.bodies.first { $0.id == bodyID })
+        let brep = try XCTUnwrap(body.brep)
+
+        // A handful of exact faces: 2 caps + 2 flat walls + 2 conical ends,
+        // never the ~50 of a tessellated arc.
+        let counts = OCCTKernel.faceTypeCounts(brep)
+        let total = counts.planar + counts.cylindrical + counts.other
+        XCTAssertLessThan(total, 10, "exact faces only: \(counts)")
+        XCTAssertGreaterThanOrEqual(counts.other, 2, "the two drafted arc walls are conical")
+
+        let h = 20.0, t = tan(10 * Double.pi / 180)
+        let a0 = 2 * r * (2 * half) + Double.pi * r * r          // 914.16
+        let p0 = 2 * (2 * half) + 2 * Double.pi * r               // 122.83
+        let want = a0 * h - p0 * t * h * h / 2 + Double.pi * t * t * h * h * h / 3
+        let vol = MeasureKit.volume(of: body)
+        XCTAssertEqual(vol, want, accuracy: want * 1e-4,
+                       "drafted slot \(vol) vs Steiner closed form \(want)")
+    }
+
     /// A negative angle EXPANDS the section — the reverse taper. Volume is the
     /// larger frustum.
     func testANegativeAngleExpandsTheSection() throws {
