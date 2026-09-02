@@ -180,7 +180,14 @@ design), `FREECAD_PLAYBOOK.md` (the FreeCAD-derived hardening ledger),
   limitation" note) — so the node fixes a real bug. Bodies with no producing
   feature (imports) and the Scale tool keep `TransformBodiesCommand`.
   `testTransformDeltaComposesBackToAfterAndDrivesANode`;
-  `GizmoFlowUITests.testGizmoDragCreatesUndoableMove` still passes. 1209/1209. **Then the draft's consumed edges (`6ae1699`):**
+  `GizmoFlowUITests.testGizmoDragCreatesUndoableMove` still passes. 1209/1209.
+  **Scale followed:** the node's composition is a similarity now (rotation
+  R_δ·R_b, scale s_δ·s_b, translation R_δ·(s_δ·t_b)+t_δ); the B-rep placement
+  already carried scale (the full matrix into `gp_Trsf::SetValues`) and the
+  volume is cubic, so nothing else moved. `feature.transform` takes `scale`
+  (about `rotationCenter`, `bad_scale` ≤ 0) and the Scale tool commits nodes
+  like the others — its "scale about the body's pivot" is exactly
+  delta = (I, f, t − f·t). `testTransformNodeScalesTheBody` (×2 → 8× volume). **Then the draft's consumed edges (`6ae1699`):**
   `ProfileOffset.offsetLoop` refused any outline whose short edges an inward
   offset consumed (every 2 mm corner cut under a 14 mm draft — measured
   outlines are full of them). Each run of consumed edges now collapses onto
@@ -295,15 +302,15 @@ plane sections, exact face areas, holed-sweep naming, CSG-free render meshes):
   true async contract; attended work, its own design pass.
 - **`feature.loft` crash** on two similar octagons on parallel planes — a
   Swift `assert` inside Euclid (Debug only); in a separate session.
-- **Scale as a node**: `.transform` refuses scale (the graph's composition
-  and `OCCTKernel.transformed` ignore it), so the Scale tool still writes
-  `body.transform` directly and a scaled body's move is still lost on the
-  next rebuild. Needs scale in the composition AND in the B-rep placement.
+- ~~Scale as a node~~ — landed 2026-09-02 (below): the composition carries a
+  uniform scale (`Transform3D.composed(onto:)`, `delta(from:to:)`), the
+  B-rep placement already did (`gp_Trsf::SetValues` admits it), the volume
+  is cubic; `feature.transform` takes `scale`, the Scale tool records nodes.
 - **Consumed ARCS in `SegmentOffset`** (an arc whose offset radius
   vanishes) still return nil; lines are handled. Rare in practice.
 - **Scene caching / `ToolLifecycle` registry** (§4.5) — untouched.
 
-**Current test baseline (2026-09-02, evening): 1209 unit tests in ~21s** — the
+**Current test baseline (2026-09-02, evening): 1211 unit tests in ~21s** — the
 day added the exact helix spine, the BEG 55 lineup's bounds/mirror fixes,
 transform-as-a-feature, consumed-edge drafts on both offset paths, plane
 sections (`SectionKit`, `KernelSectionTests`), and the exact face areas.

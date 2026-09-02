@@ -1919,8 +1919,8 @@ final class EditorViewModel {
     /// rebuilt in ONE undo step, so the move survives every later rebuild —
     /// the graph owns the placement now; `RebuildPlanner` deliberately resets
     /// document-level transforms (they used to vanish on the next parameter
-    /// edit). A body with no producing feature (an import) and any change of
-    /// scale keep the direct `TransformBodiesCommand`. The live preview
+    /// edit). A body with no producing feature (an import) keeps the direct
+    /// `TransformBodiesCommand`; scale rides in the node too. The live preview
     /// mutated `transform` outside the undo stack; for the node path it is put
     /// back first, so the rebuild's snapshot of "before" is the true before
     /// and undo lands the body where it started.
@@ -1933,7 +1933,7 @@ final class EditorViewModel {
         for (id, new) in after {
             guard let old = before[id], old != new else { continue }
             let producer = session.document.features.nodes.last { $0.outputBodyIDs.contains(id) }
-            if let producer, abs(new.scale - old.scale) < 1e-12 {
+            if let producer, new.scale > 1e-12, old.scale > 1e-12 {
                 session.preview { document in
                     if let index = document.bodyIndex(of: id) {
                         document.bodies[index].transform = old
@@ -2262,7 +2262,7 @@ final class EditorViewModel {
             after[id] = transform
         }
         guard !after.isEmpty else { return }
-        session.perform(TransformBodiesCommand(title: "Scale", before: before, after: after))
+        commitTransforms(title: "Scale", before: before, after: after)
         session.save()
     }
 

@@ -32,23 +32,26 @@ nonisolated struct Transform3D: Equatable, Sendable {
 
     static let identity = Transform3D()
 
-    /// The rigid delta that carries placement `before` onto `after` under the
-    /// graph's composition (`delta ∘ before`: rotation = δ.r·b.r, translation
-    /// = δ.r·b.t + δ.t) — what a `.transform` feature node records for a gizmo
-    /// move. Scale is not part of it: a scaled move keeps the direct command.
+    /// The similarity delta that carries placement `before` onto `after`
+    /// under the graph's composition (`delta ∘ before`: rotation = δ.r·b.r,
+    /// scale = δ.s·b.s, translation = δ.r·(δ.s·b.t) + δ.t) — what a
+    /// `.transform` feature node records for a gizmo move, rotate or scale.
     static func delta(from before: Transform3D, to after: Transform3D) -> Transform3D {
         var delta = Transform3D()
         delta.rotation = simd_normalize(after.rotation * before.rotation.inverse)
-        delta.translation = after.translation - delta.rotation.act(before.translation)
+        delta.scale = after.scale / max(before.scale, 1e-12)
+        delta.translation = after.translation - delta.rotation.act(before.translation * delta.scale)
         return delta
     }
 
-    /// `delta ∘ base`, the graph's composition (pattern instances and
-    /// transform nodes place bodies this way).
+    /// `delta ∘ base`, the graph's composition for a transform node: apply
+    /// the base placement, then scale about the origin, rotate, translate.
+    /// (Pattern instances compose the same way with unit scale.)
     func composed(onto base: Transform3D) -> Transform3D {
         var result = base
         result.rotation = simd_normalize(rotation * base.rotation)
-        result.translation = rotation.act(base.translation) + translation
+        result.scale = base.scale * scale
+        result.translation = rotation.act(base.translation * scale) + translation
         return result
     }
 

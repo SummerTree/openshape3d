@@ -287,7 +287,7 @@ graph, and shows up in History like any other feature.
 | `feature.scaleFace` | `bodyID`, `face`, `factor` (>0; scales the face about its centre, tapering the solid) |
 | `feature.rotateFace` | `bodyID`, `face`, `angleDegrees` (±360); optional `axis` `[u, v, n]` in the face's basis (default the normal, which twists in place) |
 | `feature.mirror` | `bodyID`, `planeOrigin`, `planeNormal`; optional `keepOriginal` (default true — a mirrored COPY beside the source; `false` moves it: the source body is consumed, one body remains) |
-| `feature.transform` | `bodyID`; `translation` `[x,y,z]` and/or `rotationDegrees` with optional `rotationAxis` (default +Z) and `rotationCenter` (default origin). Moves the body IN PLACE — same id, analytic solid and element names kept; a parametric node like any other. Identity is refused (`identity_transform`). |
+| `feature.transform` | `bodyID`; `translation` `[x,y,z]`, `rotationDegrees` (optional `rotationAxis`, default +Z) and/or `scale` (a positive uniform factor), the rotation and scale about `rotationCenter` (default origin). Moves the body IN PLACE — same id, analytic solid and element names kept; a parametric node like any other, the same node the Move/Rotate/Scale tools record. Identity is refused (`identity_transform`), `scale ≤ 0` is `bad_scale`. |
 | `feature.boolean` | `kind` (union/subtract/intersect), `targetBodyID`, `toolBodyIDs[]` |
 
 Entity kinds: `line` (`a`,`b`), `circle` (`center`,`radius`), `arc`

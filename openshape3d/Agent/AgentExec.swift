@@ -325,22 +325,26 @@ nonisolated enum AgentExec {
             let body = BodyID(raw: try uuid(a, "bodyID"))
             let t = try vector3(a, "translation", default: .zero)
             let degrees = try optionalDouble(a, "rotationDegrees") ?? 0
+            let scale = try optionalDouble(a, "scale") ?? 1
+            guard scale > 1e-12 else {
+                return .failure(.init(code: "bad_scale", message: "\"scale\" must be a positive factor."))
+            }
+            // Rotation and scale about `rotationCenter` c fold into the delta as
+            // T(c)·R·S·T(−c), then the translation is added: c − R(s·c) + t.
             var delta = Transform3D()
+            delta.scale = scale
+            let centre = try vector3(a, "rotationCenter", default: .zero)
             if abs(degrees) > 1e-12 {
                 let axis = try vector3(a, "rotationAxis", default: SIMD3(0, 0, 1))
                 guard simd_length(axis) > 1e-9 else {
                     return .failure(.init(code: "degenerate_axis", message: "\"rotationAxis\" must be non-zero."))
                 }
-                let centre = try vector3(a, "rotationCenter", default: .zero)
-                let r = simd_quatd(angle: degrees * .pi / 180, axis: simd_normalize(axis))
-                delta.rotation = r
-                delta.translation = centre - r.act(centre) + t
-            } else {
-                delta.translation = t
+                delta.rotation = simd_quatd(angle: degrees * .pi / 180, axis: simd_normalize(axis))
             }
-            guard simd_length(t) > 1e-12 || abs(degrees) > 1e-12 else {
+            delta.translation = centre - delta.rotation.act(centre * scale) + t
+            guard simd_length(t) > 1e-12 || abs(degrees) > 1e-12 || abs(scale - 1) > 1e-12 else {
                 return .failure(.init(code: "identity_transform",
-                                      message: "Give a non-zero \"translation\" and/or \"rotationDegrees\" — an identity move does nothing."))
+                                      message: "Give a non-zero \"translation\", \"rotationDegrees\" and/or a \"scale\" ≠ 1 — an identity move does nothing."))
             }
             return .success(.transform(body: body, delta: delta))
         } catch let e as AgentExecError { return .failure(e) } catch { return .failure(unexpected) }

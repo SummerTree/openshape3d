@@ -592,12 +592,13 @@ nonisolated extension FeatureGraph {
 
     // MARK: Transform
 
-    /// Moves a body IN PLACE: the delta is composed onto its placement, the
-    /// geometry stays body-local (no kernel call — the analytic solid and its
-    /// element names survive, exactly as a pattern instance's do) and the body
-    /// keeps its id, so everything downstream that referenced it still
-    /// resolves. The rotation is about the world origin; "about a point" is
-    /// folded into the delta by the caller (T·R·T⁻¹, see `parseTransform`).
+    /// Moves a body IN PLACE: the delta (rotation, uniform scale, translation)
+    /// is composed onto its placement, the geometry stays body-local (no
+    /// kernel call — the analytic solid and its element names survive,
+    /// exactly as a pattern instance's do) and the body keeps its id, so
+    /// everything downstream that referenced it still resolves. Rotation and
+    /// scale are about the world origin; "about a point" is folded into the
+    /// delta by the caller (T·R·T⁻¹, see `parseTransform`).
     private func evalTransform(
         _ node: FeatureNode,
         bodyRef: BodyRef,
@@ -609,12 +610,15 @@ nonisolated extension FeatureGraph {
             state.errors[node.id] = .brokenRef("transform body unresolved")
             return
         }
-        guard delta.scale == 1 else {
-            state.errors[node.id] = .kernelFailure("transform: scaling a body is not supported (scale \(delta.scale))")
+        guard delta.scale > 1e-12 else {
+            state.errors[node.id] = .kernelFailure("transform: scale must be positive (\(delta.scale))")
             return
         }
         var body = input
-        body.transform = Self.composePatternTransform(delta, base: input.transform)
+        // Scale rides in the placement too: the renderer's matrix, the B-rep
+        // placement (`OCCTKernel.transformed`, a uniform-scale gp_Trsf) and
+        // the volume (cubic) all honour `transform.scale` already.
+        body.transform = delta.composed(onto: input.transform)
         // A new revision even though the local mesh is unchanged: the session
         // skips replacing a body whose revision did not move, and this one did.
         body.meshRevision = nextRevision()

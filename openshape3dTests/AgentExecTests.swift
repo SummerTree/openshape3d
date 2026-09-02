@@ -512,6 +512,20 @@ final class AgentExecTests: XCTestCase {
         XCTAssertEqual(delta.scale, 1)
     }
 
+    /// A scale about a centre folds in like a rotation: ×2 about (10, 0, 0)
+    /// leaves that point fixed — translation = c − 2c = (−10, 0, 0).
+    func testTransformScaleAboutACentreKeepsThatPointFixed() throws {
+        guard case let .transform(_, delta)? = op("""
+        {"op":"feature.transform","args":{"bodyID":"\(bodyUUID)","scale":2,"rotationCenter":[10,0,0]}}
+        """) else { return XCTFail("expected .transform") }
+        XCTAssertEqual(delta.scale, 2)
+        XCTAssertEqual(delta.translation.x, -10, accuracy: 1e-9)
+        XCTAssertEqual(simd_distance(delta.applying(to: SIMD3(10, 0, 0)), SIMD3(10, 0, 0)), 0, accuracy: 1e-9)
+        XCTAssertEqual(code("""
+        {"op":"feature.transform","args":{"bodyID":"\(bodyUUID)","scale":0}}
+        """), "bad_scale")
+    }
+
     func testIdentityTransformIsRefusedAndAZeroAxisToo() {
         XCTAssertEqual(code("""
         {"op":"feature.transform","args":{"bodyID":"\(bodyUUID)"}}

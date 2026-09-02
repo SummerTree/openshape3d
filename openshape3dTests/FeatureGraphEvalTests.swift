@@ -746,6 +746,43 @@ final class FeatureGraphEvalTests: XCTestCase {
         XCTAssertEqual(simd_distance(worldCentroid(moved), expected), 0, accuracy: 1e-9)
     }
 
+    /// Scale rides in the node: a ×2 delta (about the origin) octuples the
+    /// box's volume and doubles its centroid's distance from the origin, and
+    /// the delta helper round-trips a scaled placement.
+    func testTransformNodeScalesTheBody() throws {
+        var before = Transform3D()
+        before.translation = SIMD3(1, 2, 3)
+        before.scale = 0.5
+        var after = Transform3D()
+        after.rotation = simd_quatd(angle: 0.4, axis: SIMD3(0, 0, 1))
+        after.translation = SIMD3(-4, 6, 1)
+        after.scale = 3
+        let delta = Transform3D.delta(from: before, to: after)
+        let back = delta.composed(onto: before)
+        XCTAssertEqual(back.scale, 3, accuracy: 1e-12)
+        XCTAssertEqual(simd_distance(back.translation, after.translation), 0, accuracy: 1e-9)
+
+        let boxFeature = FeatureID(), scaleFeature = FeatureID(), boxID = BodyID()
+        var twice = Transform3D()
+        twice.scale = 2
+        let graph = FeatureGraph(nodes: [
+            FeatureNode(id: boxFeature, name: "Box",
+                kind: .primitive(spec: .box(width: 4, depth: 4, height: 4),
+                                 placement: Transform3D(translation: SIMD3(20, 0, 0))),
+                outputBodyIDs: [boxID]),
+            FeatureNode(id: scaleFeature, name: "Scale",
+                kind: .transform(body: BodyRef(producer: boxFeature, bodyID: boxID), delta: twice),
+                outputBodyIDs: [BodyID()]),
+        ])
+        let result = graph.evaluate(sketches: [], planes: [],
+                                    naming: SignatureNaming(), nextRevision: RevisionSource().next)
+        XCTAssertNil(result.errors[scaleFeature], "\(result.errors)")
+        let scaled = try XCTUnwrap(result.bodies.first { $0.id == boxID })
+        XCTAssertEqual(scaled.transform.scale, 2, accuracy: 1e-12)
+        XCTAssertEqual(MeasureKit.volume(of: scaled), 64 * 8, accuracy: 1e-6, "volume scales cubically")
+        XCTAssertEqual(worldCentroid(scaled).x, 40, accuracy: 1e-9, "scaled about the origin")
+    }
+
     /// …and a rotation about the world origin swings the placement with it:
     /// a box at x = 20 turned 90° about z sits at y = 20.
     func testTransformRotatesThePlacementAboutTheOrigin() throws {
