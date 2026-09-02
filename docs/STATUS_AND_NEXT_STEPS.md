@@ -167,8 +167,17 @@ design), `FREECAD_PLAYBOOK.md` (the FreeCAD-derived hardening ledger),
   and `feature.transform {bodyID, translation, rotationDegrees, rotationAxis,
   rotationCenter}` exposes it (rotation about a centre folded in as
   T·R·T⁻¹; identity refused). The interactive Move tool still writes
-  `body.transform` directly — moving it onto the node is the remaining half
-  of the mission. 1183/1183. **Then the draft's consumed edges (`6ae1699`):**
+  `body.transform` directly (`TransformBodiesCommand`, `Commands.swift`) —
+  moving it onto the node is the remaining half of the mission, and it is
+  an undo/persistence change, so: plan, not incremental. The plan: keep the
+  gizmo's live preview mutating `body.transform` outside the stack as today;
+  at commit, for every moved body that HAS a producing feature, append one
+  `.transform` node (delta = after ∘ before⁻¹) instead of writing the
+  transform, undo = remove the nodes (the graph replays the old placement);
+  bodies with no producer (STEP imports, mesh-only) keep the direct command.
+  Then `ReplaceBodyCommand`/`adoptCachedBodies` must stop preserving a
+  document-level transform for graph bodies, or a moved body would be moved
+  twice — that interaction is the part to design first. 1183/1183. **Then the draft's consumed edges (`6ae1699`):**
   `ProfileOffset.offsetLoop` refused any outline whose short edges an inward
   offset consumed (every 2 mm corner cut under a 14 mm draft — measured
   outlines are full of them). Each run of consumed edges now collapses onto
@@ -181,7 +190,18 @@ design), `FREECAD_PLAYBOOK.md` (the FreeCAD-derived hardening ledger),
   onto the meeting point of the neighbouring carriers with both joints ON
   those carriers, so a rounded-and-chamfered outline keeps its exact conical
   arc walls when the draft eats the chamfers (8 mm inward still refuses).
-  1188/1188. Landed on the way:
+  1188/1188. **Then plane sections (`588b77e`):** `OCCTKernel.sectionPolylines`
+  (bridge: `BRepAlgoAPI_Section` with approximation, each section edge as a
+  polyline in its own direction — a line as two ends, a curve sampled at a
+  chord deflection) + `SectionKit` (pure: chain the pieces into loops in the
+  plane frame, merge collinear runs, sign the shoelace areas, largest first)
+  + `GET /v1/section?body=&normal=&origin=&xAxis=&deflection=` on the body's
+  PLACED solid. The drawing view — a rebuild can now be checked
+  section-for-section against a reference cut (the BEG 55 comparison had to
+  section the reference by hand and the rebuild by envelope). Pinned on a
+  box across/oblique/clear, a 96-gon prism, and a true cylinder (the exact
+  uniform N-gon at a 0.002 mm chord; along the axis a 10×8 rectangle).
+  1196/1196. Landed on the way:
   `/v1/state` bodies now carry `bounds` (mesh min/max, mm); `feature.mirror`
   `keepOriginal:false` now CONSUMES the source (it was a documented no-op —
   `testMirrorWithoutKeepOriginalConsumesTheSource`); a draft extrude refuses
