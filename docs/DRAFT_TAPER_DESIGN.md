@@ -1,14 +1,19 @@
 # Draft / taper angle on extrude — design (to land as its own mission)
 
-Status: **SLICES 1 + 2 LANDED (2026-09-01)** — through `feature.extrude`
-with `taperDegrees` (and `symmetric`). A 40×40 square drafted 10° over
-20 mm is exactly 26,689 mm³ (the analytic frustum); a holed profile drafts
-the hole the OPPOSITE way (a bore widens for core release) and subtracts
-it; symmetric draft tapers BOTH ways from the sketch plane (a three-section
-loft — two frustums back to back). All end to end, valid B-rep, 0 invalid.
-STILL OPEN (slice 3): curved-boundary profiles (single-edge-wire care) and
-composed hole-WALL naming (the subtraction currently relabels the holed
-result by geometry).
+Status: **SLICES 1 + 2 + 3 (circles) LANDED (2026-09-01)** — through
+`feature.extrude` with `taperDegrees` (and `symmetric`). A 40×40 square
+drafted 10° over 20 mm is exactly 26,689 mm³ (the analytic frustum); a
+holed profile drafts the hole the OPPOSITE way (a bore widens for core
+release) and subtracts it; symmetric draft tapers BOTH ways from the sketch
+plane (a three-section loft — two frustums back to back); a CIRCULAR
+profile (or bore) drafts to an EXACT cone frustum — a single conical wall,
+not a 48-facet shell — because a circle's offset is a concentric circle
+(radius ± offset), which lofts conic→conic and sidesteps OCC's single-edge
+2D-offset gotcha. All end to end, valid B-rep, 0 invalid.
+STILL OPEN (slice 3, remainder): ARC / mixed-conic boundaries (the mitred
+polygon offset does not preserve arcs — those still tessellate) and
+composed hole-WALL naming (the subtraction relabels the holed result by
+geometry).
 
 ## Why
 

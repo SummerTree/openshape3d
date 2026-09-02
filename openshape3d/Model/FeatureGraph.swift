@@ -1824,8 +1824,28 @@ nonisolated extension FeatureGraph {
             Profile(loop: loop, kind: .polygonal,
                     sourceEntityIDs: src.sourceEntityIDs, edgeEntityIDs: src.edgeEntityIDs)
         }
+        // A concentric circle at `radius`, kept as an exact conic so the loft
+        // reads its `.circle` kind and builds a single conic wire.
+        func circleProfile(center: SIMD2<Double>, radius: Double, from src: Profile) -> Profile {
+            let n = ProfileDetector.circleSegments
+            let loop = (0..<n).map { i -> SIMD2<Double> in
+                let a = Double(i) / Double(n) * 2 * Double.pi
+                return center + SIMD2(cos(a), sin(a)) * radius
+            }
+            return Profile(loop: loop, kind: .circle(center: center, radius: radius),
+                           sourceEntityIDs: src.sourceEntityIDs)
+        }
         // For a profile, the base (at the sketch plane) and its offset copy.
         func sections(_ p: Profile, offsetBy dist: Double) -> (base: Profile, offset: Profile)? {
+            // A circle's offset is EXACT — a concentric circle of radius ± dist.
+            // This sidesteps OCC's single-edge-wire 2D offset (the gotcha
+            // FreeCAD flags) AND lofts conic→conic, so a drafted circle becomes
+            // a true cone frustum with ONE conical wall, not a 48-facet shell.
+            if case let .circle(center, radius) = p.kind {
+                let newRadius = radius + dist          // +dist expands, −dist contracts
+                guard newRadius > 1e-6 else { return nil }
+                return (p, circleProfile(center: center, radius: newRadius, from: p))
+            }
             guard let off = ProfileOffset.offsetLoop(p.loop, by: dist) else { return nil }
             return (polyProfile(p.loop, from: p), polyProfile(off, from: p))
         }

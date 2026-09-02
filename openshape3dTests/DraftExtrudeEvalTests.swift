@@ -86,6 +86,38 @@ final class DraftExtrudeEvalTests: XCTestCase {
                        "symmetric draft \(vol) vs two frustums \(want)")
     }
 
+    /// Slice 3: a CIRCLE drafts to an exact cone frustum — ONE conical wall,
+    /// not a 48-facet approximation. A circle's offset is a concentric circle
+    /// (radius ± offset), so the loft stays conic→conic and the wall is a
+    /// single curved face: two planar caps + one non-planar wall, never ~50
+    /// planar facets. Volume matches the analytic cone frustum.
+    func testADraftedCircleIsAnExactConeFrustum() throws {
+        let feature = FeatureID(), bodyID = BodyID()
+        let sketchID = SketchID(), circle = UUID()
+        let sketch = Sketch(id: sketchID, name: "C", plane: .ground, entities: [
+            .circle(id: circle, center: .zero, radius: 20)])
+        let result = evaluate(
+            [draftNode(feature, bodyID, sketch: sketchID, rect: circle,
+                       distance: 20, taper: 10)], [sketch])
+        XCTAssertTrue(result.errors.isEmpty, "\(result.errors)")
+        let body = try XCTUnwrap(result.bodies.first { $0.id == bodyID })
+        let brep = try XCTUnwrap(body.brep, "a drafted circle is a real B-rep")
+
+        // The wall is ONE curved face, not tessellated planar facets.
+        let counts = OCCTKernel.faceTypeCounts(brep)
+        XCTAssertEqual(counts.planar, 2, "just the two circular caps are planar")
+        XCTAssertEqual(counts.other, 1, "a single non-planar (cone) wall")
+        XCTAssertEqual(counts.cylindrical, 0, "a draft is a cone, not a cylinder")
+
+        // Faceted 48-gon render mesh → a ~0.3% inscribed deficit is expected.
+        let off = 20 * tan(10 * Double.pi / 180)
+        let r0 = 20.0, r1 = 20.0 - off
+        let want = Double.pi * 20 / 3 * (r0 * r0 + r1 * r1 + r0 * r1)
+        let vol = MeasureKit.bodyVolume(body.render, scale: 1)
+        XCTAssertEqual(vol, want, accuracy: want * 0.01,
+                       "cone frustum \(want) vs \(vol)")
+    }
+
     /// A negative angle EXPANDS the section — the reverse taper. Volume is the
     /// larger frustum.
     func testANegativeAngleExpandsTheSection() throws {
@@ -122,6 +154,55 @@ final class DraftExtrudeEvalTests: XCTestCase {
         XCTAssertNotNil(result.errors[feature], "an over-steep taper must error")
         XCTAssertNil(result.bodies.first { $0.id == bodyID },
                      "no body ships from a collapsed section")
+    }
+
+    /// Slice 3, the other single-edge-wire case FreeCAD flags: a CIRCULAR bore
+    /// drafts the opposite way and stays an exact cone — the subtracted bore is
+    /// ONE conical wall, not 48 facets. Result = square frustum − cone bore.
+    func testADraftedCircularBoreStaysConic() throws {
+        let draft = FeatureID(), draftID = BodyID()
+        let sketchID = SketchID(), outerRect = UUID(), bore = UUID()
+        let sketch = Sketch(id: sketchID, name: "HB", plane: .ground, entities: [
+            .rect(id: outerRect, min: SIMD2(-20, -20), max: SIMD2(20, 20)),
+            .circle(id: bore, center: .zero, radius: 8)])
+        let node = FeatureNode(
+            id: draft, name: "Draft",
+            kind: .draftExtrude(
+                profile: ProfileRef(sketchID: sketchID, entityIDs: [outerRect],
+                                    holeEntityIDs: [[bore]], seedPoint: SIMD2(14, 0)),
+                plane: PlaneRef(source: .sketch(sketchID)),
+                distance: Expr(value: 20), taperAngle: Expr(value: 10),
+                symmetric: false,
+                boolean: BooleanIntent(op: .newBody, resolvedTargets: [])),
+            outputBodyIDs: [draftID])
+        let result = evaluate([node], [sketch])
+        XCTAssertTrue(result.errors.isEmpty, "\(result.errors)")
+        let body = try XCTUnwrap(result.bodies.first { $0.id == draftID })
+        let brep = try XCTUnwrap(body.brep, "a drafted holed pad is a real B-rep")
+
+        // The whole solid is a HANDFUL of exact faces — 2 caps, 4 ruled outer
+        // walls, 1 conical bore. A faceted bore would instead blow the count
+        // past 50, so the total is the robust "stayed exact" discriminator
+        // (drafted walls are ruled BSplines, so they bucket as `other` too and
+        // an `other == 1` check would be representation-fragile).
+        let counts = OCCTKernel.faceTypeCounts(brep)
+        let total = counts.planar + counts.cylindrical + counts.other
+        XCTAssertLessThan(total, 12, "exact faces only, not a tessellated bore: \(counts)")
+        XCTAssertGreaterThanOrEqual(counts.other, 1, "at least the conical bore wall is curved")
+        XCTAssertEqual(counts.cylindrical, 0, "a drafted bore is a cone, not a cylinder")
+
+        func squareFrustum(_ s0: Double, _ s1: Double, _ h: Double) -> Double {
+            let a = s0 * s0, b = s1 * s1
+            return h / 3 * (a + b + (a * b).squareRoot())
+        }
+        let off = 20 * tan(10 * Double.pi / 180)
+        let outer = squareFrustum(40, 40 - 2 * off, 20)
+        let r0 = 8.0, r1 = 8.0 + off                        // bore widens
+        let coneBore = Double.pi * 20 / 3 * (r0 * r0 + r1 * r1 + r0 * r1)
+        let want = outer - coneBore
+        let vol = MeasureKit.bodyVolume(body.render, scale: 1)
+        XCTAssertEqual(vol, want, accuracy: want * 0.01,
+                       "square frustum \(outer) − cone bore \(coneBore) = \(want), got \(vol)")
     }
 
     /// Slice 2: a hole drafts the OPPOSITE way (the bore widens toward the far
