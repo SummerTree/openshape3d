@@ -69,15 +69,58 @@ nonisolated enum ProfileOffset {
             out.append(l0.p + l0.d * t)
         }
 
-        // An inward offset past the inradius FLIPS the loop through its centre:
-        // each edge reverses direction, and the flipped loop keeps the same
-        // winding sign (so an area-sign test alone misses it). The honest
-        // signal is that every result edge must still run the SAME way as its
-        // original — a collapsed (zero-length) or reversed edge fails this.
-        for i in 0..<n {
+        // An edge whose offset copy runs BACKWARDS was consumed: an inward
+        // offset larger than a short edge (a 2 mm corner cut under a 14 mm
+        // draft — measured outlines are full of them) pulls its two mitres
+        // past each other. Every kernel resolves this the same way: the edge
+        // vanishes and its neighbours meet. Here the vertex COUNT must survive
+        // too — the draft lofts base and offset edge-for-edge — so each run of
+        // consumed edges collapses onto the meeting point of its surviving
+        // neighbours' carriers, spread ε apart so the wire keeps distinct
+        // vertices (the wall over a consumed edge becomes a sliver). A loop
+        // that leaves fewer than three surviving edges, or whose survivors
+        // still reverse, is genuinely offset past itself: nil.
+        func reversed(_ i: Int, _ v: [SIMD2<Double>]) -> Bool {
             let origDir = pts[(i + 1) % n] - pts[i]
-            let newDir = out[(i + 1) % n] - out[i]
-            guard simd_dot(origDir, newDir) > 1e-12 else { return nil }
+            let newDir = v[(i + 1) % n] - v[i]
+            return simd_dot(origDir, newDir) <= 1e-12
+        }
+        var consumed = (0..<n).filter { reversed($0, out) }
+        if !consumed.isEmpty {
+            let survivors = n - consumed.count
+            guard survivors >= 3 else { return nil }
+            let eps = 1e-3
+            var visited = Set<Int>()
+            for start in consumed where !visited.contains(start) {
+                // Walk back to the run's first consumed edge, then forward to its last.
+                var first = start
+                while consumed.contains((first - 1 + n) % n) && (first - 1 + n) % n != start { first = (first - 1 + n) % n }
+                var last = first
+                while consumed.contains((last + 1) % n) && (last + 1) % n != first { last = (last + 1) % n }
+                var run = [first]
+                while run.last! != last { run.append((run.last! + 1) % n) }
+                run.forEach { visited.insert($0) }
+                // The run's vertices are first ... last+1; their replacement is
+                // where the previous surviving edge meets the next one.
+                let l0 = lines[(first - 1 + n) % n], l1 = lines[(last + 1) % n]
+                let denom = l0.d.x * l1.d.y - l0.d.y * l1.d.x
+                guard abs(denom) > 1e-9 else { return nil }
+                let diff = l1.p - l0.p
+                let t = (diff.x * l1.d.y - diff.y * l1.d.x) / denom
+                let meet = l0.p + l0.d * t
+                let chord = pts[(last + 1) % n] - pts[first]
+                let along = simd_length(chord) > 1e-12 ? simd_normalize(chord) : l0.d
+                let count = run.count + 1                      // vertices first ... last+1
+                for (k, vi) in (0..<count).map({ ((first + $0) % n) }).enumerated() {
+                    out[vi] = meet + along * (Double(k) - Double(count - 1) / 2) * eps
+                }
+            }
+            // Only the ε-edges themselves may now run short; every survivor
+            // must run its original way, else the offset really is past itself.
+            for i in 0..<n where !visited.contains(i) {
+                guard !reversed(i, out) else { return nil }
+            }
+            consumed = []
         }
         let result = wasCW ? Array(out.reversed()) : out
         let outArea = Profile.signedArea(result)

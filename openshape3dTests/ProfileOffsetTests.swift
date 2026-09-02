@@ -86,6 +86,53 @@ final class ProfileOffsetTests: XCTestCase {
         XCTAssertNil(ProfileOffset.offsetLoop(sq, by: -6), "inversion")
     }
 
+    /// A 100×60 rectangle with 2 mm corner cuts offset inward by 10: each cut
+    /// is consumed (its mitres cross after 2.4 mm) and collapses onto the
+    /// sharp corner where its neighbours meet — the vertex count survives
+    /// (the draft lofts edge-for-edge), the two corner vertices sit ε apart,
+    /// and the section is the 80×40 inner rectangle.
+    func testAConsumedCornerCutCollapsesOntoItsNeighboursCorner() throws {
+        let c = 2.0
+        let loop: [SIMD2<Double>] = [
+            SIMD2(-50 + c, -30), SIMD2(50 - c, -30), SIMD2(50, -30 + c), SIMD2(50, 30 - c),
+            SIMD2(50 - c, 30), SIMD2(-50 + c, 30), SIMD2(-50, 30 - c), SIMD2(-50, -30 + c)]
+        let g = try XCTUnwrap(ProfileOffset.offsetLoop(loop, by: -10), "consumed corners must not refuse")
+        XCTAssertEqual(g.count, 8, "vertex count is kept for the loft")
+        let corners: [SIMD2<Double>] = [SIMD2(40, -20), SIMD2(40, 20), SIMD2(-40, 20), SIMD2(-40, -20)]
+        for (k, corner) in corners.enumerated() {
+            let a = g[(1 + 2 * k) % 8], b = g[(2 + 2 * k) % 8]
+            XCTAssertLessThan(simd_distance(a, corner), 2e-3, "corner \(k) vertex a \(a)")
+            XCTAssertLessThan(simd_distance(b, corner), 2e-3, "corner \(k) vertex b \(b)")
+            XCTAssertGreaterThan(simd_distance(a, b), 1e-4, "the two must stay distinct points")
+        }
+        // the ε-spread corner pairs add slivers of order ε·(half-side): ~0.09 mm²
+        XCTAssertEqual(Profile.signedArea(g), 80 * 40, accuracy: 0.2)
+    }
+
+    /// A rectangle whose one corner is a tessellated round (four 0.8 mm
+    /// segments): a 10 mm inward offset consumes the whole run, which collapses
+    /// together onto the corner; the other three corners mitre as usual.
+    func testARunOfTinySegmentsCollapsesTogether() throws {
+        // The (+x, +y) corner is a 2 mm round tessellated in four 0.78 mm chords:
+        // (30, 18) → three points on the arc about (28, 18) → (28, 20).
+        let r = 2.0, centre = SIMD2(28.0, 18.0)
+        var loop: [SIMD2<Double>] = [SIMD2(-30, -20), SIMD2(30, -20), SIMD2(30, 18)]
+        for i in 1...3 {
+            let a = Double(i) / 4 * (Double.pi / 2)
+            loop.append(centre + SIMD2(cos(a), sin(a)) * r)
+        }
+        loop += [SIMD2(28, 20), SIMD2(-30, 20)]
+        XCTAssertEqual(loop.count, 8)
+        let g = try XCTUnwrap(ProfileOffset.offsetLoop(loop, by: -10))
+        XCTAssertEqual(g.count, 8)
+        for p in g[2...6] {
+            XCTAssertLessThan(simd_distance(p, SIMD2(20, 10)), 5e-3, "run vertex \(p) collapses onto (20, 10)")
+        }
+        XCTAssertLessThan(simd_distance(g[0], SIMD2(-20, -10)), 1e-9)
+        XCTAssertLessThan(simd_distance(g[7], SIMD2(-20, 10)), 1e-9)
+        XCTAssertEqual(Profile.signedArea(g), 40 * 20, accuracy: 0.05)
+    }
+
     func testDegenerateInputsAreRejected() {
         XCTAssertNil(ProfileOffset.offsetLoop([SIMD2(0, 0), SIMD2(1, 0)], by: 1),
                      "fewer than three points")

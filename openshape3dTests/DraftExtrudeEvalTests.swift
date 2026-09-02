@@ -208,6 +208,39 @@ final class DraftExtrudeEvalTests: XCTestCase {
     /// Slice 3, the other single-edge-wire case FreeCAD flags: a CIRCULAR bore
     /// drafts the opposite way and stays an exact cone — the subtracted bore is
     /// ONE conical wall, not 48 facets. Result = square frustum − cone bore.
+    /// A drafted outline whose short corner cuts the taper CONSUMES (a 2 mm
+    /// chamfer under a 10 mm offset) still builds: the offset section keeps
+    /// every edge, the consumed ones as ε-slivers on the sharp corner. Every
+    /// wall is planar and all vertices lie on two parallel planes, so the
+    /// prismoid formula V = h/6·(A₀ + 4A_mid + A₁) is exact: 45,306.67 mm³.
+    func testADraftThatConsumesCornerCutsStillBuilds() throws {
+        let feature = FeatureID(), bodyID = BodyID(), sketchID = SketchID()
+        let c = 2.0
+        let pts: [SIMD2<Double>] = [
+            SIMD2(-50 + c, -30), SIMD2(50 - c, -30), SIMD2(50, -30 + c), SIMD2(50, 30 - c),
+            SIMD2(50 - c, 30), SIMD2(-50 + c, 30), SIMD2(-50, 30 - c), SIMD2(-50, -30 + c)]
+        let ids = (0..<8).map { _ in UUID() }
+        let sketch = Sketch(id: sketchID, name: "S", plane: .ground, entities: (0..<8).map { i in
+            .line(id: ids[i], a: pts[i], b: pts[(i + 1) % 8]) })
+        let node = FeatureNode(
+            id: feature, name: "Draft",
+            kind: .draftExtrude(
+                profile: ProfileRef(sketchID: sketchID, entityIDs: ids, holeEntityIDs: [], seedPoint: .zero),
+                plane: PlaneRef(source: .sketch(sketchID)),
+                distance: Expr(value: 10), taperAngle: Expr(value: 45), symmetric: false,
+                boolean: BooleanIntent(op: .newBody, resolvedTargets: [])),
+            outputBodyIDs: [bodyID])
+        let result = evaluate([node], [sketch])
+        XCTAssertTrue(result.errors.isEmpty, "the consumed chamfers must not refuse the draft: \(result.errors)")
+        let body = try XCTUnwrap(result.bodies.first { $0.id == bodyID })
+        XCTAssertNotNil(body.brep)
+        // base 100×60 less four 2-mm triangles; top 80×40; the mid-section is the
+        // linear interpolation — 90×50 less four 1×1 triangles.
+        let a0 = 6000.0 - 8, am = 4500.0 - 2, a1 = 3200.0
+        let want = 10.0 / 6 * (a0 + 4 * am + a1)          // 45,306.67
+        XCTAssertEqual(MeasureKit.volume(of: body), want, accuracy: 0.5)
+    }
+
     func testADraftedCircularBoreStaysConic() throws {
         let draft = FeatureID(), draftID = BodyID()
         let sketchID = SketchID(), outerRect = UUID(), bore = UUID()
