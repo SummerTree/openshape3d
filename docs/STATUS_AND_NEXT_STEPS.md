@@ -519,7 +519,7 @@ Notes:
 | `OS3D_DEBUG_SEED` | Seed a 4 mm box, **selected** (`.editingPrimitive`) — the fastest way to a live move gizmo |
 | `OS3D_DEBUG_SEED_CYLINDER` | Circle extrude via OCCT (a TRUE smooth cylinder), `brep` and all — it calls `adoptBRep` exactly like `evalExtrude` |
 | `OS3D_DEBUG_SEED_BOOLEAN` | Cylinder − cylinder, staying round through the brep path |
-| `OS3D_DEBUG_SEED_HOLE` | 10×10×6 box with a Ø4 through-hole (524.62 mm³) — the only seed with a CYLINDRICAL face, so the one Delete Face needs |
+| `OS3D_DEBUG_SEED_HOLE` | 10×10×6 box with a Ø4 through-hole (524.60 mm³ B-rep-exact; the mesh read 524.62 before 2026-09-02) — the only seed with a CYLINDRICAL face, so the one Delete Face needs |
 | `OS3D_DEBUG_SEED_STEP` | Stepped block, low half to y=6 and high half to y=12 (1800 mm³) — two PARALLEL faces at different heights, which is the pair Replace Face needs and no single-box seed can offer |
 | `OS3D_DEBUG_SEED_PRIMBOOL` | Cylinder primitive − box primitive (mixed analytic boolean) |
 | `OS3D_DEBUG_SEED_IMAGE` | Reference image on the ground plane, left unselected |
@@ -964,7 +964,7 @@ feature-owned body so it replays.
   explicit that some deletions legitimately leave a sheet body.
 
 Verified on numbers, not screenshots: the `OS3D_DEBUG_SEED_HOLE` body is a
-10 × 10 × 6 box with a Ø4 through-hole, 524.62 mm³. Deleting the hole's wall
+10 × 10 × 6 box with a Ø4 through-hole, 524.60 mm³ (B-rep-exact; the faceted mesh read 524.62 before 2026-09-02). Deleting the hole's wall
 takes it to **600.00 mm³ — exactly the full box** — and one undo puts it back.
 `DeleteFaceUITests` asserts both numbers; `DeleteFaceKitTests` proves the same
 heal at the kernel level (cylindrical faces 1 → 0, planar 6).

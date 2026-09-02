@@ -16,10 +16,13 @@ import XCTest
 
 final class DeleteFaceUITests: XCTestCase {
 
-    /// 10 × 10 × 6 box minus a Ø4 drill = 600 − π·2²·6 = 524.60 mm³. The bar
-    /// reads 524.62: the volume is integrated over the RENDER mesh, whose
-    /// faceted cylinder is a hair larger than the analytic one.
-    private let drilledVolume = "524.62 mm³"
+    /// 10 × 10 × 6 box minus a Ø4 drill = 600 − π·2²·6 = 524.60 mm³, and the
+    /// bar reads exactly that: since 2026-09-02 the volume comes from the
+    /// B-rep (`MeasureKit.volume(of:)`), not the render mesh. It used to read
+    /// 524.62 — the faceted hole is an inscribed polygon, so a hair too small,
+    /// leaving a hair too much box. A regression to mesh-integrated volume
+    /// would land back on 524.62 and fail here.
+    private let drilledVolume = "524.60 mm³"
     private let healedVolume = "600.00 mm³"
 
     override func setUpWithError() throws {
