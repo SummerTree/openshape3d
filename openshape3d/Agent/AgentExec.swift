@@ -93,7 +93,7 @@ nonisolated enum AgentExecOp: Sendable, Equatable {
     /// `FeatureKind.sweep` stores (a sweep's path is routinely drawn on a
     /// different plane than its profile, so plane-local would be ambiguous).
     case sweep(sketch: SketchID, seed: SIMD2<Double>, spine: [SIMD3<Double>],
-               boolean: BooleanIntent.Op, targets: [BodyID])
+               boolean: BooleanIntent.Op, targets: [BodyID], helix: HelixSpec?)
     /// ≥2 ordered sections, each a (sketch, seed) that resolves to a profile
     /// on that sketch's plane; OCCT lofts a solid through them in order. Each
     /// section is on its OWN sketch/plane — that is the whole point of a loft.
@@ -376,17 +376,63 @@ nonisolated enum AgentExec {
         do {
             let sketch = SketchID(raw: try uuid(a, "sketchID"))
             let seed = try vector2(a, "seedPoint")
-            guard let raw = a["spine"] as? [[Double]], raw.count >= 2,
-                  raw.allSatisfy({ $0.count == 3 && $0.allSatisfy(\.isFinite) }) else {
+            // An exact helix may replace the polyline: the render mesh then
+            // follows a polyline SAMPLED from the same spec, so the two agree.
+            let helix = try parseHelix(a["helix"])
+            let spine: [SIMD3<Double>]
+            if let raw = a["spine"] as? [[Double]] {
+                guard raw.count >= 2,
+                      raw.allSatisfy({ $0.count == 3 && $0.allSatisfy(\.isFinite) }) else {
+                    return .failure(.init(code: "missing_spine",
+                                          message: "args.spine must be ≥2 world-space "
+                                          + "[x, y, z] points in mm."))
+                }
+                spine = raw.map { SIMD3($0[0], $0[1], $0[2]) }
+            } else if let helix {
+                spine = helix.sampledSpine()
+            } else {
                 return .failure(.init(code: "missing_spine",
                                       message: "args.spine must be ≥2 world-space "
-                                      + "[x, y, z] points in mm."))
+                                      + "[x, y, z] points in mm — or give \"helix\"."))
             }
-            let spine = raw.map { SIMD3($0[0], $0[1], $0[2]) }
             let (op, targets) = try booleanIntent(a)
             return .success(.sweep(sketch: sketch, seed: seed, spine: spine,
-                                   boolean: op, targets: targets))
+                                   boolean: op, targets: targets, helix: helix))
         } catch let e as AgentExecError { return .failure(e) } catch { return .failure(unexpected) }
+    }
+
+    /// `"helix": {axisPoint, axisDirection, radius, pitch, turns,
+    /// referenceDirection?, startAngle?}` — an EXACT helical spine. Positive
+    /// pitch is right-handed about `axisDirection`; `referenceDirection` is
+    /// where angle 0 points (any perpendicular when omitted).
+    private static func parseHelix(_ raw: Any?) throws -> HelixSpec? {
+        guard let raw else { return nil }
+        guard let h = raw as? [String: Any] else {
+            throw AgentExecError(code: "bad_helix",
+                                 message: "\"helix\" must be an object: {axisPoint, axisDirection, "
+                                 + "radius, pitch, turns, referenceDirection?, startAngle?}.")
+        }
+        let axisPoint = try vector3(h, "axisPoint", default: .zero)
+        let axisDirection = try vector3(h, "axisDirection", default: SIMD3(0, 1, 0))
+        guard simd_length(axisDirection) > 1e-9 else {
+            throw AgentExecError(code: "bad_helix", message: "helix.axisDirection must be non-zero.")
+        }
+        let n = simd_normalize(axisDirection)
+        var reference = try vector3(h, "referenceDirection", default: .zero)
+        reference -= simd_dot(reference, n) * n
+        if simd_length(reference) < 1e-9 {
+            let pick: SIMD3<Double> = abs(n.x) < 0.9 ? SIMD3(1, 0, 0) : SIMD3(0, 1, 0)
+            reference = simd_cross(n, pick)
+        }
+        let radius = try double(h, "radius"), pitch = try double(h, "pitch"), turns = try double(h, "turns")
+        guard radius > 0, turns > 0, abs(pitch) > 1e-9 else {
+            throw AgentExecError(code: "bad_helix",
+                                 message: "helix.radius and helix.turns must be > 0 and helix.pitch non-zero.")
+        }
+        let startAngle = try optionalDouble(h, "startAngle") ?? 0
+        return HelixSpec(axisPoint: axisPoint, axisDirection: n,
+                         referenceDirection: simd_normalize(reference),
+                         radius: radius, pitch: pitch, turns: turns, startAngle: startAngle)
     }
 
     private static func parseLoft(_ a: [String: Any]) -> Result<AgentExecOp, AgentExecError> {

@@ -121,9 +121,16 @@ design), `FREECAD_PLAYBOOK.md` (the FreeCAD-derived hardening ledger),
   and a section rotated normal to the spine by our own transform (so the
   history survives), and a polyline sweep encloses exactly A·L
   (`SweepSpineTests`: quarter arc, 90° corner, bends, radii). Gotcha 21
-  has the three traps. 1175/1175. The helical sweep itself is next
-  (`scripts/rebuild_helicoil.py` is its acceptance test; an exact helix
-  spine is the follow-on to the sampled one).
+  has the three traps. 1175/1175. **Then the exact helix landed:**
+  `FeatureKind.sweep` gains an optional `HelixSpec` (axis, reference
+  direction, radius, pitch, turns, start angle) — the B-rep sweeps along a
+  true helix edge (a line in a cylinder's (angle, height) parameter space,
+  Frenet mode) while the render polyline is sampled from the same spec;
+  `feature.sweep` accepts `"helix"`. By Pappus a helical sweep is exactly
+  section area × turns·√((2πr)²+p²): `testExactHelixSweepIsAreaTimesTrueLength`
+  (two caps + four helicoidal walls, 1e-5), and the HELICOIL rebuild
+  (`rebuild_helicoil.py`, exact mode) matches to 1e-4. Documents written
+  before helices decode with `helix` absent. 1176/1176.
 - Two app deaths mid-exec during this pass did NOT reproduce under
   controlled repeats (fresh doc ×2, then the heavy doc, all monitored):
   no crash report, no jetsam, RSS modest; the simulator-control helper

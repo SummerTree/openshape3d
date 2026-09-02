@@ -73,6 +73,30 @@ final class SweepSpineTests: XCTestCase {
         XCTAssertEqual(OCCTKernel.volume(brep), want, accuracy: want * 1e-6)
     }
 
+    /// An EXACT helical spine (`HelixSpec`): four helicoidal walls, and by
+    /// Pappus the volume is area × the TRUE helix length — which the sampled
+    /// polyline sweep of the same spec falls measurably short of.
+    func testExactHelixSweepIsAreaTimesTrueLength() throws {
+        let spec = HelixSpec(axisPoint: .zero, axisDirection: SIMD3(0, 1, 0),
+                             referenceDirection: SIMD3(1, 0, 0), radius: 10, pitch: 4, turns: 2)
+        let start = spec.point(at: 0), t = spec.tangent(at: 0)
+        let radial = SIMD3<Double>(1, 0, 0)                                   // ⟂ t at angle 0
+        let plane = SketchPlane(origin: start, xAxis: radial, yAxis: simd_cross(t, radial))  // normal = t
+        let exact = try XCTUnwrap(OCCTKernel.sweepSolid(
+            outer: try square(), holes: [], plane: plane, spine: spec.sampledSpine(), helix: spec))
+        let want = spec.length                                              // A = 1
+        XCTAssertEqual(OCCTKernel.volume(exact), want, accuracy: want * 1e-5,
+                       "helix sweep \(OCCTKernel.volume(exact)) vs A × true length \(want)")
+        let counts = OCCTKernel.faceTypeCounts(exact)
+        XCTAssertEqual(counts.planar, 2, "two caps: \(counts)")
+        XCTAssertEqual(counts.other, 4, "four helicoidal walls: \(counts)")
+
+        let sampled = try XCTUnwrap(OCCTKernel.sweepSolid(
+            outer: try square(), holes: [], plane: plane, spine: spec.sampledSpine()))
+        XCTAssertLessThan(OCCTKernel.volume(sampled), want, "36 chords per turn cut the corners")
+        XCTAssertGreaterThan(OCCTKernel.volume(sampled), want * 0.99)
+    }
+
     /// The section is the SAME size all along: the radius of the arc does not
     /// change V/(A·L) (it did not before either — the flaw was per corner).
     func testRadiusDoesNotMatter() throws {

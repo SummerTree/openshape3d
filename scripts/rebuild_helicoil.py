@@ -6,14 +6,13 @@ two Vs form the internal and the external thread) swept along a HELIX, plus
 the driving tang, a straight bar of the same wire across the bore. TraceParts
 product: BENE INOX 219711 "filet rapporte HELICOIL Plus inox A2".
 
-What the app can do today: `feature.sweep` carries a sketched profile along
-a world-space POLYLINE spine (BRepOffsetAPI_MakePipe). So the helix is
-sampled finely (SEGMENTS_PER_TURN chords per turn). That is not an exact
-helix — the chords are shorter than the arc by 1 - sin(pi/S)/(pi/S) — but a
-MITRED polyline sweep encloses EXACTLY section area x polyline length, so
-the volume check is exact for what was built, and the true-helix figure is
-reported beside it. An exact helix edge (a 2D line on a cylindrical surface
-+ MakePipeShell) is the kernel upgrade this script is the acceptance test for.
+`feature.sweep` takes a `helix` spec (axis, radius, pitch, turns) and sweeps
+the profile along the EXACT helix edge — a 2D line on a cylindrical surface,
+MakePipeShell in Frenet mode — so by Pappus the coil encloses exactly
+section area x true helix length, and that is what is checked (1e-4).
+HC_EXACT=0 falls back to the older sampled POLYLINE spine
+(SEGMENTS_PER_TURN mitred chords per turn): also exact for what it builds
+(area x polyline length) but 1 - sin(pi/S)/(pi/S) short of the true helix.
 
 Parameters default to M6 x 1.0, 1.5D (9 mm) Helicoil Plus geometry; adjust
 from the datasheet. Run against a live DEBUG app; OS3D_PORT (default 8787;
@@ -73,24 +72,29 @@ def check(label, ok, detail):
     print(f"-- {label}: {detail}  {'OK' if ok else 'FAIL'}")
 
 
-# ---- 1. The helix spine (axis = world Y, "up") --------------------------------
-def helix_point(theta):
-    return [R_CENTROID * math.cos(theta), PITCH * theta / (2 * math.pi), R_CENTROID * math.sin(theta)]
+# ---- 1. The helix spine: EXACT (axis = world Y, right-handed, angle 0 = +X) ----
+EXACT = os.environ.get("HC_EXACT", "1") != "0"
+helix = {"axisPoint": [0, 0, 0], "axisDirection": [0, 1, 0], "referenceDirection": [1, 0, 0],
+         "radius": R_CENTROID, "pitch": PITCH, "turns": TURNS}
+
+
+def helix_point(theta):   # the same right-handed frame the kernel uses: x = +X, y = n x x = -Z
+    return [R_CENTROID * math.cos(theta), PITCH * theta / (2 * math.pi), -R_CENTROID * math.sin(theta)]
 
 
 n_pts = int(round(TURNS * SEGMENTS_PER_TURN)) + 1
-spine = [helix_point(2 * math.pi * i / SEGMENTS_PER_TURN) for i in range(n_pts)]
+spine = [helix_point(2 * math.pi * TURNS * i / (n_pts - 1)) for i in range(n_pts)]
 poly_len = sum(math.dist(spine[i], spine[i + 1]) for i in range(n_pts - 1))
 true_len = TURNS * math.sqrt((2 * math.pi * R_CENTROID) ** 2 + PITCH ** 2)
 area = WIRE_RADIAL * WIRE_AXIAL / 2
 print(f"Helicoil M{NOMINAL_D:g} x {PITCH:g}, {LENGTH:g} mm: {TURNS:.2f} turns, "
       f"R_c {R_CENTROID:.3f}, wire {WIRE_RADIAL} x {WIRE_AXIAL} (A = {area:.4f} mm2)")
-print(f"   spine: {n_pts} points, polyline {poly_len:.3f} mm vs true helix {true_len:.3f} mm "
-      f"({(1 - poly_len / true_len) * 100:.3f}% short)")
+print(f"   spine: {'EXACT helix' if EXACT else 'sampled polyline'}; polyline {poly_len:.3f} mm vs "
+      f"true helix {true_len:.3f} mm ({(1 - poly_len / true_len) * 100:.3f}% short)")
 
-# ---- 2. Profile plane at the spine start, normal = first segment ---------------
-p0 = spine[0]
-t = unit(sub(spine[1], spine[0]))
+# ---- 2. Profile plane at the helix start, normal = the EXACT start tangent -----
+p0 = [R_CENTROID, 0.0, 0.0]
+t = unit([0.0, PITCH / (2 * math.pi), -R_CENTROID])       # d/dθ at θ = 0, right-handed about +Y
 radial = [1.0, 0.0, 0.0]
 xa = unit(sub(radial, [dot(radial, t) * c for c in t]))   # radial, made perpendicular to t
 ya = cross(t, xa)                                         # so xa x ya = t (the sketch normal)
@@ -104,8 +108,13 @@ X({"op": "sketch.addEntities", "args": {"sketchID": sk, "entities": [
     {"kind": "line", "a": [0, -ha], "b": [hr, 0]}]}})
 
 # ---- 3. The coil: sweep the diamond along the helix ---------------------------
-print("\n3. Coil (diamond section swept along the sampled helix):")
-res = X({"op": "feature.sweep", "args": {"sketchID": sk, "seedPoint": [0, 0], "spine": spine}})
+print(f"\n3. Coil (diamond section swept along the {'exact' if EXACT else 'sampled'} helix):")
+args = {"sketchID": sk, "seedPoint": [0, 0]}
+if EXACT:
+    args["helix"] = helix          # the exec samples the render polyline from the same spec
+else:
+    args["spine"] = spine
+res = X({"op": "feature.sweep", "args": args})
 print(f"   ok={res.get('ok')} errs={res.get('evalErrors')} warn={res.get('warning')}")
 coil = res.get("producedBodyIDs", [None])[0]
 if coil is None:
@@ -113,10 +122,15 @@ if coil is None:
     sys.exit(1)
 cb = body(coil)
 cv = cb["volumeMM3"]
-want_poly = area * poly_len
-check("coil volume = A x polyline length", abs(cv - want_poly) / want_poly < 0.002,
-      f"{cv:.4f} mm3 vs {want_poly:.4f} (mitred sweep is exact)  brep={cb['brep']}  "
-      f"| true helix would be {area * true_len:.4f}")
+if EXACT:
+    want = area * true_len
+    check("coil volume = A x TRUE helix length (Pappus)", abs(cv - want) / want < 1e-4,
+          f"{cv:.4f} mm3 vs {want:.4f}  brep={cb['brep']}")
+else:
+    want_poly = area * poly_len
+    check("coil volume = A x polyline length", abs(cv - want_poly) / want_poly < 0.002,
+          f"{cv:.4f} mm3 vs {want_poly:.4f} (mitred sweep is exact)  brep={cb['brep']}  "
+          f"| true helix would be {area * true_len:.4f}")
 
 # ---- 4. The tang: the same wire straight across the bore at the start ---------
 print("\n4. Tang (straight bar of the wire across the bore):")

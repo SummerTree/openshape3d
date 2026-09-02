@@ -365,20 +365,32 @@ nonisolated enum OCCTKernel {
             outerSegments: segments, bases: bases, history: history).map(BRepHandle.init)
     }
 
-    /// Sweep a profile along a world-space polyline spine.
+    /// Sweep a profile along a world-space polyline spine — or, when `helix`
+    /// is given, along that EXACT helix (the polyline then only seeds the
+    /// section's placement and serves callers without the spec).
     static func sweepSolid(outer: Profile, holes: [Profile], plane: SketchPlane,
-                           spine: [SIMD3<Double>],
+                           spine: [SIMD3<Double>], helix: HelixSpec? = nil,
                            history: OCCTShapeHistory? = nil) -> BRepHandle? {
         guard spine.count >= 2 else { return nil }
         let p = packedProfile(outer, holes: holes)
         var flat = [Double](); flat.reserveCapacity(spine.count * 3)
         for point in spine { flat.append(point.x); flat.append(point.y); flat.append(point.z) }
         let spineData = flat.withUnsafeBytes { Data($0) }
+        // 13 doubles: axis point, axis direction, reference direction, radius,
+        // pitch, turns, start angle — matching OS3DHelixWire in the bridge.
+        var helixData: Data?
+        if let h = helix {
+            let n = simd_normalize(h.axisDirection)
+            let x = simd_normalize(h.referenceDirection - simd_dot(h.referenceDirection, n) * n)
+            let v: [Double] = [h.axisPoint.x, h.axisPoint.y, h.axisPoint.z, n.x, n.y, n.z,
+                               x.x, x.y, x.z, h.radius, h.pitch, h.turns, h.startAngle]
+            helixData = v.withUnsafeBytes { Data($0) }
+        }
         return OCCTBridge.sweptShape(
             withOuterLoop: p.loop, outerConic: p.conic, holes: p.holeLoops,
             holeConics: p.holeConics, outerSegments: p.segments,
             holeSegments: p.holeSegments, basis: planeBasis(plane),
-            spine: spineData, history: history).map(BRepHandle.init)
+            spine: spineData, helix: helixData, history: history).map(BRepHandle.init)
     }
 
     /// Turn resolved profile holes into extrude boundaries, keeping the ones

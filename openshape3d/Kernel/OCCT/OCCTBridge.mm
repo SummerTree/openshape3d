@@ -49,6 +49,10 @@
 #include <BRepOffsetAPI_MakePipe.hxx>
 #include <BRepOffsetAPI_MakePipeShell.hxx>
 #include <TopTools_DataMapOfShapeShape.hxx>
+#include <Geom_CylindricalSurface.hxx>
+#include <Geom2d_Line.hxx>
+#include <BRepLib.hxx>
+#include <gp_Ax3.hxx>
 #include <BRepBuilderAPI_TransitionMode.hxx>
 #include <BRepBuilderAPI_MakePolygon.hxx>
 #include <BRepPrimAPI_MakeCylinder.hxx>
@@ -947,9 +951,46 @@ static gp_Trsf OS3DBasisTransform(OCCTPlaneBasis *basis) {
 /// still called the solid valid. MakePipeShell with RightCorner transitions
 /// and profile correction gives exactly A·L for a polyline, and follows a
 /// smooth spine with a corrected-Frenet frame.
+/// An EXACT helix edge for a sweep spine: a straight line in the (angle,
+/// height) parameter space of a cylindrical surface, whose 3D curve OCCT
+/// then builds to tolerance (a helix is not a rational curve, so it is a
+/// tight B-spline; the volume matches area × true length to 1e-6). 13
+/// doubles: axis point, axis direction, reference direction (angle 0),
+/// radius, pitch, turns, start angle — as `OCCTKernel.sweepSolid` packs
+/// them. Positive pitch is right-handed about the axis. Also reports the
+/// start point and the exact start tangent so the section can be placed.
+static bool OS3DHelixWire(const double *h, TopoDS_Wire &outWire,
+                          gp_Pnt &startPoint, gp_Vec &startTangent) {
+    const gp_Pnt axisPoint(h[0], h[1], h[2]);
+    const gp_Vec axisV(h[3], h[4], h[5]), refV(h[6], h[7], h[8]);
+    const double radius = h[9], pitch = h[10], turns = h[11], theta0 = h[12];
+    if (!(radius > 1e-9) || !(turns > 0) || std::fabs(pitch) < 1e-12) return false;
+    if (axisV.Magnitude() < 1e-12 || refV.Magnitude() < 1e-12) return false;
+    const gp_Ax3 frame(axisPoint, gp_Dir(axisV), gp_Dir(refV));      // Z = axis, X = angle 0
+    Handle(Geom_CylindricalSurface) cylinder = new Geom_CylindricalSurface(frame, radius);
+    // One turn is (u, v) += (2π, pitch) on the cylinder's parameter plane.
+    Handle(Geom2d_Line) line = new Geom2d_Line(gp_Pnt2d(theta0, 0.0), gp_Dir2d(2.0 * M_PI, pitch));
+    const double paramLength = turns * std::sqrt(4.0 * M_PI * M_PI + pitch * pitch);
+    BRepBuilderAPI_MakeEdge me(line, cylinder, 0.0, paramLength);
+    if (!me.IsDone()) return false;
+    TopoDS_Edge edge = me.Edge();
+    BRepLib::BuildCurves3d(edge, 1e-7);
+    BRepBuilderAPI_MakeWire mw(edge);
+    if (!mw.IsDone()) return false;
+    outWire = mw.Wire();
+    const gp_Vec X(frame.XDirection()), Y(frame.YDirection()), Z(frame.Direction());
+    startPoint = axisPoint.Translated(X * (radius * std::cos(theta0)) + Y * (radius * std::sin(theta0)));
+    startTangent = X * (-radius * std::sin(theta0)) + Y * (radius * std::cos(theta0))
+                 + Z * (pitch / (2.0 * M_PI));
+    return true;
+}
+
 static TopoDS_Shape OS3DPipeShellSolid(const TopoDS_Wire &profile,
-                                       BRepOffsetAPI_MakePipeShell &mk) {
-    mk.SetMode(Standard_False);                          // corrected Frenet
+                                       BRepOffsetAPI_MakePipeShell &mk,
+                                       bool frenet = false) {
+    // Frenet along a smooth helix keeps the section's orientation to the
+    // axis constant (a thread); corrected Frenet handles polylines.
+    mk.SetMode(frenet ? Standard_True : Standard_False);
     mk.SetTransitionMode(BRepBuilderAPI_RightCorner);    // mitre at corners
     // No WithContact / WithCorrection: both make the shell sweep a transformed
     // COPY of the profile and key its history by the copy's edges, which are
@@ -1243,7 +1284,7 @@ static void OS3DFillLoftHistory(OCCTShapeHistory *history,
                                    holes:holes holeConics:holeConics
                            outerSegments:outerSegments
                             holeSegments:holeSegments basis:basis
-                                   spine:spine history:nil];
+                                   spine:spine helix:nil history:nil];
 }
 
 + (nullable OCCTShape *)sweptShapeWithOuterLoop:(NSData *)outerLoop
@@ -1254,10 +1295,12 @@ static void OS3DFillLoftHistory(OCCTShapeHistory *history,
                                    holeSegments:(nullable NSArray<NSData *> *)holeSegments
                                           basis:(OCCTPlaneBasis *)basis
                                           spine:(NSData *)spine
+                                          helix:(nullable NSData *)helix
                                         history:(nullable OCCTShapeHistory *)history {
     const NSUInteger points = spine.length / (3 * sizeof(double));
     if (points < 2) return nil;
     const double *s = (const double *)spine.bytes;
+    const bool exactHelix = (helix != nil && helix.length >= 13 * sizeof(double));
     try {
         const TopoDS_Face face = OS3DProfileFace(outerLoop, outerConic, holes,
                                                  holeConics, outerSegments,
@@ -1267,12 +1310,23 @@ static void OS3DFillLoftHistory(OCCTShapeHistory *history,
                                         Standard_True);
         const TopoDS_Shape worldFace = placer.Shape();
 
-        BRepBuilderAPI_MakePolygon poly;
-        for (NSUInteger i = 0; i < points; ++i) {
-            poly.Add(gp_Pnt(s[3*i], s[3*i+1], s[3*i+2]));
+        // The spine: an EXACT helix when the spec is given (the polyline then
+        // only came along for the render), else the polyline itself. Either
+        // way the section is placed at the spine's start, normal to its true
+        // opening tangent.
+        TopoDS_Wire spineWire;
+        gp_Pnt startPoint(s[0], s[1], s[2]);
+        gp_Vec startTangent(startPoint, gp_Pnt(s[3], s[4], s[5]));
+        if (exactHelix) {
+            if (!OS3DHelixWire((const double *)helix.bytes, spineWire, startPoint, startTangent)) return nil;
+        } else {
+            BRepBuilderAPI_MakePolygon poly;
+            for (NSUInteger i = 0; i < points; ++i) {
+                poly.Add(gp_Pnt(s[3*i], s[3*i+1], s[3*i+2]));
+            }
+            if (!poly.IsDone()) return nil;
+            spineWire = poly.Wire();
         }
-        if (!poly.IsDone()) return nil;
-        const TopoDS_Wire spineWire = poly.Wire();
         if (spineWire.IsNull()) return nil;
 
         // The OUTER wire sweeps into the solid (see OS3DPipeShellSolid for why
@@ -1287,8 +1341,8 @@ static void OS3DFillLoftHistory(OCCTShapeHistory *history,
         TopoDS_Face sectionFace = TopoDS::Face(worldFace);
         TopTools_DataMapOfShapeShape placedToSection;
         {
-            const gp_Pnt start(s[0], s[1], s[2]);
-            const gp_Vec along(start, gp_Pnt(s[3], s[4], s[5]));
+            const gp_Pnt start = startPoint;
+            const gp_Vec along = startTangent;
             Handle(Geom_Plane) plane = Handle(Geom_Plane)::DownCast(BRep_Tool::Surface(sectionFace));
             if (!plane.IsNull() && along.Magnitude() > 1e-12) {
                 const gp_Dir t(along);
@@ -1311,7 +1365,7 @@ static void OS3DFillLoftHistory(OCCTShapeHistory *history,
         const TopoDS_Wire outerWire = BRepTools::OuterWire(sectionFace);
         if (outerWire.IsNull()) return nil;
         BRepOffsetAPI_MakePipeShell mk(spineWire);
-        TopoDS_Shape solid = OS3DPipeShellSolid(outerWire, mk);
+        TopoDS_Shape solid = OS3DPipeShellSolid(outerWire, mk, exactHelix);
         if (solid.IsNull()) return nil;
         const TopoDS_Shape firstCap = OS3DCapFace(solid, mk.FirstShape());
         const TopoDS_Shape lastCap = OS3DCapFace(solid, mk.LastShape());
@@ -1319,7 +1373,7 @@ static void OS3DFillLoftHistory(OCCTShapeHistory *history,
         for (TopExp_Explorer w(sectionFace, TopAbs_WIRE); w.More(); w.Next()) {
             if (w.Current().IsSame(outerWire)) continue;
             BRepOffsetAPI_MakePipeShell hm(spineWire);
-            const TopoDS_Shape tube = OS3DPipeShellSolid(TopoDS::Wire(w.Current()), hm);
+            const TopoDS_Shape tube = OS3DPipeShellSolid(TopoDS::Wire(w.Current()), hm, exactHelix);
             if (tube.IsNull()) return nil;
             BRepAlgoAPI_Cut cut(solid, tube);
             cut.Build();

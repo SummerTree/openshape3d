@@ -258,10 +258,13 @@ nonisolated enum ProjectMergeKit {
                 return .revolve(
                     profile: remap(profile), plane: remap(plane, translation: t),
                     axis: remap(axis), angle: angle, boolean: boolean)
-            case let .sweep(profile, plane, spine, boolean):
+            case let .sweep(profile, plane, spine, boolean, helix):
+                var movedHelix = helix
+                movedHelix?.axisPoint += t          // the exact spine moves with the sampled one
                 return .sweep(
                     profile: remap(profile), plane: remap(plane, translation: t),
-                    spine: spine.map { PointWrapper($0.point + t) }, boolean: boolean)
+                    spine: spine.map { PointWrapper($0.point + t) }, boolean: boolean,
+                    helix: movedHelix)
             case let .loft(sections, boolean):
                 return .loft(sections: sections.map(remap), boolean: boolean)
             case let .boolean(op, target, tools):

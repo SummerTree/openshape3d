@@ -360,6 +360,19 @@ an unexplained failure.
 ## What this cannot do yet
 
 `/v1/exec` covers sketching plus extrude, revolve, pattern, mirror, boolean,
+**helix sweep** — threads, springs, wire inserts: give `feature.sweep` a
+`"helix": {"axisPoint":[x,y,z], "axisDirection":[x,y,z], "radius":r,
+"pitch":p, "turns":n, "referenceDirection":[x,y,z]?, "startAngle":θ?}`
+instead of (or as well as) `spine`. The B-rep is swept along the EXACT
+helix (right-handed about the axis for positive pitch; `referenceDirection`
+is where angle 0 points, any perpendicular when omitted) and the render
+polyline is sampled from the same spec, so they agree. Place the profile
+sketch at the helix start, normal to its start tangent
+(`HelixSpec.point(at:)` / `tangent(at:)`); by Pappus the volume is exactly
+section area × turns·√((2πr)² + p²). Bad values return `bad_helix`.
+`scripts/rebuild_helicoil.py` is the worked example (a HELICOIL insert:
+diamond wire on a helix plus its tang, matched to 1e-4).
+
 **sweep** (`{"op":"feature.sweep","args":{"sketchID":…,"seedPoint":…,
 "spine":[[x,y,z],…]}}` — world-space spine, ≥2 points, same boolean/targets
 as extrude) — and, since the topological-naming mission landed its edge/face

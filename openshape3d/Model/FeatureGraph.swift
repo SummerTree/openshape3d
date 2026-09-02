@@ -90,6 +90,52 @@ nonisolated struct PointWrapper: Codable, Hashable, Sendable {
     init(_ point: SIMD3<Double>) { self.point = point }
 }
 
+/// An EXACT helical spine for a sweep — threads, springs, wire inserts.
+/// The sweep node still stores its sampled polyline `spine` (what the render
+/// mesh follows and what a kernel without the spec would use); when this is
+/// present the B-rep is swept along the true helix instead: a 2D line on a
+/// cylindrical surface is an exact helix edge, so the wall is the true
+/// helicoid and, by Pappus, the volume is section area × true helix length.
+///
+/// `referenceDirection` (perpendicular to the axis) is where angle 0 points,
+/// so the caller's sampled polyline and the kernel's cylinder frame agree on
+/// where the helix starts. Positive `pitch` rises along `axisDirection` per
+/// turn, right-handed about it; negative pitch descends.
+nonisolated struct HelixSpec: Codable, Hashable, Sendable {
+    var axisPoint: SIMD3<Double>
+    var axisDirection: SIMD3<Double>
+    var referenceDirection: SIMD3<Double>
+    var radius: Double
+    var pitch: Double
+    var turns: Double
+    var startAngle: Double = 0
+
+    /// The helix point at angle `theta` (radians from `referenceDirection`).
+    func point(at theta: Double) -> SIMD3<Double> {
+        let n = simd_normalize(axisDirection)
+        let x = simd_normalize(referenceDirection - simd_dot(referenceDirection, n) * n)
+        let y = simd_cross(n, x)
+        return axisPoint + (x * cos(theta) + y * sin(theta)) * radius + n * (pitch * theta / (2 * .pi))
+    }
+
+    /// The unit tangent at angle `theta`.
+    func tangent(at theta: Double) -> SIMD3<Double> {
+        let n = simd_normalize(axisDirection)
+        let x = simd_normalize(referenceDirection - simd_dot(referenceDirection, n) * n)
+        let y = simd_cross(n, x)
+        return simd_normalize((-x * sin(theta) + y * cos(theta)) * radius + n * (pitch / (2 * .pi)))
+    }
+
+    /// Sampled polyline from `startAngle` over `turns`, `perTurn` chords each.
+    func sampledSpine(perTurn: Int = 36) -> [SIMD3<Double>] {
+        let count = max(1, Int((turns * Double(perTurn)).rounded()))
+        return (0...count).map { point(at: startAngle + 2 * .pi * turns * Double($0) / Double(count)) }
+    }
+
+    /// True helix length: turns × √((2πr)² + pitch²).
+    var length: Double { turns * ((2 * .pi * radius) * (2 * .pi * radius) + pitch * pitch).squareRoot() }
+}
+
 // MARK: - Feature kinds / nodes / graph (frozen contract)
 
 /// One editable operation in the history. Tranche 1 records/evaluates
@@ -114,7 +160,12 @@ nonisolated enum FeatureKind: Codable, Sendable {
     case draftExtrude(profile: ProfileRef, plane: PlaneRef, distance: Expr,
                       taperAngle: Expr, symmetric: Bool, boolean: BooleanIntent)
     case revolve(profile: ProfileRef, plane: PlaneRef, axis: AxisRef, angle: Expr, boolean: BooleanIntent)
-    case sweep(profile: ProfileRef, plane: PlaneRef, spine: [PointWrapper], boolean: BooleanIntent)
+    /// `helix`, when present, is the EXACT spine the B-rep follows; `spine`
+    /// stays the sampled polyline the render mesh sweeps along (and is what
+    /// documents written before helices carried — they decode with `helix`
+    /// absent, i.e. nil). See `HelixSpec`.
+    case sweep(profile: ProfileRef, plane: PlaneRef, spine: [PointWrapper], boolean: BooleanIntent,
+               helix: HelixSpec?)
     case loft(sections: [ProfileRef], boolean: BooleanIntent)
     case boolean(kind: BooleanKind, target: BodyRef, tools: [BodyRef])
     case transform(body: BodyRef, delta: Transform3D)
@@ -210,7 +261,7 @@ nonisolated extension FeatureNode {
             ids.insert(profile.sketchID)
             addPlane(plane)
             addAxis(axis)
-        case let .sweep(profile, plane, _, _):
+        case let .sweep(profile, plane, _, _, _):
             ids.insert(profile.sketchID)
             addPlane(plane)
         case let .loft(sections, _):
@@ -234,7 +285,7 @@ nonisolated extension FeatureNode {
         }
         switch kind {
         case let .extrude(_, plane, _, _, _, _), let .draftExtrude(_, plane, _, _, _, _),
-             let .revolve(_, plane, _, _, _), let .sweep(_, plane, _, _),
+             let .revolve(_, plane, _, _, _), let .sweep(_, plane, _, _, _),
              let .mirror(_, plane, _):
             add(plane)
         case .primitive, .loft, .boolean, .transform, .pattern, .pushPull, .moveFace,
@@ -254,7 +305,7 @@ nonisolated extension FeatureNode {
         case .primitive:
             return []
         case let .extrude(_, _, _, _, boolean, _), let .draftExtrude(_, _, _, _, _, boolean),
-             let .revolve(_, _, _, _, boolean), let .sweep(_, _, _, boolean),
+             let .revolve(_, _, _, _, boolean), let .sweep(_, _, _, boolean, _),
              let .loft(_, boolean):
             return boolean.resolvedTargets.map(\.bodyID)
         case let .boolean(_, target, tools):
@@ -501,10 +552,10 @@ nonisolated extension FeatureGraph {
             evalRevolve(
                 node, profileRef: profile, planeRef: plane, axisRef: axis,
                 angle: angle, boolean: boolean, into: &state, next: nextRevision)
-        case let .sweep(profile, plane, spine, boolean):
+        case let .sweep(profile, plane, spine, boolean, helix):
             evalSweep(
                 node, profileRef: profile, planeRef: plane, spine: spine,
-                boolean: boolean, into: &state, next: nextRevision)
+                boolean: boolean, helix: helix, into: &state, next: nextRevision)
         case let .loft(sections, boolean):
             evalLoft(node, sectionRefs: sections, boolean: boolean, into: &state, next: nextRevision)
         case let .mirror(body, plane, keepOriginal):
@@ -1837,6 +1888,7 @@ nonisolated extension FeatureGraph {
         planeRef: PlaneRef,
         spine: [PointWrapper],
         boolean: BooleanIntent,
+        helix: HelixSpec? = nil,
         into state: inout EvalState,
         next nextRevision: () -> UInt64
     ) {
@@ -1849,12 +1901,14 @@ nonisolated extension FeatureGraph {
             return
         }
         let spinePts = spine.map(\.point)   // WORLD-space 3D points
+        // The render mesh follows the sampled polyline either way; the B-rep
+        // follows the EXACT helix when the node carries one (`HelixSpec`).
         let mesh = SweepLoftKit.sweep(profile: outer, holes: holes, in: plane, alongPath: spinePts)
         let history: OCCTShapeHistory? =
             OCCTKernel.useOCCTAsSourceOfTruth ? OCCTShapeHistory() : nil
         let brep = OCCTKernel.useOCCTAsSourceOfTruth
             ? OCCTKernel.sweepSolid(outer: outer, holes: holes, plane: plane,
-                                    spine: spinePts, history: history)
+                                    spine: spinePts, helix: helix, history: history)
             : nil
         let names = (brep != nil ? history : nil).map {
             ElementNaming.extrudeNames(creator: node.id,

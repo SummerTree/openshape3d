@@ -250,6 +250,7 @@ typedef NS_ENUM(NSInteger, OCCTOpCode) {
                                    holeSegments:(nullable NSArray<NSData *> *)holeSegments
                                           basis:(OCCTPlaneBasis *)basis
                                           spine:(NSData *)spine
+                                          helix:(nullable NSData *)helix
                                         history:(nullable OCCTShapeHistory *)history;
 
 /// Loft through ordered section profiles, each on its own plane.

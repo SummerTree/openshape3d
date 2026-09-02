@@ -24,7 +24,7 @@ final class AgentExecTests: XCTestCase {
     func testSweepParsesSpineAndRejectsShortOnes() throws {
         let id = UUID().uuidString
         let parsed = op(#"{"op":"feature.sweep","args":{"sketchID":"\#(id)","seedPoint":[1,2],"spine":[[0,0,0],[10,0,0],[10,5,0]]}}"#)
-        guard case let .sweep(_, seed, spine, boolean, targets)? = parsed else {
+        guard case let .sweep(_, seed, spine, boolean, targets, _)? = parsed else {
             return XCTFail("expected .sweep, got \(String(describing: parsed))")
         }
         XCTAssertEqual(seed, SIMD2(1, 2))
@@ -34,6 +34,31 @@ final class AgentExecTests: XCTestCase {
         XCTAssertTrue(targets.isEmpty)
         XCTAssertEqual(code(#"{"op":"feature.sweep","args":{"sketchID":"\#(id)","seedPoint":[0,0],"spine":[[0,0,0]]}}"#),
                        "missing_spine", "a one-point spine is no path")
+    }
+
+    /// A `helix` stands in for the spine: the exec samples the render
+    /// polyline from the spec (36 chords per turn) in the kernel's frame —
+    /// right-handed about the axis, angle 0 along the reference direction.
+    func testSweepAcceptsAHelixAndSamplesItsSpineInTheKernelFrame() throws {
+        let id = UUID().uuidString
+        let parsed = op(#"{"op":"feature.sweep","args":{"sketchID":"\#(id)","seedPoint":[0,0],"helix":{"axisPoint":[0,0,0],"axisDirection":[0,1,0],"referenceDirection":[1,0,0],"radius":10,"pitch":4,"turns":2}}}"#)
+        guard case let .sweep(_, _, spine, _, _, helix)? = parsed else {
+            return XCTFail("expected .sweep, got \(String(describing: parsed))")
+        }
+        let h = try XCTUnwrap(helix)
+        XCTAssertEqual(h.radius, 10)
+        XCTAssertEqual(h.turns, 2)
+        XCTAssertEqual(spine.count, 73, "36 chords per turn x 2 turns, plus the start")
+        XCTAssertEqual(simd_length(spine[0] - SIMD3(10, 0, 0)), 0, accuracy: 1e-9)
+        // a quarter turn in (9 of the 36 chords per turn): +X has rotated toward n x x = -Z, a quarter pitch up
+        XCTAssertEqual(spine[9].x, 0, accuracy: 1e-9, "quarter turn: \(spine[9])")
+        XCTAssertEqual(spine[9].y, 1, accuracy: 1e-9, "quarter pitch up: \(spine[9])")
+        XCTAssertEqual(spine[9].z, -10, accuracy: 1e-9, "toward n x ref = -Z: \(spine[9])")
+        XCTAssertEqual(simd_length(spine[72] - h.point(at: 4 * .pi)), 0, accuracy: 1e-9)
+        XCTAssertEqual(code(#"{"op":"feature.sweep","args":{"sketchID":"\#(id)","seedPoint":[0,0],"helix":{"axisPoint":[0,0,0],"axisDirection":[0,1,0],"radius":0,"pitch":4,"turns":2}}}"#),
+                       "bad_helix", "a zero radius is no helix")
+        XCTAssertEqual(code(#"{"op":"feature.sweep","args":{"sketchID":"\#(id)","seedPoint":[0,0]}}"#),
+                       "missing_spine", "neither a spine nor a helix")
     }
 
     func testLoftParsesSectionsAndRejectsFewerThanTwo() throws {

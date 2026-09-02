@@ -10726,7 +10726,8 @@ final class EditorViewModel {
                 profile: outer,
                 plane: PlaneRef(source: .sketch(sketchID)),
                 spine: spine.map { PointWrapper($0) },
-                boolean: boolean
+                boolean: boolean,
+                helix: nil          // the interactive tool sweeps a drawn polyline
             ),
             outputBodyIDs: outputBodyIDs
         )

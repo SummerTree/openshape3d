@@ -482,7 +482,8 @@ final class FeatureGraphEvalTests: XCTestCase {
                     plane: PlaneRef(source: .sketch(sketchID)),
                     spine: [PointWrapper(SIMD3(0, 0, 0)), PointWrapper(SIMD3(0, 0, 5)),
                             PointWrapper(SIMD3(0, 0, 10))],
-                    boolean: BooleanIntent(op: .newBody, resolvedTargets: [])),
+                    boolean: BooleanIntent(op: .newBody, resolvedTargets: []),
+                    helix: nil),
                 outputBodyIDs: [bodyID]),
         ])
         let result = graph.evaluate(sketches: [sketch], planes: [],
@@ -663,7 +664,8 @@ final class FeatureGraphEvalTests: XCTestCase {
                 profile: ProfileRef(sketchID: sA, entityIDs: [e], holeEntityIDs: [], seedPoint: nil),
                 plane: PlaneRef(source: .sketch(sB)),
                 spine: [PointWrapper(.zero)],
-                boolean: BooleanIntent(op: .newBody, resolvedTargets: [])),
+                boolean: BooleanIntent(op: .newBody, resolvedTargets: []),
+                helix: nil),
             outputBodyIDs: [BodyID()])
         XCTAssertEqual(sweep.referencedSketchIDs, [sA, sB])
 
@@ -1071,5 +1073,51 @@ final class FeatureGraphEvalTests: XCTestCase {
         let box = try XCTUnwrap(result.bodies.first { $0.id == h.boxID })
         XCTAssertEqual(volume(box), 1000 + 200, accuracy: 1e-2,
                        "the pushPull (active, unsuppressed) still ran on the box")
+    }
+
+    // MARK: - Back-compat
+
+    /// Documents saved before helical sweeps existed carry no `helix` key
+    /// anywhere; they must still decode, as the polyline sweep they were.
+    func testASweepSavedBeforeHelicesDecodesWithNoHelix() throws {
+        let sketchID = SketchID(), entity = UUID(), bodyID = BodyID()
+        let node = FeatureNode(name: "Sweep",
+            kind: .sweep(
+                profile: ProfileRef(sketchID: sketchID, entityIDs: [entity],
+                                    holeEntityIDs: [], seedPoint: .zero),
+                plane: PlaneRef(source: .sketch(sketchID)),
+                spine: [PointWrapper(SIMD3(0, 0, 0)), PointWrapper(SIMD3(0, 0, 10))],
+                boolean: BooleanIntent(op: .newBody, resolvedTargets: []),
+                helix: HelixSpec(axisPoint: .zero, axisDirection: SIMD3(0, 0, 1),
+                                 referenceDirection: SIMD3(1, 0, 0),
+                                 radius: 5, pitch: 2, turns: 3)),
+            outputBodyIDs: [bodyID])
+        let encoded = try JSONEncoder().encode(node)
+        XCTAssertTrue(try XCTUnwrap(String(data: encoded, encoding: .utf8)).contains("\"helix\""),
+                      "the helix is written when present")
+        guard case let .sweep(_, _, _, _, kept) = try JSONDecoder().decode(FeatureNode.self, from: encoded).kind else {
+            return XCTFail("round trip lost the sweep")
+        }
+        XCTAssertEqual(kept?.turns, 3, "a helix round-trips")
+
+        // A pre-helix document: the same node with every `helix` key removed, wherever it sits.
+        func stripped(_ any: Any) -> Any {
+            if let dict = any as? [String: Any] {
+                var out: [String: Any] = [:]
+                for (key, value) in dict where key != "helix" { out[key] = stripped(value) }
+                return out
+            }
+            if let array = any as? [Any] { return array.map(stripped) }
+            return any
+        }
+        let legacy = try JSONSerialization.data(
+            withJSONObject: stripped(JSONSerialization.jsonObject(with: encoded)))
+        let decoded = try JSONDecoder().decode(FeatureNode.self, from: legacy)
+        guard case let .sweep(_, _, spine, _, helix) = decoded.kind else {
+            return XCTFail("a pre-helix sweep failed to decode: \(decoded.kind)")
+        }
+        XCTAssertNil(helix)
+        XCTAssertEqual(spine.count, 2, "the polyline spine is what it always was")
+        XCTAssertEqual(decoded.outputBodyIDs, [bodyID])
     }
 }
