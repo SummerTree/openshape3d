@@ -53,6 +53,10 @@ def vols(res, label):
     print(f"-- {label}: ok={res['ok']} warn={res.get('warning')} errs={res.get('evalErrors')}")
     for b in res["bodies"]:
         print(f"     {b['name']:<20} {b['volumeMM3']:>14,.0f} mm3  brep={b['brep']}")
+def vol_of(res, body_id):
+    # By id, never positional: a boolean keeps its target body, and a
+    # non-fresh document can have any body sitting at index 0.
+    return next(b["volumeMM3"] for b in res["bodies"] if b["id"] == body_id)
 
 # ---- 1. Revolve: the rim cross-section, spun about world X ----
 sk = X({"op":"sketch.create","args":{"name":"Wheel Section",
@@ -116,7 +120,7 @@ vols(pat2,"Bolt pattern x5")
 sub2=X({"op":"feature.boolean","args":{"kind":"subtract","targetBodyID":wheel,
        "toolBodyIDs":[bid]+pat2.get("producedBodyIDs",[])}})
 vols(sub2,"Bolt subtract")
-half=sub2["bodies"][0]["volumeMM3"]
+half=vol_of(sub2, wheel)
 
 # ---- 5. Mirror across the hub face and fuse: the FULL wheel ----
 # The revolve profile is the half cross-section (world x >= 0); Mirror 01 +
@@ -130,7 +134,7 @@ vols(mir,"Mirror")
 uni=X({"op":"feature.boolean","args":{"kind":"union","targetBodyID":wheel,
        "toolBodyIDs":mir["producedBodyIDs"]}})
 vols(uni,"Union (full wheel)")
-full=uni["bodies"][0]["volumeMM3"]
+full=vol_of(uni, wheel)
 drift=abs(full-2*half)/(2*half)
 print(f"full wheel {full:,.0f} mm3 vs 2x half {2*half:,.0f} ({drift*100:.3f}% off)")
 assert drift < 0.001, "mirror+union must exactly double the half wheel"

@@ -94,7 +94,10 @@ check("box 40×40×750", vol(small), 40 * 40 * 750)
 cut = X({"op": "feature.boolean", "args": {
     "kind": "subtract", "targetBodyID": big, "toolBodyIDs": [small]}})
 print("   cut ok:", cut["ok"], "errs:", cut.get("evalErrors"))
-csg_vol = cut["bodies"][0]["volumeMM3"]
+# Read the RESULT by id: a subtract keeps its target, so `big` is the angle.
+# (`bodies[0]` was positional and read whatever body already sat first in
+# a non-fresh document.)
+csg_vol = vol(big)
 check("Method 1 angle", csg_vol, EXPECTED)
 
 # ---- Method 2: extrude the L-profile -------------------------------------
@@ -105,7 +108,7 @@ print("\nMethod 2 — extrude the L-profile:")
 L = [[0, 0], [50, 0], [50, 10], [10, 10], [10, 50], [0, 50]]
 m2 = extrude("Angle L-profile", L, [5, 5])
 print("   extrude ok:", m2["ok"], "errs:", m2.get("evalErrors"))
-l_vol = m2["bodies"][-1]["volumeMM3"]
+l_vol = vol(m2["producedBodyIDs"][0])
 check("Method 2 angle", l_vol, EXPECTED)
 
 # ---- The cross-check the tutorial is really about ------------------------
