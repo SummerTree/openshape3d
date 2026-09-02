@@ -117,7 +117,8 @@ ids that cannot run.
 ```json
 {"ok":true,"document":"Untitled 2","mode":"editingPrimitive","platform":"simulator",
  "selection":["BB96E231-…"],"selectedSketchEntities":0,
- "bodies":[{"id":"BB96E231-…","name":"Box","hidden":false,"volumeMM3":64,"brep":false}],
+ "bodies":[{"id":"BB96E231-…","name":"Box","hidden":false,"volumeMM3":64,"brep":false,
+            "bounds":[[0,0,0],[4,4,4]]}],
  "sketchCount":0,"featureCount":0,"canUndo":true,"canRedo":false,"undoTitle":"Add Box",
  "measurements":[{"label":"Volume","value":"64.00 mm³"},{"label":"Bounds","value":"4.00 × 4.00 × 4.00 mm"}],
  "commandSearchActive":false}
@@ -262,7 +263,7 @@ graph, and shows up in History like any other feature.
 | `feature.moveFace` | `bodyID`, `face`, `delta` `[du, dv, dn]` in the face's own basis (mm — du/dv shear, dn along the normal) |
 | `feature.scaleFace` | `bodyID`, `face`, `factor` (>0; scales the face about its centre, tapering the solid) |
 | `feature.rotateFace` | `bodyID`, `face`, `angleDegrees` (±360); optional `axis` `[u, v, n]` in the face's basis (default the normal, which twists in place) |
-| `feature.mirror` | `bodyID`, `planeOrigin`, `planeNormal`; optional `keepOriginal` |
+| `feature.mirror` | `bodyID`, `planeOrigin`, `planeNormal`; optional `keepOriginal` (default true — a mirrored COPY beside the source; `false` moves it: the source body is consumed, one body remains) |
 | `feature.boolean` | `kind` (union/subtract/intersect), `targetBodyID`, `toolBodyIDs[]` |
 
 Entity kinds: `line` (`a`,`b`), `circle` (`center`,`radius`), `arc`

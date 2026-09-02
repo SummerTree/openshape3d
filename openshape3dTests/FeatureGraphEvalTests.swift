@@ -644,6 +644,32 @@ final class FeatureGraphEvalTests: XCTestCase {
         XCTAssertEqual(centroidX(mirror), -20, accuracy: 1e-3, "centroid x is reflected across x=0")
     }
 
+    /// (4b) keepOriginal false MOVES the body to the other side: the source is
+    /// consumed and only the reflected copy remains (it used to be silently
+    /// ignored, leaving two bodies).
+    func testMirrorWithoutKeepOriginalConsumesTheSource() throws {
+        let boxFeature = FeatureID(), mirrorFeature = FeatureID()
+        let boxID = BodyID(), mirrorID = BodyID()
+        let graph = FeatureGraph(nodes: [
+            FeatureNode(id: boxFeature, name: "Box",
+                kind: .primitive(spec: .box(width: 4, depth: 4, height: 4),
+                                 placement: Transform3D(translation: SIMD3(20, 0, 0))),
+                outputBodyIDs: [boxID]),
+            FeatureNode(id: mirrorFeature, name: "Mirror",
+                kind: .mirror(body: BodyRef(producer: boxFeature, bodyID: boxID),
+                              plane: PlaneRef(source: .explicit(.worldYZ)),
+                              keepOriginal: false),
+                outputBodyIDs: [mirrorID]),
+        ])
+        let result = graph.evaluate(sketches: [], planes: [],
+                                    naming: SignatureNaming(), nextRevision: RevisionSource().next)
+        XCTAssertNil(result.errors[mirrorFeature], "mirror must evaluate: \(result.errors)")
+        XCTAssertEqual(Set(result.bodies.map(\.id)), [mirrorID], "the source is gone, the copy remains")
+        let mirror = try XCTUnwrap(result.bodies.first { $0.id == mirrorID })
+        XCTAssertEqual(centroidX(mirror), -20, accuracy: 1e-3)
+        XCTAssertEqual(volume(mirror), 64, accuracy: 1e-6)
+    }
+
     /// (5) referencedSketchIDs unions the profile / plane / axis sketches per kind.
     func testReferencedSketchIDsCoversProfilePlaneAxis() {
         let sA = SketchID(), sB = SketchID(), sC = SketchID()

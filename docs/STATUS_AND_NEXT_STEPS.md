@@ -131,6 +131,36 @@ design), `FREECAD_PLAYBOOK.md` (the FreeCAD-derived hardening ledger),
   (two caps + four helicoidal walls, 1e-5), and the HELICOIL rebuild
   (`rebuild_helicoil.py`, exact mode) matches to 1e-4. Documents written
   before helices decode with `helix` absent. 1176/1176.
+- **2026-09-02 — BEG 55 tapping-unit lineup (E2 Systems, TraceParts
+  90-29052019-034131), `scripts/rebuild_beg55.py`.** The "product" is eight
+  variants 200 mm apart (Ø150/Ø178 octagonal motor × drive train behind or
+  mirrored to the front about z = 42 × plain Ø52 nose or Ø64 collet chuck),
+  nine parts each — 72 reference parts, 112,982 triangles. The manufacturer's
+  drawing PDF and the TraceParts preview archive are served as downloads and
+  were NOT fetched; the reference is the product page's own three.js viewer:
+  its WebGL draw calls were intercepted for one frame and every position
+  buffer read back (world mm, one modelView for all draws), then bounding
+  boxes, signed volumes, and plane-cut section polygons (chained, DP 0.4 mm)
+  were computed in-page. Every profile in the rebuild comes from those
+  sections. Result (`beg55_report.json`, report artifact "BEG 55 Rebuild"):
+  bracket −0.07 %, feed housing +0.4 %, switch box −1.2 %, quills +1 %,
+  motors +2.2/+2.5 %, body +4.3 % (the belt housing modelled solid), valve
+  +4.9 %, plate +6.3 %, belt-cover ring −10/−16 % (not a body of revolution);
+  total +2.3 %; envelopes exact (≤ 0.7 mm) on all but the cover (4.8 mm
+  behind; 15 mm on the front-mounted units, where the reference cover is
+  rotated 90° — its ears sit along y, the mirror keeps them along x);
+  72 bodies, all analytic, 0 invalid. Landed on the way:
+  `/v1/state` bodies now carry `bounds` (mesh min/max, mm); `feature.mirror`
+  `keepOriginal:false` now CONSUMES the source (it was a documented no-op —
+  `testMirrorWithoutKeepOriginalConsumesTheSource`); a draft extrude refuses
+  offsets that eat a profile's short segments ("offsets the profile into
+  itself" — the plate outline's 2 mm corners), so drafted slabs use a clean
+  rectangle. Found, not fixed (task filed): `feature.loft` between two
+  similar octagons on parallel planes KILLS the app (connection closed, no
+  .ips) — the octagonal motor frustums use draft extrudes instead. Also:
+  a headless-booted simulator gets shut down by later xcodebuild runs — boot
+  it under Simulator.app (`open -a Simulator --args -CurrentDeviceUDID …`).
+  1179/1179.
 - Two app deaths mid-exec during this pass did NOT reproduce under
   controlled repeats (fresh doc ×2, then the heavy doc, all monitored):
   no crash report, no jetsam, RSS modest; the simulator-control helper

@@ -2173,8 +2173,9 @@ nonisolated extension FeatureGraph {
             state.errors[node.id] = .brokenRef("mirror node has no output BodyID")
             return
         }
-        // keepOriginal is effectively true in v1: the mirror node only ADDS its own
-        // output body; the source stays put (never removed here).
+        // The mirror node ADDS its own output body; with keepOriginal false the
+        // source is consumed as well (removed below, after the copy is placed),
+        // so "mirror to the other side" leaves one body, not two.
         var body = Body(
             id: id, name: node.name, transform: .identity, primitive: nil,
             euclidMesh: mirrored, revision: nextRevision())
@@ -2199,6 +2200,9 @@ nonisolated extension FeatureGraph {
         if body.brep != nil, let sourceNames = state.kernelNames[bodyRef.bodyID],
            !sourceNames.isEmpty {
             state.kernelNames[id] = sourceNames
+        }
+        if !keepOriginal {
+            state.remove(bodyRef.bodyID)
         }
     }
 

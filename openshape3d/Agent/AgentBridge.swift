@@ -884,6 +884,11 @@ final class AgentBridge {
                 // Whether this body is still analytic or has been flattened to
                 // its tessellation — the distinction the OCCT port exists for.
                 "brep": body.brep != nil,
+                // World-space extent (mm), so a rebuild can be checked against a
+                // reference part's envelope, not just its volume.
+                "bounds": MeasureKit.boundingBox(bodies: [body]).map {
+                    [[$0.min.x, $0.min.y, $0.min.z], [$0.max.x, $0.max.y, $0.max.z]]
+                } ?? [],
             ]
         }
 
