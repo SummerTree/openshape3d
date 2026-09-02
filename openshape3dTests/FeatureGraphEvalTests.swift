@@ -1169,6 +1169,46 @@ final class FeatureGraphEvalTests: XCTestCase {
                        "the pushPull (active, unsuppressed) still ran on the box")
     }
 
+    /// A sweep of a profile WITH a hole: the bore is swept as its own tube and
+    /// subtracted with ancestry, so its walls are named by the HOLE entity and
+    /// the outer walls by the outer — composed through the cut, not left
+    /// nameless (the bridge's in-sweep cut kept only the outer's history).
+    func testAHoledSweepNamesItsBoreWallsByTheHoleEntity() throws {
+        let feature = FeatureID(), bodyID = BodyID(), sketchID = SketchID()
+        let outerRect = UUID(), holeRect = UUID()
+        let sketch = Sketch(id: sketchID, name: "S", plane: .worldXY, entities: [
+            .rect(id: outerRect, min: SIMD2(-10, -10), max: SIMD2(10, 10)),
+            .rect(id: holeRect, min: SIMD2(-3, -3), max: SIMD2(3, 3))])
+        let graph = FeatureGraph(nodes: [
+            FeatureNode(id: feature, name: "Sweep",
+                kind: .sweep(
+                    profile: ProfileRef(sketchID: sketchID, entityIDs: [outerRect],
+                                        holeEntityIDs: [[holeRect]], seedPoint: SIMD2(6, 0)),
+                    plane: PlaneRef(source: .sketch(sketchID)),
+                    spine: [PointWrapper(SIMD3(0, 0, 0)), PointWrapper(SIMD3(0, 0, 10))],
+                    boolean: BooleanIntent(op: .newBody, resolvedTargets: []),
+                    helix: nil),
+                outputBodyIDs: [bodyID]),
+        ])
+        let result = graph.evaluate(sketches: [sketch], planes: [],
+                                    naming: SignatureNaming(), nextRevision: RevisionSource().next)
+        XCTAssertTrue(result.errors.isEmpty, "\(result.errors)")
+        let body = try XCTUnwrap(result.bodies.first { $0.id == bodyID })
+        XCTAssertNotNil(body.brep)
+        XCTAssertEqual(MeasureKit.volume(of: body), (400 - 36) * 10, accuracy: 1e-6)
+
+        let names = try XCTUnwrap(result.kernelNames[bodyID], "a holed sweep is named")
+        func walls(of entity: UUID) -> Int {
+            names.values.filter {
+                if case let .profileWall(e, _) = $0.source { return e == entity }
+                return false
+            }.count
+        }
+        XCTAssertEqual(walls(of: holeRect), 4, "the bore's walls carry the hole entity: \(names)")
+        XCTAssertEqual(walls(of: outerRect), 4, "the outer walls keep the outer entity")
+        XCTAssertTrue(names.values.allSatisfy { $0.creator == feature })
+    }
+
     // MARK: - Back-compat
 
     /// Documents saved before helical sweeps existed carry no `helix` key

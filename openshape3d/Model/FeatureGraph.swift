@@ -1940,17 +1940,49 @@ nonisolated extension FeatureGraph {
         // The render mesh follows the sampled polyline either way; the B-rep
         // follows the EXACT helix when the node carries one (`HelixSpec`).
         let mesh = SweepLoftKit.sweep(profile: outer, holes: holes, in: plane, alongPath: spinePts)
-        let history: OCCTShapeHistory? =
-            OCCTKernel.useOCCTAsSourceOfTruth ? OCCTShapeHistory() : nil
-        let brep = OCCTKernel.useOCCTAsSourceOfTruth
-            ? OCCTKernel.sweepSolid(outer: outer, holes: holes, plane: plane,
-                                    spine: spinePts, helix: helix, history: history)
-            : nil
-        let names = (brep != nil ? history : nil).map {
-            ElementNaming.extrudeNames(creator: node.id,
-                                       ancestry: ShapeAncestry($0),
-                                       outer: outer, holes: holes)
-        } ?? [:]
+        var brep: BRepHandle? = nil
+        var names: [Int: ElementName] = [:]
+        if OCCTKernel.useOCCTAsSourceOfTruth {
+            // Sweep the OUTER alone, named from its profile; then each hole as
+            // its own tube, named from ITS hole entity, subtracted with
+            // ancestry and composed — exactly as the drafted bore does. The
+            // bridge's own in-sweep cut would leave the bore walls nameless
+            // (its history covers the outer sweep only), so a holed sweep's
+            // bore could only be found by geometry, never by identity.
+            let history = OCCTShapeHistory()
+            guard var solid = OCCTKernel.sweepSolid(outer: outer, holes: [], plane: plane,
+                                                    spine: spinePts, helix: helix, history: history) else {
+                emitFullSolid(node, mesh: mesh, brep: nil, kernelNames: [:],
+                              boolean: boolean, scheme: .generic,
+                              into: &state, next: nextRevision)
+                return
+            }
+            names = ElementNaming.extrudeNames(creator: node.id, ancestry: ShapeAncestry(history),
+                                               outer: outer, holes: [])
+            for hole in holes {
+                let boreHistory = OCCTShapeHistory()
+                guard let bore = OCCTKernel.sweepSolid(outer: hole, holes: [], plane: plane,
+                                                       spine: spinePts, helix: helix, history: boreHistory) else {
+                    state.errors[node.id] = .kernelFailure("sweep hole tube failed")
+                    return
+                }
+                let boreNames = ElementNaming.extrudeNames(creator: node.id, ancestry: ShapeAncestry(boreHistory),
+                                                           outer: hole, holes: [])
+                switch OCCTKernel.booleanResultWithAncestry(solid, bore, op: OCCTKernel.booleanOp(.subtract)) {
+                case let .success((outcome, ancestry)):
+                    solid = outcome.handle
+                    names = ElementNaming.composeNames(operation: node.id, ancestry: ancestry,
+                                                       inputNames: [names, boreNames])
+                case let .failure(error):
+                    state.errors[node.id] = .kernelFailure("sweep hole cut: \(error.message)")
+                    return
+                case nil:
+                    state.errors[node.id] = .kernelFailure("sweep hole cut failed")
+                    return
+                }
+            }
+            brep = solid
+        }
         emitFullSolid(node, mesh: mesh, brep: brep, kernelNames: names,
                       boolean: boolean, scheme: .generic,
                       into: &state, next: nextRevision)
