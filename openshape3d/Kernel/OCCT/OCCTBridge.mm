@@ -35,6 +35,9 @@
 #include <BRepOffsetAPI_MakeOffsetShape.hxx>
 #include <TopTools_IndexedDataMapOfShapeListOfShape.hxx>
 #include <BRepAdaptor_Curve.hxx>
+#include <BRepAlgoAPI_Section.hxx>
+#include <GCPnts_UniformDeflection.hxx>
+#include <gp_Pln.hxx>
 #include <GeomAPI_ProjectPointOnCurve.hxx>
 #include <Geom_Curve.hxx>
 #include <TopExp.hxx>
@@ -2297,6 +2300,46 @@ static OCCTShape *OS3DBlendByIndices(OCCTShape *shape, NSData *edgeIndices,
         }
         return [NSData dataWithBytes:rows.data()
                               length:rows.size() * sizeof(double)];
+    } catch (...) {
+        return nil;
+    }
+}
+
++ (nullable NSData *)sectionOfShape:(OCCTShape *)shape
+                              plane:(NSData *)plane
+                         deflection:(double)deflection {
+    if (shape == nil || shape->_shape.IsNull() || plane.length < 6 * sizeof(double)) return nil;
+    try {
+        const double *p = (const double *)plane.bytes;
+        gp_Pln pln(gp_Pnt(p[0], p[1], p[2]), gp_Dir(p[3], p[4], p[5]));
+        BRepAlgoAPI_Section section(shape->_shape, pln, Standard_False);
+        section.ComputePCurveOn1(Standard_True);
+        section.Approximation(Standard_True);
+        section.Build();
+        if (!section.IsDone()) return nil;
+        const double chord = deflection > 0 ? deflection : 0.05;
+        std::vector<double> out;
+        for (TopExp_Explorer ex(section.Shape(), TopAbs_EDGE); ex.More(); ex.Next()) {
+            const TopoDS_Edge edge = TopoDS::Edge(ex.Current());
+            BRepAdaptor_Curve curve(edge);
+            std::vector<gp_Pnt> pts;
+            if (curve.GetType() == GeomAbs_Line) {
+                pts.push_back(curve.Value(curve.FirstParameter()));
+                pts.push_back(curve.Value(curve.LastParameter()));
+            } else {
+                GCPnts_UniformDeflection disc(curve, chord, curve.FirstParameter(), curve.LastParameter());
+                if (disc.IsDone() && disc.NbPoints() >= 2) {
+                    for (Standard_Integer i = 1; i <= disc.NbPoints(); ++i) pts.push_back(disc.Value(i));
+                } else {
+                    pts.push_back(curve.Value(curve.FirstParameter()));
+                    pts.push_back(curve.Value(curve.LastParameter()));
+                }
+            }
+            if (edge.Orientation() == TopAbs_REVERSED) std::reverse(pts.begin(), pts.end());
+            out.push_back((double)pts.size());
+            for (const gp_Pnt &q : pts) { out.push_back(q.X()); out.push_back(q.Y()); out.push_back(q.Z()); }
+        }
+        return [NSData dataWithBytes:out.data() length:out.size() * sizeof(double)];
     } catch (...) {
         return nil;
     }

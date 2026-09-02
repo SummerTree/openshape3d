@@ -185,6 +185,29 @@ stale; only NAMES go missing after an undo (refs then mint name-less), so
 there is no `stale_identity` refusal on these endpoints. Edges missing from
 the list are seams/borders, which never blend anyway.
 
+### `GET /v1/section?body=<uuid>&normal=x,y,z[&origin=x,y,z][&xAxis=x,y,z][&deflection=0.05]`
+
+A plane cut through one body — the drawing view. The solid is cut where it
+SITS (its placement applied, so a pattern instance or a moved body cuts in
+place), and the kernel's section edges are chained into loops in the plane's
+own frame: `xAxis` is your `xAxis` projected into the plane (or the world
+axis least aligned with the normal), `yAxis = normal × xAxis`. Curves are
+sampled at `deflection` mm chord error (default 0.05), collinear runs are
+merged, and loops come largest area first:
+
+```json
+{"body":"…","plane":{"origin":[0,0,15],"normal":[0,0,1],"xAxis":[1,0,0],"yAxis":[0,1,0]},
+ "count":2,"loops":[{"closed":true,"area":6000,"points":[[-50,-30],[50,-30],[50,30],[-50,30]]},
+                    {"closed":true,"area":-804.2,"points":[…]}]}
+```
+
+`area` is the shoelace area with sign (a hole traverses the other way);
+an open chain (the plane grazing a face) has `closed:false` and `area:0`.
+This is the tool for checking a rebuild section-for-section against a
+reference cut (the BEG 55 report did that by hand on the reference side
+only): `bad_plane` when `normal` is missing or zero; a mesh-only body is
+refused like `/v1/edges`.
+
 ### `POST /v1/exec` — `feature.fillet` / `feature.chamfer` / `feature.shell`
 
 The ops that used to be inexpressible over the wire (they take topological

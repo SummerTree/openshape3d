@@ -609,6 +609,32 @@ nonisolated enum OCCTKernel {
     /// Per-kernel-face geometry in the shared 1-based numbering. Planar
     /// normals point OUT of the solid; a cylindrical face's "normal" is its
     /// axis direction, matching `FaceSignature` conventions.
+    /// The plane's intersection with the solid as world-space polylines, one
+    /// per kernel section edge (a line as its two ends, a curve sampled at
+    /// `deflection` mm chord error), unordered. `SectionKit.loops` chains
+    /// them into the closed loops a drawing shows.
+    static func sectionPolylines(_ handle: BRepHandle, origin: SIMD3<Double>,
+                                 normal: SIMD3<Double>, deflection: Double = 0.05) -> [[SIMD3<Double>]] {
+        var plane: [Double] = [origin.x, origin.y, origin.z, normal.x, normal.y, normal.z]
+        let data = Data(bytes: &plane, count: 6 * MemoryLayout<Double>.size)
+        guard let out = OCCTBridge.section(of: handle.shape, plane: data, deflection: deflection) else { return [] }
+        let values: [Double] = out.withUnsafeBytes { Array($0.bindMemory(to: Double.self)) }
+        var result: [[SIMD3<Double>]] = []
+        var i = 0
+        while i < values.count {
+            let count = Int(values[i]); i += 1
+            guard count >= 1, i + count * 3 <= values.count else { break }
+            var pts: [SIMD3<Double>] = []
+            pts.reserveCapacity(count)
+            for k in 0..<count {
+                pts.append(SIMD3(values[i + 3 * k], values[i + 3 * k + 1], values[i + 3 * k + 2]))
+            }
+            i += count * 3
+            result.append(pts)
+        }
+        return result
+    }
+
     static func faceInfo(_ handle: BRepHandle) -> [KernelFaceInfo] {
         guard let data = OCCTBridge.faceInfo(of: handle.shape) else { return [] }
         let values: [Double] = data.withUnsafeBytes {

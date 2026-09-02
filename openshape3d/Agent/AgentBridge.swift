@@ -117,6 +117,10 @@ final class AgentBridge {
         case let .faces(bodyID):
             return listFaces(bodyID: bodyID, on: viewModel)
 
+        case let .section(bodyID, origin, normal, xAxisHint, deflection):
+            return section(bodyID: bodyID, origin: origin, normal: normal,
+                           xAxisHint: xAxisHint, deflection: deflection, on: viewModel)
+
         case let .capture(note):
             let analytic = viewModel.session.document.bodies.compactMap { body in
                 body.brep.map { (label: body.name, handle: $0) }
@@ -519,6 +523,42 @@ final class AgentBridge {
     private func jsonObject<T: Encodable>(_ value: T) -> Any? {
         guard let data = try? JSONEncoder().encode(value) else { return nil }
         return try? JSONSerialization.jsonObject(with: data)
+    }
+
+    /// `GET /v1/section?body=&normal=&origin=&xAxis=&deflection=`: the plane
+    /// cut through the body's PLACED solid (its transform applied, so pattern
+    /// instances and moved bodies cut where they sit), chained into loops in
+    /// the plane frame. Mesh-only bodies are refused like /v1/edges.
+    private func section(bodyID: String, origin: SIMD3<Double>, normal: SIMD3<Double>,
+                         xAxisHint: SIMD3<Double>?, deflection: Double,
+                         on viewModel: EditorViewModel) -> AgentResponse {
+        guard let uuid = UUID(uuidString: bodyID) else {
+            return execMissing("body", bodyID)
+        }
+        let context: (body: Body, brep: BRepHandle)
+        switch identityContext(BodyID(raw: uuid), viewModel.session) {
+        case let .ok(body, brep): context = (body, brep)
+        case let .reply(reply): return reply
+        }
+        let placed = OCCTKernel.transformed(context.brep, by: context.body.transform) ?? context.brep
+        let n = simd_normalize(normal)
+        let pieces = OCCTKernel.sectionPolylines(placed, origin: origin, normal: n, deflection: deflection)
+        let frame = SectionKit.frame(normal: n, xAxisHint: xAxisHint)
+        let loops = SectionKit.loops(from: pieces, origin: origin, xAxis: frame.xAxis, yAxis: frame.yAxis)
+        return .ok([
+            "body": context.body.id.raw.uuidString,
+            "plane": [
+                "origin": [origin.x, origin.y, origin.z],
+                "normal": [n.x, n.y, n.z],
+                "xAxis": [frame.xAxis.x, frame.xAxis.y, frame.xAxis.z],
+                "yAxis": [frame.yAxis.x, frame.yAxis.y, frame.yAxis.z],
+            ],
+            "count": loops.count,
+            "loops": loops.map { loop -> [String: Any] in
+                ["closed": loop.closed, "area": loop.area,
+                 "points": loop.points.map { [$0.x, $0.y] }]
+            },
+        ])
     }
 
     private func listEdges(bodyID: String, on viewModel: EditorViewModel) -> AgentResponse {

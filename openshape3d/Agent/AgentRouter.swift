@@ -79,6 +79,10 @@ nonisolated enum AgentRoute: Sendable, Equatable {
     /// Kernel face discovery — the shell/fillet counterpart of /v1/state's
     /// body list, one level deeper.
     case faces(bodyID: String)
+    /// A plane cut through one body, as closed loops in the plane's frame —
+    /// the drawing view, for checking a rebuild section-for-section.
+    case section(bodyID: String, origin: SIMD3<Double>, normal: SIMD3<Double>,
+                 xAxisHint: SIMD3<Double>?, deflection: Double)
     /// Already-decided replies.
     case reply(status: Int, error: String, message: String)
 
@@ -86,7 +90,7 @@ nonisolated enum AgentRoute: Sendable, Equatable {
     var needsEditor: Bool {
         switch self {
         case .state, .runCommand, .exec, .screenshot, .check, .capture,
-             .edges, .faces:
+             .edges, .faces, .section:
             return true
         case .health, .commands, .reply: return false
         }
@@ -136,6 +140,23 @@ nonisolated enum AgentRouter {
             }
             return request.path == "/v1/edges"
                 ? .edges(bodyID: body) : .faces(bodyID: body)
+
+        case "/v1/section":
+            if let bad = get(request) { return bad }
+            guard let body = request.query["body"], !body.isEmpty else {
+                return .reply(status: 400, error: "missing_body_param",
+                              message: "/v1/section needs ?body=<uuid> — ids come from /v1/state.")
+            }
+            guard let normal = vector3(request.query["normal"]), simd_length(normal) > 1e-9 else {
+                return .reply(status: 400, error: "bad_plane",
+                              message: "/v1/section needs ?normal=x,y,z (non-zero); optional origin=x,y,z "
+                                     + "(default 0,0,0), xAxis=x,y,z (the loops' u direction), deflection (mm, 0.05).")
+            }
+            let origin = vector3(request.query["origin"]) ?? .zero
+            let hint = vector3(request.query["xAxis"])
+            let deflection = request.query["deflection"].flatMap(Double.init) ?? 0.05
+            return .section(bodyID: body, origin: origin, normal: normal,
+                            xAxisHint: hint, deflection: deflection)
 
         case "/v1/capture":
             guard request.method == "POST" else {
@@ -191,6 +212,14 @@ nonisolated enum AgentRouter {
     }
 
     /// 405 unless the method is GET.
+    /// `"x,y,z"` from a query string; nil unless exactly three numbers.
+    private static func vector3(_ raw: String?) -> SIMD3<Double>? {
+        guard let raw else { return nil }
+        let parts = raw.split(separator: ",").compactMap { Double($0.trimmingCharacters(in: .whitespaces)) }
+        guard parts.count == 3 else { return nil }
+        return SIMD3(parts[0], parts[1], parts[2])
+    }
+
     private static func get(_ request: AgentRequest) -> AgentRoute? {
         request.method == "GET" ? nil : .reply(
             status: 405, error: "method_not_allowed",

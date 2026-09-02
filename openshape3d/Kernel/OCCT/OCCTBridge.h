@@ -461,6 +461,16 @@ typedef NS_ENUM(NSInteger, OCCTOpCode) {
 /// revolved washer exactly that way (measured 2026-09-01).
 + (nullable NSData *)faceInfoOfShape:(OCCTShape *)shape;
 
+/// The plane's intersection with the shape (`BRepAlgoAPI_Section`), as
+/// packed doubles: per section edge `count, x1 y1 z1, … xN yN zN` in the
+/// edge's own direction — a line as its two ends, any other curve sampled
+/// at `deflection` (chord error, mm). `plane` is six doubles: origin then
+/// normal. Pieces arrive unordered; chaining them into loops is the
+/// caller's job (`SectionKit`). Nil on a null shape or a failed cut.
++ (nullable NSData *)sectionOfShape:(OCCTShape *)shape
+                              plane:(NSData *)plane
+                         deflection:(double)deflection;
+
 /// Every edge with exactly two distinct adjacent faces, as packed int32
 /// triples `(edgeIndex, faceA, faceB)` — 1-based indexed-map numbering
 /// shared with the render mesh's face channel and the ancestry rows; the
