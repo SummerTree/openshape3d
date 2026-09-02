@@ -9895,7 +9895,7 @@ final class EditorViewModel {
             guard let body = session.document.body(with: id),
                   let box = MeasureKit.boundingBox(bodies: [body])
             else { return [] }
-            let volume = MeasureKit.bodyVolume(body.render, scale: body.transform.scale)
+            let volume = MeasureKit.volume(of: body)   // B-rep-exact when analytic
             let size = box.max - box.min
             return [
                 MeasurementRow(label: "Volume", value: Self.formattedVolume(volume)),

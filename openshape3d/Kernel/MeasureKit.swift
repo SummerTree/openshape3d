@@ -31,6 +31,26 @@ nonisolated enum MeasureKit {
         return abs(sum) / 6 * scale * scale * scale
     }
 
+    /// The volume to REPORT for a body: exact from its B-rep when it has one,
+    /// the render mesh otherwise.
+    ///
+    /// The mesh is a tessellation, so on curved surfaces it reads low — an
+    /// inscribed 48-gon is ~0.3% under the true circle, and every curved
+    /// catalogue part rebuilt in the real-part validation landed at exactly
+    /// that offset (wheel, revolved housing, drafted cone: 0.27–0.29%). The
+    /// geometry was right; the ruler was faceted. `BRepGProp` integrates the
+    /// analytic surfaces, so a cylinder reads π·r²·h to the mm³. Falls back
+    /// to the mesh when there is no B-rep (a mesh-only op) or the kernel
+    /// reports 0 (its failure value) — never silently reports nothing.
+    static func volume(of body: Body) -> Double {
+        let s = body.transform.scale
+        if let brep = body.brep {
+            let exact = OCCTKernel.volume(brep)
+            if exact > 0 { return exact * s * s * s }
+        }
+        return bodyVolume(body.render, scale: s)
+    }
+
     /// Total surface area of the mesh (× scale²).
     static func surfaceArea(_ mesh: RenderMesh, scale: Double = 1) -> Double {
         area(of: mesh, triangles: 0..<mesh.triangleCount, scale: scale)

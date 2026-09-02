@@ -877,7 +877,9 @@ final class AgentBridge {
                 "id": body.id.raw.uuidString,
                 "name": body.name,
                 "hidden": body.isHidden,
-                "volumeMM3": MeasureKit.bodyVolume(body.render, scale: body.transform.scale),
+                // Exact from the B-rep where there is one (the mesh reads
+                // ~0.3% low on curved faces) — same number the info bar shows.
+                "volumeMM3": MeasureKit.volume(of: body),
                 // Whether this body is still analytic or has been flattened to
                 // its tessellation — the distinction the OCCT port exists for.
                 "brep": body.brep != nil,
