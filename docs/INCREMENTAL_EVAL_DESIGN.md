@@ -1,9 +1,21 @@
 # Incremental evaluation — memoised replay (design)
 
-Status: **DESIGN + SLICE 1 IN PROGRESS (2026-09-02).** Slice 1 = the pure
-`FeatureGraph` memo (journal + fingerprint + cache) with unit tests; slice 2
-= `DocumentSession` wiring (revision adoption, skip-unchanged replace,
-cached error refresh) and the heavy-document measurement.
+Status: **SLICES 1 + 2 LANDED (2026-09-02).** Slice 1 = the pure
+`FeatureGraph` memo (journal + fingerprint + cache, `EvalCache.swift`,
+`IncrementalEvalTests`); slice 2 = `DocumentSession` wiring (cache threaded
+through `performRebuild`, skip-unchanged `ReplaceBodyCommand`, adoption of
+the document's bodies after apply, cached copies for the read-only replays).
+
+**Measured after, same document and script as the table below:**
+
+| document | trivial 10×10×5 box extrude | RSS per op | undo |
+|---|---|---|---|
+| light | **0.03–0.05 s** | +0.1 MB | — |
+| heavy (60M mm³ wheel chain) | **0.04 s** (was 18–21 s, ~500×) | **+0.2 MB** (was +70 MB) | **0.04 s** (was a full replay) |
+
+Suite 1139/1139. What remains from §4.5 is orthogonal: off-main evaluation
+(S1) and GPU buffer pooling (S2) — this is the "don't recompute" layer
+underneath both.
 
 ## The measured problem
 

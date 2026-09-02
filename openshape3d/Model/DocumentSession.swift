@@ -28,6 +28,12 @@ final class DocumentSession {
     /// Per-node errors from the most recent `rebuildFrom` evaluation, surfaced
     /// to the editor/history panel (broken-ref / empty-geometry / kernel-failure
     /// badges). Empty when the last rebuild was clean.
+    /// The replay memo (docs/INCREMENTAL_EVAL_DESIGN.md): per feature node, the
+    /// fingerprint of its inputs and the delta it produced last time, so a
+    /// rebuild re-runs only what changed. Threaded through `performRebuild`
+    /// and adopted to the document's bodies after each apply; the read-only
+    /// replays (`refreshEvalErrors`, `inputBody`) use a discarded copy.
+    private var evalCache = EvalCache()
     private(set) var lastEvalErrors: [FeatureID: FeatureError] = [:]
 
     /// The face tables of the most recent APPLIED rebuild — the tables whose
@@ -204,11 +210,13 @@ final class DocumentSession {
         guard let index = graph.index(of: featureID) else { return nil }
         graph.rollbackIndex = index
         var counter: UInt64 = 1
+        var scratch = evalCache   // read-only use of the memo; discarded
         let result = graph.evaluate(
             sketches: document.sketches,
             planes: document.planes,
             naming: naming,
-            nextRevision: { counter &+= 1; return counter }
+            nextRevision: { counter &+= 1; return counter },
+            cache: &scratch
         )
         return result.bodies.first { $0.id == bodyID }
     }
@@ -373,11 +381,14 @@ final class DocumentSession {
         // bodies get a fresh one again in ReplaceBodyCommand.apply).
         // `sketches` override: performWithSketchRebuild evaluates against a
         // preview that already contains its (not-yet-performed) sketch edit.
+        // Memoised (docs/INCREMENTAL_EVAL_DESIGN.md): nodes whose inputs are
+        // unchanged are spliced from `evalCache` instead of re-run.
         let result = editedGraph.evaluate(
             sketches: sketches ?? document.sketches,
             planes: document.planes,
             naming: naming,
-            nextRevision: { self.document.nextRevision() }
+            nextRevision: { self.document.nextRevision() },
+            cache: &evalCache
         )
         lastEvalErrors = result.errors
         lastFaceTables = result.faceTables
@@ -412,6 +423,11 @@ final class DocumentSession {
         // graph) is tranche 2.
         for body in result.bodies where ownedIDs.contains(body.id) {
             if let existing = currentOwned[body.id] {
+                // Unchanged since the last apply: a spliced node's body carries
+                // the document's own revision (adopted below), so there is no
+                // replace — no re-mint, no GPU rebuild, no undo noise. A node
+                // that actually ran minted a fresh revision and still replaces.
+                if existing.meshRevision == body.meshRevision { continue }
                 var after = body
                 after.name = existing.name
                 after.isHidden = existing.isHidden
@@ -444,6 +460,7 @@ final class DocumentSession {
 
         guard !commands.isEmpty else {
             captureNamingRevisions(for: resultByID.keys)
+            adoptCachedBodies()
             return
         }
         perform(CompositeCommand(title: title, commands: commands))
@@ -454,6 +471,15 @@ final class DocumentSession {
         // retained tables/names describe these bodies exactly — the replay
         // built them — only the revision stamps had moved.
         captureNamingRevisions(for: resultByID.keys)
+        adoptCachedBodies()
+    }
+
+    /// The memo's bodies take the DOCUMENT's post-apply geometry and revision
+    /// (shared storage, the re-minted stamp), so the next replay's splices
+    /// compare equal to what is live and the memo does not double the
+    /// geometry it remembers — see `EvalCache.adopt`.
+    private func adoptCachedBodies() {
+        evalCache.adopt(Dictionary(uniqueKeysWithValues: document.bodies.map { ($0.id, $0) }))
     }
 
     /// Stamp which body revisions `lastFaceTables`/`lastKernelNames`
@@ -795,6 +821,7 @@ final class DocumentSession {
             loaded.variables.append(decodeVariable(persisted))
         }
         document = loaded
+        evalCache = EvalCache()   // a fresh memo for a freshly loaded document
         if storeIsNewerThanApp {
             loadWarning = """
             This project was saved by a newer version of the app. It opens \
@@ -840,11 +867,15 @@ final class DocumentSession {
             return
         }
         var counter: UInt64 = 1
+        // Against a COPY of the memo: as fast as a live rebuild for unchanged
+        // nodes, and still incapable of mutating the document or the memo.
+        var scratch = evalCache
         let result = document.features.evaluate(
             sketches: document.sketches,
             planes: document.planes,
             naming: naming,
-            nextRevision: { counter &+= 1; return counter }
+            nextRevision: { counter &+= 1; return counter },
+            cache: &scratch
         )
         lastEvalErrors = result.errors
     }

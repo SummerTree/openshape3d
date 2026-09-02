@@ -53,8 +53,19 @@ design), `FREECAD_PLAYBOOK.md` (the FreeCAD-derived hardening ledger),
   With the 60M mm³ wheel chain sitting in the document, each of the lock's
   ~14 exec ops cost ~13 s (whole rebuild ~3 min vs ~4 s in a fresh document)
   and RSS climbed 253 MB → 1.6 GB: every op re-evaluates unrelated upstream
-  chains. These are the hard numbers for the §4.5 off-main-eval / scene-
-  caching mission. Deliberately NOT fixed here — it is that mission.
+  chains. **FIXED the same day — memoised replay** (`INCREMENTAL_EVAL_DESIGN.md`,
+  slices 1+2, `EvalCache.swift`): each node is fingerprinted from its kind,
+  its referenced sketches/planes and the stamps of the bodies it consumes
+  (a Merkle chain over producer fingerprints), and an unchanged node is
+  spliced from its journaled delta instead of re-run; the session then skips
+  the `ReplaceBodyCommand` for bodies whose revision is unchanged, so the
+  GPU does not rebuild them either, and the read-only replays (error
+  refresh on load/undo/redo, edit previews) use a discarded copy of the
+  memo. Same document, same script: the heavy-document trivial extrude went
+  **18–21 s → 0.04 s (~500×)**, RSS per op **+70 MB → +0.2 MB**, undo
+  **full replay → 0.04 s**. Correctness rests on `consumedBodyIDs`
+  enumerating every body a kind reads — an op that reads an undeclared
+  body must declare it or run uncached (gotcha 19).
 - Two app deaths mid-exec during this pass did NOT reproduce under
   controlled repeats (fresh doc ×2, then the heavy doc, all monitored):
   no crash report, no jetsam, RSS modest; the simulator-control helper
@@ -95,7 +106,9 @@ registry) and new kernel capability (spline-as-profile, draft/taper angles
 for cast parts, transform-as-a-feature). Each warrants its own design pass,
 not incremental continuation.
 
-**Current test baseline (2026-09-01): 1115 unit tests in ~17s** (1 skipped:
+**Current test baseline (2026-09-02): 1139 unit tests in ~17s** (draft/taper,
+B-rep volume readback, memoised replay all added on 2026-09-01/02; the
+previous line follows) — **(2026-09-01): 1115 unit tests in ~17s** (1 skipped:
 the on-demand `OCCTFuzzTests` hostile-input sweep, run with
 `TEST_RUNNER_OS3D_FUZZ=1`). Earlier this session: 1086 → the naming
 completions, real-part regressions, exec expansion, and conflict-diagnosis
@@ -747,6 +760,18 @@ first differing frame is the one you want.
     it seeded each. Corollary for rebuild scripts: read result bodies BY ID
     (`producedBodyIDs`, or the boolean's target id) — never `bodies[0]`,
     which reads whatever leftover body sits first in a non-fresh document.
+
+19. **The replay memo is only as correct as `consumedBodyIDs`.** A node is
+    spliced from `EvalCache` (skipped, not re-run) whenever its kind, its
+    referenced sketches/planes and the stamps of the bodies it CONSUMES are
+    unchanged — so an eval that reads a body it does not declare would be
+    silently stale when only that body changed. Every kind's inputs are read
+    straight off its refs in `FeatureNode.consumedBodyIDs`; when you add a
+    kind, or make an existing eval read another body (a second target, a
+    reference face on a different body), declare it there. If it genuinely
+    cannot be enumerated, leave the node out of the memo (always re-run) —
+    correct-by-default. `IncrementalEvalTests` pins the contract on a
+    boolean graph; add a case there for any new consumer relationship.
 
 ---
 
