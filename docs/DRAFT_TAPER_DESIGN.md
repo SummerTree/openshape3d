@@ -121,6 +121,24 @@ caller gives an angle, not a hand-computed second profile.
 - **Slice 2**: holes (negated offset), symmetric (three-section loft).
 - **Slice 3**: circular / curved boundaries, carrying the single-edge-wire
   offset care FreeCAD documents.
+- **Slice 4 — consumed edges (landed 2026-09-02, `6ae1699`).** A real
+  outline has short edges — a 2 mm corner cut, the chords of a tessellated
+  round — that an inward offset larger than ~2.4× their length CONSUMES:
+  the edge's two mitres cross and its offset copy runs backwards.
+  `ProfileOffset.offsetLoop` used to return nil for any of them (the BEG 55
+  motor plate could only be drafted as a rectangle). It now does what every
+  kernel does — the edge vanishes and its neighbours meet — with one twist
+  the loft imposes: the vertex COUNT must survive because base and offset
+  are lofted edge-for-edge. So each run of consumed edges collapses onto
+  the meeting point of its surviving neighbours' carriers, its vertices
+  spread 1e-3 mm along the run's chord; the wall over a consumed edge is a
+  sliver face, which OCCT and the render loft both accept. The honest nil
+  remains for survivors that still reverse, or fewer than three survivors.
+  Every lateral face is planar and all vertices lie on two parallel planes,
+  so the prismoid formula pins the volume exactly
+  (`testADraftThatConsumesCornerCutsStillBuilds`, 45,306.67 mm³). The
+  segments path (`SegmentOffset`, lines + arcs) still returns nil on a
+  reversed line and falls through to this polygon path.
 
 Ledgered in `FREECAD_PLAYBOOK.md` (the `makeDraft` = loft-between-offset
 pattern).

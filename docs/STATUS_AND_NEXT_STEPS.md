@@ -159,7 +159,24 @@ design), `FREECAD_PLAYBOOK.md` (the FreeCAD-derived hardening ledger),
   45 vs the 43–47 stroke, bracket back −5.7 (the 459 likely runs to a cover
   plate the CAD omits), motor B +9 (B excludes the 9 mm front cap). The CAD
   and the rebuild agree with the sheet identically — the rebuild's profiles
-  came from the CAD. Landed on the way:
+  came from the CAD. **Then transform-as-a-feature (2026-09-02, `3f3c4ca`):**
+  `FeatureKind.transform` had been a "tranche 2" eval error; `evalTransform`
+  now composes the delta onto the body's placement (as a pattern instance
+  carries one — no kernel call, analytic solid + element names kept, same
+  id, revision bumped so the session replaces the render; scale refused),
+  and `feature.transform {bodyID, translation, rotationDegrees, rotationAxis,
+  rotationCenter}` exposes it (rotation about a centre folded in as
+  T·R·T⁻¹; identity refused). The interactive Move tool still writes
+  `body.transform` directly — moving it onto the node is the remaining half
+  of the mission. 1183/1183. **Then the draft's consumed edges (`6ae1699`):**
+  `ProfileOffset.offsetLoop` refused any outline whose short edges an inward
+  offset consumed (every 2 mm corner cut under a 14 mm draft — measured
+  outlines are full of them). Each run of consumed edges now collapses onto
+  the meeting point of its surviving neighbours' carriers, keeping the vertex
+  count (the draft lofts edge-for-edge) with the run's vertices 1e-3 apart,
+  so the wall over a consumed edge is a sliver; survivors that still reverse,
+  or fewer than three, stay nil. Pinned by the prismoid-exact volume of a
+  drafted chamfered outline (45,306.67 mm³). 1186/1186. Landed on the way:
   `/v1/state` bodies now carry `bounds` (mesh min/max, mm); `feature.mirror`
   `keepOriginal:false` now CONSUMES the source (it was a documented no-op —
   `testMirrorWithoutKeepOriginalConsumesTheSource`); a draft extrude refuses

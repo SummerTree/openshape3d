@@ -236,10 +236,11 @@ def drive_train(cx, size, front):
     # The slab's top face is inset 10.8 (x) / 22 (y) at z = 18: one uniform draft
     # stands in for the two-rate chamfer. 12 mm over 18 — the outline's 12.7 mm
     # corner segments survive that offset; 16 mm consumed them (self-intersection).
-    # The measured outline carries 2 mm corner segments that any useful inward
-    # offset consumes, so the drafted slab is the outline's rectangle (the
-    # rounded corners live in the 6 mm base); its top lands at ±56 x 98..233.
-    extrude("Plate Slab", XY(0, cx), [rect(-70, 84, 70, 247.4)], (30, 120), 18, "union", plate, taper=math.degrees(math.atan(14 / 18)))
+    # The measured outline carries 2 mm corner segments that the 14 mm inward
+    # offset consumes; since 6ae1699 the draft collapses those onto the
+    # neighbouring corners instead of refusing, so the slab drafts the real
+    # outline (its top lands at about ±56 x 98..233, corners rounded).
+    extrude("Plate Slab", XY(0, cx), poly(PLATE_XY), (30, 120), 18, "union", plate, taper=math.degrees(math.atan(14 / 18)))
     # the 68-wide rib on the back exists in four runs (x = 0 section), not one bar
     for y0, y1 in [(96.6, 122.7), (127.7, 149.7), (181.7, 188.7), (193.7, 227.2)]:
         extrude("Plate Rib", XY(-17.5, cx), [rect(-34, y0, 34, y1)], (0, (y0 + y1) / 2), 11.5, "union", plate)
