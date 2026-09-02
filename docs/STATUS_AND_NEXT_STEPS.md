@@ -223,7 +223,13 @@ design), `FREECAD_PLAYBOOK.md` (the FreeCAD-derived hardening ledger),
   (Euclid only as the fallback; the boolean-into-target tool built lazily).
   Live: 2 s, B-rep 17,083.915 mm³ = the interpolating spline's Gauss-exact
   area × 8 less the bore to 1.8e-8, −0.0003 % against the true cam (the 5°
-  sampling), 4 faces, 0 invalid. 1203/1203. Landed on the way:
+  sampling), 4 faces, 0 invalid. 1203/1203. **Then the holed sweep's render
+  mesh (`9310d3d`):** its BSP subtract of the hole cutters (the same hazard,
+  and `emitFullSolid` keeps the Euclid render on purpose) replaced by walls
+  for the outer (CCW) and every hole (CW) through the shared transported
+  frames (`sweepFrames`) plus `PolygonTriangulator` caps — the 1,152-sample
+  outline with a bore sweeps in 0.1 s to the exact prism volume, and a holed
+  sweep round a mitred corner stays watertight. 1205/1205. Landed on the way:
   `/v1/state` bodies now carry `bounds` (mesh min/max, mm); `feature.mirror`
   `keepOriginal:false` now CONSUMES the source (it was a documented no-op —
   `testMirrorWithoutKeepOriginalConsumesTheSource`); a draft extrude refuses
@@ -278,7 +284,7 @@ transform-as-a-feature). Draft/taper angles for cast parts landed
 the memoised replay landed 2026-09-02. Each remaining mission warrants its
 own design pass, not incremental continuation.
 
-**Current test baseline (2026-09-02, evening): 1203 unit tests in ~21s** — the
+**Current test baseline (2026-09-02, evening): 1205 unit tests in ~22s** — the
 day added the exact helix spine, the BEG 55 lineup's bounds/mirror fixes,
 transform-as-a-feature, consumed-edge drafts on both offset paths, plane
 sections (`SectionKit`, `KernelSectionTests`), and the exact face areas.
@@ -1035,9 +1041,12 @@ first differing frame is the one you want.
     as the fallback (the boolean-into-target tool is built lazily). The
     signal to remember: `sample <pid> 3` on the simulator app shows the hot
     frames — both times it was `Euclid … BSP.clip / coplanarDetessellate`,
-    never the kernel. `SweepLoftKit.sweep(profile:holes:)` and the loft still
-    build their render meshes in Euclid: the same hazard for holed spline
-    sweeps, unfixed.
+    never the kernel. The holed SWEEP's render mesh (`SweepLoftKit.sweep`,
+    which `emitFullSolid` keeps on purpose — adopting OCCT's revolve
+    tessellation made the naming pass unusable) had the same BSP subtract;
+    since `9310d3d` it sweeps outer and holes as walls through the shared
+    frames and triangulates the caps with holes — no boolean. The holed
+    LOFT (`Euclid.Mesh.loft` over subpaths) is the one place left.
 
 ---
 
