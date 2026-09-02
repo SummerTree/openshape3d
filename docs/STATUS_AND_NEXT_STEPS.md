@@ -128,10 +128,13 @@ design), `FREECAD_PLAYBOOK.md` (the FreeCAD-derived hardening ledger),
   read sin/cos/mm so the conflict gate is scale-honest.
 
 Next missions are genuinely different in kind — architectural refactors
-(§4.5: off-main eval/preview service, scene caching, `ToolLifecycle`
-registry) and new kernel capability (spline-as-profile, draft/taper angles
-for cast parts, transform-as-a-feature). Each warrants its own design pass,
-not incremental continuation.
+(§4.5: off-main eval slices 1–3 per `OFF_MAIN_EVAL_DESIGN.md`, scene
+caching, `ToolLifecycle` registry) and new kernel capability
+(spline-as-profile — designed in `SPLINE_PROFILE_DESIGN.md`, not started;
+transform-as-a-feature). Draft/taper angles for cast parts landed
+2026-09-01/02 (`DRAFT_TAPER_DESIGN.md`, complete for line/arc profiles);
+the memoised replay landed 2026-09-02. Each remaining mission warrants its
+own design pass, not incremental continuation.
 
 **Current test baseline (2026-09-02): 1156 unit tests in ~17s** (draft/taper incl.
 arc profiles and non-tangent joints, B-rep volume readback, memoised replay, rebuild planner all added on 2026-09-01/02; the
