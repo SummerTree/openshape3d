@@ -286,14 +286,22 @@ design), `FREECAD_PLAYBOOK.md` (the FreeCAD-derived hardening ledger),
   and add-time refusals name the clashing partners; the four mm² residuals
   read sin/cos/mm so the conflict gate is scale-honest.
 
-Next missions are genuinely different in kind — architectural refactors
-(§4.5: off-main eval slices 1–3 per `OFF_MAIN_EVAL_DESIGN.md`, scene
-caching, `ToolLifecycle` registry) and new kernel capability
-(spline-as-profile — designed in `SPLINE_PROFILE_DESIGN.md`, not started;
-transform-as-a-feature). Draft/taper angles for cast parts landed
-2026-09-01/02 (`DRAFT_TAPER_DESIGN.md`, complete for line/arc profiles);
-the memoised replay landed 2026-09-02. Each remaining mission warrants its
-own design pass, not incremental continuation.
+What is left after 2026-09-02 (everything else in this list of missions
+landed — draft/taper incl. consumed edges, memoised replay, spline-as-profile
+through slice 3, transform-as-a-feature on both the API and the tools,
+plane sections, exact face areas, holed-sweep naming, CSG-free render meshes):
+
+- **Off-main eval, S1b slices 1–3** (`OFF_MAIN_EVAL_DESIGN.md`) — the
+  true async contract; attended work, its own design pass.
+- **`feature.loft` crash** on two similar octagons on parallel planes — a
+  Swift `assert` inside Euclid (Debug only); in a separate session.
+- **Scale as a node**: `.transform` refuses scale (the graph's composition
+  and `OCCTKernel.transformed` ignore it), so the Scale tool still writes
+  `body.transform` directly and a scaled body's move is still lost on the
+  next rebuild. Needs scale in the composition AND in the B-rep placement.
+- **Consumed ARCS in `SegmentOffset`** (an arc whose offset radius
+  vanishes) still return nil; lines are handled. Rare in practice.
+- **Scene caching / `ToolLifecycle` registry** (§4.5) — untouched.
 
 **Current test baseline (2026-09-02, evening): 1209 unit tests in ~21s** — the
 day added the exact helix spine, the BEG 55 lineup's bounds/mirror fixes,
