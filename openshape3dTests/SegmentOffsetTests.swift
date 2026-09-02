@@ -162,4 +162,47 @@ final class SegmentOffsetTests: XCTestCase {
         XCTAssertNil(SegmentOffset.offset(slot(), by: -11), "inward past the radius collapses the arcs")
         XCTAssertNotNil(SegmentOffset.offset(slot(), by: -9.9))
     }
+
+    /// A 60×20 outline with R5 rounds on the right and 2 mm chamfers on the
+    /// left: 4 mm inward, the rounds shrink to R1 exactly while each chamfer
+    /// is consumed (its mitres cross after 2.4 mm) and collapses onto the
+    /// sharp corner where the top/bottom line meets the left line — the
+    /// segment count survives, the stub is ε long, and the section area is
+    /// the 52×12 rectangle less two R1 corner deficits.
+    private func roundedAndChamfered() -> [Seg] {
+        let c = 0.7071067811865476 * 5
+        return [
+            Seg(start: SIMD2(-28, -10), end: SIMD2(25, -10)),
+            Seg(start: SIMD2(25, -10), end: SIMD2(30, -5), mid: SIMD2(25 + c, -5 - c)),
+            Seg(start: SIMD2(30, -5), end: SIMD2(30, 5)),
+            Seg(start: SIMD2(30, 5), end: SIMD2(25, 10), mid: SIMD2(25 + c, 5 + c)),
+            Seg(start: SIMD2(25, 10), end: SIMD2(-28, 10)),
+            Seg(start: SIMD2(-28, 10), end: SIMD2(-30, 8)),
+            Seg(start: SIMD2(-30, 8), end: SIMD2(-30, -8)),
+            Seg(start: SIMD2(-30, -8), end: SIMD2(-28, -10)),
+        ]
+    }
+
+    func testAConsumedChamferBetweenLinesCollapsesOntoTheCorner() throws {
+        let g = try XCTUnwrap(SegmentOffset.offset(roundedAndChamfered(), by: -4), "consumed chamfers must not refuse")
+        XCTAssertEqual(g.count, 8, "segment count survives for the loft")
+        for i in [5, 7] {
+            XCTAssertLessThan(simd_distance(g[i].start, g[i].end), 2e-3, "chamfer \(i) is an ε-stub")
+        }
+        XCTAssertLessThan(simd_distance(g[5].start, SIMD2(-26, 6)), 2e-3, "top-left corner \(g[5].start)")
+        XCTAssertLessThan(simd_distance(g[7].start, SIMD2(-26, -6)), 2e-3, "bottom-left corner \(g[7].start)")
+        // the rounds are concentric R1 arcs, still exact
+        let mid1 = try XCTUnwrap(g[1].mid), mid3 = try XCTUnwrap(g[3].mid)
+        XCTAssertEqual(simd_distance(mid1, SIMD2(25, -5)), 1, accuracy: 1e-9)
+        XCTAssertEqual(simd_distance(mid3, SIMD2(25, 5)), 1, accuracy: 1e-9)
+        XCTAssertEqual(simd_distance(g[6].start, SIMD2(-26, 6)), 0, accuracy: 2e-3)
+        XCTAssertEqual(simd_distance(g[6].end, SIMD2(-26, -6)), 0, accuracy: 2e-3)
+        let area = Profile.signedArea(SegmentOffset.loop(from: g, arcPoints: 64))
+        XCTAssertEqual(area, 52 * 12 - 2 * (1 - Double.pi / 4), accuracy: 0.05)
+    }
+
+    func testAnOffsetPastTheRoundsStillRefuses() {
+        XCTAssertNil(SegmentOffset.offset(roundedAndChamfered(), by: -8),
+                     "8 mm inward collapses the R5 rounds and reverses the right flank — no section")
+    }
 }

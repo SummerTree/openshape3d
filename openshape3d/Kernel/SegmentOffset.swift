@@ -144,6 +144,52 @@ nonisolated enum SegmentOffset {
             pieces[j].seg.start = joint
         }
 
+        // 2b. Consumed LINES. A short flat (a chamfer, a tessellated chord)
+        //     under an offset deeper than its own mitres pulls its two joints
+        //     past each other, so the piece now runs backwards. As in the
+        //     polygon path, the line vanishes and its surviving neighbours
+        //     meet: each run of consumed lines collapses onto the meeting point
+        //     of the neighbours' carriers — kept as ε-length pieces so the
+        //     piece COUNT survives (the draft lofts segment-for-segment), with
+        //     both joints placed exactly ON the neighbouring carriers so an
+        //     arc's ends stay on its circle. A consumed ARC is a different
+        //     animal (its sweep is gone, not its length) and stays nil below.
+        var collapsed = Set<Int>()
+        let consumedLines = (0..<n).filter { i in
+            !pieces[i].isArc
+                && simd_dot(segs[i].end - segs[i].start, pieces[i].seg.end - pieces[i].seg.start) <= 1e-12
+        }
+        if !consumedLines.isEmpty {
+            guard n - consumedLines.count >= 2 else { return nil }
+            let consumedSet = Set(consumedLines)
+            let eps = 1e-3
+            for start in consumedLines where !collapsed.contains(start) {
+                var first = start
+                while consumedSet.contains((first - 1 + n) % n), (first - 1 + n) % n != start { first = (first - 1 + n) % n }
+                var last = first
+                while consumedSet.contains((last + 1) % n), (last + 1) % n != first { last = (last + 1) % n }
+                var run = [first]
+                while run.last! != last { run.append((run.last! + 1) % n) }
+                let prev = (first - 1 + n) % n, next = (last + 1) % n
+                guard prev != next else { return nil }
+                let near = (segs[first].start + segs[last].end) / 2
+                guard let meet = carrierIntersection(pieces[prev], pieces[next], near: near) else { return nil }
+                let count = run.count + 1                       // joints prev|first … last|next
+                let far = advance(pieces[next], from: meet, by: Double(count - 1) * eps)
+                let points = (0..<count).map { k -> SIMD2<Double> in
+                    let s = Double(k) / Double(count - 1)
+                    return meet + (far - meet) * s
+                }
+                pieces[prev].seg.end = points[0]
+                for (k, i) in run.enumerated() {
+                    pieces[i].seg.start = points[k]
+                    pieces[i].seg.end = points[k + 1]
+                    collapsed.insert(i)
+                }
+                pieces[next].seg.start = points[count - 1]
+            }
+        }
+
         // 3. Arcs: re-derive `mid` from the final ends along the traversal
         //    direction, and require the ORIGINAL mid's direction to still lie
         //    on the arc — a trim that emptied or flipped the arc fails here.
@@ -158,9 +204,10 @@ nonisolated enum SegmentOffset {
             let am = a0 + sweep / 2
             pieces[i].seg.mid = c + SIMD2(cos(am), sin(am)) * r
         }
-        // Lines still run their original way; the boundary still encloses a
+        // Surviving lines still run their original way (the collapsed ones
+        // are ε-stubs by construction); the boundary still encloses a
         // positive (CCW) area.
-        for i in 0..<n where !pieces[i].isArc {
+        for i in 0..<n where !pieces[i].isArc && !collapsed.contains(i) {
             let orig = segs[i].end - segs[i].start
             let new = pieces[i].seg.end - pieces[i].seg.start
             guard simd_dot(orig, new) > 1e-12 else { return nil }
@@ -171,6 +218,19 @@ nonisolated enum SegmentOffset {
     }
 
     // MARK: - Internals
+
+    /// The point on `piece`'s carrier `dist` further along its traversal
+    /// from `p` (a point already on the carrier): straight for a line, around
+    /// the circle for an arc — CCW about the centre when convex, CW when not.
+    private static func advance(_ piece: Piece, from p: SIMD2<Double>, by dist: Double) -> SIMD2<Double> {
+        guard piece.isArc else { return p + piece.dir * dist }
+        let r = piece.radius
+        guard r > 1e-12 else { return p }
+        let angle = (piece.convex ? 1.0 : -1.0) * dist / r
+        let v = p - piece.center
+        let rotated = SIMD2(v.x * cos(angle) - v.y * sin(angle), v.x * sin(angle) + v.y * cos(angle))
+        return piece.center + rotated
+    }
 
     private struct Piece {
         var seg: Profile.Segment
