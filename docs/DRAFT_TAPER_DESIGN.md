@@ -1,11 +1,14 @@
 # Draft / taper angle on extrude — design (to land as its own mission)
 
-Status: **SLICE 1 LANDED (2026-09-01)** — hole-free profiles, single
-direction, through `feature.extrude` with a `taperDegrees` argument. A
-40×40 square drafted 10° over 20 mm produces exactly 26,689 mm³ (the
-analytic square-frustum volume), end to end through exec, valid B-rep, 0
-invalid. Slices 2 (holes, symmetric) and 3 (curved boundaries) remain, per
-the staging at the bottom.
+Status: **SLICES 1 + 2 (holes) LANDED (2026-09-01)** — through
+`feature.extrude` with a `taperDegrees` argument. A 40×40 square drafted
+10° over 20 mm is exactly 26,689 mm³ (the analytic frustum); a holed
+profile drafts the hole the OPPOSITE way (a bore widens toward the far end
+for core release) and subtracts it, giving outer-frustum − bore-frustum.
+Both end to end, valid B-rep, 0 invalid. STILL OPEN: symmetric (three-
+section loft), curved-boundary profiles (single-edge-wire care), and
+composed hole-WALL naming (the subtraction currently relabels the holed
+result by geometry). Staging at the bottom.
 
 ## Why
 

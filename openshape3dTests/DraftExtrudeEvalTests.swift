@@ -98,10 +98,10 @@ final class DraftExtrudeEvalTests: XCTestCase {
                      "no body ships from a collapsed section")
     }
 
-    /// Slice 1 is hole-free: a profile that declares a hole is refused (a hole
-    /// needs the opposite offset + its own lofted subtraction — deferred), not
-    /// silently drafted as a solid.
-    func testADraftOnAHoledProfileIsRefusedForNow() throws {
+    /// Slice 2: a hole drafts the OPPOSITE way (the bore widens toward the far
+    /// end, for core release) and is subtracted — so the result is the outer
+    /// frustum minus the outward-drafted bore frustum.
+    func testADraftOnAHoledProfileCutsADraftedBore() throws {
         let draft = FeatureID(), draftID = BodyID()
         let sketchID = SketchID(), outerRect = UUID(), holeRect = UUID()
         let sketch = Sketch(id: sketchID, name: "H", plane: .ground, entities: [
@@ -113,12 +113,24 @@ final class DraftExtrudeEvalTests: XCTestCase {
                 profile: ProfileRef(sketchID: sketchID, entityIDs: [outerRect],
                                     holeEntityIDs: [[holeRect]], seedPoint: SIMD2(12, 0)),
                 plane: PlaneRef(source: .sketch(sketchID)),
-                distance: Expr(value: 10), taperAngle: Expr(value: 5),
+                distance: Expr(value: 20), taperAngle: Expr(value: 10),
                 boolean: BooleanIntent(op: .newBody, resolvedTargets: [])),
             outputBodyIDs: [draftID])
         let result = evaluate([node], [sketch])
-        XCTAssertNotNil(result.errors[draft],
-                        "draft on a holed profile is deferred, not silently solid")
-        XCTAssertNil(result.bodies.first { $0.id == draftID })
+        XCTAssertTrue(result.errors.isEmpty, "\(result.errors)")
+        let body = try XCTUnwrap(result.bodies.first { $0.id == draftID })
+        XCTAssertNotNil(body.brep, "a drafted holed pad is a real B-rep")
+
+        func frustum(_ side0: Double, _ side1: Double, _ h: Double) -> Double {
+            let a = side0 * side0, b = side1 * side1
+            return h / 3 * (a + b + (a * b).squareRoot())
+        }
+        let off = 20 * tan(10 * Double.pi / 180)
+        let outer = frustum(40, 40 - 2 * off, 20)          // contracts
+        let bore = frustum(10, 10 + 2 * off, 20)           // opposite → widens
+        let want = outer - bore
+        let vol = MeasureKit.bodyVolume(body.render, scale: 1)
+        XCTAssertEqual(vol, want, accuracy: max(1, want * 0.01),
+                       "outer frustum \(outer) − bore frustum \(bore) = \(want), got \(vol)")
     }
 }

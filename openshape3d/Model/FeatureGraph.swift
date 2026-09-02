@@ -1805,52 +1805,79 @@ nonisolated extension FeatureGraph {
             state.errors[node.id] = .brokenRef("draft-extrude plane unresolved")
             return
         }
-        // Slice 1: a hole needs the OPPOSITE offset and its own lofted
-        // subtraction — deferred, so surface it rather than draft the outline
-        // and silently drop the hole.
-        guard holes.isEmpty else {
-            state.errors[node.id] = .kernelFailure(
-                "draft on a profile with holes is not supported yet")
-            return
-        }
         let d = distance.value
         guard abs(d) > 1e-9 else {
             state.errors[node.id] = .kernelFailure("draft-extrude distance must be non-zero")
             return
         }
+        // The outer boundary contracts along the extrude by `offsetDistance`;
+        // every HOLE offsets the OPPOSITE way (a bore widens toward the far
+        // end, so a core pin releases), keeping the wall's draft consistent.
         let offsetDistance = -tan(taperAngle.value * .pi / 180) * d
-        guard let offsetLoop = ProfileOffset.offsetLoop(outer.loop, by: offsetDistance) else {
+        func polyProfile(_ loop: [SIMD2<Double>], from src: Profile) -> Profile {
+            // POLYLINE sections so the loft matches edge-for-edge (a conic base
+            // against a polygonal top would desync ThruSections).
+            Profile(loop: loop, kind: .polygonal,
+                    sourceEntityIDs: src.sourceEntityIDs, edgeEntityIDs: src.edgeEntityIDs)
+        }
+        func offsetSection(_ p: Profile, by dist: Double) -> (base: Profile, top: Profile)? {
+            guard let top = ProfileOffset.offsetLoop(p.loop, by: dist) else { return nil }
+            return (polyProfile(p.loop, from: p), polyProfile(top, from: p))
+        }
+        guard let outerSec = offsetSection(outer, by: offsetDistance) else {
             state.errors[node.id] = .kernelFailure(
                 "the taper offsets the profile into itself — reduce the angle or the depth")
             return
         }
-        // Both sections as POLYLINE profiles so the loft matches edge-for-edge
-        // (a conic base against a polygonal top would desync ThruSections).
-        func polyProfile(_ loop: [SIMD2<Double>]) -> Profile {
-            Profile(loop: loop, kind: .polygonal,
-                    sourceEntityIDs: outer.sourceEntityIDs,
-                    edgeEntityIDs: outer.edgeEntityIDs)
+        var holeSecs: [(base: Profile, top: Profile)] = []
+        for hole in holes {
+            guard let sec = offsetSection(hole, by: -offsetDistance) else {
+                state.errors[node.id] = .kernelFailure(
+                    "the taper offsets a hole into itself — reduce the angle or the depth")
+                return
+            }
+            holeSecs.append(sec)
         }
-        let base = polyProfile(outer.loop)
+
         let n = simd_normalize(plane.normal)
         let topPlane = SketchPlane(origin: plane.origin + n * d,
                                    xAxis: plane.xAxis, yAxis: plane.yAxis)
-        let sections = [(profile: base, holes: [Profile](), plane: plane),
-                        (profile: polyProfile(offsetLoop), holes: [Profile](), plane: topPlane)]
-        let mesh = SweepLoftKit.loft(profiles: sections)
-        let history: OCCTShapeHistory? =
-            OCCTKernel.useOCCTAsSourceOfTruth ? OCCTShapeHistory() : nil
-        let brep = OCCTKernel.useOCCTAsSourceOfTruth
-            ? OCCTKernel.loftSolid(sections: sections.map { ($0.profile, $0.plane) },
-                                   history: history)
-            : nil
-        // Walls name from the base profile edges (loft naming); a drafted wall
-        // is still owned by the sketch edge that seeded it.
-        let names = (brep != nil ? history : nil).map {
-            ElementNaming.extrudeNames(creator: node.id,
-                                       ancestry: ShapeAncestry($0),
-                                       outer: base, holes: [])
-        } ?? [:]
+        // Render mesh: one lofted shell with the holes carried per section.
+        let mesh = SweepLoftKit.loft(profiles: [
+            (outerSec.base, holeSecs.map(\.base), plane),
+            (outerSec.top, holeSecs.map(\.top), topPlane)])
+
+        // B-rep: loft the outer, then subtract each hole's own loft. Naming
+        // rides the outer loft's history when there are no holes; with holes
+        // the subtraction reindexes the faces, so it relabels by geometry
+        // (composed hole-wall naming is the next follow-on, per the doc).
+        var brep: BRepHandle?
+        var names: [Int: ElementName] = [:]
+        if OCCTKernel.useOCCTAsSourceOfTruth {
+            let history = OCCTShapeHistory()
+            guard var solid = OCCTKernel.loftSolid(
+                sections: [(outerSec.base, plane), (outerSec.top, topPlane)],
+                history: history) else {
+                state.errors[node.id] = .kernelFailure("draft-extrude loft failed")
+                return
+            }
+            if holeSecs.isEmpty {
+                names = ElementNaming.extrudeNames(
+                    creator: node.id, ancestry: ShapeAncestry(history),
+                    outer: outerSec.base, holes: [])
+            } else {
+                for sec in holeSecs {
+                    guard let bore = OCCTKernel.loftSolid(
+                            sections: [(sec.base, plane), (sec.top, topPlane)]),
+                          let cut = OCCTKernel.boolean(solid, bore, op: 1) else {
+                        state.errors[node.id] = .kernelFailure("draft-extrude hole cut failed")
+                        return
+                    }
+                    solid = cut
+                }
+            }
+            brep = solid
+        }
         emitFullSolid(node, mesh: mesh, brep: brep, kernelNames: names,
                       boolean: boolean, scheme: .generic,
                       into: &state, next: nextRevision)
