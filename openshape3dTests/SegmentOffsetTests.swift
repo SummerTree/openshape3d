@@ -148,6 +148,16 @@ final class SegmentOffsetTests: XCTestCase {
         XCTAssertNil(SegmentOffset.offset(lens(), by: -7))
     }
 
+    /// A spline segment has no exact offset (the offset of a cubic is not a
+    /// cubic): the boundary takes the polygon path instead.
+    func testSplineSegmentsRefuse() {
+        let withSpline: [Seg] = [
+            Seg(start: SIMD2(0, 0), end: SIMD2(20, 0)),
+            Seg(start: SIMD2(20, 0), end: SIMD2(0, 0),
+                controlPoints: [SIMD2(20, 0), SIMD2(15, 8), SIMD2(5, 8), SIMD2(0, 0)])]
+        XCTAssertNil(SegmentOffset.offset(withSpline, by: -1))
+    }
+
     func testCollapseIsRefused() {
         XCTAssertNil(SegmentOffset.offset(slot(), by: -11), "inward past the radius collapses the arcs")
         XCTAssertNotNil(SegmentOffset.offset(slot(), by: -9.9))

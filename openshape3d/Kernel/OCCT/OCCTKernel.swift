@@ -559,6 +559,18 @@ nonisolated enum OCCTKernel {
         try? removingFacesResult(handle, at: points, tolerance: tolerance).get()
     }
 
+    /// The poles of the B-spline edge the kernel builds for a sketch spline —
+    /// the cross-language pin for `CatmullRomBezier` (a test compares them
+    /// pole for pole with the Swift conversion). Nil if the edge fails.
+    static func splineEdgePoles(_ points: [SIMD2<Double>], closed: Bool) -> [SIMD2<Double>]? {
+        var flat = [Double](); flat.reserveCapacity(points.count * 2)
+        for p in points { flat.append(p.x); flat.append(p.y) }
+        let data = flat.withUnsafeBytes { Data($0) }
+        guard let out = OCCTBridge.splineEdgePoles(forPoints: data, closed: closed) else { return nil }
+        let values: [Double] = out.withUnsafeBytes { Array($0.bindMemory(to: Double.self)) }
+        return stride(from: 0, to: values.count - 1, by: 2).map { SIMD2(values[$0], values[$0 + 1]) }
+    }
+
     /// Analytic face-type histogram of a solid — how we assert that geometry
     /// stayed exact through an operation.
     static func faceTypeCounts(_ handle: BRepHandle)
@@ -895,9 +907,6 @@ nonisolated enum OCCTKernel {
             linearDeflection: renderLinearDeflection).faceIndices.uint32Array()
     }
 
-    /// 7 doubles per edge — `isArc, x1, y1, x2, y2, midX, midY` — matching
-    /// `SegWire` in the bridge. Empty in, empty out: an all-straight loop has
-    /// nothing to say here that its polyline does not already say exactly.
     /// 5 doubles per entry — `cx, cy, rx, ry, rotation` — parallel to the
     /// loops they describe. A non-positive `rx` means "no conic here, use the
     /// polyline", which is how one flat array carries the absent case too.
@@ -913,10 +922,23 @@ nonisolated enum OCCTKernel {
         return flat.withUnsafeBytes { Data($0) }
     }
 
+    /// Segment records for `SegWire`, which walks them by KIND. A line or arc
+    /// is 7 doubles — `kind (0 line / 1 arc), x1, y1, x2, y2, midX, midY` —
+    /// and a spline is `kind (2 open / 3 closed), count, then count x,y
+    /// control points` (docs/SPLINE_PROFILE_DESIGN.md), so lines and arcs are
+    /// byte-for-byte what they always were. Empty in, empty out: an all-
+    /// straight loop has nothing to say here that its polyline does not
+    /// already say exactly.
     private static func packSegments(_ segments: [Profile.Segment]) -> Data {
         guard !segments.isEmpty else { return Data() }
         var flat = [Double](); flat.reserveCapacity(segments.count * 7)
         for s in segments {
+            if let points = s.controlPoints {
+                flat.append(s.closed ? 3 : 2)
+                flat.append(Double(points.count))
+                for p in points { flat.append(p.x); flat.append(p.y) }
+                continue
+            }
             flat.append(s.mid == nil ? 0 : 1)
             flat.append(s.start.x); flat.append(s.start.y)
             flat.append(s.end.x); flat.append(s.end.y)

@@ -97,8 +97,18 @@ design), `FREECAD_PLAYBOOK.md` (the FreeCAD-derived hardening ledger),
   `CatmullRomBezier` — the exact cubic Bézier spans of the centripetal
   Catmull–Rom the sketch draws (so the kernel can build the SAME curve, no
   shape change for existing sketches) plus a Gauss-exact closed area;
-  pinned against `splinePoints` to 1e-9. 1161/1161. Slices 1–3 (bridge
-  B-spline edge, detector emission, naming, stress) not started.
+  pinned against `splinePoints` to 1e-9. 1161/1161.
+  **Slice 1 landed the same day:** a sketch spline is an exact profile end
+  to end — one `Geom_BSplineCurve` edge assembled directly from the Bézier
+  chain, `ProfileDetector` making splines participate (a `.spline` entity
+  had been ignored entirely — not a profile at all), one smooth wall named
+  by the entity, draft falling back to the polygon path. Pinned pole for
+  pole against the kernel and by exact volume (closed form, 1e-6). **And a
+  finding: `BRepGProp`'s default volume rule is inexact on B-spline
+  geometry** (0.4–1.3% depending on parameterisation alone); `OS3DVolume`
+  now uses Gauss–Kronrod per knot span and matches to twelve figures —
+  gotcha 20. 1166/1166. Slices 2–3 (blend stress on spline walls, a real
+  splined part) remain.
 - Two app deaths mid-exec during this pass did NOT reproduce under
   controlled repeats (fresh doc ×2, then the heavy doc, all monitored):
   no crash report, no jetsam, RSS modest; the simulator-control helper
@@ -142,8 +152,8 @@ transform-as-a-feature). Draft/taper angles for cast parts landed
 the memoised replay landed 2026-09-02. Each remaining mission warrants its
 own design pass, not incremental continuation.
 
-**Current test baseline (2026-09-02): 1161 unit tests in ~17s** (draft/taper incl.
-arc profiles and non-tangent joints, spline Bézier conversion, B-rep volume readback, memoised replay, rebuild planner all added on 2026-09-01/02; the
+**Current test baseline (2026-09-02): 1166 unit tests in ~20s** (draft/taper incl.
+arc profiles and non-tangent joints, spline profiles with exact B-spline walls, B-rep volume readback, memoised replay, rebuild planner all added on 2026-09-01/02; the
 previous line follows) — **(2026-09-01): 1115 unit tests in ~17s** (1 skipped:
 the on-demand `OCCTFuzzTests` hostile-input sweep, run with
 `TEST_RUNNER_OS3D_FUZZ=1`). Earlier this session: 1086 → the naming
@@ -814,6 +824,20 @@ first differing frame is the one you want.
     cannot be enumerated, leave the node out of the memo (always re-run) —
     correct-by-default. `IncrementalEvalTests` pins the contract on a
     boolean graph; add a case there for any new consumer relationship.
+
+20. **`BRepGProp::VolumeProperties`' default rule is NOT exact on B-spline
+    geometry.** Its fixed-order Gauss integration is exact for planar and
+    analytic faces but not across a B-spline's knot spans: a spline-walled
+    extrude read 0.4% high with one parameterisation of the SAME curve and
+    1.3% high with another, and the `Eps` "adaptive" overload read 0.3% low.
+    `OS3DVolume` (the source of `MeasureKit.volume(of:)`, the info bar and
+    `/v1/state.volumeMM3`) now uses `VolumePropertiesGK(…, Eps 1e-7,
+    IsUseSpan: true)` — Gauss–Kronrod per span — and matches closed forms to
+    twelve figures. It costs ~2 s across the 1166-test suite. Anything that
+    integrates a B-spline face elsewhere has the same exposure:
+    `faceInfoOfShape:`'s `SurfaceProperties(face, props)` areas are still
+    the default rule (they feed identification heuristics, not checks) — use
+    the GK/`IsUseSpan` form before trusting a B-spline face area.
 
 ---
 

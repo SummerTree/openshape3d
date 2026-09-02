@@ -68,6 +68,10 @@ nonisolated enum SegmentOffset {
         let n = segments.count
         guard n >= 2 else { return nil }
         if abs(distance) < 1e-12 { return segments }
+        // The exact offset of a cubic is not a cubic: a spline segment has no
+        // exact offset here, so a boundary carrying one takes the polygon
+        // path (docs/SPLINE_PROFILE_DESIGN.md — not a goal).
+        guard !segments.contains(where: { $0.controlPoints != nil }) else { return nil }
 
         let area = Profile.signedArea(loop(from: segments))
         guard abs(area) > 1e-12 else { return nil }

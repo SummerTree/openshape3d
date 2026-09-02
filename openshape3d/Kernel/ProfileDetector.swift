@@ -39,11 +39,22 @@ nonisolated struct Profile: Identifiable {
         var start: SIMD2<Double>
         var end: SIMD2<Double>
         var mid: SIMD2<Double>?
+        /// A spline run (docs/SPLINE_PROFILE_DESIGN.md): the centripetal
+        /// Catmull–Rom control points from `start` to `end` in traversal
+        /// order, for which the kernel builds ONE B-spline edge — the same
+        /// curve `SketchEntity.splinePoints` draws. `closed` marks a closed
+        /// spline (the curve returns to its first point; `start == end`).
+        /// Nil for lines and arcs.
+        var controlPoints: [SIMD2<Double>]? = nil
+        var closed: Bool = false
 
-        init(start: SIMD2<Double>, end: SIMD2<Double>, mid: SIMD2<Double>? = nil) {
+        init(start: SIMD2<Double>, end: SIMD2<Double>, mid: SIMD2<Double>? = nil,
+             controlPoints: [SIMD2<Double>]? = nil, closed: Bool = false) {
             self.start = start
             self.end = end
             self.mid = mid
+            self.controlPoints = controlPoints
+            self.closed = closed
         }
     }
 
@@ -163,6 +174,28 @@ nonisolated enum ProfileDetector {
             }
         }
 
+        // Closed splines are closed profiles too, carried as ONE exact segment
+        // holding the control points, so the kernel builds a single B-spline
+        // edge and the wall it sweeps is one face (docs/SPLINE_PROFILE_DESIGN.md).
+        // Reversing the control points reverses the curve, so a CW spline is
+        // normalised by re-sampling them reversed — loop and segment agree.
+        for entity in entities {
+            if case let .spline(id, points, closed) = entity, closed, points.count >= 3 {
+                var control = points
+                var loop = SketchEntity.splinePoints(control, closed: true)
+                if Profile.signedArea(loop) < 0 {
+                    control.reverse()
+                    loop = SketchEntity.splinePoints(control, closed: true)
+                }
+                guard Profile.signedArea(loop) > 1e-9, !isSelfIntersecting(loop) else { continue }
+                profiles.append(Profile(
+                    loop: loop, kind: .polygonal, sourceEntityIDs: [id],
+                    segments: [Profile.Segment(start: control[0], end: control[0],
+                                               controlPoints: control, closed: true)],
+                    segmentEntityIDs: [id]))
+            }
+        }
+
         // Rects are closed by definition; emit directly (CCW).
         for entity in entities {
             if case let .rect(id, lo, hi) = entity {
@@ -240,6 +273,9 @@ nonisolated enum ProfileDetector {
             /// analytic boundary should describe it as an arc rather than as
             /// the polyline standing in for it.
             let isArc: Bool
+            /// An OPEN spline's control points, in the order of `points`, so a
+            /// loop can carry it as one exact segment (one B-spline edge).
+            var spline: [SIMD2<Double>]? = nil
         }
 
         var chains: [Chain] = []
@@ -255,6 +291,14 @@ nonisolated enum ProfileDetector {
                 )
                 if points.count >= 2 {
                     chains.append(Chain(entityID: id, points: points, isArc: true))
+                }
+            case let .spline(id, points, closed) where !closed && points.count >= 2:
+                // An open spline joins loops like any chain: its endpoints are
+                // the junction candidates, its samples the polyline, and its
+                // control points ride along for the exact edge.
+                let samples = SketchEntity.splinePoints(points, closed: false)
+                if samples.count >= 2, simd_length(samples.last! - samples.first!) > 1e-9 {
+                    chains.append(Chain(entityID: id, points: samples, isArc: false, spline: points))
                 }
             default:
                 break
@@ -334,7 +378,7 @@ nonisolated enum ProfileDetector {
             var segments: [Profile.Segment] = []
             var edgeEntityIDs: [UUID] = []
             var segmentEntityIDs: [UUID] = []
-            var sawArc = false
+            var sawCurve = false   // an arc or a spline: an exact boundary worth carrying
             var spur = false
             for index in cycle {
                 let half = halfEdges[index]
@@ -354,8 +398,15 @@ nonisolated enum ProfileDetector {
                 // An interior SAMPLE serves as the arc's third point: it is on
                 // the true arc by construction, whichever way the face
                 // traversal happened to walk this chain.
-                if chain.isArc, pts.count >= 3 {
-                    sawArc = true
+                if let control = chain.spline {
+                    // The control points in THIS traversal's order: a reversed
+                    // Catmull–Rom is the same curve walked backwards.
+                    sawCurve = true
+                    segments.append(Profile.Segment(
+                        start: pts[0], end: pts[pts.count - 1],
+                        controlPoints: half.forward ? control : control.reversed()))
+                } else if chain.isArc, pts.count >= 3 {
+                    sawCurve = true
                     segments.append(Profile.Segment(
                         start: pts[0], end: pts[pts.count - 1], mid: pts[pts.count / 2]))
                 } else if let first = pts.first, let last = pts.last {
@@ -378,10 +429,10 @@ nonisolated enum ProfileDetector {
                 kind: .polygonal,
                 sourceEntityIDs: Set(chainIDs.map { chains[$0].entityID }),
                 // Nothing to gain on an all-straight loop; see `segments`.
-                segments: sawArc ? segments : [],
+                segments: sawCurve ? segments : [],
                 edgeEntityIDs: edgeEntityIDs,
                 // Parallel to `segments`, so it follows the same emptiness.
-                segmentEntityIDs: sawArc ? segmentEntityIDs : []
+                segmentEntityIDs: sawCurve ? segmentEntityIDs : []
             ))
         }
         return profiles

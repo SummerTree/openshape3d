@@ -365,6 +365,12 @@ typedef NS_ENUM(NSInteger, OCCTOpCode) {
 /// wall and gains a curved blend face).
 + (OCCTFaceTypeCounts *)faceTypeCountsOfShape:(OCCTShape *)shape;
 
+/// The poles (x,y pairs) of the B-spline edge the kernel builds for a sketch
+/// spline through `xy` (x,y pairs) — the cross-language pin for
+/// `CatmullRomBezier` (docs/SPLINE_PROFILE_DESIGN.md): a Swift test compares
+/// them pole for pole with the Swift conversion. Nil if the edge cannot be built.
++ (nullable NSData *)splineEdgePolesForPoints:(NSData *)xy closed:(BOOL)closed;
+
 /// Round the edges that pass near `worldPoints` to `radius`
 /// (`BRepFilletAPI_MakeFillet`). `worldPoints` is packed doubles (x,y,z triples)
 /// — typically the midpoints of the mesh edges the user picked. An edge counts

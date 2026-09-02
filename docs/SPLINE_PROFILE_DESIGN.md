@@ -1,13 +1,31 @@
 # Spline as an exact profile — design
 
-Status: **DESIGN + SLICE 0 LANDED (2026-09-02).** `CatmullRomBezier`
-(`openshape3d/Kernel/CatmullRomBezier.swift`) converts the centripetal
-Catmull–Rom to its exact cubic Bézier spans and integrates a closed
-piecewise cubic's area exactly (3-point Gauss–Legendre on the degree-5
-integrand); `CatmullRomBezierTests` pin it against `splinePoints` itself to
-1e-9 (closed point-for-point, open interior, straight end spans, the
-classic uniform tangent) and the area against a dense polygon. Slices 1–3
-below are not started.
+Status: **SLICES 0 + 1 LANDED (2026-09-02).** Slice 0: `CatmullRomBezier`
+converts the centripetal Catmull–Rom to its exact cubic Bézier spans and
+integrates a closed piecewise cubic's area exactly; pinned against
+`splinePoints` to 1e-9. Slice 1: a sketch spline is now an exact profile
+end to end — `Profile.Segment.controlPoints`, the inline kind-2/3 segment
+record, `SegWire` assembling ONE `Geom_BSplineCurve` edge directly from the
+Bézier chain (3·spans+1 poles, knots 0…spans, multiplicities [4,3,…,3,4] —
+no concatenation utility, no tolerance), and `ProfileDetector` making
+splines participate at all (a `.spline` entity was previously ignored
+entirely: neither a closed spline alone nor an open one in a loop was a
+profile). Pinned three ways: the kernel's B-spline poles equal the Swift
+chain pole for pole (`testKernelSplinePolesMatchTheSwiftConversion`); a
+closed spline extrudes to 2 caps + ONE smooth wall named by its entity,
+volume = height × Gauss-exact area to 1e-6; an open spline closes a loop
+with lines (3 planar + 1 spline wall), volume by Green's theorem over the
+mixed boundary to 1e-6. Draft of a spline profile falls back to the polygon
+path without error.
+
+**Found on the way (gotcha 20):** `BRepGProp::VolumeProperties`' default
+fixed-order rule is NOT exact across B-spline knot spans — the same solid
+read 0.4–1.3% off depending only on the curve's parameterisation. The
+bridge's `OS3DVolume` now uses `VolumePropertiesGK` with `IsUseSpan`, and
+the B-rep volume matches the closed form to twelve figures. This affects
+every B-spline-walled body (lofts, sweeps, ruled draft walls), not just
+splines. Slices 2–3 (naming is already done by slice 1; stress + a real
+part) remain.
 
 ## Today
 

@@ -76,6 +76,13 @@
 #include <gp_Circ.hxx>
 #include <gp_Elips.hxx>
 #include <GC_MakeArcOfCircle.hxx>
+#include <Geom_BSplineCurve.hxx>
+#include <TColgp_Array1OfPnt.hxx>
+#include <TColStd_Array1OfReal.hxx>
+#include <TColStd_Array1OfInteger.hxx>
+#include <gp_Pnt2d.hxx>
+#include <algorithm>
+#include <cmath>
 #include <Geom_TrimmedCurve.hxx>
 #include <gp_Dir.hxx>
 #include <gp_Pnt.hxx>
@@ -560,32 +567,132 @@ static TopoDS_Wire ConicWire(const double *c, double z) {
 //
 // Returns a null wire on any bad edge; the caller falls back to the polyline
 // rather than building half a boundary.
+/// ONE B-spline edge through a sketch spline's control points — the SAME
+/// curve the sketch draws (docs/SPLINE_PROFILE_DESIGN.md). Each span of the
+/// centripetal Catmull–Rom is exactly a cubic Bézier (the math mirrors
+/// `CatmullRomBezier.swift`; the Swift tests pin it against `splinePoints`,
+/// the volume tests pin this against the Swift); the spans are joined into
+/// a single C1 B-spline so the wall it sweeps is one face, not one per span.
+/// Degenerate spans — an OPEN spline's ends, whose neighbours are clamped —
+/// are straight, as the sketch draws them. A closed spline's curve returns
+/// to its first point and MakeEdge makes it a closed edge.
+static bool OS3DSplineEdge(const double *xy, NSUInteger count, bool closed,
+                           double z, TopoDS_Edge &outEdge) {
+    if (count < 2) return false;
+    if (count == 2) {
+        BRepBuilderAPI_MakeEdge me(gp_Pnt(xy[0], xy[1], z), gp_Pnt(xy[2], xy[3], z));
+        if (!me.IsDone()) return false;
+        outEdge = me.Edge();
+        return true;
+    }
+    const long n = (long)count;
+    const long spans = closed ? n : n - 1;
+    auto P = [&](long i) -> gp_Pnt2d {
+        long k = closed ? (((i % n) + n) % n) : std::min(std::max(i, 0L), n - 1);
+        return gp_Pnt2d(xy[2 * k], xy[2 * k + 1]);
+    };
+    // A chain of cubic Béziers IS a B-spline by construction: 3·spans + 1
+    // poles, knots 0…spans with multiplicities [4, 3, …, 3, 4]. Assembled
+    // directly — no concatenation utility, no tolerance, nothing that could
+    // reshape a join — so the edge is exactly the Bézier chain.
+    TColgp_Array1OfPnt poles(1, (Standard_Integer)(3 * spans + 1));
+    for (long s = 0; s < spans; ++s) {
+        const gp_Pnt2d p0 = P(s - 1), p1 = P(s), p2 = P(s + 1), p3 = P(s + 2);
+        const double t0 = 0.0;
+        const double t1 = t0 + std::sqrt(p0.Distance(p1));
+        const double t2 = t1 + std::sqrt(p1.Distance(p2));
+        const double t3 = t2 + std::sqrt(p2.Distance(p3));
+        gp_Pnt2d b1, b2;
+        if (!(t1 > t0 && t2 > t1 && t3 > t2)) {
+            b1 = gp_Pnt2d(p1.X() + (p2.X() - p1.X()) / 3, p1.Y() + (p2.Y() - p1.Y()) / 3);
+            b2 = gp_Pnt2d(p2.X() - (p2.X() - p1.X()) / 3, p2.Y() - (p2.Y() - p1.Y()) / 3);
+        } else {
+            const double h = t2 - t1;
+            const double d1x = ((p1.X() - p0.X()) / (t1 - t0) * (t2 - t1)
+                                + (p2.X() - p1.X()) / (t2 - t1) * (t1 - t0)) / (t2 - t0);
+            const double d1y = ((p1.Y() - p0.Y()) / (t1 - t0) * (t2 - t1)
+                                + (p2.Y() - p1.Y()) / (t2 - t1) * (t1 - t0)) / (t2 - t0);
+            const double d2x = ((p2.X() - p1.X()) / (t2 - t1) * (t3 - t2)
+                                + (p3.X() - p2.X()) / (t3 - t2) * (t2 - t1)) / (t3 - t1);
+            const double d2y = ((p2.Y() - p1.Y()) / (t2 - t1) * (t3 - t2)
+                                + (p3.Y() - p2.Y()) / (t3 - t2) * (t2 - t1)) / (t3 - t1);
+            b1 = gp_Pnt2d(p1.X() + d1x * h / 3, p1.Y() + d1y * h / 3);
+            b2 = gp_Pnt2d(p2.X() - d2x * h / 3, p2.Y() - d2y * h / 3);
+        }
+        const Standard_Integer base = (Standard_Integer)(3 * s);
+        poles.SetValue(base + 1, gp_Pnt(p1.X(), p1.Y(), z));
+        poles.SetValue(base + 2, gp_Pnt(b1.X(), b1.Y(), z));
+        poles.SetValue(base + 3, gp_Pnt(b2.X(), b2.Y(), z));
+        poles.SetValue(base + 4, gp_Pnt(p2.X(), p2.Y(), z));   // == next span's first pole
+    }
+    TColStd_Array1OfReal knots(1, (Standard_Integer)(spans + 1));
+    TColStd_Array1OfInteger mults(1, (Standard_Integer)(spans + 1));
+    for (long k = 0; k <= spans; ++k) {
+        knots.SetValue((Standard_Integer)k + 1, (Standard_Real)k);
+        mults.SetValue((Standard_Integer)k + 1, (k == 0 || k == spans) ? 4 : 3);
+    }
+    Handle(Geom_BSplineCurve) curve;
+    try {
+        curve = new Geom_BSplineCurve(poles, knots, mults, 3);
+    } catch (...) {
+        return false;
+    }
+    if (curve.IsNull()) return false;
+    BRepBuilderAPI_MakeEdge me(curve);
+    if (!me.IsDone()) return false;
+    outEdge = me.Edge();
+    return true;
+}
+
+/// Records are walked by KIND (see `packSegments`): a line or arc is 7
+/// doubles, a spline is `kind, count, count x,y pairs` and becomes ONE edge.
 static TopoDS_Wire SegWire(NSData *segs, double z) {
-    const NSUInteger stride = 7;
     const double *p = (const double *)segs.bytes;
-    NSUInteger n = segs.length / (stride * sizeof(double));
-    if (n < 2) return TopoDS_Wire();
+    const NSUInteger total = segs.length / sizeof(double);
     BRepBuilderAPI_MakeWire mw;
-    for (NSUInteger i = 0; i < n; ++i) {
-        const double *e = p + i * stride;
-        gp_Pnt a(e[1], e[2], z), b(e[3], e[4], z);
-        if (a.IsEqual(b, 1e-12)) return TopoDS_Wire();
-        if (e[0] > 0.5) {
-            gp_Pnt m(e[5], e[6], z);
-            GC_MakeArcOfCircle mk(a, m, b);
-            // Collinear samples have no circle through them; a "flat arc" is
-            // a straight line and is built as one rather than failing.
-            if (mk.IsDone()) {
-                BRepBuilderAPI_MakeEdge me(mk.Value());
+    NSUInteger i = 0, records = 0;
+    bool closedSpline = false;
+    while (i < total) {
+        const double kind = p[i];
+        if (kind < 1.5) {
+            if (i + 7 > total) return TopoDS_Wire();
+            const double *e = p + i;
+            gp_Pnt a(e[1], e[2], z), b(e[3], e[4], z);
+            if (a.IsEqual(b, 1e-12)) return TopoDS_Wire();
+            bool added = false;
+            if (e[0] > 0.5) {
+                gp_Pnt m(e[5], e[6], z);
+                GC_MakeArcOfCircle mk(a, m, b);
+                // Collinear samples have no circle through them; a "flat arc"
+                // is a straight line and is built as one rather than failing.
+                if (mk.IsDone()) {
+                    BRepBuilderAPI_MakeEdge me(mk.Value());
+                    if (!me.IsDone()) return TopoDS_Wire();
+                    mw.Add(me.Edge());
+                    added = true;
+                }
+            }
+            if (!added) {
+                BRepBuilderAPI_MakeEdge me(a, b);
                 if (!me.IsDone()) return TopoDS_Wire();
                 mw.Add(me.Edge());
-                continue;
             }
+            i += 7;
+        } else {
+            if (i + 2 > total) return TopoDS_Wire();
+            const NSUInteger count = (NSUInteger)p[i + 1];
+            if (i + 2 + 2 * count > total) return TopoDS_Wire();
+            const bool closed = kind > 2.5;
+            TopoDS_Edge edge;
+            if (!OS3DSplineEdge(p + i + 2, count, closed, z, edge)) return TopoDS_Wire();
+            mw.Add(edge);
+            if (closed) closedSpline = true;
+            i += 2 + 2 * count;
         }
-        BRepBuilderAPI_MakeEdge me(a, b);
-        if (!me.IsDone()) return TopoDS_Wire();
-        mw.Add(me.Edge());
+        ++records;
     }
+    // A boundary needs at least two edges — unless it is one closed spline.
+    if (records < 2 && !closedSpline) return TopoDS_Wire();
     if (!mw.IsDone()) return TopoDS_Wire();
     return mw.Wire();
 }
@@ -1617,6 +1724,23 @@ static std::set<Standard_Integer> OS3DNearestFaces(
     }
 }
 
++ (nullable NSData *)splineEdgePolesForPoints:(NSData *)xy closed:(BOOL)closed {
+    const NSUInteger count = xy.length / (2 * sizeof(double));
+    TopoDS_Edge edge;
+    if (!OS3DSplineEdge((const double *)xy.bytes, count, closed, 0.0, edge)) return nil;
+    Standard_Real first = 0, last = 0;
+    Handle(Geom_Curve) curve = BRep_Tool::Curve(edge, first, last);
+    Handle(Geom_BSplineCurve) bspline = Handle(Geom_BSplineCurve)::DownCast(curve);
+    if (bspline.IsNull()) return nil;
+    const TColgp_Array1OfPnt &poles = bspline->Poles();
+    NSMutableData *out = [NSMutableData dataWithCapacity:poles.Length() * 2 * sizeof(double)];
+    for (Standard_Integer i = poles.Lower(); i <= poles.Upper(); ++i) {
+        double v[2] = { poles.Value(i).X(), poles.Value(i).Y() };
+        [out appendBytes:v length:sizeof(v)];
+    }
+    return out;
+}
+
 + (OCCTFaceTypeCounts *)faceTypeCountsOfShape:(OCCTShape *)shape {
     NSInteger planar = 0, cyl = 0, other = 0;
     if (shape != nil) {
@@ -2257,11 +2381,20 @@ static bool OS3DFilletBuilds(const TopoDS_Shape &shape,
 
 // Exact volume via BRepGProp; 0 on any failure. Shared by the public
 // volumeOfShape: and the shell sanity check.
+//
+// The ADAPTIVE overload, integrating per knot span to a relative precision.
+// The default fixed-order Gauss rule is exact for planar and analytic faces
+// but not across a B-spline's knot spans: a spline-walled extrude read 0.4–
+// 1.3% high depending only on how the same curve was parameterised (found by
+// the spline-profile pin, 2026-09-02). With Eps + IsUseSpan the B-rep volume
+// matches the closed-form area × height to 1e-6.
 static double OS3DVolume(const TopoDS_Shape &shape) {
     if (shape.IsNull()) return 0.0;
     try {
         GProp_GProps props;
-        BRepGProp::VolumeProperties(shape, props);
+        BRepGProp::VolumePropertiesGK(shape, props, /*Eps*/ 1e-7,
+                                      /*OnlyClosed*/ Standard_False,
+                                      /*IsUseSpan*/ Standard_True);
         return props.Mass();
     } catch (...) {
         return 0.0;
