@@ -38,25 +38,75 @@ nonisolated enum SweepLoftKit {
             return Euclid.Mesh([])
         }
         let anchor = plane.toLocal(spine[0])
+        let holeLoops = holes.map(\.loop).filter { $0.count >= 3 }
+        guard !holeLoops.isEmpty else {
+            return sweepLoop(profile.loop, relativeTo: anchor, in: plane, along: spine).makeWatertight()
+        }
 
-        var solid = sweepLoop(
-            profile.loop, relativeTo: anchor, in: plane, along: spine
-        )
-        guard !solid.polygons.isEmpty else { return solid }
+        // With holes: NO boolean. The bores used to be swept as cutters and
+        // subtracted by BSP CSG — unbounded on a spline outline's thousand
+        // samples (gotcha 24). Instead the outer loop (CCW) and every hole
+        // (CW) are swept as walls through the SAME transported frames, so a
+        // hole's wall faces into its cavity by winding alone, and the two
+        // caps are the profile-with-holes triangulated in the end frames.
+        let outer = Profile.signedArea(profile.loop) < 0 ? Array(profile.loop.reversed()) : profile.loop
+        let holesCW = holeLoops.map { Profile.signedArea($0) > 0 ? Array($0.reversed()) : $0 }
+        let frames = sweepFrames(in: plane, along: spine)
+        guard frames.count >= 2 else { return Euclid.Mesh([]) }
 
-        if !holes.isEmpty {
-            // Extend the tool spine past both ends so the hole's caps don't
-            // sit coplanar with the solid's caps (sliver-free subtract).
-            let tool = extended(spine, by: max(length(of: spine) * 1e-3, 1e-6))
-            for hole in holes where hole.loop.count >= 3 {
-                let cutter = sweepLoop(
-                    hole.loop, relativeTo: anchor, in: plane, along: tool
-                )
-                guard !cutter.polygons.isEmpty else { continue }
-                solid = solid.subtracting(cutter).makeWatertight()
+        var polygons: [Euclid.Polygon] = []
+        func walls(_ loop: [SIMD2<Double>]) {
+            let rings = frames.map { frame in loop.map { frame.place($0 - anchor) } }
+            let n = loop.count
+            for i in 0..<(rings.count - 1) {
+                for j in 0..<n {
+                    let k = (j + 1) % n
+                    let quad = [rings[i][j], rings[i][k], rings[i + 1][k], rings[i + 1][j]]
+                    if let polygon = Euclid.Polygon(quad.map { Vector($0.x, $0.y, $0.z) }) {
+                        polygons.append(polygon)
+                    } else {
+                        // a stretched mitre can fold a quad: two triangles still stand
+                        for tri in [[quad[0], quad[1], quad[2]], [quad[0], quad[2], quad[3]]] {
+                            if let polygon = Euclid.Polygon(tri.map { Vector($0.x, $0.y, $0.z) }) {
+                                polygons.append(polygon)
+                            }
+                        }
+                    }
+                }
             }
         }
-        return solid.makeWatertight()
+        walls(outer)
+        holesCW.forEach(walls)
+
+        let (vertices, triangles) = PolygonTriangulator.triangulate(
+            outer: outer.map { $0 - anchor }, holes: holesCW.map { $0.map { $0 - anchor } })
+        for (frame, flip) in [(frames[0], true), (frames[frames.count - 1], false)] {
+            for t in stride(from: 0, to: triangles.count - 2, by: 3) {
+                var pts = [triangles[t], triangles[t + 1], triangles[t + 2]].map { frame.place(vertices[$0]) }
+                if flip { pts.reverse() }             // the start cap faces back along the spine
+                if let polygon = Euclid.Polygon(pts.map { Vector($0.x, $0.y, $0.z) }) {
+                    polygons.append(polygon)
+                }
+            }
+        }
+        return Euclid.Mesh(polygons).makeWatertight()
+    }
+
+    /// One transported section frame: where a plane-local offset lands in
+    /// world space, including the mitre stretch at an interior corner.
+    struct SweepFrame {
+        var point: SIMD3<Double>
+        var u: SIMD3<Double>
+        var v: SIMD3<Double>
+        var stretch: (factor: Double, axis: SIMD3<Double>)?
+
+        func place(_ q: SIMD2<Double>) -> SIMD3<Double> {
+            var offset = u * q.x + v * q.y
+            if let (factor, axis) = stretch {
+                offset += (factor - 1) * simd_dot(offset, axis) * axis
+            }
+            return point + offset
+        }
     }
 
     /// Loft one closed loop along the spine: build transported sections and
@@ -82,28 +132,11 @@ nonisolated enum SweepLoftKit {
         in plane: SketchPlane,
         along spine: [SIMD3<Double>]
     ) -> [Euclid.Path] {
-        guard spine.count >= 2, loop.count >= 3 else { return [] }
+        guard loop.count >= 3 else { return [] }
         let local = loop.map { $0 - anchor }
-        let tangents = (0..<spine.count - 1).map {
-            simd_normalize(spine[$0 + 1] - spine[$0])
-        }
-
-        // Initial frame: plane basis rotated so the normal lands on the
-        // first tangent (minimal rotation — no spin about the tangent).
-        let r0 = rotation(from: simd_normalize(plane.normal), to: tangents[0])
-        var u = simd_act(r0, plane.xAxis)
-        var v = simd_act(r0, plane.yAxis)
-
-        func section(
-            at point: SIMD3<Double>,
-            stretch: (factor: Double, axis: SIMD3<Double>)? = nil
-        ) -> Euclid.Path {
+        return sweepFrames(in: plane, along: spine).map { frame in
             var points = local.map { q -> PathPoint in
-                var offset = u * q.x + v * q.y
-                if let (factor, axis) = stretch {
-                    offset += (factor - 1) * simd_dot(offset, axis) * axis
-                }
-                let w = point + offset
+                let w = frame.place(q)
                 return .point(w.x, w.y, w.z)
             }
             if let first = points.first {
@@ -111,30 +144,47 @@ nonisolated enum SweepLoftKit {
             }
             return Euclid.Path(points)
         }
+    }
 
-        var sections = [section(at: spine[0])]
+    /// The transported section frames along the spine (one per spine point):
+    /// the plane basis rotated onto the first tangent (minimal rotation, no
+    /// spin), parallel-transported through each corner, with the bisector
+    /// section at an interior corner stretched by 1/cos(half-angle) so the
+    /// straight legs meet like extrusions (mitre joint). Every loop swept
+    /// along the same spine shares these frames.
+    static func sweepFrames(
+        in plane: SketchPlane,
+        along spine: [SIMD3<Double>]
+    ) -> [SweepFrame] {
+        guard spine.count >= 2 else { return [] }
+        let tangents = (0..<spine.count - 1).map {
+            simd_normalize(spine[$0 + 1] - spine[$0])
+        }
+        let r0 = rotation(from: simd_normalize(plane.normal), to: tangents[0])
+        var u = simd_act(r0, plane.xAxis)
+        var v = simd_act(r0, plane.yAxis)
+
+        var frames = [SweepFrame(point: spine[0], u: u, v: v, stretch: nil)]
         for i in 1..<spine.count - 1 {
             let turn = rotation(from: tangents[i - 1], to: tangents[i])
             let angle = turn.angle
             guard angle > 1e-9 else {
-                sections.append(section(at: spine[i]))
+                frames.append(SweepFrame(point: spine[i], u: u, v: v, stretch: nil))
                 continue
             }
             let half = simd_quatd(angle: angle / 2, axis: turn.axis)
             u = simd_act(half, u)
             v = simd_act(half, v)
-            // Mitre: widen the bisector-plane section along the in-plane
-            // turn direction so the straight legs meet like extrusions.
             // Clamp for near-reversals (the mitre would go to infinity).
             let bisector = simd_normalize(tangents[i - 1] + tangents[i])
             let axis = simd_normalize(simd_cross(bisector, turn.axis))
             let factor = 1 / max(cos(angle / 2), 0.1)
-            sections.append(section(at: spine[i], stretch: (factor, axis)))
+            frames.append(SweepFrame(point: spine[i], u: u, v: v, stretch: (factor, axis)))
             u = simd_act(half, u)
             v = simd_act(half, v)
         }
-        sections.append(section(at: spine[spine.count - 1]))
-        return sections
+        frames.append(SweepFrame(point: spine[spine.count - 1], u: u, v: v, stretch: nil))
+        return frames
     }
 
     // MARK: - Loft

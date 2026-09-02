@@ -127,6 +127,44 @@ final class SweepLoftTests: XCTestCase {
         XCTAssertEqual(volume(of: mesh), 0.75, accuracy: 1e-6)
     }
 
+    /// The holed sweep is built without a boolean: outer and hole walls from
+    /// the same frames, caps triangulated with the hole. So a spline outline's
+    /// 1,152 samples with a 64-gon bore — the profile that wedged the extrude
+    /// in BSP CSG (gotcha 24) — sweeps in milliseconds, watertight, to the
+    /// exact prism volume (A_outer − A_bore) × length.
+    func testSweepOfADenseSplineOutlineWithABoreIsFastAndExact() {
+        let n = 1152
+        let outerLoop = (0..<n).map { i -> SIMD2<Double> in
+            let phi = Double(i) / Double(n) * 2 * .pi
+            let r = phi <= .pi ? 20 + 10 * (phi / .pi - sin(2 * phi) / (2 * .pi))
+                : (phi <= 1.5 * .pi ? 30 : 30 - 10 * ((phi - 1.5 * .pi) / (0.5 * .pi) - sin(2 * .pi * (phi - 1.5 * .pi) / (0.5 * .pi)) / (2 * .pi)))
+            return SIMD2(r * cos(phi), r * sin(phi))
+        }
+        let outer = Profile(loop: outerLoop, kind: .polygonal, sourceEntityIDs: [])
+        let bore = circleProfile(center: .zero, radius: 5, segments: 64)
+        let spine: [SIMD3<Double>] = [SIMD3(0, 0, 0), SIMD3(0, 0, 8)]
+        let start = Date()
+        let mesh = KernelOps.sweep(profile: outer, holes: [bore], in: xyPlane, alongPath: spine)
+        let seconds = Date().timeIntervalSince(start)
+        XCTAssertTrue(mesh.isWatertight)
+        let want = (Profile.signedArea(outerLoop) - Profile.signedArea(bore.loop)) * 8
+        XCTAssertEqual(volume(of: mesh), want, accuracy: want * 1e-6)
+        XCTAssertLessThan(seconds, 1.0, "swept in \(seconds) s")
+    }
+
+    /// A holed sweep round a mitred corner: the walls follow the stretched
+    /// bisector section like the outer does, so the tube stays watertight and
+    /// its volume is the outer L-solid less the hole's L-solid.
+    func testSweepWithHoleAroundACornerStaysWatertight() {
+        let spine: [SIMD3<Double>] = [SIMD3(0, 0, 0), SIMD3(0, 0, 2), SIMD3(2, 0, 2)]
+        let solid = KernelOps.sweep(profile: squareProfile(halfSize: 0.25), in: xyPlane, alongPath: spine)
+        let core = KernelOps.sweep(profile: squareProfile(halfSize: 0.125), in: xyPlane, alongPath: spine)
+        let tube = KernelOps.sweep(profile: squareProfile(halfSize: 0.25),
+                                   holes: [squareProfile(halfSize: 0.125)], in: xyPlane, alongPath: spine)
+        XCTAssertTrue(tube.isWatertight)
+        XCTAssertEqual(volume(of: tube), volume(of: solid) - volume(of: core), accuracy: 1e-9)
+    }
+
     // MARK: - Loft
 
     func testLoftSquareToSmallerSquareMakesFrustum() {
