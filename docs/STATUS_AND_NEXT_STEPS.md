@@ -12,6 +12,37 @@ design), `FREECAD_PLAYBOOK.md` (the FreeCAD-derived hardening ledger),
 
 ## Mission log — 2026-09-01 (landed, all committed, 1115/1115 green)
 
+- **Rebuild regression retest + first HOLLOW-CASTING part (2026-09-01, late;
+  suite 1128/1128).** Every prior rebuild script passes again in a fresh
+  document (TraceParts wheel/nut/flange ALL PASS; FreeCAD angle exact both
+  ways; wheel mirror+union 0.000%). Two scripts had read result bodies
+  POSITIONALLY (`bodies[0]`) and false-failed in a non-fresh document — the
+  volume they printed was a leftover body while the real result in the same
+  output was exactly right; fixed to read by id (a79c7eb). New:
+  `scripts/rebuild_doorlock_zn.py` — item Industrietechnik **Door Lock 6-8
+  Zn** (TraceParts door-locks TP01009002003, art. 0.0.488.45) rebuilt from
+  its item24 dimensional drawing: die-cast housing extruded to the drawn
+  53×64.5×30 envelope then SHELLED to a 3 mm wall with the mounting face
+  left open (chosen by kernel face normal via `/v1/faces`, not a guessed
+  index), swivel-lever/top-bump/cylinder-boss unions, Ø17 bore; strike
+  plate 49.3×56 with 6.2 flange, catch boss to 10, two mounting holes and
+  the latch slot. Envelope exact, shell volume = analytic to the mm³,
+  assembly **550 g vs the 560 g datasheet (1.7%)** with the wall thickness
+  the only assumption. Identical on three runs, including inside a heavy
+  document. Draft/taper extrude also landed earlier today (three slices,
+  `DRAFT_TAPER_DESIGN.md`).
+- **MEASURED: evaluation is not incremental across independent bodies.**
+  With the 60M mm³ wheel chain sitting in the document, each of the lock's
+  ~14 exec ops cost ~13 s (whole rebuild ~3 min vs ~4 s in a fresh document)
+  and RSS climbed 253 MB → 1.6 GB: every op re-evaluates unrelated upstream
+  chains. These are the hard numbers for the §4.5 off-main-eval / scene-
+  caching mission. Deliberately NOT fixed here — it is that mission.
+- Two app deaths mid-exec during this pass did NOT reproduce under
+  controlled repeats (fresh doc ×2, then the heavy doc, all monitored):
+  no crash report, no jetsam, RSS modest; the simulator-control helper
+  segfaulted in the same window. Filed as transient/external, not an app
+  bug — but see gotcha 17, which is the one way to kill the live app on
+  purpose.
 - **Topological-naming mission COMPLETE.** Every creation op (primitive,
   extrude, revolve, sweep, loft, boolean) and every modifier (fillet,
   chamfer, shell, push/pull, delete/replace-face, mirror, pattern) composes
@@ -681,6 +712,23 @@ first differing frame is the one you want.
    interpret the results. Note the failure did NOT look like a crash, which is
    what makes it expensive — and do not use the `kAXErrorServerNotFound`
    count as the tell, since a healthy run emits those too.
+
+17. **Running the unit suite kills the live agent app.** The test host IS
+    `openshape3d.app`: `xcodebuild test` reinstalls and relaunches it, so any
+    `/v1/exec` session in flight dies with "remote end closed connection
+    without response" — no crash report, no `[agent]` log line, nothing to
+    debug. Never run the suite (even `run_in_background`) while driving the
+    live app; sequence them, and relaunch with `SIMCTL_CHILD_OS3D_AGENT=1`
+    afterwards. Also: `OS3D_AGENT_PORT` alone does nothing — the listener
+    is gated on `OS3D_AGENT` being set at all.
+
+18. **`seedPoint` selects ONE profile region.** Two circles in one sketch
+    under a single seed extrude (or cut) only the seeded one, silently. Cut
+    several holes with one seeded extrude each, or `feature.pattern` on one
+    cutter. It cost the door-lock rebuild exactly one hole's 206 mm³ before
+    it seeded each. Corollary for rebuild scripts: read result bodies BY ID
+    (`producedBodyIDs`, or the boolean's target id) — never `bodies[0]`,
+    which reads whatever leftover body sits first in a non-fresh document.
 
 ---
 

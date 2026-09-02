@@ -271,6 +271,11 @@ Arc/polygon/ellipse angles are RADIANS (unlike the degrees a feature takes);
 **Profiles are found by seed point.** `seedPoint` is a point INSIDE the closed
 region you want, in sketch-local mm; `ProfileDetector` resolves the innermost
 enclosing loop. There is no need to enumerate the loop's entity ids.
+**One seed = ONE region.** A sketch holding two separate circles under a
+single seed extrudes (or cuts) only the seeded one — the other is silently
+left alone. To cut several holes, issue one seeded extrude per region or use
+`feature.pattern` on one cutter (the door-lock rebuild lost exactly one
+hole's volume this way before it seeded each).
 
 **`boolean` is a STRING; targets go in `booleanTargets`.** The inline boolean
 on `feature.extrude`/`revolve`/`sweep`/`loft` is `"boolean":"subtract"` (one of
