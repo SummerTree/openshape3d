@@ -225,6 +225,12 @@ dimension quietly stops driving) and an unvalidated-solver-writeback issue.
 Still open from round 1, in rough order: off-main eval/preview service (S1),
 full scene caching + GPU buffer pooling (S2), `ToolLifecycle` registry
 refactor (S3), ref-resolution margin checks (S4), relative epsilons (S5).
+**2026-09-02:** the "don't recompute" layer under S1/S2 landed as the
+memoised replay (`INCREMENTAL_EVAL_DESIGN.md`: heavy-document op 18 s →
+0.04 s, RSS flat); S1 itself is designed in `OFF_MAIN_EVAL_DESIGN.md` —
+recommended first slice S1a, a synchronous facade over a detached evaluate,
+because `performRebuild` has 9 session callers and 17 external call sites
+that all read results immediately.
 
 Also landed recently (all on `main`): context-sensitive Shapr3D-style tool
 palette with flyout groups; extrude gizmo = SF Symbol `arrow.up.and.down` +
