@@ -224,6 +224,50 @@ nonisolated extension FeatureNode {
         }
         return ids
     }
+
+    /// Every construction plane this node builds on — the other sketch-side
+    /// input a memo fingerprint must cover (docs/INCREMENTAL_EVAL_DESIGN.md).
+    var referencedConstructionPlaneIDs: Set<ConstructionPlaneID> {
+        var ids = Set<ConstructionPlaneID>()
+        func add(_ ref: PlaneRef) {
+            if case let .construction(cid) = ref.source { ids.insert(cid) }
+        }
+        switch kind {
+        case let .extrude(_, plane, _, _, _, _), let .draftExtrude(_, plane, _, _, _, _),
+             let .revolve(_, plane, _, _, _), let .sweep(_, plane, _, _),
+             let .mirror(_, plane, _):
+            add(plane)
+        case .primitive, .loft, .boolean, .transform, .pattern, .pushPull, .moveFace,
+             .scaleFace, .rotateFace, .chamfer, .fillet, .shell, .deleteFace,
+             .replaceFace:
+            break
+        }
+        return ids
+    }
+
+    /// Every body this node CONSUMES, read straight off its refs — the
+    /// identity layer the memoised replay stamps. A node whose output could
+    /// depend on a body NOT listed here must add it, or be evaluated uncached;
+    /// the memo is only as correct as this enumeration.
+    var consumedBodyIDs: [BodyID] {
+        switch kind {
+        case .primitive:
+            return []
+        case let .extrude(_, _, _, _, boolean, _), let .draftExtrude(_, _, _, _, _, boolean),
+             let .revolve(_, _, _, _, boolean), let .sweep(_, _, _, boolean),
+             let .loft(_, boolean):
+            return boolean.resolvedTargets.map(\.bodyID)
+        case let .boolean(_, target, tools):
+            return [target.bodyID] + tools.map(\.bodyID)
+        case let .transform(body, _), let .mirror(body, _, _), let .pattern(body, _),
+             let .chamfer(body, _, _), let .fillet(body, _, _), let .shell(body, _, _),
+             let .deleteFace(body, _):
+            return [body.bodyID]
+        case let .pushPull(face, _, _), let .moveFace(face, _), let .scaleFace(face, _),
+             let .rotateFace(face, _, _), let .replaceFace(face, _, _, _):
+            return [face.body.bodyID]
+        }
+    }
 }
 
 /// The ordered feature history. `evaluate` is a pure function of the graph plus
@@ -312,14 +356,79 @@ nonisolated extension FeatureGraph {
         naming: TopoNaming,
         nextRevision: () -> UInt64
     ) -> EvalResult {
+        // Uncached: every node runs. The behaviour from before the memo, and
+        // what the pure-value tests and any caller that has not opted into a
+        // cache get.
+        var scratch = EvalCache()
+        return evaluate(sketches: sketches, planes: planes, naming: naming,
+                        nextRevision: nextRevision, cache: &scratch)
+    }
+
+    /// Memoised replay (docs/INCREMENTAL_EVAL_DESIGN.md).
+    ///
+    /// Each node is fingerprinted from its inputs — its kind, the sketches and
+    /// construction planes it references, and the STAMPS of the bodies it
+    /// consumes (a stamp is the fingerprint of the node that last put that
+    /// body, so the chain is Merkle-like and never leans on `meshRevision`).
+    /// A node whose fingerprint matches `cache` is spliced back in by
+    /// re-applying its recorded delta — no kernel work, and its bodies keep
+    /// their revisions, so nothing downstream (the GPU included) rebuilds.
+    /// Everything else runs exactly as before and is journaled for next time.
+    /// `cache` is rewritten to describe THIS replay, which prunes nodes that
+    /// left the graph for free.
+    func evaluate(
+        sketches: [Sketch],
+        planes: [ConstructionPlane],
+        naming: TopoNaming,
+        nextRevision: () -> UInt64,
+        cache: inout EvalCache
+    ) -> EvalResult {
         var state = EvalState(sketches: sketches, planes: planes, naming: naming)
+        // Input hashes once per replay, not once per node.
+        let sketchHash = Dictionary(sketches.map { ($0.id, EvalFingerprint.hash($0)) },
+                                    uniquingKeysWith: { first, _ in first })
+        let planeHash = Dictionary(planes.map { ($0.id, EvalFingerprint.hash($0)) },
+                                   uniquingKeysWith: { first, _ in first })
+        var next = EvalCache()
 
         // Replay only the active prefix: nodes at/after the rollback marker are not
         // evaluated (their bodies never enter the live set). `prefix` clamps to the
         // node count, so an out-of-range marker is safe. `nil` = all nodes active.
         for node in nodes.prefix(rollbackIndex ?? nodes.count) where !node.suppressed {
-            evaluate(node, into: &state, nextRevision: nextRevision)
+            let fingerprint = Self.fingerprint(
+                of: node, sketchHash: sketchHash, planeHash: planeHash, stamps: state.stamps)
+            let delta: EvalNodeDelta
+            if let hit = cache.entries[node.id], hit.fingerprint == fingerprint {
+                state.apply(hit.delta, for: node.id)
+                delta = hit.delta
+                next.lastSkipped += 1
+            } else {
+                state.currentNode = node.id
+                state.journal[node.id] = EvalNodeDelta()
+                evaluate(node, into: &state, nextRevision: nextRevision)
+                state.currentNode = nil
+                var recorded = state.journal[node.id] ?? EvalNodeDelta()
+                // Ops write kernel-face names AFTER their put; capture each
+                // body's final map now that the node is done.
+                recorded.ops = recorded.ops.map { op in
+                    guard case let .put(body, table, _) = op else { return op }
+                    return .put(body, table, kernelNames: state.kernelNames[body.id])
+                }
+                recorded.error = state.errors[node.id]
+                delta = recorded
+                next.lastRan += 1
+            }
+            next.entries[node.id] = EvalCacheEntry(fingerprint: fingerprint, delta: delta)
+            // Whatever this node put now carries its fingerprint as its stamp;
+            // whatever it consumed loses one.
+            for op in delta.ops {
+                switch op {
+                case let .put(body, _, _): state.stamps[body.id] = fingerprint
+                case let .remove(id): state.stamps[id] = nil
+                }
+            }
         }
+        cache = next
 
         return EvalResult(
             bodies: state.order.compactMap { state.bodies[$0] },
@@ -328,6 +437,33 @@ nonisolated extension FeatureGraph {
             proposedUpgrades: state.proposedUpgrades,
             errors: state.errors
         )
+    }
+
+    /// The memo key for `node` at this point of the replay.
+    private static func fingerprint(
+        of node: FeatureNode,
+        sketchHash: [SketchID: UInt64],
+        planeHash: [ConstructionPlaneID: UInt64],
+        stamps: [BodyID: UInt64]
+    ) -> UInt64 {
+        var f = EvalFingerprint()
+        if let kind = EvalFingerprint.json(node.kind) {
+            f.combine(kind)
+        } else {
+            // An unencodable kind (a non-finite parameter): salt so it never
+            // falsely matches — it re-runs every replay, exactly as before.
+            f.combine(UInt64.random(in: .min ... .max))
+        }
+        for sid in node.referencedSketchIDs.sorted(by: { $0.raw.uuidString < $1.raw.uuidString }) {
+            f.combine(sketchHash[sid] ?? 0)
+        }
+        for cid in node.referencedConstructionPlaneIDs.sorted(by: { $0.raw.uuidString < $1.raw.uuidString }) {
+            f.combine(planeHash[cid] ?? 0)
+        }
+        for bid in node.consumedBodyIDs.sorted(by: { $0.raw.uuidString < $1.raw.uuidString }) {
+            f.combine(stamps[bid] ?? 0)
+        }
+        return f.value
     }
 
     // MARK: Per-node dispatch
@@ -2082,6 +2218,16 @@ private struct EvalState {
     var proposedUpgrades: [FeatureID: FeatureKind] = [:]
     var errors: [FeatureID: FeatureError] = [:]
 
+    // MARK: Memo instrumentation (docs/INCREMENTAL_EVAL_DESIGN.md)
+
+    /// The node being evaluated: `put`/`remove` journal against it. Nil while
+    /// a cached delta is being re-applied, so a splice is never re-recorded.
+    var currentNode: FeatureID? = nil
+    var journal: [FeatureID: EvalNodeDelta] = [:]
+    /// Per live body, the fingerprint of the node that last put it — what a
+    /// consumer's own fingerprint reads, so a changed input changes the key.
+    var stamps: [BodyID: UInt64] = [:]
+
     /// Insert or replace a body (keeping its slot on replace) with its face table.
     ///
     /// Always clears the body's kernel-face names: any op that replaces a
@@ -2093,6 +2239,9 @@ private struct EvalState {
         bodies[body.id] = body
         faceTables[body.id] = table
         kernelNames[body.id] = nil
+        if let node = currentNode {
+            journal[node, default: EvalNodeDelta()].ops.append(.put(body, table, kernelNames: nil))
+        }
     }
 
     /// Remove a consumed body from the live set.
@@ -2101,6 +2250,25 @@ private struct EvalState {
         faceTables[id] = nil
         kernelNames[id] = nil
         order.removeAll { $0 == id }
+        if let node = currentNode {
+            journal[node, default: EvalNodeDelta()].ops.append(.remove(id))
+        }
+    }
+
+    /// Re-apply a recorded delta — the memo's splice. Does exactly what the
+    /// node's own puts and removes did, in order, then restores the kernel
+    /// names each put was back-filled with, and the node's error.
+    mutating func apply(_ delta: EvalNodeDelta, for node: FeatureID) {
+        for op in delta.ops {
+            switch op {
+            case let .put(body, table, names):
+                put(body, table: table)
+                kernelNames[body.id] = names
+            case let .remove(id):
+                remove(id)
+            }
+        }
+        if let error = delta.error { errors[node] = error }
     }
 
     // MARK: Reference resolution
