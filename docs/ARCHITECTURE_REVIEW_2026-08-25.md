@@ -15,7 +15,7 @@ Companion to `STATUS_AND_NEXT_STEPS.md`.
 | C3 undo stomp from armed transform tools | ✅ `prepareForHistoryChange()` before undo/redo/rollback; sanitize case is now state-only |
 | C4 dual-kernel path dependence | ✅ largely: brep carried through copy/resize/merge/archive (v2); extrude-cut + live boolean compose OCCT breps; live blend/shell branch on brep like eval. Remaining: revolve/sweep/loft-into-target stays mesh-only (OCCT has no revolve/sweep yet); `emitFullSolid` merges likewise |
 | S1 main-thread geometry | ◑ prerequisites done (OCCT exception barrier on tessellation; BRepHandle Sendable caveat documented). The off-main eval/preview service itself is NOT done — next big tranche |
-| S2 scene rebuilt per camera frame | ◑ `pullArrowState` extracted — orbiting no longer re-assembles the scene. Full scene caching, GPU buffer pooling, measurement caching still open |
+| S2 scene rebuilt per camera frame | ◑ `pullArrowState` extracted — orbiting no longer re-assembles the scene. 2026-09-02: the sketch definition solve (the whole cost of a sketching scene build — 1.5 s for 150 welded lines) is memoised on the sketch value and solved off-main (`sketchDefinitionReport`). GPU buffer pooling, measurement caching still open |
 | S3 lifecycle drift bugs | ✅ the four concrete bugs fixed (stale scaleEntry/axisEntry in `cancelTransientPicks`; unconditional pick-cancel in `deleteItem`; async boolean changeCount revalidation; empty provisional sketches removed on exit). The `ToolLifecycle` refactor itself is still open |
 | S4 silent ref rebinding | ❌ open (margin check, nearest-edge OCCT matching, partial-resolution badges) |
 | S5 numerical scale-dependence | ❌ open |

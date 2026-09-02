@@ -207,11 +207,24 @@ nonisolated enum SketchSolverBridge {
     /// Heuristic: an entity variable is under-defined when it has a non-zero
     /// component in any null-space direction of the Jacobian at the solution.
     static func entityStates(_ sketch: Sketch) -> [UUID: Bool] {
-        var out: [UUID: Bool] = [:]
+        definitionReport(sketch).states
+    }
+
+    /// What the editor shows about a sketch's definition: the per-entity
+    /// states (colours) and the structural DOF (the status chip) — from ONE
+    /// solve and one null-space analysis, the same ones `solveOutcome` runs
+    /// without a drag, so the chip's DOF is exactly `solve`'s.
+    struct DefinitionReport: Equatable, Sendable {
+        var states: [UUID: Bool]
+        var dof: Int
+    }
+
+    static func definitionReport(_ sketch: Sketch) -> DefinitionReport {
+        var states: [UUID: Bool] = [:]
         let sys = buildSystem(from: sketch, movingEntity: nil, dragTarget: nil)
         guard !sys.initial.isEmpty else {
-            for e in sketch.entities { out[e.id] = true }
-            return out
+            for e in sketch.entities { states[e.id] = true }
+            return DefinitionReport(states: states, dof: 0)
         }
         let solved = ConstraintSolver.solve(
             initial: sys.initial,
@@ -220,9 +233,9 @@ nonisolated enum SketchSolverBridge {
         ).variables
         let analysis = nullSpaceAnalysis(sys, at: solved)
         for e in sketch.entities {
-            out[e.id] = entityDetermined(e, sys: sys, determined: analysis.determined)
+            states[e.id] = entityDetermined(e, sys: sys, determined: analysis.determined)
         }
-        return out
+        return DefinitionReport(states: states, dof: analysis.dof)
     }
 
     // MARK: - System model

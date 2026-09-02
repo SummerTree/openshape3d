@@ -344,9 +344,25 @@ plane sections, exact face areas, holed-sweep naming, CSG-free render meshes):
   is idempotent). A rounded rectangle drafts past its corner radius to sharp
   corners; the slot past its semicircles still refuses (two parallel
   survivors never meet).
-- **Scene caching / `ToolLifecycle` registry** (§4.5) — untouched.
+- **Scene caching (S2) / `ToolLifecycle` registry (S3)** — S2's first slice
+  landed 2026-09-02 (late): a scene-build probe (30 bodies + a 150-line
+  welded sketch) put the IDLE scene at 0.2 ms and the SKETCHING scene at
+  1,495 ms — all of it `SketchSolverBridge.entityStates`, the Jacobian
+  null-space analysis (cubic: numeric Jacobian, JᵀJ, Jacobi eigen on a
+  600×600), run inside `scene` on every viewport update and AGAIN by the
+  status chip's `sketchDefinitionStatus` on every editor body. Now one
+  `SketchSolverBridge.definitionReport` (states + DOF from a single solve)
+  is memoised on the SKETCH VALUE in `EditorViewModel.sketchDefinitionReport`
+  and computed on a detached task, latest-wins (drag ticks coalesce); the
+  scene reads the previous report until the new one bumps
+  `sketchDefinitionEpoch`. `SketchDefinitionCacheTests` pins one solve per
+  sketch value, coalescing, colours/DOF, and a <0.2 s scene build with the
+  150-line sketch open (was 1.5 s). Still open in S2: the renderer's
+  per-frame `makeBuffer` for sketch-line/fill batches (orbit frames), preview
+  bodies re-uploading all buffers per tick, measurement caching; S3
+  untouched. Gotcha 26 below.
 
-**Current test baseline (2026-09-02, evening): 1216 unit tests in ~21s** — the
+**Current test baseline (2026-09-02, evening): 1220 unit tests in ~21s** — the
 day added the exact helix spine, the BEG 55 lineup's bounds/mirror fixes,
 transform-as-a-feature, consumed-edge drafts on both offset paths, plane
 sections (`SectionKit`, `KernelSectionTests`), the exact face areas, and the
@@ -1137,6 +1153,23 @@ first differing frame is the one you want.
     `KernelOps.boolean` unconditionally and only then assigned OCCT's brep
     over it — that union is where this trap fired. It is OCCT-first now,
     with the Euclid CSG only when an operand is mesh-only.
+
+26. **Never solve a sketch inside a getter SwiftUI evaluates.** The
+    definition-state solve (`SketchSolverBridge.definitionReport`, formerly
+    `entityStates` + a second `solve` for the chip's DOF) is a Jacobian
+    null-space analysis — cubic in the variable count, 1.5 s for 150
+    welded lines in Debug — and it sat inside `EditorViewModel.scene`
+    (every viewport update while sketching: hover, selection, each drag
+    tick) and `sketchDefinitionStatus` (every editor body). Nothing in the
+    agent scripts felt it, because `/v1/exec` never enters sketching mode;
+    a probe test found it (`vm.scene` timed idle vs sketching). Read
+    `sketchDefinitionReport(for:)` — memoised on the sketch VALUE, solved
+    on a detached task, latest wins, previous report served meanwhile,
+    `sketchDefinitionEpoch` bumps when it lands; tests
+    `await vm.settleSketchDefinition()`. The same rule holds for anything
+    else superlinear the scene might grow: measure with a 150-entity
+    sketch before it ships (`SketchDefinitionCacheTests` keeps the 0.2 s
+    bound).
 
 ---
 

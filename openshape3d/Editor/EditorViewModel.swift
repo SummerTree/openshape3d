@@ -745,8 +745,8 @@ final class EditorViewModel {
         // Shapr3D too — so selection is a brighter, more saturated azure while
         // under-defined stays the calmer mid-blue.
         let selectedColor = SIMD4<Float>(0.0, 0.60, 1.0, 1)
-        let definedColor = SIMD4<Float>(0.20, 0.70, 0.35, 1)      // fully defined
-        let underDefinedColor = SIMD4<Float>(0.22, 0.44, 0.82, 1) // under-defined
+        let definedColor = Self.definedSketchColor
+        let underDefinedColor = Self.underDefinedSketchColor
         // Hidden sketches are skipped — except the one being edited.
         let activeSketchID: SketchID? = {
             if case .sketching(let id, _) = mode { return id }
@@ -757,9 +757,10 @@ final class EditorViewModel {
             // Construction (reference) entities render dashed (spec §3.3).
             let construction = sketch.constructionEntityIDs
             let unselected = sketch.entities.filter { !selectedSketchEntityIDs.contains($0.id) }
-            // Per-entity definition state, only for the sketch being edited.
+            // Per-entity definition state, only for the sketch being edited —
+            // from the memo; a miss solves in the background, never here.
             let states: [UUID: Bool]? = (sketch.id == activeSketchID)
-                ? SketchSolverBridge.entityStates(sketch) : nil
+                ? sketchDefinitionReport(for: sketch)?.states : nil
             func committedColorFor(_ id: UUID) -> SIMD4<Float> {
                 guard let states else { return committedColor }
                 return (states[id] ?? false) ? definedColor : underDefinedColor
@@ -8084,9 +8085,80 @@ final class EditorViewModel {
     /// remaining structural DOF and whether the sketch is fully defined
     /// (0 DOF). `nil` when not sketching or the sketch has no geometry yet.
     var sketchDefinitionStatus: (dof: Int, fullyDefined: Bool)? {
-        guard let sketch = activeSketch, !sketch.entities.isEmpty else { return nil }
-        let (_, dof) = SketchSolverBridge.solve(sketch, movingEntity: nil, dragTarget: nil)
-        return (dof, dof == 0)
+        guard let sketch = activeSketch, !sketch.entities.isEmpty,
+              let report = sketchDefinitionReport(for: sketch) else { return nil }
+        return (report.dof, report.dof == 0)
+    }
+
+    // MARK: - Definition state (memoised, solved off the main thread)
+
+    /// Sketch colours by definition state (plan §C4): GREEN fully defined,
+    /// BLUE under-defined. Static so tests can name them.
+    static let definedSketchColor = SIMD4<Float>(0.20, 0.70, 0.35, 1)
+    static let underDefinedSketchColor = SIMD4<Float>(0.22, 0.44, 0.82, 1)
+
+    /// The solver behind `sketchDefinitionReport` — a test seam (count the
+    /// calls, return canned states). Runs on a background thread.
+    @ObservationIgnored var definitionSolver: @Sendable (Sketch) -> SketchSolverBridge.DefinitionReport =
+        SketchSolverBridge.definitionReport
+
+    /// Bumped on the main actor when a background definition solve lands, so
+    /// every view that read a stale or missing report re-evaluates.
+    private(set) var sketchDefinitionEpoch = 0
+
+    @ObservationIgnored private var definitionMemo:
+        (sketch: Sketch, report: SketchSolverBridge.DefinitionReport)?
+    @ObservationIgnored private var definitionInFlight: Sketch?
+    @ObservationIgnored private var definitionPending: Sketch?
+
+    /// The active sketch's definition report — per-entity fully-defined
+    /// flags and the structural DOF — WITHOUT solving on the main thread.
+    /// The solve is a Jacobian null-space analysis, cubic in the variable
+    /// count (1.5 s for 150 constrained lines in Debug); it used to run
+    /// inside the `scene` getter on EVERY viewport update while sketching,
+    /// and again in the status chip on every editor body. Both read this
+    /// memo now, keyed on the sketch VALUE (so a body edit never invalidates
+    /// it). A miss schedules one background solve for the newest sketch —
+    /// latest wins, so drag ticks coalesce — and returns the previous report
+    /// for the same sketch, so colours hold steady until the fresh result
+    /// bumps `sketchDefinitionEpoch`.
+    func sketchDefinitionReport(for sketch: Sketch) -> SketchSolverBridge.DefinitionReport? {
+        _ = sketchDefinitionEpoch // observation dependency: re-read when a solve lands
+        if let memo = definitionMemo, memo.sketch == sketch { return memo.report }
+        scheduleDefinitionSolve(for: sketch)
+        return definitionMemo?.sketch.id == sketch.id ? definitionMemo?.report : nil
+    }
+
+    private func scheduleDefinitionSolve(for sketch: Sketch) {
+        if let inFlight = definitionInFlight {
+            if inFlight != sketch { definitionPending = sketch }
+            return
+        }
+        definitionInFlight = sketch
+        let solver = definitionSolver
+        Task.detached(priority: .userInitiated) { [weak self] in
+            let report = solver(sketch)
+            await MainActor.run { self?.definitionSolveDidFinish(sketch, report) }
+        }
+    }
+
+    private func definitionSolveDidFinish(
+        _ sketch: Sketch, _ report: SketchSolverBridge.DefinitionReport
+    ) {
+        definitionInFlight = nil
+        definitionMemo = (sketch, report)
+        sketchDefinitionEpoch += 1
+        if let next = definitionPending {
+            definitionPending = nil
+            if next != sketch { scheduleDefinitionSolve(for: next) }
+        }
+    }
+
+    /// Wait for the in-flight and pending definition solves (tests).
+    func settleSketchDefinition() async {
+        while definitionInFlight != nil || definitionPending != nil {
+            try? await Task.sleep(for: .milliseconds(2))
+        }
     }
 
     /// True while the active sketch's constraint system is CONFLICTING — the
