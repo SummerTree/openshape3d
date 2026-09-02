@@ -41,6 +41,14 @@ design), `FREECAD_PLAYBOOK.md` (the FreeCAD-derived hardening ledger),
   rebuilt — a plain shell of its envelope would land ±50% on mass, which
   is a guess, not a check. Draft/taper extrude also landed earlier today
   (three slices, `DRAFT_TAPER_DESIGN.md`).
+- **Volume readback is now B-rep-exact.** The real-part pass exposed that
+  every curved part read ~0.3% low (wheel, latch housing, drafted cone —
+  0.27–0.29% each): the reported volume was integrated over the render
+  mesh, an inscribed tessellation. `MeasureKit.volume(of:)` now prefers the
+  B-rep's `BRepGProp` volume (mesh fallback when there is none), and both
+  the info bar and `/v1/state.volumeMM3` use it — so a cylinder reads
+  π·r²·h to the mm³ and the "accurate" claim no longer carries a faceting
+  asterisk. Pinned by `BRepVolumeReadbackTests`.
 - **MEASURED: evaluation is not incremental across independent bodies.**
   With the 60M mm³ wheel chain sitting in the document, each of the lock's
   ~14 exec ops cost ~13 s (whole rebuild ~3 min vs ~4 s in a fresh document)

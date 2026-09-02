@@ -125,6 +125,11 @@ ids that cannot run.
 
 `measurements` is the same array `SelectionInfoBar` renders, so an agent and a
 person reading over its shoulder never disagree about what the model measures.
+`volumeMM3` is the B-rep's exact `BRepGProp` volume whenever `brep` is true —
+a cylinder reads π·r²·h to the mm³, so compare it against analytic values
+tightly. When `brep` is false it is integrated over the render mesh, which
+reads ~0.3% LOW on curved surfaces (an inscribed tessellation), so allow
+that much there. (Before 2026-09-02 every body used the mesh figure.)
 `brep` says whether a body is still analytic or has been flattened to its
 tessellation — the distinction the OCCT port exists for.
 
