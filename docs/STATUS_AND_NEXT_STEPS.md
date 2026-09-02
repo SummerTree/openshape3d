@@ -975,6 +975,25 @@ first differing frame is the one you want.
     test run, and should assert the expected test COUNT, not just zero
     failures — a count that did not grow is the tell.
 
+23. **`BRepGProp::SurfaceProperties` is wrong on a B-spline wall BOTH ways,
+    and neither rule has the volume's `IsUseSpan`.** Measured 2026-09-02 on
+    a closed-spline extrude (wall = perimeter × height = 1458.24, caps =
+    1641.44, tessellation 1457.1 as the independent third estimate): the
+    default rule (Gauss order from degree and knot count) reads the wall
+    +1.3 % (1477.2) and the planar caps 0.014 % off along their spline
+    boundary; the adaptive `SurfaceProperties(face, props, 1e-7)` reads the
+    caps to 1e-7 but the wall −4.6 % (1391.8). Neither splits at knots. So
+    `faceInfoOfShape:` now does what `VolumePropertiesGK(…, IsUseSpan)` did
+    for volumes, itself: an untrimmed iso-rectangular face (every wall of an
+    extrude or revolve, any unpierced B-spline face) is integrated per KNOT
+    SPAN with 10-point Gauss–Legendre on |∂S/∂u × ∂S/∂v|
+    (`OS3DSpanExactArea`, knots from the surface, its extrusion basis curve,
+    or its revolution basis curve); planes take the adaptive rule; only a
+    trimmed curved face is left to the default. Face areas are identity
+    signatures. `testClosedSplineExtrudesToOneSmoothWall` pins wall and caps
+    to 1e-6. A trap inside the trap: a `tail -3` on the test output hid the
+    wall's failure line behind the two caps' for one round.
+
 ---
 
 ## 4. Next missions (prioritized)

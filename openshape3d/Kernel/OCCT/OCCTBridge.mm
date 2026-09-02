@@ -38,6 +38,12 @@
 #include <BRepAlgoAPI_Section.hxx>
 #include <GCPnts_UniformDeflection.hxx>
 #include <gp_Pln.hxx>
+#include <Geom_Surface.hxx>
+#include <Geom_BSplineSurface.hxx>
+#include <Geom_SurfaceOfLinearExtrusion.hxx>
+#include <Geom_SurfaceOfRevolution.hxx>
+#include <Geom_RectangularTrimmedSurface.hxx>
+#include <Geom2d_Curve.hxx>
 #include <GeomAPI_ProjectPointOnCurve.hxx>
 #include <Geom_Curve.hxx>
 #include <TopExp.hxx>
@@ -2260,6 +2266,111 @@ static OCCTShape *OS3DBlendByIndices(OCCTShape *shape, NSData *edgeIndices,
     return OS3DBlendByIndices(shape, edgeIndices, distance, false, status, history);
 }
 
+/// Whether the face's UV domain is an untrimmed iso-rectangle — one wire,
+/// every edge's pcurve running along u or v — and if so its bounds. That is
+/// every wall of an extrude or revolve and every unpierced B-spline face;
+/// a wall with a hole through it has a curved inner pcurve and fails.
+static bool OS3DIsoRectangularDomain(const TopoDS_Face &face,
+                                     double &u1, double &u2, double &v1, double &v2) {
+    int wires = 0;
+    for (TopExp_Explorer w(face, TopAbs_WIRE); w.More(); w.Next()) { if (++wires > 1) return false; }
+    if (wires == 0) return false;
+    for (TopExp_Explorer e(face, TopAbs_EDGE); e.More(); e.Next()) {
+        const TopoDS_Edge edge = TopoDS::Edge(e.Current());
+        double f = 0.0, l = 0.0;
+        Handle(Geom2d_Curve) pc = BRep_Tool::CurveOnSurface(edge, face, f, l);
+        if (pc.IsNull()) return false;
+        // Sample rather than trust the type: a straight B-spline pcurve counts.
+        const gp_Pnt2d a = pc->Value(f), b = pc->Value(l), m = pc->Value(0.5 * (f + l));
+        const bool uConst = fabs(a.X() - b.X()) < 1e-9 && fabs(a.X() - m.X()) < 1e-9;
+        const bool vConst = fabs(a.Y() - b.Y()) < 1e-9 && fabs(a.Y() - m.Y()) < 1e-9;
+        if (!uConst && !vConst) return false;
+    }
+    BRepTools::UVBounds(face, u1, u2, v1, v2);
+    return u2 > u1 + 1e-12 && v2 > v1 + 1e-12;
+}
+
+/// Knot values of `curve` (through a trim) inside (lo, hi), for span splitting.
+static void OS3DCurveKnots(const Handle(Geom_Curve) &curve, double lo, double hi, std::vector<double> &out) {
+    Handle(Geom_Curve) basis = curve;
+    if (!basis.IsNull() && basis->DynamicType() == STANDARD_TYPE(Geom_TrimmedCurve))
+        basis = Handle(Geom_TrimmedCurve)::DownCast(basis)->BasisCurve();
+    if (basis.IsNull() || basis->DynamicType() != STANDARD_TYPE(Geom_BSplineCurve)) return;
+    Handle(Geom_BSplineCurve) bs = Handle(Geom_BSplineCurve)::DownCast(basis);
+    for (Standard_Integer i = bs->FirstUKnotIndex(); i <= bs->LastUKnotIndex(); ++i) {
+        const double k = bs->Knot(i);
+        if (k > lo + 1e-12 && k < hi - 1e-12) out.push_back(k);
+    }
+}
+
+/// The face's area by 10-point Gauss–Legendre per KNOT SPAN of |∂S/∂u × ∂S/∂v|
+/// over its iso-rectangular UV domain — exact to ~1e-10 on B-spline walls,
+/// where both `BRepGProp::SurfaceProperties` rules are off (the default by
+/// +1.3 %, the adaptive by −4.6 % on a closed-spline extrude, gotcha 23):
+/// neither splits at knots, and unlike `VolumePropertiesGK` there is no
+/// `IsUseSpan`. Returns a negative number when the face is not iso-rectangular.
+static double OS3DSpanExactArea(const TopoDS_Face &face) {
+    double u1, u2, v1, v2;
+    if (!OS3DIsoRectangularDomain(face, u1, u2, v1, v2)) return -1.0;
+    TopLoc_Location loc;
+    Handle(Geom_Surface) S = BRep_Tool::Surface(face, loc);      // area is rigid-invariant: ignore loc
+    if (S.IsNull()) return -1.0;
+    Handle(Geom_Surface) base = S;
+    if (base->DynamicType() == STANDARD_TYPE(Geom_RectangularTrimmedSurface))
+        base = Handle(Geom_RectangularTrimmedSurface)::DownCast(base)->BasisSurface();
+    std::vector<double> us = {u1}, vs = {v1};
+    std::vector<double> ku, kv;
+    if (base->DynamicType() == STANDARD_TYPE(Geom_BSplineSurface)) {
+        Handle(Geom_BSplineSurface) bs = Handle(Geom_BSplineSurface)::DownCast(base);
+        for (Standard_Integer i = bs->FirstUKnotIndex(); i <= bs->LastUKnotIndex(); ++i) {
+            const double k = bs->UKnot(i); if (k > u1 + 1e-12 && k < u2 - 1e-12) ku.push_back(k);
+        }
+        for (Standard_Integer i = bs->FirstVKnotIndex(); i <= bs->LastVKnotIndex(); ++i) {
+            const double k = bs->VKnot(i); if (k > v1 + 1e-12 && k < v2 - 1e-12) kv.push_back(k);
+        }
+    } else if (base->DynamicType() == STANDARD_TYPE(Geom_SurfaceOfLinearExtrusion)) {
+        OS3DCurveKnots(Handle(Geom_SurfaceOfLinearExtrusion)::DownCast(base)->BasisCurve(), u1, u2, ku);
+    } else if (base->DynamicType() == STANDARD_TYPE(Geom_SurfaceOfRevolution)) {
+        OS3DCurveKnots(Handle(Geom_SurfaceOfRevolution)::DownCast(base)->BasisCurve(), v1, v2, kv);
+    }
+    std::sort(ku.begin(), ku.end()); std::sort(kv.begin(), kv.end());
+    us.insert(us.end(), ku.begin(), ku.end()); us.push_back(u2);
+    vs.insert(vs.end(), kv.begin(), kv.end()); vs.push_back(v2);
+    // A smooth integrand within a span still wants a few cells per span for
+    // long spans (a full circle of revolution is one span of 2π).
+    static const double gx[10] = {-0.9739065285171717, -0.8650633666889845, -0.6794095682990244, -0.4333953941292472, -0.1488743389816312,
+                                   0.1488743389816312, 0.4333953941292472, 0.6794095682990244, 0.8650633666889845, 0.9739065285171717};
+    static const double gw[10] = {0.0666713443086881, 0.1494513491505806, 0.2190863625159820, 0.2692667193099963, 0.2955242247147529,
+                                  0.2955242247147529, 0.2692667193099963, 0.2190863625159820, 0.1494513491505806, 0.0666713443086881};
+    auto cells = [](std::vector<double> &knots) {
+        std::vector<double> out;
+        for (size_t i = 0; i + 1 < knots.size(); ++i) {
+            const int sub = std::max(1, std::min(8, (int)ceil((knots[i + 1] - knots[i]) / 1.0)));
+            for (int s = 0; s <= sub; ++s) {
+                if (s == 0 && i > 0) continue;
+                out.push_back(knots[i] + (knots[i + 1] - knots[i]) * (double)s / sub);
+            }
+        }
+        return out;
+    };
+    const std::vector<double> cu = cells(us), cv = cells(vs);
+    double area = 0.0;
+    gp_Pnt P; gp_Vec dU, dV;
+    for (size_t i = 0; i + 1 < cu.size(); ++i) {
+        const double ha = 0.5 * (cu[i + 1] - cu[i]), ua = 0.5 * (cu[i + 1] + cu[i]);
+        for (size_t j = 0; j + 1 < cv.size(); ++j) {
+            const double hb = 0.5 * (cv[j + 1] - cv[j]), vb = 0.5 * (cv[j + 1] + cv[j]);
+            double cell = 0.0;
+            for (int a = 0; a < 10; ++a) for (int b = 0; b < 10; ++b) {
+                S->D1(ua + ha * gx[a], vb + hb * gx[b], P, dU, dV);
+                cell += gw[a] * gw[b] * dU.Crossed(dV).Magnitude();
+            }
+            area += cell * ha * hb;
+        }
+    }
+    return area;
+}
+
 + (nullable NSData *)faceInfoOfShape:(OCCTShape *)shape {
     if (shape == nil || shape->_shape.IsNull()) return nil;
     try {
@@ -2269,11 +2380,28 @@ static OCCTShape *OS3DBlendByIndices(OCCTShape *shape, NSData *edgeIndices,
         rows.reserve((size_t)faceMap.Extent() * 10);
         for (Standard_Integer i = 1; i <= faceMap.Extent(); ++i) {
             const TopoDS_Face face = TopoDS::Face(faceMap(i));
-            GProp_GProps props;
-            BRepGProp::SurfaceProperties(face, props);
-            const gp_Pnt centroid = props.CentreOfMass();
-            const double area = props.Mass();
             BRepAdaptor_Surface surf(face);
+            GProp_GProps props;
+            // Face areas are identity signatures, and on a B-spline wall BOTH
+            // `BRepGProp::SurfaceProperties` rules are off (gotcha 23: default
+            // +1.3 %, adaptive −4.6 % — neither splits at knots). So: a plane
+            // takes the adaptive rule (exact to 1e-7 along a spline boundary);
+            // an untrimmed iso-rectangular face is integrated per knot span
+            // here (`OS3DSpanExactArea`); only a trimmed curved face is left
+            // to the default rule. Centroids stay the kernel's (a sample
+            // point, not a measurement). `testClosedSplineExtrudesToOneSmoothWall`.
+            const bool planar = surf.GetType() == GeomAbs_Plane;
+            if (planar) {
+                BRepGProp::SurfaceProperties(face, props, 1e-7);
+            } else {
+                BRepGProp::SurfaceProperties(face, props);
+            }
+            const gp_Pnt centroid = props.CentreOfMass();
+            double area = props.Mass();
+            if (!planar) {
+                const double exact = OS3DSpanExactArea(face);
+                if (exact > 0.0) area = exact;
+            }
             double kind = 2.0, extra = 0.0;
             gp_Dir normal(0.0, 0.0, 1.0);
             if (surf.GetType() == GeomAbs_Plane) {

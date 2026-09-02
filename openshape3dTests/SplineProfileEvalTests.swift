@@ -85,6 +85,45 @@ final class SplineProfileEvalTests: XCTestCase {
         // Named by the spline entity, once.
         let names = try XCTUnwrap(result.kernelNames[bodyID])
         XCTAssertEqual(wallCount(names, entity: spline), 1, "one wall, owned by the spline")
+
+        // Face AREAS are identity signatures, so they must be exact too: the
+        // spline wall is perimeter × height, the perimeter integrated here
+        // with 16 × 5-point Gauss–Legendre per Bézier span (≈1e-10). Before
+        // the adaptive integrator the kernel read this 0.4–1.3 % off.
+        let gl: [(x: Double, w: Double)] = [
+            (0, 0.5688888888888889),
+            (0.5384693101056831, 0.4786286704993665), (-0.5384693101056831, 0.4786286704993665),
+            (0.906179845938664, 0.2369268850561891), (-0.906179845938664, 0.2369268850561891)]
+        var perimeter = 0.0
+        for span in spans {
+            let sub = 16
+            for k in 0..<sub {
+                let a = Double(k) / Double(sub), b = Double(k + 1) / Double(sub)
+                for node in gl {
+                    let u = (a + b) / 2 + node.x * (b - a) / 2
+                    perimeter += node.w * (b - a) / 2 * simd_length(CatmullRomBezier.derivative(span, u))
+                }
+            }
+        }
+        let faces = OCCTKernel.faceInfo(brep)
+        let wall = try XCTUnwrap(faces.first { $0.signature == nil }, "the one non-planar face")
+        // Third estimate, independent of both integrals: the tessellation's
+        // triangle area less the two caps (a chordal mesh reads a curved wall
+        // slightly LOW, never 4 % off).
+        let mesh = body.render
+        var meshArea = 0.0
+        for t in stride(from: 0, to: mesh.indices.count - 2, by: 3) {
+            let a = SIMD3<Double>(mesh.positions[Int(mesh.indices[t])])
+            let b = SIMD3<Double>(mesh.positions[Int(mesh.indices[t + 1])])
+            let c = SIMD3<Double>(mesh.positions[Int(mesh.indices[t + 2])])
+            meshArea += simd_length(simd_cross(b - a, c - a)) / 2
+        }
+        let meshWall = meshArea - 2 * want / 10
+        XCTAssertEqual(wall.area, perimeter * 10, accuracy: perimeter * 10 * 1e-6,
+                       "wall area \(wall.area) vs perimeter × height \(perimeter * 10); tessellated wall \(meshWall)")
+        for cap in faces where cap.signature != nil {
+            XCTAssertEqual(cap.area, want / 10, accuracy: want / 10 * 1e-6, "each cap is the profile's area")
+        }
     }
 
     /// An open spline closes a loop with lines: three planar walls, one spline
