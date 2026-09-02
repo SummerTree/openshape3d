@@ -15,7 +15,7 @@ nonisolated enum STLExporter {
         var polygons = [Euclid.Polygon]()
         for body in bodies {
             let world = body.euclidMesh().transformed(by: body.transform.euclid)
-            polygons.append(contentsOf: world.triangulate().polygons)
+            polygons.append(contentsOf: EuclidBridge.triangles(of: world))
         }
         return Euclid.Mesh(polygons).stlData()
     }

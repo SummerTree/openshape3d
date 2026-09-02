@@ -34,15 +34,29 @@ nonisolated enum EuclidBridge {
         }
     }
 
+    /// Every polygon of `mesh` as triangles — the SAME triangles
+    /// `Mesh.triangulate()` produces, without building the intermediate
+    /// `Mesh`. That intermediate is not free: Euclid carries the source
+    /// mesh's cached "is watertight" claim onto it and, in a Debug build,
+    /// `assert`s the claim against the triangles. A CSG result can be
+    /// watertight as polygons yet not as triangles — a polygon whose
+    /// vertices sit 5e-7 mm apart (a coincident-face union of a Float32-
+    /// rebuilt body and a Double one, 2026-09-02) triangulates to one fewer
+    /// triangle, and the dropped sliver leaves an edge unpaired. That
+    /// assertion killed the app with no crash report. Triangulating polygon
+    /// by polygon makes the conversion a pure function of the geometry.
+    static func triangles(of mesh: Euclid.Mesh) -> [Euclid.Polygon] {
+        mesh.polygons.flatMap { $0.triangulate() }
+    }
+
     /// Triangulates a Euclid mesh and welds vertices into an indexed RenderMesh.
     static func renderMesh(from mesh: Euclid.Mesh) -> RenderMesh {
-        let triangulated = mesh.triangulate()
         var positions = [SIMD3<Float>]()
         var normals = [SIMD3<Float>]()
         var indices = [UInt32]()
         var lookup = [WeldKey: UInt32]()
 
-        for polygon in triangulated.polygons {
+        for polygon in triangles(of: mesh) {
             for vertex in polygon.vertices {
                 let p = SIMD3<Float>(
                     Float(vertex.position.x), Float(vertex.position.y), Float(vertex.position.z)

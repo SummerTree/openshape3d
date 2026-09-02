@@ -1862,38 +1862,80 @@ nonisolated extension FeatureGraph {
             return
         }
         // The full solid, wrapped identity so KernelOps.boolean bakes no extra
-        // transform (mesh already lives in the shared world space).
-        let toolBody = Body(
+        // transform (mesh already lives in the shared world space). The brep,
+        // when there is one, rides along so the OCCT composition below sees
+        // the tool exactly as a boolean node would.
+        var toolBody = Body(
             id: BodyID(), name: "\(node.name) tool", transform: .identity, primitive: nil,
             euclidMesh: mesh, revision: 0)
+        toolBody.brep = brep
         let toolTable = state.naming.faceTable(for: toolBody, createdBy: node.id, scheme: scheme)
-        let resultMesh = KernelOps.boolean(kind, target: target, tool: toolBody)
-        guard !resultMesh.polygons.isEmpty else {
+
+        // OCCT FIRST, Euclid only when OCCT declines — the same order
+        // `evalExtrude`'s boolean branch and `evalBoolean` already follow.
+        // This branch used to run the Euclid CSG unconditionally and then
+        // ASSIGN the OCCT result's brep over it, which was not merely wasted
+        // work: it KILLED the app. A loft whose top section sits exactly on
+        // the target's bottom face (the BEG 55 motor end cap, 2026-09-02)
+        // hands the Euclid union two coincident coplanar caps whose edges
+        // disagree at the 1e-6 level — the target's CSG mesh is rebuilt from
+        // Float32 render buffers, the tool's is Double — and the BSP clip
+        // leaves a wall polygon with four vertices 5e-7 mm apart. Its
+        // triangulation drops the sliver, the mesh is no longer watertight,
+        // and Euclid's own `assert` on the carried watertight claim trapped
+        // the process with no crash report. Adopting OCCT's fused solid
+        // (render, edges AND euclid from its tessellation) never touches
+        // the Euclid CSG for the analytic case at all. When OCCT OWNS the op
+        // (both sides analytic) and fails for cause, surface it: shipping
+        // the mesh result would silently drop the brep on the next save.
+        var result: Body?
+        var resultHandle: BRepHandle?
+        var resultNames: [Int: ElementName] = [:]
+        switch OCCTKernel.composedBooleanResultWithAncestry(kind, target: target, tool: toolBody) {
+        case let .success((outcome, ancestry)):
+            var body = Body(
+                id: target.id, name: target.name, transform: .identity, primitive: nil,
+                euclidMesh: Euclid.Mesh([]), revision: nextRevision())
+            if body.adoptBRep(outcome.handle) {
+                result = body
+                resultHandle = outcome.handle
+                // Inherit / mint through the boolean's ancestry: the target's
+                // own names and the tool's (this node's walls and caps).
+                resultNames = ElementNaming.composeNames(
+                    operation: node.id, ancestry: ancestry,
+                    inputNames: [state.kernelNames[target.id] ?? [:], kernelNames])
+            }
+        case let .failure(error):
+            state.errors[node.id] = .kernelFailure("boolean: \(error.message)")
+            return
+        case nil:
+            break  // an operand is mesh-only — Euclid legitimately owns it
+        }
+        if result == nil {
+            // Either operand is mesh-only (a holed loft, an imported mesh), or
+            // OCCT produced something that would not tessellate.
+            let resultMesh = KernelOps.boolean(kind, target: target, tool: toolBody)
+            guard !resultMesh.polygons.isEmpty else {
+                state.errors[node.id] = .emptyGeometry
+                return
+            }
+            result = Body(
+                id: target.id, name: target.name, transform: .identity, primitive: nil,
+                euclidMesh: resultMesh, revision: nextRevision())
+        }
+        guard let result else {
             state.errors[node.id] = .emptyGeometry
             return
         }
-        var result = Body(
-            id: target.id, name: target.name, transform: .identity, primitive: nil,
-            euclidMesh: resultMesh, revision: nextRevision())
-        // Compose the boolean in OCCT when BOTH sides are analytic, so a
-        // revolved boss cut into an analytic block leaves an analytic result.
-        // One brep-less side falls back to the mesh for the whole operation —
-        // a half-analytic result would be worse than an honest mesh one. But
-        // when OCCT OWNS the op (both sides analytic) and fails for cause,
-        // surface it: shipping the mesh result would silently drop the brep.
-        if OCCTKernel.useOCCTAsSourceOfTruth, let brep, let targetBrep = target.brep {
-            switch OCCTKernel.booleanResult(
-                targetBrep, brep, op: OCCTKernel.booleanOp(kind)) {
-            case let .success(outcome):
-                result.brep = outcome.handle
-            case let .failure(error):
-                state.errors[node.id] = .kernelFailure("boolean: \(error.message)")
-                return
-            }
-        }
         let inputTables = [state.faceTables[target.id], toolTable].compactMap { $0 }
-        let table = state.naming.propagate(inputs: inputTables, output: result, op: .boolean(kind))
+        var table = state.naming.propagate(inputs: inputTables, output: result, op: .boolean(kind))
+        if let resultHandle, !resultNames.isEmpty {
+            table = ElementNaming.attach(
+                resultNames, to: table,
+                channel: OCCTKernel.renderMeshFaceChannel(from: resultHandle))
+        }
         state.put(result, table: table)
+        if !resultNames.isEmpty { state.kernelNames[result.id] = resultNames }
     }
 
     private func evalRevolve(

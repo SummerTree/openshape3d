@@ -1153,7 +1153,7 @@ nonisolated extension KernelOps {
         while n > 1, mesh.polygons.count * n * n > budget { n -= 1 }
 
         var polygons = [Euclid.Polygon]()
-        for polygon in mesh.triangulate().polygons {
+        for polygon in EuclidBridge.triangles(of: mesh) {
             let verts = polygon.vertices
             // Untouched triangles keep their original (possibly smooth) normals so
             // curved faces elsewhere on the body aren't flattened.

@@ -1,7 +1,7 @@
 # Status & Next Steps — Handoff Notes
 
-Last updated: 2026-09-01 (naming-mission completion + real-part validation +
-exec-surface completion — see the mission log just below). This is the living
+Last updated: 2026-09-02 (loft-union app death fixed + BEG 55 lineup + exact
+helix sweep — see the mission log just below). This is the living
 handoff document: what is DONE, how the newest subsystems work, the dev
 workflow, and the prioritized next missions.
 Companions: `IMPLEMENTATION_PLAN.md` (original phase plan),
@@ -253,12 +253,39 @@ design), `FREECAD_PLAYBOOK.md` (the FreeCAD-derived hardening ledger),
   `testMirrorWithoutKeepOriginalConsumesTheSource`); a draft extrude refuses
   offsets that eat a profile's short segments ("offsets the profile into
   itself" — the plate outline's 2 mm corners), so drafted slabs use a clean
-  rectangle. Found, not fixed (task filed): `feature.loft` between two
-  similar octagons on parallel planes KILLS the app (connection closed, no
-  .ips) — the octagonal motor frustums use draft extrudes instead. Also:
+  rectangle. Found (fixed the same day, next entry): `feature.loft` between
+  two similar octagons on parallel planes KILLED the app (connection closed,
+  no .ips) — the octagonal motor frustums use draft extrudes instead. Also:
   a headless-booted simulator gets shut down by later xcodebuild runs — boot
   it under Simulator.app (`open -a Simulator --args -CurrentDeviceUDID …`).
   1179/1179.
+- **The loft-union app death, found and fixed (2026-09-02).** Reproduced
+  as pure values in `LoftOctagonTests` (the BEG 55 end cap: two similar
+  octagons on z = 73 / z = 98 lofted and unioned into the octagonal body
+  extruded from z = 98): the kernel loft alone and the graph loft as a NEW
+  body were fine; the union died. Not in the kernel at all — the stack
+  (SIGTRAP hook, gotcha 23) ended in Euclid's `Mesh.triangulate()` under
+  `EuclidBridge.renderMesh(from:)` while `emitFullSolid` built the result
+  body from the EUCLID union it still ran unconditionally before assigning
+  OCCT's brep over it. The two coincident caps disagree at the 1e-6 level
+  (the target's CSG mesh is rebuilt from Float32 render buffers, the
+  tool's is Double), the BSP clip left a loft wall with four vertices
+  5e-7 mm apart, its triangulation dropped the sliver, and Euclid's own
+  `assert` on the watertight claim it carries onto the triangulated mesh
+  trapped the process. Two fixes: (1) the revolve/sweep/loft boolean branch
+  is now OCCT-first — `composedBooleanResultWithAncestry`, adopt the fused
+  solid, compose names through the ancestry, Euclid only when OCCT declines
+  — the order `evalExtrude`'s boolean branch and `evalBoolean` already had,
+  so the analytic case never touches the Euclid CSG (and a target with a
+  non-identity transform is now placed before the fuse, which the old
+  assign path skipped); (2) `EuclidBridge.triangles(of:)` triangulates
+  polygon by polygon so the render, STL and twist conversions are pure
+  functions of the geometry and can never trip that assertion — pinned by
+  `testAMeshUnionWithCoincidentCapsConvertsToARenderMeshWithoutTrapping`,
+  which traps without it. The union now reads B-rep-exact (prism +
+  frustum to 1e-2 %) with kernel-face names. `rebuild_beg55.py` still uses
+  its draft extrudes for the frustums; the loft form works again.
+  1183/1183 (1 fuzz test skipped by design).
 - Two app deaths mid-exec during this pass did NOT reproduce under
   controlled repeats (fresh doc ×2, then the heavy doc, all monitored):
   no crash report, no jetsam, RSS modest; the simulator-control helper
@@ -300,8 +327,6 @@ plane sections, exact face areas, holed-sweep naming, CSG-free render meshes):
 
 - **Off-main eval, S1b slices 1–3** (`OFF_MAIN_EVAL_DESIGN.md`) — the
   true async contract; attended work, its own design pass.
-- **`feature.loft` crash** on two similar octagons on parallel planes — a
-  Swift `assert` inside Euclid (Debug only); in a separate session.
 - ~~Scale as a node~~ — landed 2026-09-02 (below): the composition carries a
   uniform scale (`Transform3D.composed(onto:)`, `delta(from:to:)`), the
   B-rep placement already did (`gp_Trsf::SetValues` admits it), the volume
@@ -310,10 +335,11 @@ plane sections, exact face areas, holed-sweep naming, CSG-free render meshes):
   vanishes) still return nil; lines are handled. Rare in practice.
 - **Scene caching / `ToolLifecycle` registry** (§4.5) — untouched.
 
-**Current test baseline (2026-09-02, evening): 1211 unit tests in ~21s** — the
+**Current test baseline (2026-09-02, evening): 1215 unit tests in ~22s** — the
 day added the exact helix spine, the BEG 55 lineup's bounds/mirror fixes,
 transform-as-a-feature, consumed-edge drafts on both offset paths, plane
-sections (`SectionKit`, `KernelSectionTests`), and the exact face areas.
+sections (`SectionKit`, `KernelSectionTests`), the exact face areas, and the
+loft-union crash fix (`LoftOctagonTests`, merged from its own branch).
 Earlier that day: **1170 unit tests in ~20s** (draft/taper incl.
 arc profiles and non-tangent joints, spline profiles with exact B-spline walls, B-rep volume readback, memoised replay, rebuild planner all added on 2026-09-01/02; the
 previous line follows) — **(2026-09-01): 1115 unit tests in ~17s** (1 skipped:
@@ -1079,6 +1105,27 @@ first differing frame is the one you want.
     and since then that builder is the ONLY path for sweeps and lofts,
     holes or not. Nothing on the render path calls a Euclid boolean now
     except the extrude fallback, which runs only when OCCT declined.
+
+25. **A Swift `assert` trap writes NO crash report in the simulator, and
+    the app's only symptom is a closed connection.** The loft-union death
+    (2026-09-02) left no .ips, nothing in the unified log, and `/v1/exec`
+    simply hung up. It was Euclid's `assert(isWatertight == nil ||
+    isWatertight == polygons.areWatertight)` in `Mesh.Storage.init` — Debug
+    only, so a Release build would have shipped the bad claim instead. To
+    get a stack out of XCTest: `signal(SIGTRAP) { _ in backtrace… }` with
+    `backtrace_symbols_fd` at the top of the reproducing test, then pipe
+    the xcodebuild log through `swift demangle`. Attaching lldb to the test
+    host does NOT work — xcodebuild SIGTERMs the stalled host. Corollary
+    for Euclid: `Mesh.triangulate()` and `detessellate()` carry the source
+    mesh's cached watertight claim onto a mesh with DIFFERENT polygons and
+    assert it — a CSG result that is watertight as polygons but loses a
+    sliver triangle under triangulation trips it. Convert through
+    `EuclidBridge.triangles(of:)`, never `mesh.triangulate()`. And the
+    third Euclid boolean gotcha 24 did not list: `emitFullSolid`'s
+    boolean branch (a revolve/sweep/loft unioned or cut INTO a body) ran
+    `KernelOps.boolean` unconditionally and only then assigned OCCT's brep
+    over it — that union is where this trap fired. It is OCCT-first now,
+    with the Euclid CSG only when an operand is mesh-only.
 
 ---
 
