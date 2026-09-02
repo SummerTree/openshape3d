@@ -283,8 +283,14 @@ design), `FREECAD_PLAYBOOK.md` (the FreeCAD-derived hardening ledger),
   functions of the geometry and can never trip that assertion — pinned by
   `testAMeshUnionWithCoincidentCapsConvertsToARenderMeshWithoutTrapping`,
   which traps without it. The union now reads B-rep-exact (prism +
-  frustum to 1e-2 %) with kernel-face names. `rebuild_beg55.py` still uses
-  its draft extrudes for the frustums; the loft form works again.
+  frustum to 1e-2 %) with kernel-face names. `rebuild_beg55.py` is back on
+  lofts for the motor frustums (end section = the body octagon scaled about
+  the axis): full lineup rerun, 72 bodies, 0 invalid, all B-rep, total
+  +2.29 % vs reference (motors +2.45/+2.11 %, the other 64 parts byte-
+  identical to the draft-extrude run). Running it alongside another
+  session's UI suite on the same Mac shut the simulator down twice under
+  the app (SimRenderServer trap, no app crash) — the run that counts was
+  on a second booted iPad with `OS3D_AGENT_PORT=8901`, `OS3D_PORT=8901`.
   1183/1183 (1 fuzz test skipped by design).
 - Two app deaths mid-exec during this pass did NOT reproduce under
   controlled repeats (fresh doc ×2, then the heavy doc, all monitored):

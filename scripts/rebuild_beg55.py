@@ -220,13 +220,16 @@ def drive_train(cx, size, front):
     print(f"5. Drive train {tag}")
     # motor: octagonal body, two frustum end caps (lofts), terminal box, shaft
     motor = extrude("Motor Body", XY(m["z0"], cx), poly(octagon(m["half"], m["ch"])), (0, CY), m["z1"] - m["z0"])
-    # End caps are octagonal frustums: 25 mm long, flats from `half` in to `end` —
-    # exactly a uniform DRAFT extrude (positive taper contracts). The front cap
-    # starts from the small octagon and expands (negative taper) up to the body.
-    taper = math.degrees(math.atan((m["half"] - m["end"]) / 25.0))
-    d = m["half"] - m["end"]
-    extrude("Motor Front Cap", XY(m["z0"] - 25, cx), poly(octagon(m["half"] - d, m["ch"] - d * (math.sqrt(2) - 1))), (0, CY), 25, "union", motor, taper=-taper)
-    extrude("Motor Rear Cap", XY(m["z1"], cx), poly(octagon(m["half"], m["ch"])), (0, CY), 25, "union", motor, taper=taper)
+    # End caps are octagonal frustums: 25 mm long, flats from `half` in to `end`
+    # (the end section is the body's octagon scaled about the axis), lofted
+    # between the two sections and unioned into the body. The loft's inner
+    # section sits exactly on the body's end face — the coincident-cap union
+    # that used to kill the app (fixed 2026-09-02, `LoftOctagonTests`); a
+    # draft extrude stood in for it meanwhile.
+    s = m["end"] / m["half"]
+    full, end = poly(octagon(m["half"], m["ch"])), poly(octagon(m["half"], m["ch"], s=s))
+    loft("Motor Front Cap", XY(m["z0"] - 25, cx), end, (0, CY), XY(m["z0"], cx), full, (0, CY), "union", motor)
+    loft("Motor Rear Cap", XY(m["z1"], cx), full, (0, CY), XY(m["z1"] + 25, cx), end, (0, CY), "union", motor)
     y0, y1, y2, bz0, bz1 = m["box"]
     extrude("Motor Terminal Box", XY(bz0, cx), poly([(48.5, y0), (48.5, y1), (33.5, y2), (-33.5, y2), (-48.5, y1), (-48.5, y0)]), (0, (y0 + y2) / 2), bz1 - bz0, "union", motor)
     r, sz0, sz1 = m["shaft"]
