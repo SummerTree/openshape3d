@@ -723,32 +723,22 @@ nonisolated extension FeatureGraph {
         }
 
         if boolean.op == .newBody {
-            // New body: FLUSH prisms unioned — exact as-drawn geometry.
-            var solid = KernelOps.extrude(
-                profile: outer, holes: holes, in: plane, distance: distance.value, symmetric: symmetric)
-            for extra in extras {
-                solid = solid.union(KernelOps.extrude(
-                    profile: extra.profile, holes: extra.holes, in: plane,
-                    distance: distance.value, symmetric: symmetric))
-            }
-            guard !solid.polygons.isEmpty else {
-                state.errors[node.id] = .emptyGeometry
-                return
-            }
             guard let id = node.outputBodyIDs.first else {
                 state.errors[node.id] = .brokenRef("extrude node has no output BodyID")
                 return
             }
-            var body = Body(
-                id: id, name: node.name, transform: .identity, primitive: nil,
-                euclidMesh: solid, revision: nextRevision())
             // B-rep source of truth for EVERY extrude: circles become an
             // analytic cylinder (round), circular HOLES an analytic bore, other
             // profiles an exact polygonal prism, and extra regions fuse in.
-            // Either way the body carries a brep, so downstream booleans stay
-            // analytic.
+            // The kernel goes FIRST and, when its solid tessellates, the body
+            // is built from that tessellation alone — the Euclid prism below
+            // is the fallback, never a prerequisite: cutting holes through it
+            // is a BSP CSG, quadratic-plus on a spline outline's thousand
+            // samples, and a 72-point cam with a bore wedged the eval for
+            // minutes that way (gotcha 24).
             var names: [Int: ElementName] = [:]
             var channel: [UInt32] = []
+            var adopted: Body? = nil
             if OCCTKernel.useOCCTAsSourceOfTruth {
                 let z = OCCTKernel.extrudeZRange(distance: distance.value, symmetric: symmetric)
                 let history: OCCTShapeHistory? = extras.isEmpty ? OCCTShapeHistory() : nil
@@ -758,16 +748,42 @@ nonisolated extension FeatureGraph {
                     origin: plane.origin, xAxis: plane.xAxis,
                     yAxis: plane.yAxis, normal: plane.normal,
                     history: history) {
+                    var candidate = Body(
+                        id: id, name: node.name, transform: .identity, primitive: nil,
+                        euclidMesh: Euclid.Mesh([]), revision: nextRevision())
                     // Names attach through the per-triangle channel, which
                     // only aligns when the OCCT tessellation IS the render —
                     // so only when adoption succeeded (step 2 wiring).
-                    if body.adoptBRep(handle), let history {
-                        names = ElementNaming.extrudeNames(
-                            creator: node.id, ancestry: ShapeAncestry(history),
-                            outer: outer, holes: holes)
-                        channel = OCCTKernel.renderMeshFaceChannel(from: handle)
+                    if candidate.adoptBRep(handle) {
+                        if let history {
+                            names = ElementNaming.extrudeNames(
+                                creator: node.id, ancestry: ShapeAncestry(history),
+                                outer: outer, holes: holes)
+                            channel = OCCTKernel.renderMeshFaceChannel(from: handle)
+                        }
+                        adopted = candidate
                     }
                 }
+            }
+            var body: Body
+            if let adopted {
+                body = adopted
+            } else {
+                // Fallback: FLUSH prisms unioned — exact as-drawn geometry.
+                var solid = KernelOps.extrude(
+                    profile: outer, holes: holes, in: plane, distance: distance.value, symmetric: symmetric)
+                for extra in extras {
+                    solid = solid.union(KernelOps.extrude(
+                        profile: extra.profile, holes: extra.holes, in: plane,
+                        distance: distance.value, symmetric: symmetric))
+                }
+                guard !solid.polygons.isEmpty else {
+                    state.errors[node.id] = .emptyGeometry
+                    return
+                }
+                body = Body(
+                    id: id, name: node.name, transform: .identity, primitive: nil,
+                    euclidMesh: solid, revision: nextRevision())
             }
             var table = state.naming.faceTable(for: body, createdBy: node.id, scheme: .extrude(outer))
             table = ElementNaming.attach(names, to: table, channel: channel)
@@ -786,22 +802,13 @@ nonisolated extension FeatureGraph {
             state.errors[node.id] = .brokenRef("extrude boolean target unresolved")
             return
         }
-        // Use the OVERLAPPED (padded) tool — exactly what the live extrude-cut
-        // uses — so coplanar / flush cut faces merge cleanly instead of leaving
-        // hanging thin walls. A flush prism here would diverge from the tool.
-        let toolMesh = KernelOps.overlapExtrudeTool(
-            profile: outer, holes: holes, extraProfiles: extras,
-            in: plane, distance: distance.value, symmetric: symmetric)
-        guard !toolMesh.polygons.isEmpty else {
-            state.errors[node.id] = .emptyGeometry
-            return
-        }
-        // The tool prism, wrapped identity so KernelOps.boolean bakes no extra
-        // transform (mesh already lives in the shared world space).
-        let toolBody = Body(
-            id: BodyID(), name: "\(node.name) tool", transform: .identity, primitive: nil,
-            euclidMesh: toolMesh, revision: 0)
-        let toolTable = state.naming.faceTable(for: toolBody, createdBy: node.id, scheme: .extrude(outer))
+        // The tool body is built LAZILY: from the kernel tool's own
+        // tessellation when OCCT owns the boolean (below), else the padded
+        // Euclid prism in the fallback. The Euclid prism used to be built
+        // here unconditionally, holes and all — a BSP subtract, quadratic-plus
+        // on a spline outline's thousand samples, that wedged the eval on a
+        // 72-point cam with a bore (gotcha 24) — and then thrown away.
+        var toolBody: Body? = nil
         // OCCT FIRST, Euclid only when OCCT declines — the same §3b decision
         // evalBoolean got, applied late to this branch: the Euclid CSG here
         // ran UNCONDITIONALLY and was thrown away whenever OCCT succeeded,
@@ -853,6 +860,12 @@ nonisolated extension FeatureGraph {
                             operation: node.id, ancestry: ancestry,
                             inputNames: [state.kernelNames[target.id] ?? [:],
                                          toolNames])
+                        // The tool's face table from the SAME tessellator as
+                        // the result, for the signature-propagation layer.
+                        var occtTool = Body(
+                            id: BodyID(), name: "\(node.name) tool", transform: .identity,
+                            primitive: nil, euclidMesh: Euclid.Mesh([]), revision: 0)
+                        if occtTool.adoptBRep(toolBrep) { toolBody = occtTool }
                     }
                 case let .failure(error):
                     // Both operands were analytic; a mesh-only result here
@@ -866,8 +879,22 @@ nonisolated extension FeatureGraph {
         if !occtOwned {
             // Either the target is mesh-only or OCCT declined the tool
             // (multi-profile with a failed piece, holed loft…). Euclid
-            // legitimately owns the result.
-            let resultMesh = KernelOps.boolean(kind, target: target, tool: toolBody)
+            // legitimately owns the result. Use the OVERLAPPED (padded) tool
+            // — exactly what the live extrude-cut uses — so coplanar / flush
+            // cut faces merge cleanly instead of leaving hanging thin walls;
+            // wrapped identity so KernelOps.boolean bakes no extra transform.
+            let toolMesh = KernelOps.overlapExtrudeTool(
+                profile: outer, holes: holes, extraProfiles: extras,
+                in: plane, distance: distance.value, symmetric: symmetric)
+            guard !toolMesh.polygons.isEmpty else {
+                state.errors[node.id] = .emptyGeometry
+                return
+            }
+            let euclidTool = Body(
+                id: BodyID(), name: "\(node.name) tool", transform: .identity, primitive: nil,
+                euclidMesh: toolMesh, revision: 0)
+            toolBody = euclidTool
+            let resultMesh = KernelOps.boolean(kind, target: target, tool: euclidTool)
             guard !resultMesh.polygons.isEmpty else {
                 state.errors[node.id] = .emptyGeometry
                 return
@@ -875,6 +902,9 @@ nonisolated extension FeatureGraph {
             result = Body(
                 id: target.id, name: target.name, transform: .identity, primitive: nil,
                 euclidMesh: resultMesh, revision: nextRevision())
+        }
+        let toolTable = toolBody.map {
+            state.naming.faceTable(for: $0, createdBy: node.id, scheme: .extrude(outer))
         }
         let inputTables = [state.faceTables[target.id], toolTable].compactMap { $0 }
         var table = state.naming.propagate(inputs: inputTables, output: result, op: .boolean(kind))

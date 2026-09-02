@@ -126,6 +126,52 @@ final class SplineProfileEvalTests: XCTestCase {
         }
     }
 
+    /// Spline slice 3 in unit form — a real spline part: a plate cam with a
+    /// cycloidal rise/dwell/return law, its outline one closed 72-point
+    /// spline, with a Ø10 bore, 8 thick. The B-rep volume is the interpolating
+    /// spline's Gauss-exact area less the bore, × 8; and it must be FAST —
+    /// this exact profile wedged the eval for minutes while the render mesh
+    /// went through a BSP subtract (gotcha 24).
+    func testACycloidalCamWithABoreExtrudesExactlyAndFast() throws {
+        let n = 72
+        func radius(_ phi: Double) -> Double {
+            if phi <= .pi { return 20 + 10 * (phi / .pi - sin(2 * phi) / (2 * .pi)) }
+            if phi <= 1.5 * .pi { return 30 }
+            let psi = (phi - 1.5 * .pi) / (0.5 * .pi)
+            return 30 - 10 * (psi - sin(2 * .pi * psi) / (2 * .pi))
+        }
+        let outline = (0..<n).map { i -> SIMD2<Double> in
+            let phi = Double(i) / Double(n) * 2 * .pi
+            return SIMD2(radius(phi) * cos(phi), radius(phi) * sin(phi))
+        }
+        let feature = FeatureID(), bodyID = BodyID(), sketchID = SketchID()
+        let spline = UUID(), bore = UUID()
+        let sketch = Sketch(id: sketchID, name: "Cam", plane: .ground, entities: [
+            .spline(id: spline, points: outline, closed: true),
+            .circle(id: bore, center: .zero, radius: 5)])
+        let node = FeatureNode(
+            id: feature, name: "Cam",
+            kind: .extrude(
+                profile: ProfileRef(sketchID: sketchID, entityIDs: [spline],
+                                    holeEntityIDs: [[bore]], seedPoint: SIMD2(12, 0)),
+                plane: PlaneRef(source: .sketch(sketchID)),
+                distance: Expr(value: 8), symmetric: false,
+                boolean: BooleanIntent(op: .newBody, resolvedTargets: []),
+                extraProfiles: []),
+            outputBodyIDs: [bodyID])
+        let start = Date()
+        let result = evaluate([node], [sketch])
+        let seconds = Date().timeIntervalSince(start)
+        XCTAssertTrue(result.errors.isEmpty, "\(result.errors)")
+        XCTAssertLessThan(seconds, 5.0, "a cam with a bore took \(seconds) s")
+        let body = try XCTUnwrap(result.bodies.first { $0.id == bodyID })
+        XCTAssertNotNil(body.brep)
+        let splineArea = abs(CatmullRomBezier.signedArea(CatmullRomBezier.spans(outline, closed: true)))
+        let want = (splineArea - Double.pi * 25) * 8
+        let vol = MeasureKit.volume(of: body)
+        XCTAssertEqual(vol, want, accuracy: want * 1e-6, "B-rep \(vol) vs spline-exact \(want)")
+    }
+
     /// An open spline closes a loop with lines: three planar walls, one spline
     /// wall, and Green's theorem over the mixed boundary gives the volume.
     func testOpenSplineJoinsLinesIntoOneExactLoop() throws {
