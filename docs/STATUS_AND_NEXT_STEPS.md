@@ -112,6 +112,18 @@ design), `FREECAD_PLAYBOOK.md` (the FreeCAD-derived hardening ledger),
   blend face, a chamfer builds, oversize and out-of-range edge indices
   refuse typed (`SplineBlendStressTests`). 1170/1170. Slice 3 (a real
   splined part) remains.
+- **Curved sweeps were wrong; fixed (2026-09-02).** Asked to build a
+  Helicoil (a diamond-section wire swept along a helix), the sweep's B-rep
+  came out at 0.8% of its volume — valid per BRepCheck, right-looking in
+  the mesh. Minimal probes showed V/(A·L) = mean cos(chord angle):
+  `BRepOffsetAPI_MakePipe` translates the profile along a polyline without
+  turning it. `sweptShape` now uses `MakePipeShell` with mitred corners
+  and a section rotated normal to the spine by our own transform (so the
+  history survives), and a polyline sweep encloses exactly A·L
+  (`SweepSpineTests`: quarter arc, 90° corner, bends, radii). Gotcha 21
+  has the three traps. 1175/1175. The helical sweep itself is next
+  (`scripts/rebuild_helicoil.py` is its acceptance test; an exact helix
+  spine is the follow-on to the sampled one).
 - Two app deaths mid-exec during this pass did NOT reproduce under
   controlled repeats (fresh doc ×2, then the heavy doc, all monitored):
   no crash report, no jetsam, RSS modest; the simulator-control helper
@@ -841,6 +853,28 @@ first differing frame is the one you want.
     `faceInfoOfShape:`'s `SurfaceProperties(face, props)` areas are still
     the default rule (they feed identification heuristics, not checks) — use
     the GK/`IsUseSpan` form before trusting a B-spline face area.
+
+21. **`BRepOffsetAPI_MakePipe` along a polyline does not turn the profile.**
+    Found building a Helicoil (2026-09-02): the sweep's B-rep came out at
+    0.8% of its expected volume while BRepCheck called it valid and the mesh
+    sweep looked right. MakePipe TRANSLATES the profile along each spine
+    edge without re-orienting it, so on a curved spine every chord is a
+    skewed prism with an oblique section — measured V/(A·L) equals the mean
+    of cos(chord angle): 0.69 for a 9-chord quarter arc, 0.5 for one 90°
+    corner, ~0 around a full turn. `sweptShape` now uses
+    `BRepOffsetAPI_MakePipeShell` with `RightCorner` transitions (mitred
+    polyline corners, section kept normal: exactly A·L) — with three
+    details that each cost a round: (a) do NOT use its `WithCorrection` /
+    `WithContact`: they sweep a transformed COPY of the profile and key the
+    history by the copy's edges, so face ancestry vanishes — rotate the
+    section normal to the spine yourself and keep the edge map;
+    (b) after `MakeSolid` its `FirstShape/LastShape` are the cap FACES, use
+    them directly; (c) never find a cap by "the face containing the section
+    wire's edges" — a one-edge circular section's only edge is shared with
+    the wall beside the cap, and the wall gets found first (every face then
+    carries two names and the naming drops them all). `SweepSpineTests`
+    pins the volumes; `testASweepSiblingFaceMintsInsteadOfDuplicating` the
+    history.
 
 ---
 

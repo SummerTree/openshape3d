@@ -47,6 +47,9 @@
 #include <BRepPrimAPI_MakeRevol.hxx>
 #include <BRepOffsetAPI_ThruSections.hxx>
 #include <BRepOffsetAPI_MakePipe.hxx>
+#include <BRepOffsetAPI_MakePipeShell.hxx>
+#include <TopTools_DataMapOfShapeShape.hxx>
+#include <BRepBuilderAPI_TransitionMode.hxx>
 #include <BRepBuilderAPI_MakePolygon.hxx>
 #include <BRepPrimAPI_MakeCylinder.hxx>
 #include <BRepPrimAPI_MakeSphere.hxx>
@@ -77,6 +80,7 @@
 #include <gp_Elips.hxx>
 #include <GC_MakeArcOfCircle.hxx>
 #include <Geom_BSplineCurve.hxx>
+#include <Geom_Plane.hxx>
 #include <TColgp_Array1OfPnt.hxx>
 #include <TColStd_Array1OfReal.hxx>
 #include <TColStd_Array1OfInteger.hxx>
@@ -932,12 +936,70 @@ static gp_Trsf OS3DBasisTransform(OCCTPlaneBasis *basis) {
 // underlying BRepSweep_Revol::Shape(edge) has no such gate, so when
 // Generated() comes back empty we query it directly; the in-result check in
 // emit() keeps phantom shapes out, same as everywhere else.
+/// Sweep one profile WIRE along `spine` into a solid with the section kept
+/// NORMAL to the path and polyline corners MITRED.
+///
+/// This replaced BRepOffsetAPI_MakePipe (2026-09-02). MakePipe along a
+/// polyline wire TRANSLATES the profile along each edge without turning it,
+/// so on a curved spine every chord is a skewed prism whose section is
+/// oblique to the path: measured V/(A·L) = mean of cos(chord angle) — 0.69
+/// for a 9-chord quarter arc, ~0 around a full helix — while BRepCheck
+/// still called the solid valid. MakePipeShell with RightCorner transitions
+/// and profile correction gives exactly A·L for a polyline, and follows a
+/// smooth spine with a corrected-Frenet frame.
+static TopoDS_Shape OS3DPipeShellSolid(const TopoDS_Wire &profile,
+                                       BRepOffsetAPI_MakePipeShell &mk) {
+    mk.SetMode(Standard_False);                          // corrected Frenet
+    mk.SetTransitionMode(BRepBuilderAPI_RightCorner);    // mitre at corners
+    // No WithContact / WithCorrection: both make the shell sweep a transformed
+    // COPY of the profile and key its history by the copy's edges, which are
+    // unreachable — the caller rotates the section normal to the spine itself
+    // (and keeps the edge map for the history). The profile passed here must
+    // already sit at the spine start, normal to its first segment.
+    mk.Add(profile, Standard_False, Standard_False);
+    mk.Build();
+    if (!mk.IsDone()) return TopoDS_Shape();
+    if (!mk.MakeSolid()) return TopoDS_Shape();
+    return mk.Shape();
+}
+
+/// The face of `solid` bounded by every edge of `sectionWire` — the cap a
+/// pipe shell's first/last section wire closes (PipeShell reports the
+/// section WIRES as First/LastShape, and the history wants the faces).
+static TopoDS_Shape OS3DCapFace(const TopoDS_Shape &solid, const TopoDS_Shape &section) {
+    if (solid.IsNull() || section.IsNull()) return TopoDS_Shape();
+    // After MakeSolid a pipe shell's First/LastShape ARE the cap faces.
+    if (section.ShapeType() == TopAbs_FACE) return section;
+    // A section wire: the cap is the face whose edge set EQUALS the wire's.
+    // Merely containing them is not enough — a one-edge (circular) section's
+    // only edge is shared with the lateral wall next to the cap, and that
+    // wall would be found first (it was: caps landed on wall faces, every
+    // face got two names, and the naming dropped them all as ambiguous).
+    TopTools_IndexedMapOfShape wireEdges;
+    TopExp::MapShapes(section, TopAbs_EDGE, wireEdges);
+    if (wireEdges.Extent() == 0) return TopoDS_Shape();
+    for (TopExp_Explorer f(solid, TopAbs_FACE); f.More(); f.Next()) {
+        TopTools_IndexedMapOfShape faceEdges;
+        TopExp::MapShapes(f.Current(), TopAbs_EDGE, faceEdges);
+        if (faceEdges.Extent() != wireEdges.Extent()) continue;
+        bool all = true;
+        for (Standard_Integer i = 1; i <= wireEdges.Extent() && all; ++i) {
+            if (!faceEdges.Contains(wireEdges(i))) all = false;
+        }
+        if (all) return f.Current();
+    }
+    return TopoDS_Shape();
+}
+
 static void OS3DFillSweepHistory(OCCTShapeHistory *history,
                                  BRepPrimAPI_MakeSweep &mk,
                                  BRepBuilderAPI_Transform &placer,
                                  const TopoDS_Face &localFace,
                                  const TopoDS_Shape &finalShape,
-                                 BRepPrimAPI_MakeRevol *revolMaker = nullptr) {
+                                 BRepPrimAPI_MakeRevol *revolMaker = nullptr,
+                                 const TopoDS_Shape &firstCap = TopoDS_Shape(),
+                                 const TopoDS_Shape &lastCap = TopoDS_Shape(),
+                                 const TopTools_DataMapOfShapeShape *profileToSection = nullptr) {
     if (history == nil || finalShape.IsNull()) return;
     TopTools_IndexedMapOfShape finalFaces;
     TopExp::MapShapes(finalShape, TopAbs_FACE, finalFaces);
@@ -958,8 +1020,11 @@ static void OS3DFillSweepHistory(OCCTShapeHistory *history,
             }
         }
     };
-    try { emit(mk.FirstShape(), 0, 0, 1, 1); } catch (...) {}
-    try { emit(mk.LastShape(), 0, 0, 2, 1); } catch (...) {}
+    // Caps: a pipe shell hands its section WIRES back as First/LastShape, so
+    // the caller finds the faces they bound and passes them in; the sweeps
+    // whose First/LastShape are already faces pass nothing.
+    try { emit(firstCap.IsNull() ? mk.FirstShape() : firstCap, 0, 0, 1, 1); } catch (...) {}
+    try { emit(lastCap.IsNull() ? mk.LastShape() : lastCap, 0, 0, 2, 1); } catch (...) {}
     int32_t ordinal = 0;
     for (TopExp_Explorer wires(localFace, TopAbs_WIRE); wires.More();
          wires.Next(), ++ordinal) {
@@ -967,8 +1032,14 @@ static void OS3DFillSweepHistory(OCCTShapeHistory *history,
         for (TopExp_Explorer edges(wires.Current(), TopAbs_EDGE);
              edges.More(); edges.Next(), ++subIndex) {
             try {
-                const TopoDS_Shape placed = placer.ModifiedShape(edges.Current());
+                TopoDS_Shape placed = placer.ModifiedShape(edges.Current());
                 if (placed.IsNull()) continue;
+                // A pipe shell with profile correction works on a transformed
+                // COPY of the profile, so its history is keyed by the first
+                // section's edges, not the placed ones: translate when told.
+                if (profileToSection != nullptr && profileToSection->IsBound(placed)) {
+                    placed = profileToSection->Find(placed);
+                }
                 const TopTools_ListOfShape &generated = mk.Generated(placed);
                 for (TopTools_ListIteratorOfListOfShape it(generated);
                      it.More(); it.Next()) {
@@ -1204,12 +1275,59 @@ static void OS3DFillLoftHistory(OCCTShapeHistory *history,
         const TopoDS_Wire spineWire = poly.Wire();
         if (spineWire.IsNull()) return nil;
 
-        BRepOffsetAPI_MakePipe mk(spineWire, worldFace);
-        mk.Build();
-        if (!mk.IsDone()) return nil;
-        const TopoDS_Shape solid = mk.Shape();
+        // The OUTER wire sweeps into the solid (see OS3DPipeShellSolid for why
+        // not MakePipe); each hole wire sweeps the same way and is cut out.
+        //
+        // The section is first turned NORMAL to the spine's opening segment by
+        // a transform of our own (pivot: the spine start), never by the pipe
+        // shell's WithCorrection — that sweeps a transformed COPY whose edges
+        // key the history and are unreachable. Our rotator's ModifiedShape
+        // keeps placed edge -> section edge, so face ancestry survives. When
+        // the profile is already normal (every exec sweep is), nothing moves.
+        TopoDS_Face sectionFace = TopoDS::Face(worldFace);
+        TopTools_DataMapOfShapeShape placedToSection;
+        {
+            const gp_Pnt start(s[0], s[1], s[2]);
+            const gp_Vec along(start, gp_Pnt(s[3], s[4], s[5]));
+            Handle(Geom_Plane) plane = Handle(Geom_Plane)::DownCast(BRep_Tool::Surface(sectionFace));
+            if (!plane.IsNull() && along.Magnitude() > 1e-12) {
+                const gp_Dir t(along);
+                gp_Dir n = plane->Axis().Direction();
+                if (n.Dot(t) < 0) n.Reverse();
+                const double cosine = n.Dot(t);
+                const gp_Vec axis = gp_Vec(n).Crossed(gp_Vec(t));
+                if (cosine < 1.0 - 1e-12 && axis.Magnitude() > 1e-12) {
+                    gp_Trsf rot;
+                    rot.SetRotation(gp_Ax1(start, gp_Dir(axis)),
+                                    std::acos(std::max(-1.0, std::min(1.0, cosine))));
+                    BRepBuilderAPI_Transform rotator(sectionFace, rot, Standard_True);
+                    for (TopExp_Explorer e(sectionFace, TopAbs_EDGE); e.More(); e.Next()) {
+                        placedToSection.Bind(e.Current(), rotator.ModifiedShape(e.Current()));
+                    }
+                    sectionFace = TopoDS::Face(rotator.Shape());
+                }
+            }
+        }
+        const TopoDS_Wire outerWire = BRepTools::OuterWire(sectionFace);
+        if (outerWire.IsNull()) return nil;
+        BRepOffsetAPI_MakePipeShell mk(spineWire);
+        TopoDS_Shape solid = OS3DPipeShellSolid(outerWire, mk);
         if (solid.IsNull()) return nil;
-        OS3DFillSweepHistory(history, mk, placer, face, solid);
+        const TopoDS_Shape firstCap = OS3DCapFace(solid, mk.FirstShape());
+        const TopoDS_Shape lastCap = OS3DCapFace(solid, mk.LastShape());
+        const TopTools_DataMapOfShapeShape &profileToSection = placedToSection;
+        for (TopExp_Explorer w(sectionFace, TopAbs_WIRE); w.More(); w.Next()) {
+            if (w.Current().IsSame(outerWire)) continue;
+            BRepOffsetAPI_MakePipeShell hm(spineWire);
+            const TopoDS_Shape tube = OS3DPipeShellSolid(TopoDS::Wire(w.Current()), hm);
+            if (tube.IsNull()) return nil;
+            BRepAlgoAPI_Cut cut(solid, tube);
+            cut.Build();
+            if (!cut.IsDone() || cut.Shape().IsNull()) return nil;
+            solid = cut.Shape();
+        }
+        OS3DFillSweepHistory(history, mk, placer, face, solid, nullptr, firstCap, lastCap,
+                             &profileToSection);
         OCCTShape *out = [OCCTShape new];
         out->_shape = solid;
         return out;
