@@ -22,7 +22,8 @@ final class DraftExtrudeEvalTests: XCTestCase {
 
     private func draftNode(_ feature: FeatureID, _ bodyID: BodyID,
                            sketch: SketchID, rect: UUID,
-                           distance: Double, taper: Double) -> FeatureNode {
+                           distance: Double, taper: Double,
+                           symmetric: Bool = false) -> FeatureNode {
         FeatureNode(
             id: feature, name: "Draft",
             kind: .draftExtrude(
@@ -31,6 +32,7 @@ final class DraftExtrudeEvalTests: XCTestCase {
                 plane: PlaneRef(source: .sketch(sketch)),
                 distance: Expr(value: distance),
                 taperAngle: Expr(value: taper),
+                symmetric: symmetric,
                 boolean: BooleanIntent(op: .newBody, resolvedTargets: [])),
             outputBodyIDs: [bodyID])
     }
@@ -58,6 +60,30 @@ final class DraftExtrudeEvalTests: XCTestCase {
         let vol = MeasureKit.bodyVolume(body.render, scale: 1)
         XCTAssertEqual(vol, want, accuracy: max(1, want * 0.005),
                        "drafted frustum volume \(vol) vs analytic \(want)")
+    }
+
+    /// Symmetric draft tapers BOTH ways from the sketch plane: the base is the
+    /// widest section in the middle and both ends contract, so the solid is two
+    /// frustums back to back (each of height `distance`).
+    func testSymmetricDraftIsTwoFrustumsBackToBack() throws {
+        let feature = FeatureID(), bodyID = BodyID()
+        let sketchID = SketchID(), rect = UUID()
+        let sketch = Sketch(id: sketchID, name: "S", plane: .ground, entities: [
+            .rect(id: rect, min: SIMD2(-20, -20), max: SIMD2(20, 20))])
+        let result = evaluate(
+            [draftNode(feature, bodyID, sketch: sketchID, rect: rect,
+                       distance: 10, taper: 10, symmetric: true)], [sketch])
+        XCTAssertTrue(result.errors.isEmpty, "\(result.errors)")
+        let body = try XCTUnwrap(result.bodies.first { $0.id == bodyID })
+        XCTAssertNotNil(body.brep)
+        let off = 10 * tan(10 * Double.pi / 180)           // each half height 10
+        let endSide = 40 - 2 * off
+        let A1 = 40.0 * 40, A2 = endSide * endSide
+        let half = 10.0 / 3 * (A1 + A2 + (A1 * A2).squareRoot())
+        let want = 2 * half                                 // two frustums
+        let vol = MeasureKit.bodyVolume(body.render, scale: 1)
+        XCTAssertEqual(vol, want, accuracy: max(1, want * 0.005),
+                       "symmetric draft \(vol) vs two frustums \(want)")
     }
 
     /// A negative angle EXPANDS the section — the reverse taper. Volume is the
@@ -114,6 +140,7 @@ final class DraftExtrudeEvalTests: XCTestCase {
                                     holeEntityIDs: [[holeRect]], seedPoint: SIMD2(12, 0)),
                 plane: PlaneRef(source: .sketch(sketchID)),
                 distance: Expr(value: 20), taperAngle: Expr(value: 10),
+                symmetric: false,
                 boolean: BooleanIntent(op: .newBody, resolvedTargets: [])),
             outputBodyIDs: [draftID])
         let result = evaluate([node], [sketch])

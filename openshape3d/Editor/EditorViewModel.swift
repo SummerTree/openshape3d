@@ -11286,7 +11286,7 @@ final class EditorViewModel {
             case .newBody: verb = "Extrude"
             }
             return "\(verb) \(fmt(distance.value)) mm"
-        case let .draftExtrude(_, _, distance, taperAngle, _):
+        case let .draftExtrude(_, _, distance, taperAngle, _, _):
             return "Draft \(fmt(distance.value)) mm @ \(fmt(taperAngle.value))°"
         case let .boolean(op, _, _):
             return op.rawValue.capitalized

@@ -225,7 +225,7 @@ final class AgentBridge {
                     kind: .draftExtrude(profile: profile, plane: plane,
                                         distance: Expr(value: distance),
                                         taperAngle: Expr(value: taperDegrees),
-                                        boolean: intent),
+                                        symmetric: symmetric, boolean: intent),
                     outputBodyIDs: [BodyID()]), on: viewModel)
             }
             return record(FeatureNode(

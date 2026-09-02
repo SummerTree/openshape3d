@@ -249,10 +249,11 @@ nonisolated enum ProjectMergeKit {
                     profile: remap(profile), plane: remap(plane, translation: t),
                     distance: distance, symmetric: symmetric, boolean: boolean,
                     extraProfiles: extra.map(remap))
-            case let .draftExtrude(profile, plane, distance, taperAngle, boolean):
+            case let .draftExtrude(profile, plane, distance, taperAngle, symmetric, boolean):
                 return .draftExtrude(
                     profile: remap(profile), plane: remap(plane, translation: t),
-                    distance: distance, taperAngle: taperAngle, boolean: boolean)
+                    distance: distance, taperAngle: taperAngle,
+                    symmetric: symmetric, boolean: boolean)
             case let .revolve(profile, plane, axis, angle, boolean):
                 return .revolve(
                     profile: remap(profile), plane: remap(plane, translation: t),

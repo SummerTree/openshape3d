@@ -112,7 +112,7 @@ nonisolated enum FeatureKind: Codable, Sendable {
     /// sections, not a straight prism. `taperAngle` is degrees (converted at
     /// eval); a zero angle would be a plain extrude and is never recorded here.
     case draftExtrude(profile: ProfileRef, plane: PlaneRef, distance: Expr,
-                      taperAngle: Expr, boolean: BooleanIntent)
+                      taperAngle: Expr, symmetric: Bool, boolean: BooleanIntent)
     case revolve(profile: ProfileRef, plane: PlaneRef, axis: AxisRef, angle: Expr, boolean: BooleanIntent)
     case sweep(profile: ProfileRef, plane: PlaneRef, spine: [PointWrapper], boolean: BooleanIntent)
     case loft(sections: [ProfileRef], boolean: BooleanIntent)
@@ -203,7 +203,7 @@ nonisolated extension FeatureNode {
             ids.insert(profile.sketchID)
             for extra in extraProfiles { ids.insert(extra.sketchID) }
             addPlane(plane)
-        case let .draftExtrude(profile, plane, _, _, _):
+        case let .draftExtrude(profile, plane, _, _, _, _):
             ids.insert(profile.sketchID)
             addPlane(plane)
         case let .revolve(profile, plane, axis, _, _):
@@ -345,10 +345,11 @@ nonisolated extension FeatureGraph {
                 node, profileRef: profile, planeRef: plane, distance: distance,
                 symmetric: symmetric, boolean: boolean, extraProfileRefs: extraProfiles,
                 into: &state, next: nextRevision)
-        case let .draftExtrude(profile, plane, distance, taperAngle, boolean):
+        case let .draftExtrude(profile, plane, distance, taperAngle, symmetric, boolean):
             evalDraftExtrude(
                 node, profileRef: profile, planeRef: plane, distance: distance,
-                taperAngle: taperAngle, boolean: boolean, into: &state, next: nextRevision)
+                taperAngle: taperAngle, symmetric: symmetric, boolean: boolean,
+                into: &state, next: nextRevision)
         case let .boolean(kind, target, tools):
             evalBoolean(node, kind: kind, target: target, tools: tools, into: &state, next: nextRevision)
         case let .pushPull(face, distance, mode):
@@ -1793,6 +1794,7 @@ nonisolated extension FeatureGraph {
         planeRef: PlaneRef,
         distance: Expr,
         taperAngle: Expr,
+        symmetric: Bool,
         boolean: BooleanIntent,
         into state: inout EvalState,
         next nextRevision: () -> UInt64
@@ -1813,6 +1815,8 @@ nonisolated extension FeatureGraph {
         // The outer boundary contracts along the extrude by `offsetDistance`;
         // every HOLE offsets the OPPOSITE way (a bore widens toward the far
         // end, so a core pin releases), keeping the wall's draft consistent.
+        // `symmetric` drafts BOTH ways from the sketch plane (±d), so the base
+        // profile is the widest section in the middle and both ends taper.
         let offsetDistance = -tan(taperAngle.value * .pi / 180) * d
         func polyProfile(_ loop: [SIMD2<Double>], from src: Profile) -> Profile {
             // POLYLINE sections so the loft matches edge-for-edge (a conic base
@@ -1820,55 +1824,67 @@ nonisolated extension FeatureGraph {
             Profile(loop: loop, kind: .polygonal,
                     sourceEntityIDs: src.sourceEntityIDs, edgeEntityIDs: src.edgeEntityIDs)
         }
-        func offsetSection(_ p: Profile, by dist: Double) -> (base: Profile, top: Profile)? {
-            guard let top = ProfileOffset.offsetLoop(p.loop, by: dist) else { return nil }
-            return (polyProfile(p.loop, from: p), polyProfile(top, from: p))
+        // For a profile, the base (at the sketch plane) and its offset copy.
+        func sections(_ p: Profile, offsetBy dist: Double) -> (base: Profile, offset: Profile)? {
+            guard let off = ProfileOffset.offsetLoop(p.loop, by: dist) else { return nil }
+            return (polyProfile(p.loop, from: p), polyProfile(off, from: p))
         }
-        guard let outerSec = offsetSection(outer, by: offsetDistance) else {
+        guard let outerS = sections(outer, offsetBy: offsetDistance) else {
             state.errors[node.id] = .kernelFailure(
                 "the taper offsets the profile into itself — reduce the angle or the depth")
             return
         }
-        var holeSecs: [(base: Profile, top: Profile)] = []
+        var holeS: [(base: Profile, offset: Profile)] = []
         for hole in holes {
-            guard let sec = offsetSection(hole, by: -offsetDistance) else {
+            guard let s = sections(hole, offsetBy: -offsetDistance) else {
                 state.errors[node.id] = .kernelFailure(
                     "the taper offsets a hole into itself — reduce the angle or the depth")
                 return
             }
-            holeSecs.append(sec)
+            holeS.append(s)
         }
 
         let n = simd_normalize(plane.normal)
-        let topPlane = SketchPlane(origin: plane.origin + n * d,
-                                   xAxis: plane.xAxis, yAxis: plane.yAxis)
-        // Render mesh: one lofted shell with the holes carried per section.
-        let mesh = SweepLoftKit.loft(profiles: [
-            (outerSec.base, holeSecs.map(\.base), plane),
-            (outerSec.top, holeSecs.map(\.top), topPlane)])
+        func planeAt(_ t: Double) -> SketchPlane {
+            SketchPlane(origin: plane.origin + n * t,
+                        xAxis: plane.xAxis, yAxis: plane.yAxis)
+        }
+        // The stack of section planes and whether each uses the OFFSET profile:
+        // symmetric drafts an offset end at ±d with the base in the middle.
+        let stack: [(plane: SketchPlane, offset: Bool)] = symmetric
+            ? [(planeAt(-d), true), (planeAt(0), false), (planeAt(d), true)]
+            : [(planeAt(0), false), (planeAt(d), true)]
 
-        // B-rep: loft the outer, then subtract each hole's own loft. Naming
-        // rides the outer loft's history when there are no holes; with holes
-        // the subtraction reindexes the faces, so it relabels by geometry
+        func pick(_ s: (base: Profile, offset: Profile), _ useOffset: Bool) -> Profile {
+            useOffset ? s.offset : s.base
+        }
+        // Render mesh: one lofted shell with the holes carried per section.
+        let mesh = SweepLoftKit.loft(profiles: stack.map { step in
+            (pick(outerS, step.offset), holeS.map { pick($0, step.offset) }, step.plane)
+        })
+
+        // B-rep: loft the outer through the stack, then subtract each hole's
+        // own loft. Naming rides the outer loft's history when hole-free; with
+        // holes the subtraction reindexes the faces, so it relabels by geometry
         // (composed hole-wall naming is the next follow-on, per the doc).
         var brep: BRepHandle?
         var names: [Int: ElementName] = [:]
         if OCCTKernel.useOCCTAsSourceOfTruth {
             let history = OCCTShapeHistory()
             guard var solid = OCCTKernel.loftSolid(
-                sections: [(outerSec.base, plane), (outerSec.top, topPlane)],
+                sections: stack.map { (pick(outerS, $0.offset), $0.plane) },
                 history: history) else {
                 state.errors[node.id] = .kernelFailure("draft-extrude loft failed")
                 return
             }
-            if holeSecs.isEmpty {
+            if holeS.isEmpty {
                 names = ElementNaming.extrudeNames(
                     creator: node.id, ancestry: ShapeAncestry(history),
-                    outer: outerSec.base, holes: [])
+                    outer: pick(outerS, stack[0].offset), holes: [])
             } else {
-                for sec in holeSecs {
+                for hs in holeS {
                     guard let bore = OCCTKernel.loftSolid(
-                            sections: [(sec.base, plane), (sec.top, topPlane)]),
+                            sections: stack.map { (pick(hs, $0.offset), $0.plane) }),
                           let cut = OCCTKernel.boolean(solid, bore, op: 1) else {
                         state.errors[node.id] = .kernelFailure("draft-extrude hole cut failed")
                         return
