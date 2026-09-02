@@ -142,9 +142,16 @@ caller gives an angle, not a hand-computed second profile.
   where the surviving neighbours' carriers meet (`carrierIntersection`
   covers line/arc/arc–arc) with both joints placed exactly on those
   carriers, so a neighbouring arc's ends stay on its circle and the
-  concentric offset arcs remain exact; a consumed ARC (sweep gone) stays
-  nil. So a rounded-and-chamfered outline drafts with true conical walls
-  even when the draft eats the chamfers.
+  concentric offset arcs remain exact. Consumed ARCS followed the same
+  evening: an arc whose offset radius vanishes (a corner round drafted
+  deeper than its radius) is consumed up front and the joint pass, which
+  now runs between SURVIVORS from immutable carriers and repeats when a
+  survivor line reverses, collapses any consumed run onto the neighbours'
+  meeting point. So a rounded rectangle drafts past its corner radius to
+  sharp corners with the piece count kept, and a rounded-and-chamfered
+  outline drafts with true conical walls even when the draft eats the
+  chamfers. The honest nil remains for survivors that cannot meet (a slot
+  past its semicircles leaves two parallel flats).
 
 Ledgered in `FREECAD_PLAYBOOK.md` (the `makeDraft` = loft-between-offset
 pattern).

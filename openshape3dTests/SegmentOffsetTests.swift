@@ -201,8 +201,44 @@ final class SegmentOffsetTests: XCTestCase {
         XCTAssertEqual(area, 52 * 12 - 2 * (1 - Double.pi / 4), accuracy: 0.05)
     }
 
-    func testAnOffsetPastTheRoundsStillRefuses() {
-        XCTAssertNil(SegmentOffset.offset(roundedAndChamfered(), by: -8),
-                     "8 mm inward collapses the R5 rounds and reverses the right flank — no section")
+    /// A 40×20 rectangle with R3 corner rounds offset inward by 4: every round's
+    /// offset radius vanishes (3 − 4 < 0), so each is consumed and its two
+    /// lines meet at a sharp corner — the count stays 8, the rounds are
+    /// ε-stubs on (±16, ±6), and the section is the 32×12 rectangle.
+    func testCornerRoundsDraftedPastTheirRadiusCollapseToSharpCorners() throws {
+        let r = 3.0, c = 0.7071067811865476 * r
+        let loop: [Seg] = [
+            Seg(start: SIMD2(-17, -10), end: SIMD2(17, -10)),
+            Seg(start: SIMD2(17, -10), end: SIMD2(20, -7), mid: SIMD2(17 + c, -7 - c)),
+            Seg(start: SIMD2(20, -7), end: SIMD2(20, 7)),
+            Seg(start: SIMD2(20, 7), end: SIMD2(17, 10), mid: SIMD2(17 + c, 7 + c)),
+            Seg(start: SIMD2(17, 10), end: SIMD2(-17, 10)),
+            Seg(start: SIMD2(-17, 10), end: SIMD2(-20, 7), mid: SIMD2(-17 - c, 7 + c)),
+            Seg(start: SIMD2(-20, 7), end: SIMD2(-20, -7)),
+            Seg(start: SIMD2(-20, -7), end: SIMD2(-17, -10), mid: SIMD2(-17 - c, -7 - c)),
+        ]
+        XCTAssertNotNil(SegmentOffset.offset(loop, by: -2), "shallower than the radius: rounds shrink to R1")
+        let g = try XCTUnwrap(SegmentOffset.offset(loop, by: -4), "deeper than the radius must not refuse")
+        XCTAssertEqual(g.count, 8)
+        let corners: [SIMD2<Double>] = [SIMD2(16, -6), SIMD2(16, 6), SIMD2(-16, 6), SIMD2(-16, -6)]
+        for (k, corner) in corners.enumerated() {
+            let stub = g[1 + 2 * k]
+            XCTAssertNil(stub.mid, "a consumed round is a straight stub")
+            XCTAssertLessThan(simd_distance(stub.start, stub.end), 2e-3)
+            XCTAssertLessThan(simd_distance(stub.start, corner), 2e-3, "corner \(k): \(stub.start)")
+        }
+        XCTAssertEqual(Profile.signedArea(SegmentOffset.loop(from: g)), 32 * 12, accuracy: 0.2)
+    }
+
+    /// 8 mm inward consumes the R5 rounds (their offset radius is −3) AND the
+    /// chamfers; what survives — top, bottom, right flank, left flank — meets
+    /// at sharp corners: the true inward offset, a 44 × 4 rectangle, count
+    /// kept. 11 mm inward is past the half-height: the top and bottom flanks
+    /// cross, the survivors are two parallel lines with no meeting point — nil.
+    func testAnOffsetPastTheRoundsCollapsesThemAndPastTheHalfHeightRefuses() throws {
+        let g = try XCTUnwrap(SegmentOffset.offset(roundedAndChamfered(), by: -8))
+        XCTAssertEqual(g.count, 8)
+        XCTAssertEqual(Profile.signedArea(SegmentOffset.loop(from: g)), 44 * 4, accuracy: 0.2)
+        XCTAssertNil(SegmentOffset.offset(roundedAndChamfered(), by: -11), "past the half-height there is no section")
     }
 }

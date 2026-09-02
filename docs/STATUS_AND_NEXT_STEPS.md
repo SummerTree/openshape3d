@@ -337,11 +337,16 @@ plane sections, exact face areas, holed-sweep naming, CSG-free render meshes):
   uniform scale (`Transform3D.composed(onto:)`, `delta(from:to:)`), the
   B-rep placement already did (`gp_Trsf::SetValues` admits it), the volume
   is cubic; `feature.transform` takes `scale`, the Scale tool records nodes.
-- **Consumed ARCS in `SegmentOffset`** (an arc whose offset radius
-  vanishes) still return nil; lines are handled. Rare in practice.
+- ~~Consumed ARCS in `SegmentOffset`~~ — landed 2026-09-02: an arc whose
+  offset radius vanishes is consumed up front, the joint pass runs between
+  survivors with ε-stubs across any consumed run, and reversed survivor
+  lines join the set on a repeat pass (carriers are immutable, so the pass
+  is idempotent). A rounded rectangle drafts past its corner radius to sharp
+  corners; the slot past its semicircles still refuses (two parallel
+  survivors never meet).
 - **Scene caching / `ToolLifecycle` registry** (§4.5) — untouched.
 
-**Current test baseline (2026-09-02, evening): 1215 unit tests in ~22s** — the
+**Current test baseline (2026-09-02, evening): 1216 unit tests in ~21s** — the
 day added the exact helix spine, the BEG 55 lineup's bounds/mirror fixes,
 transform-as-a-feature, consumed-edge drafts on both offset paths, plane
 sections (`SectionKit`, `KernelSectionTests`), the exact face areas, and the

@@ -83,7 +83,13 @@ nonisolated enum SegmentOffset {
         //    direction) and its traversal tangent at each end.
         var pieces: [Piece] = []
         pieces.reserveCapacity(n)
-        for s in segs {
+        // Pieces the offset consumes: an arc whose offset radius vanishes (a
+        // corner round drafted deeper than its radius) up front, a line whose
+        // offset runs backwards after the joints. Both collapse onto the
+        // meeting point of their surviving neighbours' carriers, as ε-stubs,
+        // so the piece count survives for the segment-for-segment loft.
+        var consumed = Set<Int>()
+        for (index, s) in segs.enumerated() {
             if let mid = s.mid {
                 guard let (c, r) = circle(through: s.start, mid, s.end) else { return nil }
                 // On a CCW loop an arc that turns LEFT (CCW about its centre)
@@ -92,7 +98,16 @@ nonisolated enum SegmentOffset {
                 let cross = (mid.x - s.start.x) * (s.end.y - mid.y) - (mid.y - s.start.y) * (s.end.x - mid.x)
                 let convex = cross > 0
                 let r2 = convex ? r + distance : r - distance
-                guard r2 > 1e-9 else { return nil }          // the arc collapsed
+                guard r2 > 1e-9 else {
+                    // The arc collapsed: a placeholder stub, replaced at the joints.
+                    let chord = s.end - s.start
+                    var stub = Piece(seg: Profile.Segment(start: s.start, end: s.end), isArc: false)
+                    stub.dir = simd_length(chord) > 1e-12 ? simd_normalize(chord) : SIMD2(1, 0)
+                    stub.freeStart = s.start; stub.freeEnd = s.end
+                    pieces.append(stub)
+                    consumed.insert(index)
+                    continue
+                }
                 func moved(_ p: SIMD2<Double>) -> SIMD2<Double> { c + simd_normalize(p - c) * r2 }
                 func tangent(at p: SIMD2<Double>) -> SIMD2<Double> {
                     let rad = simd_normalize(p - c)
@@ -107,6 +122,7 @@ nonisolated enum SegmentOffset {
                 piece.oldMidAngle = atan2(mid.y - c.y, mid.x - c.x)
                 piece.tangentIn = tangent(at: s.start)
                 piece.tangentOut = tangent(at: s.end)
+                piece.freeStart = piece.seg.start; piece.freeEnd = piece.seg.end
                 pieces.append(piece)
             } else {
                 let edge = s.end - s.start
@@ -120,75 +136,73 @@ nonisolated enum SegmentOffset {
                 piece.dir = dir
                 piece.tangentIn = dir
                 piece.tangentOut = dir
+                piece.freeStart = piece.seg.start; piece.freeEnd = piece.seg.end
                 pieces.append(piece)
             }
         }
 
-        // 2. Joints. A tangent joint's two offset ends already coincide (the
-        //    line's outward normal IS the arc's radial there): seal any
-        //    floating-point daylight. Any other joint is trimmed or extended to
-        //    where the two carriers meet, choosing the meeting point nearest
-        //    the ORIGINAL joint so a circle's second intersection never wins.
-        for i in 0..<n {
-            let j = (i + 1) % n
-            let joint: SIMD2<Double>
-            if simd_dot(pieces[i].tangentOut, pieces[j].tangentIn) > 1 - 1e-6 {
-                let gap = simd_length(pieces[i].seg.end - pieces[j].seg.start)
-                guard gap <= 1e-4 else { return nil }
-                joint = (pieces[i].seg.end + pieces[j].seg.start) / 2
-            } else {
-                guard let p = carrierIntersection(pieces[i], pieces[j], near: segs[i].end) else { return nil }
-                joint = p
-            }
-            pieces[i].seg.end = joint
-            pieces[j].seg.start = joint
-        }
-
-        // 2b. Consumed LINES. A short flat (a chamfer, a tessellated chord)
-        //     under an offset deeper than its own mitres pulls its two joints
-        //     past each other, so the piece now runs backwards. As in the
-        //     polygon path, the line vanishes and its surviving neighbours
-        //     meet: each run of consumed lines collapses onto the meeting point
-        //     of the neighbours' carriers — kept as ε-length pieces so the
-        //     piece COUNT survives (the draft lofts segment-for-segment), with
-        //     both joints placed exactly ON the neighbouring carriers so an
-        //     arc's ends stay on its circle. A consumed ARC is a different
-        //     animal (its sweep is gone, not its length) and stays nil below.
-        var collapsed = Set<Int>()
-        let consumedLines = (0..<n).filter { i in
-            !pieces[i].isArc
-                && simd_dot(segs[i].end - segs[i].start, pieces[i].seg.end - pieces[i].seg.start) <= 1e-12
-        }
-        if !consumedLines.isEmpty {
-            guard n - consumedLines.count >= 2 else { return nil }
-            let consumedSet = Set(consumedLines)
-            let eps = 1e-3
-            for start in consumedLines where !collapsed.contains(start) {
-                var first = start
-                while consumedSet.contains((first - 1 + n) % n), (first - 1 + n) % n != start { first = (first - 1 + n) % n }
-                var last = first
-                while consumedSet.contains((last + 1) % n), (last + 1) % n != first { last = (last + 1) % n }
-                var run = [first]
-                while run.last! != last { run.append((run.last! + 1) % n) }
-                let prev = (first - 1 + n) % n, next = (last + 1) % n
-                guard prev != next else { return nil }
-                let near = (segs[first].start + segs[last].end) / 2
-                guard let meet = carrierIntersection(pieces[prev], pieces[next], near: near) else { return nil }
-                let count = run.count + 1                       // joints prev|first … last|next
-                let far = advance(pieces[next], from: meet, by: Double(count - 1) * eps)
-                let points = (0..<count).map { k -> SIMD2<Double> in
-                    let s = Double(k) / Double(count - 1)
-                    return meet + (far - meet) * s
+        // 2. Joints, between consecutive SURVIVORS. A tangent joint's two free
+        //    offset ends already coincide (the line's outward normal IS the
+        //    arc's radial there): seal any floating-point daylight. Any other
+        //    joint is trimmed or extended to where the two carriers meet,
+        //    choosing the meeting point nearest the ORIGINAL joint so a
+        //    circle's second intersection never wins. A consumed run between
+        //    two survivors collapses onto their meeting point as ε-stubs, both
+        //    ends placed exactly ON the neighbouring carriers so an arc's ends
+        //    stay on its circle. Then any survivor line whose offset runs
+        //    backwards (a chamfer, a chord — its mitres crossed) is consumed
+        //    too and the pass repeats; carriers are immutable, so it can.
+        let eps = 1e-3
+        func jointPass() -> Bool {
+            let survivors = (0..<n).filter { !consumed.contains($0) }
+            guard survivors.count >= 2 else { return false }
+            for (si, i) in survivors.enumerated() {
+                let j = survivors[(si + 1) % survivors.count]
+                var run: [Int] = []
+                var k = (i + 1) % n
+                while k != j { run.append(k); k = (k + 1) % n }
+                let joint: SIMD2<Double>
+                if run.isEmpty, simd_dot(pieces[i].tangentOut, pieces[j].tangentIn) > 1 - 1e-6 {
+                    guard simd_length(pieces[i].freeEnd - pieces[j].freeStart) <= 1e-4 else { return false }
+                    joint = (pieces[i].freeEnd + pieces[j].freeStart) / 2
+                } else {
+                    let near = run.isEmpty ? segs[i].end : (segs[i].end + segs[j].start) / 2
+                    guard let p = carrierIntersection(pieces[i], pieces[j], near: near) else { return false }
+                    joint = p
                 }
-                pieces[prev].seg.end = points[0]
-                for (k, i) in run.enumerated() {
-                    pieces[i].seg.start = points[k]
-                    pieces[i].seg.end = points[k + 1]
-                    collapsed.insert(i)
+                if run.isEmpty {
+                    pieces[i].seg.end = joint
+                    pieces[j].seg.start = joint
+                } else {
+                    let count = run.count + 1                       // joints i|first … last|j
+                    let far = advance(pieces[j], from: joint, by: Double(count - 1) * eps)
+                    let points = (0..<count).map { m -> SIMD2<Double> in
+                        joint + (far - joint) * (Double(m) / Double(count - 1))
+                    }
+                    pieces[i].seg.end = points[0]
+                    for (m, r) in run.enumerated() {
+                        pieces[r].seg.start = points[m]
+                        pieces[r].seg.end = points[m + 1]
+                        pieces[r].isArc = false
+                    }
+                    pieces[j].seg.start = points[count - 1]
                 }
-                pieces[next].seg.start = points[count - 1]
             }
+            return true
         }
+        var passes = 0
+        while true {
+            guard jointPass() else { return nil }
+            let reversed = (0..<n).filter { i in
+                !consumed.contains(i) && !pieces[i].isArc
+                    && simd_dot(segs[i].end - segs[i].start, pieces[i].seg.end - pieces[i].seg.start) <= 1e-12
+            }
+            if reversed.isEmpty { break }
+            reversed.forEach { consumed.insert($0) }
+            passes += 1
+            guard passes <= n else { return nil }
+        }
+        let collapsed = consumed
 
         // 3. Arcs: re-derive `mid` from the final ends along the traversal
         //    direction, and require the ORIGINAL mid's direction to still lie
@@ -235,6 +249,11 @@ nonisolated enum SegmentOffset {
     private struct Piece {
         var seg: Profile.Segment
         var isArc: Bool
+        /// The ends of the segment offset ALONE — a tangent joint is recognised
+        /// by these coinciding, and joint passes recompute from them so they
+        /// can run more than once.
+        var freeStart = SIMD2<Double>(0, 0)
+        var freeEnd = SIMD2<Double>(0, 0)
         var center = SIMD2<Double>(0, 0)   // arcs
         var radius = 0.0                   // arcs: the OFFSET radius
         var convex = true                  // arcs: CCW about the centre on a CCW loop
