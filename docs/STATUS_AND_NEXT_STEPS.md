@@ -87,7 +87,12 @@ design), `FREECAD_PLAYBOOK.md` (the FreeCAD-derived hardening ledger),
   composes through every subtraction exactly as `evalBoolean` does — a
   drafted bore's walls resolve by identity (`profileWall(entity: hole)`),
   closing the topological-naming mission's last "relabels by geometry"
-  case. Draft/taper is now complete except the non-tangent arc joint.
+  case. Then the last gap: **non-tangent arc joints** trim or extend both
+  offset pieces to their carriers' nearest intersection (line–arc via
+  line–circle, arc–arc via circle–circle) and re-derive the arc's mid,
+  refusing only when the carriers no longer meet — pinned by a "D" and a
+  lens in closed form. **Draft/taper (playbook M1) is complete for every
+  line/arc profile.** 1156/1156.
 - Two app deaths mid-exec during this pass did NOT reproduce under
   controlled repeats (fresh doc ×2, then the heavy doc, all monitored):
   no crash report, no jetsam, RSS modest; the simulator-control helper
@@ -128,8 +133,8 @@ registry) and new kernel capability (spline-as-profile, draft/taper angles
 for cast parts, transform-as-a-feature). Each warrants its own design pass,
 not incremental continuation.
 
-**Current test baseline (2026-09-02): 1154 unit tests in ~17s** (draft/taper incl.
-arc profiles, B-rep volume readback, memoised replay, rebuild planner all added on 2026-09-01/02; the
+**Current test baseline (2026-09-02): 1156 unit tests in ~17s** (draft/taper incl.
+arc profiles and non-tangent joints, B-rep volume readback, memoised replay, rebuild planner all added on 2026-09-01/02; the
 previous line follows) — **(2026-09-01): 1115 unit tests in ~17s** (1 skipped:
 the on-demand `OCCTFuzzTests` hostile-input sweep, run with
 `TEST_RUNNER_OS3D_FUZZ=1`). Earlier this session: 1086 → the naming

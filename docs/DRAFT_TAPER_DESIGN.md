@@ -32,8 +32,17 @@ every subtraction goes through `booleanResultWithAncestry` +
 are `profileWall(entity: hole)` and the outer's four `profileWall(entity:
 outer)`, all created by the draft node. The naming mission's last "relabels
 by geometry" case is closed.
-STILL OPEN: only the non-tangent arc-joint case as an exact offset (it
-needs line–arc / arc–arc intersection trimming; polygon fallback today).
+**Non-tangent joints LANDED (2026-09-02) — draft/taper is COMPLETE for
+line/arc profiles.** Where a joint is neither tangent nor line–line, both
+offset pieces are trimmed or extended to where their CARRIERS meet — the
+infinite line, the full circle — choosing the meeting point nearest the
+original joint (so a circle's second intersection never wins), and each
+arc's `mid` is re-derived from its final ends along its traversal
+direction, refusing if the original mid no longer lies on the arc (a trim
+that emptied or flipped it). A "D" (bulged top meeting the sides at an
+angle) and a lens (two convex arcs) pin the closed-form joints; carriers
+that no longer meet (a lens offset past its circles' reach) refuse, and the
+draft falls back to the polygon path only then.
 
 ## Why
 

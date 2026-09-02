@@ -120,8 +120,17 @@ X({"op": "feature.extrude", "args": {
     "sketchID": skb, "seedPoint": [0, 0], "distance": HANDLE_T + 2,
     "boolean": "subtract", "booleanTargets": [handle]}})
 lv = body(handle)["volumeMM3"]
-want_l = (math.pi * HUB_R ** 2 * HANDLE_T + (lever_len - HUB_R) * LEVER_W * HANDLE_T
-          - math.pi * R_BORE ** 2 * HANDLE_T)
+# Hub disc + lever bar minus their EXACT overlap: the lever (u in [0, L],
+# |v| <= w/2) lies inside the disc only where u^2 + v^2 <= R^2, so its corners
+# near the rim poke out. Overlap area = integral over u of 2*min(w/2, sqrt(R^2-u^2)).
+# (With the mesh readback the ~70 mm3 this adds hid inside the 0.5% tolerance;
+# the B-rep-exact readback makes the analytic have to be exact too.)
+u_flat = math.sqrt(HUB_R ** 2 - (LEVER_W / 2) ** 2)          # where the half-width stops fitting
+overlap = (2 * (LEVER_W / 2) * u_flat
+           + (HUB_R * math.sqrt(max(0.0, HUB_R ** 2 - HUB_R ** 2)) + HUB_R ** 2 * math.asin(1.0))
+           - (u_flat * math.sqrt(HUB_R ** 2 - u_flat ** 2) + HUB_R ** 2 * math.asin(u_flat / HUB_R)))
+want_l = (math.pi * HUB_R ** 2 * HANDLE_T + lever_len * LEVER_W * HANDLE_T
+          - overlap * HANDLE_T - math.pi * R_BORE ** 2 * HANDLE_T)
 check("handle volume", abs(lv - want_l) / want_l < 0.005,
       f"{lv:,.0f} mm3 vs analytic {want_l:,.0f} = {lv * ZN:.0f} g zinc")
 

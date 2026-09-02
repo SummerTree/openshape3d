@@ -7,14 +7,16 @@
 //  rectangles, slots, obrounds; docs/DRAFT_TAPER_DESIGN.md slice 3). Where
 //  `ProfileOffset` mitres a polygon, this keeps every arc an ARC: a line
 //  shifts along its outward normal, an arc becomes the concentric arc of
-//  radius r ± d, and the two stay joined exactly wherever the original joint
-//  was tangent — which every fillet is by construction. Lofted on the
-//  segments channel, the drafted wall over an arc is then a true cone.
+//  radius r ± d, and neighbours are re-joined exactly — tangent joints stay
+//  sealed (which every fillet is by construction), and any other joint is
+//  trimmed or extended to where the two offset carriers (the infinite line,
+//  the full circle) actually meet. Lofted on the segments channel, the
+//  drafted wall over an arc is then a true cone.
 //
-//  Joints that are neither tangent nor line–line (a corner where an arc meets
-//  something at an angle) have no offset that is both exact and simple; the
-//  offset returns nil and the caller falls back to the polygon path. Correct
-//  where it applies, honest where it does not.
+//  Nil means "not exactly offsettable": an arc that collapses, carriers that
+//  no longer meet, a line that reverses, an arc whose trim flips it, or a
+//  boundary whose area vanishes. The caller falls back to the polygon path.
+//  Correct where it applies, honest where it does not.
 //
 //  Pure value math, no kernel dependency.
 //
@@ -47,11 +49,6 @@ nonisolated enum SegmentOffset {
             let a0 = atan2(s.start.y - c.y, s.start.x - c.x)
             let a1 = atan2(s.end.y - c.y, s.end.x - c.x)
             let am = atan2(mid.y - c.y, mid.x - c.x)
-            func ccw(_ from: Double, _ to: Double) -> Double {
-                var d = (to - from).truncatingRemainder(dividingBy: 2 * .pi)
-                if d < 0 { d += 2 * .pi }
-                return d
-            }
             var sweep = ccw(a0, a1)
             if ccw(a0, am) > sweep { sweep -= 2 * .pi }   // mid sits on the CW way round
             for i in 1..<max(arcPoints, 2) {
@@ -65,12 +62,8 @@ nonisolated enum SegmentOffset {
     /// Offset a closed line/arc boundary by `distance` (positive = OUTWARD /
     /// expand, negative = inward / contract). Orientation is normalized
     /// internally so the sign means the same thing for CW and CCW input, and
-    /// the result keeps the input's winding.
-    ///
-    /// Returns nil when the offset is not exactly and simply defined: a joint
-    /// that is neither tangent nor line–line, an arc that would collapse
-    /// (radius ≤ 0), a line that reverses, or a boundary whose area vanishes
-    /// or flips. Nil means "fall back", never "ship a bad section".
+    /// the result keeps the input's winding. Nil when not exactly offsettable
+    /// (see the file comment).
     static func offset(_ segments: [Profile.Segment], by distance: Double) -> [Profile.Segment]? {
         let n = segments.count
         guard n >= 2 else { return nil }
@@ -81,14 +74,9 @@ nonisolated enum SegmentOffset {
         let wasCW = area < 0
         let segs = wasCW ? reversed(segments) : segments
 
-        // 1. Offset every segment as if it were alone, remembering its
-        //    traversal tangent at each end for the joint test.
-        struct Piece {
-            var seg: Profile.Segment
-            var isArc: Bool
-            var tangentIn: SIMD2<Double>    // traversal direction at start
-            var tangentOut: SIMD2<Double>   // traversal direction at end
-        }
+        // 1. Offset every segment as if it were alone, keeping its carrier
+        //    (line: point + direction; arc: centre + offset radius + turn
+        //    direction) and its traversal tangent at each end.
         var pieces: [Piece] = []
         pieces.reserveCapacity(n)
         for s in segs {
@@ -107,60 +95,138 @@ nonisolated enum SegmentOffset {
                     let t = SIMD2(-rad.y, rad.x)                 // CCW traversal
                     return convex ? t : -t
                 }
-                pieces.append(Piece(
-                    seg: Profile.Segment(start: moved(s.start), end: moved(s.end), mid: moved(mid)),
-                    isArc: true, tangentIn: tangent(at: s.start), tangentOut: tangent(at: s.end)))
+                var piece = Piece(seg: Profile.Segment(start: moved(s.start), end: moved(s.end), mid: moved(mid)),
+                                  isArc: true)
+                piece.center = c
+                piece.radius = r2
+                piece.convex = convex
+                piece.oldMidAngle = atan2(mid.y - c.y, mid.x - c.x)
+                piece.tangentIn = tangent(at: s.start)
+                piece.tangentOut = tangent(at: s.end)
+                pieces.append(piece)
             } else {
                 let edge = s.end - s.start
                 let len = simd_length(edge)
                 guard len > 1e-12 else { return nil }
                 let dir = edge / len
                 let outward = SIMD2(dir.y, -dir.x)
-                pieces.append(Piece(
-                    seg: Profile.Segment(start: s.start + outward * distance, end: s.end + outward * distance),
-                    isArc: false, tangentIn: dir, tangentOut: dir))
+                var piece = Piece(seg: Profile.Segment(start: s.start + outward * distance,
+                                                       end: s.end + outward * distance),
+                                  isArc: false)
+                piece.dir = dir
+                piece.tangentIn = dir
+                piece.tangentOut = dir
+                pieces.append(piece)
             }
         }
 
         // 2. Joints. A tangent joint's two offset ends already coincide (the
-        //    line's outward normal IS the arc's radial there); seal any
-        //    floating-point daylight. A line–line corner mitres. Anything
-        //    else is not exactly offsettable here.
+        //    line's outward normal IS the arc's radial there): seal any
+        //    floating-point daylight. Any other joint is trimmed or extended to
+        //    where the two carriers meet, choosing the meeting point nearest
+        //    the ORIGINAL joint so a circle's second intersection never wins.
         for i in 0..<n {
             let j = (i + 1) % n
-            let tangent = simd_dot(pieces[i].tangentOut, pieces[j].tangentIn) > 1 - 1e-6
-            if tangent {
+            let joint: SIMD2<Double>
+            if simd_dot(pieces[i].tangentOut, pieces[j].tangentIn) > 1 - 1e-6 {
                 let gap = simd_length(pieces[i].seg.end - pieces[j].seg.start)
                 guard gap <= 1e-4 else { return nil }
-                let joint = (pieces[i].seg.end + pieces[j].seg.start) / 2
-                pieces[i].seg.end = joint
-                pieces[j].seg.start = joint
-            } else if !pieces[i].isArc && !pieces[j].isArc {
-                let p0 = pieces[i].seg.start, d0 = pieces[i].tangentOut
-                let p1 = pieces[j].seg.start, d1 = pieces[j].tangentIn
-                let denom = d0.x * d1.y - d0.y * d1.x
-                guard abs(denom) > 1e-9 else { return nil }      // (anti)parallel corner
-                let diff = p1 - p0
-                let t = (diff.x * d1.y - diff.y * d1.x) / denom
-                let corner = p0 + d0 * t
-                pieces[i].seg.end = corner
-                pieces[j].seg.start = corner
+                joint = (pieces[i].seg.end + pieces[j].seg.start) / 2
             } else {
-                return nil
+                guard let p = carrierIntersection(pieces[i], pieces[j], near: segs[i].end) else { return nil }
+                joint = p
             }
+            pieces[i].seg.end = joint
+            pieces[j].seg.start = joint
         }
 
-        // 3. Inversion and collapse: every line still runs its original way,
-        //    and the boundary still encloses a positive (CCW) area.
+        // 3. Arcs: re-derive `mid` from the final ends along the traversal
+        //    direction, and require the ORIGINAL mid's direction to still lie
+        //    on the arc — a trim that emptied or flipped the arc fails here.
+        for i in 0..<n where pieces[i].isArc {
+            let c = pieces[i].center, r = pieces[i].radius
+            let a0 = atan2(pieces[i].seg.start.y - c.y, pieces[i].seg.start.x - c.x)
+            let a1 = atan2(pieces[i].seg.end.y - c.y, pieces[i].seg.end.x - c.x)
+            let sweep = pieces[i].convex ? ccw(a0, a1) : -ccw(a1, a0)
+            guard abs(sweep) > 1e-9 else { return nil }
+            let toOld = pieces[i].convex ? ccw(a0, pieces[i].oldMidAngle) : -ccw(pieces[i].oldMidAngle, a0)
+            guard abs(toOld) <= abs(sweep) + 1e-9 else { return nil }
+            let am = a0 + sweep / 2
+            pieces[i].seg.mid = c + SIMD2(cos(am), sin(am)) * r
+        }
+        // Lines still run their original way; the boundary still encloses a
+        // positive (CCW) area.
         for i in 0..<n where !pieces[i].isArc {
             let orig = segs[i].end - segs[i].start
             let new = pieces[i].seg.end - pieces[i].seg.start
             guard simd_dot(orig, new) > 1e-12 else { return nil }
         }
         let result = pieces.map(\.seg)
-        let outArea = Profile.signedArea(loop(from: result))
-        guard outArea > 1e-9 else { return nil }
+        guard Profile.signedArea(loop(from: result)) > 1e-9 else { return nil }
         return wasCW ? reversed(result) : result
+    }
+
+    // MARK: - Internals
+
+    private struct Piece {
+        var seg: Profile.Segment
+        var isArc: Bool
+        var center = SIMD2<Double>(0, 0)   // arcs
+        var radius = 0.0                   // arcs: the OFFSET radius
+        var convex = true                  // arcs: CCW about the centre on a CCW loop
+        var oldMidAngle = 0.0              // arcs: direction of the original mid
+        var dir = SIMD2<Double>(0, 0)      // lines
+        var tangentIn = SIMD2<Double>(0, 0)
+        var tangentOut = SIMD2<Double>(0, 0)
+    }
+
+    /// CCW angular distance from `from` to `to`, in [0, 2π).
+    private static func ccw(_ from: Double, _ to: Double) -> Double {
+        var d = (to - from).truncatingRemainder(dividingBy: 2 * .pi)
+        if d < 0 { d += 2 * .pi }
+        return d
+    }
+
+    /// Where two offset carriers meet, nearest `near`; nil if they do not.
+    private static func carrierIntersection(_ a: Piece, _ b: Piece, near: SIMD2<Double>) -> SIMD2<Double>? {
+        let candidates: [SIMD2<Double>]
+        switch (a.isArc, b.isArc) {
+        case (false, false):
+            let denom = a.dir.x * b.dir.y - a.dir.y * b.dir.x
+            guard abs(denom) > 1e-9 else { return nil }          // (anti)parallel corner
+            let diff = b.seg.start - a.seg.start
+            let t = (diff.x * b.dir.y - diff.y * b.dir.x) / denom
+            candidates = [a.seg.start + a.dir * t]
+        case (false, true):
+            candidates = lineCircle(p: a.seg.start, d: a.dir, c: b.center, r: b.radius)
+        case (true, false):
+            candidates = lineCircle(p: b.seg.start, d: b.dir, c: a.center, r: a.radius)
+        case (true, true):
+            candidates = circleCircle(c1: a.center, r1: a.radius, c2: b.center, r2: b.radius)
+        }
+        return candidates.min { simd_length_squared($0 - near) < simd_length_squared($1 - near) }
+    }
+
+    private static func lineCircle(p: SIMD2<Double>, d: SIMD2<Double>,
+                                   c: SIMD2<Double>, r: Double) -> [SIMD2<Double>] {
+        let t0 = simd_dot(c - p, d)
+        let q = p + d * t0
+        let h2 = r * r - simd_length_squared(c - q)
+        guard h2 > -1e-9 else { return [] }
+        let h = h2.squareRoot().isNaN ? 0 : max(0, h2).squareRoot()
+        return [q + d * h, q - d * h]
+    }
+
+    private static func circleCircle(c1: SIMD2<Double>, r1: Double,
+                                     c2: SIMD2<Double>, r2: Double) -> [SIMD2<Double>] {
+        let delta = c2 - c1
+        let d = simd_length(delta)
+        guard d > 1e-12, d <= r1 + r2 + 1e-9, d >= abs(r1 - r2) - 1e-9 else { return [] }
+        let a = (r1 * r1 - r2 * r2 + d * d) / (2 * d)
+        let h = max(0, r1 * r1 - a * a).squareRoot()
+        let m = c1 + delta * (a / d)
+        let perp = SIMD2(-delta.y, delta.x) / d
+        return [m + perp * h, m - perp * h]
     }
 
     /// The same boundary traversed the other way: order reversed, every
