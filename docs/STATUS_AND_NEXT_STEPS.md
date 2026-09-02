@@ -201,7 +201,12 @@ design), `FREECAD_PLAYBOOK.md` (the FreeCAD-derived hardening ledger),
   section the reference by hand and the rebuild by envelope). Pinned on a
   box across/oblique/clear, a 96-gon prism, and a true cylinder (the exact
   uniform N-gon at a 0.002 mm chord; along the axis a 10×8 rectangle).
-  1196/1196. Landed on the way:
+  1196/1196. **Then exact face areas (`32ad9e2`, gotcha 23):** both
+  `BRepGProp::SurfaceProperties` rules are off on a B-spline wall (+1.3 % /
+  −4.6 %), so `faceInfoOfShape:` integrates untrimmed iso-rectangular faces
+  per knot span itself (10-point Gauss–Legendre on |∂S/∂u × ∂S/∂v|), planes
+  by the adaptive rule; pinned to 1e-6 against the Bézier perimeter × height.
+  Landed on the way:
   `/v1/state` bodies now carry `bounds` (mesh min/max, mm); `feature.mirror`
   `keepOriginal:false` now CONSUMES the source (it was a documented no-op —
   `testMirrorWithoutKeepOriginalConsumesTheSource`); a draft extrude refuses
@@ -256,7 +261,11 @@ transform-as-a-feature). Draft/taper angles for cast parts landed
 the memoised replay landed 2026-09-02. Each remaining mission warrants its
 own design pass, not incremental continuation.
 
-**Current test baseline (2026-09-02): 1170 unit tests in ~20s** (draft/taper incl.
+**Current test baseline (2026-09-02, evening): 1196 unit tests in ~21s** — the
+day added the exact helix spine, the BEG 55 lineup's bounds/mirror fixes,
+transform-as-a-feature, consumed-edge drafts on both offset paths, plane
+sections (`SectionKit`, `KernelSectionTests`), and the exact face areas.
+Earlier that day: **1170 unit tests in ~20s** (draft/taper incl.
 arc profiles and non-tangent joints, spline profiles with exact B-spline walls, B-rep volume readback, memoised replay, rebuild planner all added on 2026-09-01/02; the
 previous line follows) — **(2026-09-01): 1115 unit tests in ~17s** (1 skipped:
 the on-demand `OCCTFuzzTests` hostile-input sweep, run with
