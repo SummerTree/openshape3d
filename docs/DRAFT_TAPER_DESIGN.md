@@ -136,9 +136,15 @@ caller gives an angle, not a hand-computed second profile.
   remains for survivors that still reverse, or fewer than three survivors.
   Every lateral face is planar and all vertices lie on two parallel planes,
   so the prismoid formula pins the volume exactly
-  (`testADraftThatConsumesCornerCutsStillBuilds`, 45,306.67 mm³). The
-  segments path (`SegmentOffset`, lines + arcs) still returns nil on a
-  reversed line and falls through to this polygon path.
+  (`testADraftThatConsumesCornerCutsStillBuilds`, 45,306.67 mm³). The exact
+  segments path (`SegmentOffset`, lines + arcs, `a49705c`) applies the same
+  rule to consumed LINE pieces after its joint step — the run collapses onto
+  where the surviving neighbours' carriers meet (`carrierIntersection`
+  covers line/arc/arc–arc) with both joints placed exactly on those
+  carriers, so a neighbouring arc's ends stay on its circle and the
+  concentric offset arcs remain exact; a consumed ARC (sweep gone) stays
+  nil. So a rounded-and-chamfered outline drafts with true conical walls
+  even when the draft eats the chamfers.
 
 Ledgered in `FREECAD_PLAYBOOK.md` (the `makeDraft` = loft-between-offset
 pattern).

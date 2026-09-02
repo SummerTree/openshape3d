@@ -176,7 +176,12 @@ design), `FREECAD_PLAYBOOK.md` (the FreeCAD-derived hardening ledger),
   count (the draft lofts edge-for-edge) with the run's vertices 1e-3 apart,
   so the wall over a consumed edge is a sliver; survivors that still reverse,
   or fewer than three, stay nil. Pinned by the prismoid-exact volume of a
-  drafted chamfered outline (45,306.67 mm³). 1186/1186. Landed on the way:
+  drafted chamfered outline (45,306.67 mm³). 1186/1186. The exact
+  line/arc path got the same rule (`a49705c`): consumed line pieces collapse
+  onto the meeting point of the neighbouring carriers with both joints ON
+  those carriers, so a rounded-and-chamfered outline keeps its exact conical
+  arc walls when the draft eats the chamfers (8 mm inward still refuses).
+  1188/1188. Landed on the way:
   `/v1/state` bodies now carry `bounds` (mesh min/max, mm); `feature.mirror`
   `keepOriginal:false` now CONSUMES the source (it was a documented no-op —
   `testMirrorWithoutKeepOriginalConsumesTheSource`); a draft extrude refuses
