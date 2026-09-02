@@ -1914,6 +1914,49 @@ final class EditorViewModel {
         }
     }
 
+    /// Commit a transform tool's result. A body the feature graph produced
+    /// gets a `.transform` node (delta = after ∘ before⁻¹), appended and
+    /// rebuilt in ONE undo step, so the move survives every later rebuild —
+    /// the graph owns the placement now; `RebuildPlanner` deliberately resets
+    /// document-level transforms (they used to vanish on the next parameter
+    /// edit). A body with no producing feature (an import) and any change of
+    /// scale keep the direct `TransformBodiesCommand`. The live preview
+    /// mutated `transform` outside the undo stack; for the node path it is put
+    /// back first, so the rebuild's snapshot of "before" is the true before
+    /// and undo lands the body where it started.
+    private func commitTransforms(title: String,
+                                  before: [BodyID: Transform3D],
+                                  after: [BodyID: Transform3D]) {
+        var nodes: [FeatureNode] = []
+        var directBefore: [BodyID: Transform3D] = [:]
+        var directAfter: [BodyID: Transform3D] = [:]
+        for (id, new) in after {
+            guard let old = before[id], old != new else { continue }
+            let producer = session.document.features.nodes.last { $0.outputBodyIDs.contains(id) }
+            if let producer, abs(new.scale - old.scale) < 1e-12 {
+                session.preview { document in
+                    if let index = document.bodyIndex(of: id) {
+                        document.bodies[index].transform = old
+                    }
+                }
+                nodes.append(FeatureNode(
+                    name: title,
+                    kind: .transform(body: BodyRef(producer: producer.id, bodyID: id),
+                                     delta: Transform3D.delta(from: old, to: new)),
+                    outputBodyIDs: [BodyID()]))
+            } else {
+                directBefore[id] = old
+                directAfter[id] = new
+            }
+        }
+        if !directAfter.isEmpty {
+            session.perform(TransformBodiesCommand(title: title, before: directBefore, after: directAfter))
+        }
+        if !nodes.isEmpty {
+            session.recordAndRebuild(nodes, title: title)
+        }
+    }
+
     func endMove() {
         moveDragDelta = nil
         endRotationOrbit()
@@ -1936,7 +1979,7 @@ final class EditorViewModel {
             }
         }
         guard changed else { return }
-        session.perform(TransformBodiesCommand(before: before, after: after))
+        commitTransforms(title: "Move", before: before, after: after)
     }
 
     // MARK: - Rotation orbit + exact angle (spec §5.3)
@@ -2162,7 +2205,7 @@ final class EditorViewModel {
             after[id] = transform
         }
         guard !after.isEmpty else { return }
-        session.perform(TransformBodiesCommand(before: before, after: after))
+        commitTransforms(title: "Move", before: before, after: after)
         session.save()
     }
 
@@ -2371,7 +2414,7 @@ final class EditorViewModel {
             )
         }
         rotateAxisState = nil
-        session.perform(TransformBodiesCommand(title: "Rotate", before: state.before, after: after))
+        commitTransforms(title: "Rotate", before: state.before, after: after)
         mode = .idle
         session.save()
     }
@@ -2618,7 +2661,7 @@ final class EditorViewModel {
             mode = .idle
             return
         }
-        session.perform(TransformBodiesCommand(title: "Translate", before: before, after: after))
+        commitTransforms(title: "Translate", before: before, after: after)
         if selection.count == 1, let id = selection.first {
             mode = .selected(id)
         } else {
@@ -2669,9 +2712,7 @@ final class EditorViewModel {
         }
         var transform = body.transform
         transform.translation += delta
-        session.perform(TransformBodiesCommand(
-            title: "Align", before: [source: body.transform], after: [source: transform]
-        ))
+        commitTransforms(title: "Align", before: [source: body.transform], after: [source: transform])
         selection = [source]
         mode = .selected(source)
         session.save()

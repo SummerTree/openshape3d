@@ -32,6 +32,26 @@ nonisolated struct Transform3D: Equatable, Sendable {
 
     static let identity = Transform3D()
 
+    /// The rigid delta that carries placement `before` onto `after` under the
+    /// graph's composition (`delta ∘ before`: rotation = δ.r·b.r, translation
+    /// = δ.r·b.t + δ.t) — what a `.transform` feature node records for a gizmo
+    /// move. Scale is not part of it: a scaled move keeps the direct command.
+    static func delta(from before: Transform3D, to after: Transform3D) -> Transform3D {
+        var delta = Transform3D()
+        delta.rotation = simd_normalize(after.rotation * before.rotation.inverse)
+        delta.translation = after.translation - delta.rotation.act(before.translation)
+        return delta
+    }
+
+    /// `delta ∘ base`, the graph's composition (pattern instances and
+    /// transform nodes place bodies this way).
+    func composed(onto base: Transform3D) -> Transform3D {
+        var result = base
+        result.rotation = simd_normalize(rotation * base.rotation)
+        result.translation = rotation.act(base.translation) + translation
+        return result
+    }
+
     var matrix: simd_double4x4 {
         var result = simd_double4x4(rotation)
         result.columns.0 *= scale

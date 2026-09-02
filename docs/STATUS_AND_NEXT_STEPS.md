@@ -166,18 +166,21 @@ design), `FREECAD_PLAYBOOK.md` (the FreeCAD-derived hardening ledger),
   id, revision bumped so the session replaces the render; scale refused),
   and `feature.transform {bodyID, translation, rotationDegrees, rotationAxis,
   rotationCenter}` exposes it (rotation about a centre folded in as
-  T·R·T⁻¹; identity refused). The interactive Move tool still writes
-  `body.transform` directly (`TransformBodiesCommand`, `Commands.swift`) —
-  moving it onto the node is the remaining half of the mission, and it is
-  an undo/persistence change, so: plan, not incremental. The plan: keep the
-  gizmo's live preview mutating `body.transform` outside the stack as today;
-  at commit, for every moved body that HAS a producing feature, append one
-  `.transform` node (delta = after ∘ before⁻¹) instead of writing the
-  transform, undo = remove the nodes (the graph replays the old placement);
-  bodies with no producer (STEP imports, mesh-only) keep the direct command.
-  Then `ReplaceBodyCommand`/`adoptCachedBodies` must stop preserving a
-  document-level transform for graph bodies, or a moved body would be moved
-  twice — that interaction is the part to design first. 1183/1183. **Then the draft's consumed edges (`6ae1699`):**
+  T·R·T⁻¹; identity refused). **The interactive half landed the same evening:**
+  the Move / numeric move / Rotate / Translate / Align tools commit through
+  `EditorViewModel.commitTransforms`, which turns every feature-owned body's
+  move into a `.transform` node (delta = after ∘ before⁻¹,
+  `Transform3D.delta(from:to:)`) appended and rebuilt in ONE undo step
+  (`DocumentSession.recordAndRebuild` — the appends ride as the rebuild
+  composite's leading commands); the live preview's outside-the-stack
+  mutation is put back first so the composite's "before" is the true before.
+  The design worry (a body moved twice) dissolved on reading
+  `RebuildPlanner`: it never preserved a document-level transform — a gizmo
+  move was simply LOST on the next parameter edit (its own "tranche-1
+  limitation" note) — so the node fixes a real bug. Bodies with no producing
+  feature (imports) and the Scale tool keep `TransformBodiesCommand`.
+  `testTransformDeltaComposesBackToAfterAndDrivesANode`;
+  `GizmoFlowUITests.testGizmoDragCreatesUndoableMove` still passes. 1209/1209. **Then the draft's consumed edges (`6ae1699`):**
   `ProfileOffset.offsetLoop` refused any outline whose short edges an inward
   offset consumed (every 2 mm corner cut under a 14 mm draft — measured
   outlines are full of them). Each run of consumed edges now collapses onto
@@ -292,7 +295,7 @@ transform-as-a-feature). Draft/taper angles for cast parts landed
 the memoised replay landed 2026-09-02. Each remaining mission warrants its
 own design pass, not incremental continuation.
 
-**Current test baseline (2026-09-02, evening): 1208 unit tests in ~22s** — the
+**Current test baseline (2026-09-02, evening): 1209 unit tests in ~21s** — the
 day added the exact helix spine, the BEG 55 lineup's bounds/mirror fixes,
 transform-as-a-feature, consumed-edge drafts on both offset paths, plane
 sections (`SectionKit`, `KernelSectionTests`), and the exact face areas.

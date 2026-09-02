@@ -90,11 +90,13 @@ enum RebuildPlanner {
         // world-space meshes with an identity transform; carrying the live body's
         // pivot transform (extrude/boolean/push-pull store a localized mesh +
         // pivot translation) would double-offset the body by its pivot on every
-        // rebuild. So a rebuilt feature body adopts the replay's identity
-        // transform. Tranche-1 limitation: a post-creation gizmo MOVE on a
-        // feature body is reset when you edit that feature's parameters —
-        // transform-as-a-recorded-feature (which preserves moves through the
-        // graph) is tranche 2.
+        // rebuild. So a rebuilt feature body adopts the replay's placement —
+        // which, since 2026-09-02, INCLUDES every gizmo move: the transform
+        // tools commit a feature-owned body's move as a `.transform` node
+        // (`EditorViewModel.commitTransforms` → `recordAndRebuild`), so the
+        // graph replays the placement and a later parameter edit keeps it.
+        // Only bodies with no producing feature (imports) still carry a
+        // document-level transform, and those are never replaced here.
         for body in result.bodies where ownedIDs.contains(body.id) {
             if let existing = currentOwned[body.id] {
                 // Unchanged since the last apply: a spliced node's body carries

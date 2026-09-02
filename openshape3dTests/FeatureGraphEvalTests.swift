@@ -708,6 +708,44 @@ final class FeatureGraphEvalTests: XCTestCase {
         XCTAssertEqual(volume(moved), 64, accuracy: 1e-6)
     }
 
+    /// The delta the transform tools record: `delta ∘ before == after` under
+    /// the graph's composition, for a placement that is already rotated and
+    /// offset — and a transform node carrying that delta lands the body there.
+    func testTransformDeltaComposesBackToAfterAndDrivesANode() throws {
+        var before = Transform3D()
+        before.rotation = simd_quatd(angle: 0.7, axis: simd_normalize(SIMD3(1, 2, 3)))
+        before.translation = SIMD3(5, -3, 8)
+        var after = Transform3D()
+        after.rotation = simd_quatd(angle: -1.9, axis: simd_normalize(SIMD3(-2, 1, 0.5)))
+        after.translation = SIMD3(-11, 4, 2)
+        let delta = Transform3D.delta(from: before, to: after)
+        XCTAssertEqual(delta.scale, 1)
+        let back = delta.composed(onto: before)
+        XCTAssertEqual(simd_distance(back.translation, after.translation), 0, accuracy: 1e-9)
+        XCTAssertEqual(abs(simd_dot(back.rotation.vector, after.rotation.vector)), 1, accuracy: 1e-9,
+                       "same rotation (up to the quaternion's sign)")
+
+        // Through the graph: a box whose placement is `before`, moved by the delta.
+        let boxFeature = FeatureID(), moveFeature = FeatureID(), boxID = BodyID()
+        let graph = FeatureGraph(nodes: [
+            FeatureNode(id: boxFeature, name: "Box",
+                kind: .primitive(spec: .box(width: 4, depth: 4, height: 4), placement: before),
+                outputBodyIDs: [boxID]),
+            FeatureNode(id: moveFeature, name: "Move",
+                kind: .transform(body: BodyRef(producer: boxFeature, bodyID: boxID), delta: delta),
+                outputBodyIDs: [BodyID()]),
+        ])
+        let result = graph.evaluate(sketches: [], planes: [],
+                                    naming: SignatureNaming(), nextRevision: RevisionSource().next)
+        XCTAssertNil(result.errors[moveFeature], "\(result.errors)")
+        let moved = try XCTUnwrap(result.bodies.first { $0.id == boxID })
+        // The primitive bakes `before` into its mesh; the node composes the delta
+        // onto an identity placement, so the world centroid must equal
+        // delta applied to the local centroid.
+        let expected = delta.applying(to: localCentroid(moved))
+        XCTAssertEqual(simd_distance(worldCentroid(moved), expected), 0, accuracy: 1e-9)
+    }
+
     /// …and a rotation about the world origin swings the placement with it:
     /// a box at x = 20 turned 90° about z sits at y = 20.
     func testTransformRotatesThePlacementAboutTheOrigin() throws {

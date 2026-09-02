@@ -232,6 +232,21 @@ final class DocumentSession {
         performRebuild(editedGraph, leadingCommands: leading, title: "Edit Feature")
     }
 
+    /// Append feature nodes and rebuild in ONE undo step (the appends ride as
+    /// the composite's leading commands, so a single undo removes the nodes
+    /// and reverts every body they moved or made). The interactive transform
+    /// tools commit through here: a gizmo move becomes a `.transform` node,
+    /// and from then on the graph owns the placement — `RebuildPlanner`
+    /// deliberately resets document-level transforms on every replay.
+    func recordAndRebuild(_ nodes: [FeatureNode], title: String) {
+        guard let first = nodes.first else { return }
+        var editedGraph = document.features
+        editedGraph.nodes.append(contentsOf: nodes)
+        let appends: [DocumentCommand] = nodes.map { AppendFeatureCommand(node: $0, title: title) }
+        _ = first
+        performRebuild(editedGraph, leadingCommands: appends, title: title)
+    }
+
     /// Suppress / un-suppress a node and rebuild everything downstream in one
     /// undo step (History panel eye toggle). No-op if the flag is unchanged.
     func setSuppressed(_ id: FeatureID, _ value: Bool) {
