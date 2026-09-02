@@ -883,6 +883,16 @@ first differing frame is the one you want.
     pins the volumes; `testASweepSiblingFaceMintsInsteadOfDuplicating` the
     history.
 
+22. **A failed `build-for-testing` leaves the PREVIOUS test bundle in place,
+    and `test-without-building` then runs it — green, against stale code.**
+    Bitten 2026-09-02: a new test with a type error failed to compile, the
+    suite step "passed 1176/1176" (the old bundle, without the new tests),
+    and a gate that only looked at the test output let a commit through
+    with an uncompilable test. Any gate must check the BUILD step's result
+    (grep `error:` / `BUILD FAILED` in its log and stop) before trusting a
+    test run, and should assert the expected test COUNT, not just zero
+    failures — a count that did not grow is the tell.
+
 ---
 
 ## 4. Next missions (prioritized)
