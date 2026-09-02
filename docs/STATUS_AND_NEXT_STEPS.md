@@ -135,9 +135,8 @@ design), `FREECAD_PLAYBOOK.md` (the FreeCAD-derived hardening ledger),
   90-29052019-034131), `scripts/rebuild_beg55.py`.** The "product" is eight
   variants 200 mm apart (Ø150/Ø178 octagonal motor × drive train behind or
   mirrored to the front about z = 42 × plain Ø52 nose or Ø64 collet chuck),
-  nine parts each — 72 reference parts, 112,982 triangles. The manufacturer's
-  drawing PDF and the TraceParts preview archive are served as downloads and
-  were NOT fetched; the reference is the product page's own three.js viewer:
+  nine parts each — 72 reference parts, 112,982 triangles. The TraceParts
+  preview archive was not fetched; the reference is the product page's own three.js viewer:
   its WebGL draw calls were intercepted for one frame and every position
   buffer read back (world mm, one modelView for all draws), then bounding
   boxes, signed volumes, and plane-cut section polygons (chained, DP 0.4 mm)
@@ -149,7 +148,18 @@ design), `FREECAD_PLAYBOOK.md` (the FreeCAD-derived hardening ledger),
   total +2.3 %; envelopes exact (≤ 0.7 mm) on all but the cover (4.8 mm
   behind; 15 mm on the front-mounted units, where the reference cover is
   rotated 90° — its ears sit along y, the mirror keeps them along x);
-  72 bodies, all analytic, 0 invalid. Landed on the way:
+  72 bodies, all analytic, 0 invalid. Then, with the user's OK, the
+  manufacturer's dimension sheet (`beg55-1200.pdf`, 294 KB, one page, no
+  text layer — the site 403s plain http, https with browser headers works;
+  read by eye at 3400 px) was fetched and 19 callouts compared, datum = the
+  housing front face: 12 exact to the millimetre (width 140, A 150/178, axis
+  heights 72/237.7, feed top 148.5, width 76, Ø52/64/70, boss 3, flange 183,
+  T-slot 7/5.5/19.5, stop rod 21.5/42); body back −0.2, switch box −2,
+  overall height +2.7 (the sheet's 360 is the Ø178 terminal-box top), quill
+  45 vs the 43–47 stroke, bracket back −5.7 (the 459 likely runs to a cover
+  plate the CAD omits), motor B +9 (B excludes the 9 mm front cap). The CAD
+  and the rebuild agree with the sheet identically — the rebuild's profiles
+  came from the CAD. Landed on the way:
   `/v1/state` bodies now carry `bounds` (mesh min/max, mm); `feature.mirror`
   `keepOriginal:false` now CONSUMES the source (it was a documented no-op —
   `testMirrorWithoutKeepOriginalConsumesTheSource`); a draft extrude refuses
