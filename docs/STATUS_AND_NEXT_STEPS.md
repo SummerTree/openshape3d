@@ -229,7 +229,15 @@ design), `FREECAD_PLAYBOOK.md` (the FreeCAD-derived hardening ledger),
   for the outer (CCW) and every hole (CW) through the shared transported
   frames (`sweepFrames`) plus `PolygonTriangulator` caps — the 1,152-sample
   outline with a bore sweeps in 0.1 s to the exact prism volume, and a holed
-  sweep round a mitred corner stays watertight. 1205/1205. Landed on the way:
+  sweep round a mitred corner stays watertight. 1205/1205. **Then the loft
+  (`81e54ed`):** Euclid's loft over subpaths is a symmetric difference, and
+  even its capped single-loop tube took 18 s on a thousand-gon; the kit now
+  builds every loop family as ring-to-ring quads with its own start
+  alignment, inverts the hole tubes, caps with `PolygonTriangulator`, and
+  settles orientation by the signed volume — a square ring lofts to the
+  exact hollow frustum, the dense holed outline in well under a second.
+  That builder is now the only render path for sweeps and lofts. 1207/1207.
+  Landed on the way:
   `/v1/state` bodies now carry `bounds` (mesh min/max, mm); `feature.mirror`
   `keepOriginal:false` now CONSUMES the source (it was a documented no-op —
   `testMirrorWithoutKeepOriginalConsumesTheSource`); a draft extrude refuses
@@ -284,7 +292,7 @@ transform-as-a-feature). Draft/taper angles for cast parts landed
 the memoised replay landed 2026-09-02. Each remaining mission warrants its
 own design pass, not incremental continuation.
 
-**Current test baseline (2026-09-02, evening): 1205 unit tests in ~22s** — the
+**Current test baseline (2026-09-02, evening): 1208 unit tests in ~22s** — the
 day added the exact helix spine, the BEG 55 lineup's bounds/mirror fixes,
 transform-as-a-feature, consumed-edge drafts on both offset paths, plane
 sections (`SectionKit`, `KernelSectionTests`), and the exact face areas.
@@ -1045,8 +1053,14 @@ first differing frame is the one you want.
     which `emitFullSolid` keeps on purpose — adopting OCCT's revolve
     tessellation made the naming pass unusable) had the same BSP subtract;
     since `9310d3d` it sweeps outer and holes as walls through the shared
-    frames and triangulates the caps with holes — no boolean. The holed
-    LOFT (`Euclid.Mesh.loft` over subpaths) is the one place left.
+    frames and triangulates the caps with holes — no boolean. The LOFT
+    (`Euclid.Mesh.loft` over subpaths = a symmetric difference; even its
+    single-loop tube spends 18 s tessellating a thousand-gon cap) followed
+    in `81e54ed`: ring-to-ring tubes built here with start alignment, holes
+    inverted, `PolygonTriangulator` caps, orientation by signed volume —
+    and since then that builder is the ONLY path for sweeps and lofts,
+    holes or not. Nothing on the render path calls a Euclid boolean now
+    except the extrude fallback, which runs only when OCCT declined.
 
 ---
 

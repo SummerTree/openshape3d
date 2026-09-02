@@ -152,6 +152,30 @@ final class SweepLoftTests: XCTestCase {
         XCTAssertLessThan(seconds, 1.0, "swept in \(seconds) s")
     }
 
+    /// No holes at all is the same builder, and just as fast: the dense
+    /// outline swept and lofted without a bore, exact prism / frustum volumes.
+    func testDenseOutlinesWithoutHolesSweepAndLoftFast() {
+        let n = 1152
+        let loop = (0..<n).map { i -> SIMD2<Double> in
+            let phi = Double(i) / Double(n) * 2 * .pi
+            let r = 25 + 5 * sin(3 * phi)
+            return SIMD2(r * cos(phi), r * sin(phi))
+        }
+        let base = Profile(loop: loop, kind: .polygonal, sourceEntityIDs: [])
+        let top = Profile(loop: loop.map { $0 * 0.9 }, kind: .polygonal, sourceEntityIDs: [])
+        let z8 = SketchPlane(origin: SIMD3(0, 0, 8), xAxis: SIMD3(1, 0, 0), yAxis: SIMD3(0, 1, 0))
+        let start = Date()
+        let swept = KernelOps.sweep(profile: base, in: xyPlane, alongPath: [SIMD3(0, 0, 0), SIMD3(0, 0, 8)])
+        let lofted = KernelOps.loft(profiles: [(profile: base, holes: [], plane: xyPlane), (profile: top, holes: [], plane: z8)])
+        let seconds = Date().timeIntervalSince(start)
+        XCTAssertTrue(swept.isWatertight)
+        XCTAssertTrue(lofted.isWatertight)
+        let a = Profile.signedArea(loop)
+        XCTAssertEqual(volume(of: swept), a * 8, accuracy: a * 8 * 1e-6)
+        XCTAssertEqual(volume(of: lofted), 8.0 / 3 * (a + a * 0.81 + (a * a * 0.81).squareRoot()), accuracy: a * 8 * 1e-6)
+        XCTAssertLessThan(seconds, 1.0, "sweep + loft took \(seconds) s")
+    }
+
     /// A holed sweep round a mitred corner: the walls follow the stretched
     /// bisector section like the outer does, so the tube stays watertight and
     /// its volume is the outer L-solid less the hole's L-solid.

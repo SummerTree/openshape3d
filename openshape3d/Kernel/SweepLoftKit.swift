@@ -39,16 +39,15 @@ nonisolated enum SweepLoftKit {
         }
         let anchor = plane.toLocal(spine[0])
         let holeLoops = holes.map(\.loop).filter { $0.count >= 3 }
-        guard !holeLoops.isEmpty else {
-            return sweepLoop(profile.loop, relativeTo: anchor, in: plane, along: spine).makeWatertight()
-        }
 
-        // With holes: NO boolean. The bores used to be swept as cutters and
-        // subtracted by BSP CSG — unbounded on a spline outline's thousand
-        // samples (gotcha 24). Instead the outer loop (CCW) and every hole
-        // (CW) are swept as walls through the SAME transported frames, so a
-        // hole's wall faces into its cavity by winding alone, and the two
-        // caps are the profile-with-holes triangulated in the end frames.
+        // NO boolean, and no Euclid loft either. The bores used to be swept
+        // as cutters and subtracted by BSP CSG — unbounded on a spline
+        // outline's thousand samples (gotcha 24) — and Euclid's capped loft
+        // of even a single loop spends seconds tessellating a thousand-gon
+        // cap. Instead the outer loop (CCW) and every hole (CW) are swept as
+        // walls through the SAME transported frames, so a hole's wall faces
+        // into its cavity by winding alone, and the two caps are the
+        // profile-with-holes triangulated in the end frames.
         let outer = Profile.signedArea(profile.loop) < 0 ? Array(profile.loop.reversed()) : profile.loop
         let holesCW = holeLoops.map { Profile.signedArea($0) > 0 ? Array($0.reversed()) : $0 }
         let frames = sweepFrames(in: plane, along: spine)
@@ -214,14 +213,7 @@ nonisolated enum SweepLoftKit {
             }
         }
 
-        guard !holeFamilies.isEmpty else {
-            let sections = profiles.enumerated().map { s, entry in
-                closedWorldPath(outers[s], in: entry.plane)
-            }
-            return Euclid.Mesh.loft(sections).makeWatertight()
-        }
-
-        // With holes: NO boolean. Euclid's loft over subpaths is a symmetric
+        // NO boolean, holes or not. Euclid's loft over subpaths is a symmetric
         // difference of the lofted subpaths — a BSP CSG, unbounded on a
         // spline outline's samples (gotcha 24) — and even its capped tube of
         // one loop spends seconds tessellating a thousand-gon cap that would
