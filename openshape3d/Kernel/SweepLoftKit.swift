@@ -214,13 +214,92 @@ nonisolated enum SweepLoftKit {
             }
         }
 
-        let sections = profiles.enumerated().map { s, entry -> Euclid.Path in
-            let outer = closedWorldPath(outers[s], in: entry.plane)
-            guard !holeFamilies.isEmpty else { return outer }
-            let holes = holeFamilies.map { closedWorldPath($0[s], in: entry.plane) }
-            return Euclid.Path(subpaths: [outer] + holes)
+        guard !holeFamilies.isEmpty else {
+            let sections = profiles.enumerated().map { s, entry in
+                closedWorldPath(outers[s], in: entry.plane)
+            }
+            return Euclid.Mesh.loft(sections).makeWatertight()
         }
-        return Euclid.Mesh.loft(sections).makeWatertight()
+
+        // With holes: NO boolean. Euclid's loft over subpaths is a symmetric
+        // difference of the lofted subpaths — a BSP CSG, unbounded on a
+        // spline outline's samples (gotcha 24) — and even its capped tube of
+        // one loop spends seconds tessellating a thousand-gon cap that would
+        // be thrown away. So every loop family becomes a tube of ring-to-ring
+        // quads built here (each ring's start aligned to the previous ring,
+        // which is what Euclid's loft did for us), a hole's tube turned to
+        // face its cavity, and the profile-with-holes triangulated as the two
+        // end caps. Orientation is settled by the signed volume.
+        func tube(_ family: [[SIMD2<Double>]]) -> [Euclid.Polygon] {
+            var rings = profiles.enumerated().map { s, entry in
+                family[s].map { entry.plane.toWorld($0) }
+            }
+            for s in 1..<rings.count {
+                let prev = rings[s - 1], ring = rings[s], n = ring.count
+                guard n == prev.count, n > 0 else { continue }
+                var best = 0, bestCost = Double.infinity
+                for shift in 0..<n {
+                    var cost = 0.0
+                    for j in 0..<n {
+                        cost += simd_length_squared(ring[(j + shift) % n] - prev[j])
+                        if cost >= bestCost { break }
+                    }
+                    if cost < bestCost { bestCost = cost; best = shift }
+                }
+                if best != 0 { rings[s] = (0..<n).map { ring[($0 + best) % n] } }
+            }
+            var out: [Euclid.Polygon] = []
+            for s in 0..<(rings.count - 1) {
+                let a = rings[s], b = rings[s + 1], n = min(a.count, b.count)
+                for j in 0..<n {
+                    let k = (j + 1) % n
+                    let quad = [a[j], a[k], b[k], b[j]]
+                    if let polygon = Euclid.Polygon(quad.map { Vector($0.x, $0.y, $0.z) }) {
+                        out.append(polygon)
+                    } else {
+                        for tri in [[quad[0], quad[1], quad[2]], [quad[0], quad[2], quad[3]]] {
+                            if let polygon = Euclid.Polygon(tri.map { Vector($0.x, $0.y, $0.z) }) {
+                                out.append(polygon)
+                            }
+                        }
+                    }
+                }
+            }
+            return out
+        }
+        var polygons = tube(outers)
+        for family in holeFamilies {
+            polygons += tube(family).map { $0.inverted() }
+        }
+        let forward = simd_dot(profiles[profiles.count - 1].plane.origin - profiles[0].plane.origin,
+                               simd_normalize(profiles[0].plane.normal)) >= 0
+        for (index, flip) in [(0, forward), (profiles.count - 1, !forward)] {
+            let entry = profiles[index]
+            let (vertices, triangles) = PolygonTriangulator.triangulate(
+                outer: outers[index], holes: holeFamilies.map { $0[index] })
+            for t in stride(from: 0, to: triangles.count - 2, by: 3) {
+                var pts = [triangles[t], triangles[t + 1], triangles[t + 2]].map { entry.plane.toWorld(vertices[$0]) }
+                if flip { pts.reverse() }
+                if let polygon = Euclid.Polygon(pts.map { Vector($0.x, $0.y, $0.z) }) {
+                    polygons.append(polygon)
+                }
+            }
+        }
+        let mesh = Euclid.Mesh(polygons).makeWatertight()
+        return signedVolume(of: mesh) < 0 ? mesh.inverted() : mesh
+    }
+
+    /// Signed tetrahedron sum — positive when the normals face outward.
+    static func signedVolume(of mesh: Euclid.Mesh) -> Double {
+        var sum = 0.0
+        for polygon in mesh.triangulate().polygons {
+            let v = polygon.vertices
+            let p0 = SIMD3(v[0].position.x, v[0].position.y, v[0].position.z)
+            let p1 = SIMD3(v[1].position.x, v[1].position.y, v[1].position.z)
+            let p2 = SIMD3(v[2].position.x, v[2].position.y, v[2].position.z)
+            sum += simd_dot(p0, simd_cross(p1, p2))
+        }
+        return sum / 6
     }
 
     /// Loop with positive (CCW) signed area.

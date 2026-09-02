@@ -167,6 +167,47 @@ final class SweepLoftTests: XCTestCase {
 
     // MARK: - Loft
 
+    /// A holed loft is built without a boolean: a square ring lofted from
+    /// z = 0 (outer 1, hole 0.5) to z = 2 (outer 0.8, hole 0.4) is the outer
+    /// frustum less the hole frustum, watertight, outward-facing.
+    func testLoftOfASquareRingIsAHollowFrustumWithoutBooleans() {
+        let z2 = SketchPlane(origin: SIMD3(0, 0, 2), xAxis: SIMD3(1, 0, 0), yAxis: SIMD3(0, 1, 0))
+        let mesh = KernelOps.loft(profiles: [
+            (profile: squareProfile(halfSize: 0.5), holes: [squareProfile(halfSize: 0.25)], plane: xyPlane),
+            (profile: squareProfile(halfSize: 0.4), holes: [squareProfile(halfSize: 0.2)], plane: z2),
+        ])
+        XCTAssertTrue(mesh.isWatertight)
+        func frustum(_ a: Double, _ b: Double) -> Double { 2.0 / 3 * (a + b + (a * b).squareRoot()) }
+        XCTAssertEqual(volume(of: mesh), frustum(1, 0.64) - frustum(0.25, 0.16), accuracy: 1e-9)
+        XCTAssertGreaterThan(SweepLoftKit.signedVolume(of: mesh), 0, "normals face outward")
+    }
+
+    /// The dense spline outline with a bore lofted to a 90 % copy: fast,
+    /// watertight, and the analytic difference of two frustums.
+    func testLoftOfADenseHoledOutlineIsFast() {
+        let n = 1152
+        let outerLoop = (0..<n).map { i -> SIMD2<Double> in
+            let phi = Double(i) / Double(n) * 2 * .pi
+            let r = 25 + 5 * sin(3 * phi)
+            return SIMD2(r * cos(phi), r * sin(phi))
+        }
+        let bore = circleProfile(center: .zero, radius: 5, segments: 64)
+        let base = Profile(loop: outerLoop, kind: .polygonal, sourceEntityIDs: [])
+        let top = Profile(loop: outerLoop.map { $0 * 0.9 }, kind: .polygonal, sourceEntityIDs: [])
+        let boreTop = circleProfile(center: .zero, radius: 4.5, segments: 64)
+        let z8 = SketchPlane(origin: SIMD3(0, 0, 8), xAxis: SIMD3(1, 0, 0), yAxis: SIMD3(0, 1, 0))
+        let start = Date()
+        let mesh = KernelOps.loft(profiles: [(profile: base, holes: [bore], plane: xyPlane),
+                                             (profile: top, holes: [boreTop], plane: z8)])
+        let seconds = Date().timeIntervalSince(start)
+        XCTAssertTrue(mesh.isWatertight)
+        func frustum(_ a: Double, _ b: Double) -> Double { 8.0 / 3 * (a + b + (a * b).squareRoot()) }
+        let ao = Profile.signedArea(outerLoop), ah = Profile.signedArea(bore.loop)
+        let want = frustum(ao, ao * 0.81) - frustum(ah, ah * 0.81)
+        XCTAssertEqual(volume(of: mesh), want, accuracy: want * 1e-6)
+        XCTAssertLessThan(seconds, 1.0, "lofted in \(seconds) s")
+    }
+
     func testLoftSquareToSmallerSquareMakesFrustum() {
         let bottom = squareProfile(halfSize: 0.5) // area 1 at z = 0
         let top = squareProfile(halfSize: 0.25) // area 0.25 at z = 1
