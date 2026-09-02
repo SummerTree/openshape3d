@@ -93,6 +93,12 @@ design), `FREECAD_PLAYBOOK.md` (the FreeCAD-derived hardening ledger),
   refusing only when the carriers no longer meet — pinned by a "D" and a
   lens in closed form. **Draft/taper (playbook M1) is complete for every
   line/arc profile.** 1156/1156.
+  Then **spline-as-profile slice 0** (`SPLINE_PROFILE_DESIGN.md`):
+  `CatmullRomBezier` — the exact cubic Bézier spans of the centripetal
+  Catmull–Rom the sketch draws (so the kernel can build the SAME curve, no
+  shape change for existing sketches) plus a Gauss-exact closed area;
+  pinned against `splinePoints` to 1e-9. 1161/1161. Slices 1–3 (bridge
+  B-spline edge, detector emission, naming, stress) not started.
 - Two app deaths mid-exec during this pass did NOT reproduce under
   controlled repeats (fresh doc ×2, then the heavy doc, all monitored):
   no crash report, no jetsam, RSS modest; the simulator-control helper
@@ -136,8 +142,8 @@ transform-as-a-feature). Draft/taper angles for cast parts landed
 the memoised replay landed 2026-09-02. Each remaining mission warrants its
 own design pass, not incremental continuation.
 
-**Current test baseline (2026-09-02): 1156 unit tests in ~17s** (draft/taper incl.
-arc profiles and non-tangent joints, B-rep volume readback, memoised replay, rebuild planner all added on 2026-09-01/02; the
+**Current test baseline (2026-09-02): 1161 unit tests in ~17s** (draft/taper incl.
+arc profiles and non-tangent joints, spline Bézier conversion, B-rep volume readback, memoised replay, rebuild planner all added on 2026-09-01/02; the
 previous line follows) — **(2026-09-01): 1115 unit tests in ~17s** (1 skipped:
 the on-demand `OCCTFuzzTests` hostile-input sweep, run with
 `TEST_RUNNER_OS3D_FUZZ=1`). Earlier this session: 1086 → the naming

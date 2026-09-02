@@ -1,8 +1,13 @@
 # Spline as an exact profile — design
 
-Status: **DESIGN (2026-09-02).** Nothing implemented. Written after draft/
-taper (M1) completed, as the next kernel-capability mission the status doc
-names. Slices at the bottom.
+Status: **DESIGN + SLICE 0 LANDED (2026-09-02).** `CatmullRomBezier`
+(`openshape3d/Kernel/CatmullRomBezier.swift`) converts the centripetal
+Catmull–Rom to its exact cubic Bézier spans and integrates a closed
+piecewise cubic's area exactly (3-point Gauss–Legendre on the degree-5
+integrand); `CatmullRomBezierTests` pin it against `splinePoints` itself to
+1e-9 (closed point-for-point, open interior, straight end spans, the
+classic uniform tangent) and the area against a dense polygon. Slices 1–3
+below are not started.
 
 ## Today
 
@@ -55,14 +60,18 @@ problem in analytic clothing.
 
 `Profile.Segment` gains an optional `controlPoints: [SIMD2<Double>]` (the
 Catmull–Rom points of the span run from `start` to `end`; `mid` stays nil).
-The bridge's segment record is a fixed 7-double stride — `[kind, start.x,
-start.y, end.x, end.y, mid.x, mid.y]`, kind 0 line / 1 arc — so a
-variable-length spline rides a SIDE BLOB: `packSegments` writes kind 2 and
-repurposes the two `mid` doubles as `(offset, count)` into a companion
-`controlPoints` `Data` (x,y pairs) passed alongside; lines and arcs are
-byte-for-byte unchanged. `SegWire` builds the joined B-spline edge for a
-kind-2 record (per-span Bézier → `GeomConvert_CompCurveToBSplineCurve`,
-periodic for a closed spline) and keeps lines/arcs as they are. `ProfileDetector` emits it for `.spline` chains (and fills
+The bridge's segment record is today a fixed 7-double stride — `[kind,
+start.x, start.y, end.x, end.y, mid.x, mid.y]`, kind 0 line / 1 arc — and
+`SegWire` is its ONLY parser (`packSegments` its only writer). So a spline
+is an INLINE variable-length record rather than a side blob: kind 2 (open)
+or 3 (closed), then `count`, then `count` x,y pairs. `SegWire` walks
+records by kind; lines and arcs stay byte-for-byte as they are, and no
+bridge signature changes. For a kind-2/3 record `SegWire` converts the
+points with the same Catmull–Rom → Bézier math as `CatmullRomBezier`
+(re-derived in C++, pinned by a cross-language test that the kernel's
+sampled edge equals `splinePoints`), builds one `Geom_BezierCurve` per span
+and joins them with `GeomConvert_CompCurveToBSplineCurve` into ONE edge —
+periodic for kind 3. `ProfileDetector` emits it for `.spline` chains (and fills
 `segmentEntityIDs`, one entry per spline). Everything downstream that reads
 `segments` — extrude, revolve, sweep, loft — gets exact splines for free;
 `boundaryIdentity(wireEdge:wireEdgeCount:)` already maps one wire edge to
