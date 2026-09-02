@@ -50,6 +50,18 @@ final class FeatureGraphEvalTests: XCTestCase {
         return xs.isEmpty ? 0 : xs.reduce(0, +) / Double(xs.count)
     }
 
+    /// The mesh centroid carried through the body's placement — what a viewer
+    /// sees. `centroidX` reads the LOCAL mesh, which a transform node leaves alone.
+    private func localCentroid(_ body: Body) -> SIMD3<Double> {
+        let ps = body.render.positions
+        guard !ps.isEmpty else { return .zero }
+        return ps.reduce(SIMD3<Double>.zero) { $0 + SIMD3(Double($1.x), Double($1.y), Double($1.z)) } / Double(ps.count)
+    }
+
+    private func worldCentroid(_ body: Body) -> SIMD3<Double> {
+        body.transform.applying(to: localCentroid(body))
+    }
+
     /// The single planar face of `table` whose normal points most strongly +Z.
     private func plusZEntry(_ table: FaceTable) -> FaceTable.Entry? {
         table.entries
@@ -668,6 +680,62 @@ final class FeatureGraphEvalTests: XCTestCase {
         let mirror = try XCTUnwrap(result.bodies.first { $0.id == mirrorID })
         XCTAssertEqual(centroidX(mirror), -20, accuracy: 1e-3)
         XCTAssertEqual(volume(mirror), 64, accuracy: 1e-6)
+    }
+
+    /// (4c) A transform node moves the body IN PLACE: same id, same volume,
+    /// the delta composed onto its placement — translation first…
+    func testTransformTranslatesTheBodyInPlace() throws {
+        let boxFeature = FeatureID(), moveFeature = FeatureID()
+        let boxID = BodyID()
+        var delta = Transform3D()
+        delta.translation = SIMD3(5, 0, 0)
+        let graph = FeatureGraph(nodes: [
+            FeatureNode(id: boxFeature, name: "Box",
+                kind: .primitive(spec: .box(width: 4, depth: 4, height: 4),
+                                 placement: Transform3D(translation: SIMD3(20, 0, 0))),
+                outputBodyIDs: [boxID]),
+            FeatureNode(id: moveFeature, name: "Move",
+                kind: .transform(body: BodyRef(producer: boxFeature, bodyID: boxID), delta: delta),
+                outputBodyIDs: [BodyID()]),
+        ])
+        let result = graph.evaluate(sketches: [], planes: [],
+                                    naming: SignatureNaming(), nextRevision: RevisionSource().next)
+        XCTAssertNil(result.errors[moveFeature], "transform must evaluate: \(result.errors)")
+        XCTAssertEqual(result.bodies.map(\.id), [boxID], "moved in place — one body, the same id")
+        let moved = try XCTUnwrap(result.bodies.first)
+        XCTAssertEqual(worldCentroid(moved).x, 25, accuracy: 1e-9, "20 from the primitive's placement + 5")
+        XCTAssertEqual(centroidX(moved), 20, accuracy: 1e-9, "the local mesh is untouched — the move is placement only")
+        XCTAssertEqual(volume(moved), 64, accuracy: 1e-6)
+    }
+
+    /// …and a rotation about the world origin swings the placement with it:
+    /// a box at x = 20 turned 90° about z sits at y = 20.
+    func testTransformRotatesThePlacementAboutTheOrigin() throws {
+        let boxFeature = FeatureID(), moveFeature = FeatureID()
+        let boxID = BodyID()
+        var delta = Transform3D()
+        delta.rotation = simd_quatd(angle: .pi / 2, axis: SIMD3(0, 0, 1))
+        let graph = FeatureGraph(nodes: [
+            FeatureNode(id: boxFeature, name: "Box",
+                kind: .primitive(spec: .box(width: 4, depth: 4, height: 4),
+                                 placement: Transform3D(translation: SIMD3(20, 0, 0))),
+                outputBodyIDs: [boxID]),
+            FeatureNode(id: moveFeature, name: "Turn",
+                kind: .transform(body: BodyRef(producer: boxFeature, bodyID: boxID), delta: delta),
+                outputBodyIDs: [BodyID()]),
+        ])
+        let result = graph.evaluate(sketches: [], planes: [],
+                                    naming: SignatureNaming(), nextRevision: RevisionSource().next)
+        XCTAssertNil(result.errors[moveFeature], "\(result.errors)")
+        let turned = try XCTUnwrap(result.bodies.first { $0.id == boxID })
+        // The primitive bakes its placement into the LOCAL mesh (centroid x = 20,
+        // y = half its depth); a quarter turn about z maps (x, y) to (−y, x).
+        let local = localCentroid(turned), c = worldCentroid(turned)
+        XCTAssertEqual(local.x, 20, accuracy: 1e-9)
+        XCTAssertEqual(c.x, -local.y, accuracy: 1e-9)
+        XCTAssertEqual(c.y, local.x, accuracy: 1e-9)
+        XCTAssertEqual(c.z, local.z, accuracy: 1e-9)
+        XCTAssertEqual(volume(turned), 64, accuracy: 1e-6)
     }
 
     /// (5) referencedSketchIDs unions the profile / plane / axis sketches per kind.

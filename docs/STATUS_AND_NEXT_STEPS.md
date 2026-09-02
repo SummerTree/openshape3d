@@ -198,8 +198,8 @@ design), `FREECAD_PLAYBOOK.md` (the FreeCAD-derived hardening ledger),
   pattern, and all seven sketch entity kinds (line/circle/arc/spline/rect/
   polygon/ellipse). Also hardened: a wrong-typed `boolean` intent is refused
   (`bad_boolean_type`) instead of silently making a stray body. Only
-  `primitive` (covered by sketch+extrude) and `transform` (deferred) remain
-  unexposed. See `AGENT_CONTROL.md`.
+  `primitive` (covered by sketch+extrude) remains unexposed —
+  `feature.transform` landed 2026-09-02 (below). See `AGENT_CONTROL.md`.
 - **Sketch conflict diagnosis stages 2–3 + scale-free residuals** (playbook
   S6/S7): the conflict chip now names WHICH constraints clash (red glyphs)
   and add-time refusals name the clashing partners; the four mm² residuals

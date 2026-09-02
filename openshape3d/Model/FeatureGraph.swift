@@ -585,9 +585,45 @@ nonisolated extension FeatureGraph {
                 targetNormal: targetNormal.point, flip: flip,
                 into: &state, next: nextRevision)
 
-        // Defined but not evaluated yet — keep the graph total.
-        case .transform:
-            state.errors[node.id] = .kernelFailure("transform evaluation is tranche 2")
+        case let .transform(body, delta):
+            evalTransform(node, bodyRef: body, delta: delta, into: &state, next: nextRevision)
+        }
+    }
+
+    // MARK: Transform
+
+    /// Moves a body IN PLACE: the delta is composed onto its placement, the
+    /// geometry stays body-local (no kernel call — the analytic solid and its
+    /// element names survive, exactly as a pattern instance's do) and the body
+    /// keeps its id, so everything downstream that referenced it still
+    /// resolves. The rotation is about the world origin; "about a point" is
+    /// folded into the delta by the caller (T·R·T⁻¹, see `parseTransform`).
+    private func evalTransform(
+        _ node: FeatureNode,
+        bodyRef: BodyRef,
+        delta: Transform3D,
+        into state: inout EvalState,
+        next nextRevision: () -> UInt64
+    ) {
+        guard let input = state.bodies[bodyRef.bodyID] else {
+            state.errors[node.id] = .brokenRef("transform body unresolved")
+            return
+        }
+        guard delta.scale == 1 else {
+            state.errors[node.id] = .kernelFailure("transform: scaling a body is not supported (scale \(delta.scale))")
+            return
+        }
+        var body = input
+        body.transform = Self.composePatternTransform(delta, base: input.transform)
+        // A new revision even though the local mesh is unchanged: the session
+        // skips replacing a body whose revision did not move, and this one did.
+        body.meshRevision = nextRevision()
+        let names = state.kernelNames[input.id]
+        let table = state.naming.faceTable(for: body, createdBy: node.id, scheme: .generic)
+        state.put(body, table: table)
+        // An isometry keeps every face: the names carry over unchanged.
+        if let names, !names.isEmpty {
+            state.kernelNames[input.id] = names
         }
     }
 

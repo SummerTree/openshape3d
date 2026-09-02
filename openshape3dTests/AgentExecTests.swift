@@ -496,6 +496,31 @@ final class AgentExecTests: XCTestCase {
         XCTAssertEqual(abs(simd_dot(n, SIMD3(0, 0, 1))), 1, accuracy: 1e-12)
     }
 
+    /// A rotation about a centre is folded into the delta as T(c)·R·T(−c), then
+    /// the translation is added: for 90° about z at (10,0,0) plus (1,2,3) the
+    /// delta's translation is (10,0,0) − R(10,0,0) + (1,2,3) = (11, −8, 3).
+    func testTransformFoldsRotationAboutACentreIntoTheDelta() throws {
+        guard case let .transform(_, delta)? = op("""
+        {"op":"feature.transform","args":{"bodyID":"\(bodyUUID)","translation":[1,2,3],
+         "rotationAxis":[0,0,2],"rotationDegrees":90,"rotationCenter":[10,0,0]}}
+        """) else { return XCTFail("expected .transform") }
+        XCTAssertEqual(delta.translation.x, 11, accuracy: 1e-9)
+        XCTAssertEqual(delta.translation.y, -8, accuracy: 1e-9)
+        XCTAssertEqual(delta.translation.z, 3, accuracy: 1e-9)
+        XCTAssertEqual(delta.rotation.angle, .pi / 2, accuracy: 1e-9)
+        XCTAssertEqual(abs(delta.rotation.axis.z), 1, accuracy: 1e-9)
+        XCTAssertEqual(delta.scale, 1)
+    }
+
+    func testIdentityTransformIsRefusedAndAZeroAxisToo() {
+        XCTAssertEqual(code("""
+        {"op":"feature.transform","args":{"bodyID":"\(bodyUUID)"}}
+        """), "identity_transform", "a move that moves nothing is a script bug")
+        XCTAssertEqual(code("""
+        {"op":"feature.transform","args":{"bodyID":"\(bodyUUID)","rotationDegrees":45,"rotationAxis":[0,0,0]}}
+        """), "degenerate_axis")
+    }
+
     func testBodyCannotBeItsOwnBooleanTool() {
         XCTAssertEqual(code("""
         {"op":"feature.boolean","args":{"kind":"subtract",

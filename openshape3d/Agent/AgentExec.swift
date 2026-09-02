@@ -75,6 +75,9 @@ nonisolated enum AgentExecOp: Sendable, Equatable {
                  angleDegrees: Double, boolean: BooleanIntent.Op, targets: [BodyID])
     case pattern(body: BodyID, spec: PatternSpec)
     case mirror(body: BodyID, plane: SketchPlane, keepOriginal: Bool)
+    /// Move a body in place (same id): a rigid delta, rotation already folded
+    /// about its centre. Scale is never set here.
+    case transform(body: BodyID, delta: Transform3D)
     /// `kind` stays a String here so this file needs no `BooleanKind`, which is
     /// main-actor-isolated under the project's `SWIFT_DEFAULT_ACTOR_ISOLATION`.
     /// `AgentBridge` maps it on the far side of the hop. Validated here anyway,
@@ -133,7 +136,7 @@ nonisolated enum AgentExec {
     static let opNames = [
         "sketch.create", "sketch.addEntities",
         "feature.extrude", "feature.revolve",
-        "feature.pattern", "feature.mirror", "feature.boolean",
+        "feature.pattern", "feature.mirror", "feature.transform", "feature.boolean",
         "feature.fillet", "feature.chamfer", "feature.shell",
         "feature.sweep", "feature.loft", "feature.pushPull",
         "feature.moveFace", "feature.scaleFace", "feature.rotateFace",
@@ -161,6 +164,7 @@ nonisolated enum AgentExec {
         case "feature.revolve":    return parseRevolve(args)
         case "feature.pattern":    return parsePattern(args)
         case "feature.mirror":     return parseMirror(args)
+        case "feature.transform":  return parseTransform(args)
         case "feature.boolean":    return parseBoolean(args)
         case "feature.fillet":     return parseBlend(args, isFillet: true)
         case "feature.chamfer":    return parseBlend(args, isFillet: false)
@@ -308,6 +312,37 @@ nonisolated enum AgentExec {
             return .success(.mirror(body: body,
                                     plane: plane(origin: origin, normal: simd_normalize(normal)),
                                     keepOriginal: a["keepOriginal"] as? Bool ?? true))
+        } catch let e as AgentExecError { return .failure(e) } catch { return .failure(unexpected) }
+    }
+
+    /// `feature.transform {bodyID, translation? [x,y,z], rotationAxis? [x,y,z],
+    /// rotationDegrees?, rotationCenter? [x,y,z]}` — moves the body IN PLACE
+    /// (it keeps its id). A rotation about centre c is folded into the delta as
+    /// T(c)·R·T(−c), then the translation is added. An identity is refused:
+    /// a move that moves nothing is a script bug, not a feature.
+    private static func parseTransform(_ a: [String: Any]) -> Result<AgentExecOp, AgentExecError> {
+        do {
+            let body = BodyID(raw: try uuid(a, "bodyID"))
+            let t = try vector3(a, "translation", default: .zero)
+            let degrees = try optionalDouble(a, "rotationDegrees") ?? 0
+            var delta = Transform3D()
+            if abs(degrees) > 1e-12 {
+                let axis = try vector3(a, "rotationAxis", default: SIMD3(0, 0, 1))
+                guard simd_length(axis) > 1e-9 else {
+                    return .failure(.init(code: "degenerate_axis", message: "\"rotationAxis\" must be non-zero."))
+                }
+                let centre = try vector3(a, "rotationCenter", default: .zero)
+                let r = simd_quatd(angle: degrees * .pi / 180, axis: simd_normalize(axis))
+                delta.rotation = r
+                delta.translation = centre - r.act(centre) + t
+            } else {
+                delta.translation = t
+            }
+            guard simd_length(t) > 1e-12 || abs(degrees) > 1e-12 else {
+                return .failure(.init(code: "identity_transform",
+                                      message: "Give a non-zero \"translation\" and/or \"rotationDegrees\" — an identity move does nothing."))
+            }
+            return .success(.transform(body: body, delta: delta))
         } catch let e as AgentExecError { return .failure(e) } catch { return .failure(unexpected) }
     }
 

@@ -273,6 +273,15 @@ final class AgentBridge {
                               keepOriginal: keepOriginal),
                 outputBodyIDs: [BodyID()]), on: viewModel)
 
+        case let .transform(bodyID, delta):
+            if let bad = missingBody([bodyID], session) { return bad }
+            // In place, like a boolean: the body keeps its id; the fresh output
+            // id is the graph's convention for "replaces, adds nothing".
+            return record(FeatureNode(
+                name: "Move",
+                kind: .transform(body: bodyRef(bodyID, session), delta: delta),
+                outputBodyIDs: [BodyID()]), on: viewModel)
+
         case let .boolean(kindName, target, tools):
             if let bad = missingBody([target] + tools, session) { return bad }
             guard let kind = BooleanKind(rawValue: kindName) else {
