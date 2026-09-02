@@ -85,18 +85,70 @@ those have **17 call sites in 3 files** outside it (`AgentBridge`,
 `EditorViewModel`, `HistoryPanelView`). That ripple — not the evaluation —
 is the size of S1. Two ways to slice it:
 
-- **S1a — off-main with a synchronous facade.** `performRebuild` runs the
-  eval detached but the *caller-facing* API blocks on the main actor until
-  it lands (a `Task` + `await` inside a `@MainActor` method still yields the
-  run loop, so the UI stays responsive — spinners, taps, the orbit gesture —
-  while the caller's continuation waits). Callers are untouched; the agent
-  keeps returning the post-op state. The interaction lock above is what
-  makes this safe. **This is the recommended first slice**: all the
-  responsiveness, none of the ripple.
-- **S1b — true async contract.** Callers become `async`, previews and the
-  agent handle "rebuild pending" explicitly. Only worth it if S1a's yielding
-  facade proves insufficient (it should not: the point is the main thread
-  is free during the kernel call).
+- **S1a — off-main with a synchronous facade. REJECTED on reflection
+  (2026-09-02).** A `@MainActor` method cannot "await and yet return
+  synchronously": the only way a synchronous caller keeps its contract while
+  the kernel runs elsewhere is a nested run loop (`RunLoop.main.run(mode:
+  before:)` spun until the task lands). That does process touches and
+  redraws, but nested run loops under SwiftUI are the classic fragility —
+  re-entrant actions, transactions and animations mid-loop — and the
+  `isRebuilding` guard would turn a user's second tap into a silent no-op.
+  Not a foundation to build on.
+- **S1b — true async contract. The path.** `performRebuild` becomes
+  `async`; the 9 session callers become `async`; the 17 external call sites
+  either `await` (the agent's `/v1/exec` must — it returns the post-op
+  state) or become fire-and-forget `Task { await … }` where nothing reads
+  the result synchronously afterwards (UI toggles, whose views observe the
+  document anyway). Sliced so each step gates on the unit suite:
+  1. Session: `reserveRevisions(through:)`, snapshot → detached evaluate →
+     apply, `isRebuilding` as an async gate, in-session callers `async`.
+  2. External sites, audited one by one for synchronous result reads
+     (see the audit below); the agent awaits, UI callers wrap.
+  3. Cancellation + coalescing (generation tag, between-node cancel hook,
+     stale-cache reuse) and the responsiveness UI test.
+  Full UI suite at the end (46.5 min).
+
+### Call-site audit (2026-09-02)
+
+What follows each of the 17 external calls decides its migration:
+
+- **Must `await` (reads the rebuilt document right after):** the agent's
+  two sites (`rebuildForSketchChange` → `execOK` response; `rebuildFrom` →
+  `producedBodyIDs`/`changedBodyIDs`); the editor's feature edits
+  (`editFeature` → `save()`, and one selects the produced body), `delete
+  Feature`/`setSuppressed` → `sanitizeAfterHistoryChange()` (reads the
+  document for ghost picks), and every `performWithSketchRebuild` followed
+  by `save()`. That is nearly all of them — "fire-and-forget" applies only
+  to the History panel closures and the two `rebuildForSketchChange` calls
+  that just reset `mode`.
+- **The sketch-edit split.** `performWithSketchRebuild` is one atomic undo
+  step (S6): the sketch command and the body rebuild. With an async rebuild
+  the sketch command must still apply **synchronously** (drawing feedback
+  cannot wait for a kernel), and the body commands are **amended into the
+  same undo step** when the eval lands (`undoStack.amendLast` exists for
+  live drags). Undo of that step then reverts both, as today.
+- **Verification gap.** `DocumentSession` is never instantiated in unit
+  tests (SwiftData), so today an async `performRebuild` could only be
+  verified by the 46-minute UI suite or the live app — too weak a net for
+  a concurrency change on the central mutation path.
+
+### Revised slicing (supersedes the list above)
+
+0. **Extract the rebuild planner as a pure function — first, and unit-test
+   it now.** `performRebuild` is snapshot → evaluate → diff (skip-unchanged
+   replace, add, delete, upgrade edits) → one `CompositeCommand` → adopt.
+   Everything before `perform` is a pure function of values:
+   `RebuildPlanner.plan(graph, sketches, planes, naming, cache, liveBodies,
+   ownedIDs, title) -> (commands, cache, errors, faceTables, kernelNames,
+   resultBodies)`. `performRebuild` becomes `plan` + `perform` + adopt.
+   Zero behaviour change; the diff logic (which today is only exercised by
+   UI tests) gets pure-value tests: skip-unchanged, add, delete-consumed,
+   upgrade edits, adoption. This is the seam the detached evaluate needs.
+1. Session: `reserveRevisions(through:)`; `plan` runs detached with a
+   snapshot; `performRebuild` async; in-session callers async.
+2. External sites per the audit (agent first — its scripts verify the
+   post-op contract end to end — then the editor, then History).
+3. Cancellation + coalescing + the responsiveness UI test; full UI suite.
 
 Out of scope here: **live tool previews** (drag-to-extrude recomputing per
 gesture frame) — the "/preview service" half of S1 in the old backlog. They

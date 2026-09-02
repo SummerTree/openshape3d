@@ -65,7 +65,10 @@ design), `FREECAD_PLAYBOOK.md` (the FreeCAD-derived hardening ledger),
   **18–21 s → 0.04 s (~500×)**, RSS per op **+70 MB → +0.2 MB**, undo
   **full replay → 0.04 s**. Correctness rests on `consumedBodyIDs`
   enumerating every body a kind reads — an op that reads an undeclared
-  body must declare it or run uncached (gotcha 19).
+  body must declare it or run uncached (gotcha 19). **Gated by the full UI
+  suite (2026-09-02): 105 tests, 2 skipped, 1 failure — and that one was
+  `DeleteFaceUITests` pinned to the old faceted 524.62 mm³; with the B-rep-
+  exact 524.60 it passes (1a4d332).** No regression from the memo anywhere.
 - Two app deaths mid-exec during this pass did NOT reproduce under
   controlled repeats (fresh doc ×2, then the heavy doc, all monitored):
   no crash report, no jetsam, RSS modest; the simulator-control helper
@@ -125,7 +128,7 @@ OCCT full-revolve `Generated()` gap and its `Revol().Shape(edge)` recovery,
 see `TOPO_NAMING_HISTORY_DESIGN.md`) the last 4, on top of the 1013 the
 FreeCAD-hardening tranches left. Previous baseline (2026-08-30):
 920 unit tests in 18s — down from ~100 s after booleans stopped running both
-kernels (see §3b). **Full UI suite last measured 2026-09-01** (covering all
+kernels (see §3b). **Full UI suite last measured 2026-09-02** (105 tests in 46.5 min after the memoised replay: 104 green + the DeleteFace expectation corrected to the B-rep-exact volume; previously 2026-09-01) (covering all
 of the above): 104 executed, 2 skipped, 46m19s — 1 failure
 (`DragSolveUITests.testDragTopCornerKeepsHorizontalEdgeAndCoalesces`, passed
 clean in isolation immediately after: the documented long-run-flake pattern,
