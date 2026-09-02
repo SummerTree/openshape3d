@@ -21,19 +21,18 @@ nonisolated enum SketchTessellator {
         holes: [Profile],
         on plane: SketchPlane
     ) -> [SIMD3<Float>] {
-        var paths = [KernelOps.closedPath(for: profile)]
-        paths.append(contentsOf: holes.map { KernelOps.closedPath(for: $0) })
-        let mesh = Euclid.Mesh.fill(paths).triangulate()
-        let transform = KernelOps.planeToWorld(plane)
-
+        // A 2D triangulation, not a mesh CSG: `Euclid.Mesh.fill([paths])`
+        // unions the filled loops and a subpath fill is a symmetric
+        // difference — both BSP booleans, exponential on a thousand-vertex
+        // spline outline, and this runs inside the scene getter on the main
+        // thread (gotcha 24: a 72-point cam wedged the app for minutes).
+        let (vertices, triangles) = PolygonTriangulator.triangulate(
+            outer: profile.loop, holes: holes.map(\.loop))
         var out: [SIMD3<Float>] = []
-        for polygon in mesh.polygons {
-            // fill() creates front and back faces; keep the front (+z) only.
-            guard polygon.plane.normal.z > 0 else { continue }
-            for vertex in polygon.vertices {
-                let world = vertex.position.transformed(by: transform)
-                out.append(SIMD3(Float(world.x), Float(world.y), Float(world.z)))
-            }
+        out.reserveCapacity(triangles.count)
+        for index in triangles {
+            let world = plane.toWorld(vertices[index])
+            out.append(SIMD3(Float(world.x), Float(world.y), Float(world.z)))
         }
         return out
     }
