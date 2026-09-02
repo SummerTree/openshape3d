@@ -29,8 +29,18 @@ design), `FREECAD_PLAYBOOK.md` (the FreeCAD-derived hardening ledger),
   the latch slot. Envelope exact, shell volume = analytic to the mm³,
   assembly **550 g vs the 560 g datasheet (1.7%)** with the wall thickness
   the only assumption. Identical on three runs, including inside a heavy
-  document. Draft/taper extrude also landed earlier today (three slices,
-  `DRAFT_TAPER_DESIGN.md`).
+  document. Second complex part from the same category: **Ganter GN 115
+  lockable latch, type LCG** (`scripts/rebuild_ganter_gn115.py`), rebuilt
+  from its standard sheet (d = 32 collar, 28 body, 19×45 arm, 100×32
+  L-handle) — a REVOLVED housing with the bore carried in the profile, a
+  unioned L-handle, and the steel latch arm as its own body so the mass
+  check is per material: **251 g vs the 250 g catalogue weight (0.3%)**,
+  0 invalid, all B-reps (handle thickness the one stated assumption). By
+  contrast item's Door Lock 8 (PA-GF, ribbed moulding, only a pictorial
+  drawing) was judged NOT verifiable from public data and deliberately not
+  rebuilt — a plain shell of its envelope would land ±50% on mass, which
+  is a guess, not a check. Draft/taper extrude also landed earlier today
+  (three slices, `DRAFT_TAPER_DESIGN.md`).
 - **MEASURED: evaluation is not incremental across independent bodies.**
   With the 60M mm³ wheel chain sitting in the document, each of the lock's
   ~14 exec ops cost ~13 s (whole rebuild ~3 min vs ~4 s in a fresh document)
