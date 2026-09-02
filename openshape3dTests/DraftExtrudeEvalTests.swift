@@ -289,5 +289,19 @@ final class DraftExtrudeEvalTests: XCTestCase {
         let vol = MeasureKit.bodyVolume(body.render, scale: 1)
         XCTAssertEqual(vol, want, accuracy: max(1, want * 0.01),
                        "outer frustum \(outer) − bore frustum \(bore) = \(want), got \(vol)")
+
+        // Composed hole-wall naming: the bore's four walls carry the HOLE
+        // entity's identity and the outer's four carry the outer's — composed
+        // through the subtraction, not relabelled by geometry afterwards.
+        let names = try XCTUnwrap(result.kernelNames[draftID], "a drafted holed pad is named")
+        func walls(of entity: UUID) -> Int {
+            names.values.filter {
+                if case let .profileWall(e, _) = $0.source { return e == entity }
+                return false
+            }.count
+        }
+        XCTAssertEqual(walls(of: holeRect), 4, "the drafted bore's walls are named by the hole entity")
+        XCTAssertEqual(walls(of: outerRect), 4, "the outer walls keep the outer entity")
+        XCTAssertTrue(names.values.allSatisfy { $0.creator == draft })
     }
 }

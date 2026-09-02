@@ -82,7 +82,12 @@ design), `FREECAD_PLAYBOOK.md` (the FreeCAD-derived hardening ledger),
   channel so arc walls are true cones). Closed-form acceptance: the
   drafted slot matches Steiner's A₀h − P₀·tanθ·h²/2 + π·tan²θ·h³/3 from
   the B-rep to 1e-4. Non-tangent arc joints fall back to the polygon path
-  by design. 1154/1154.
+  by design. 1154/1154. And **composed hole-wall naming**: the holed draft
+  now lofts each bore with a history, names it from its hole profile, and
+  composes through every subtraction exactly as `evalBoolean` does — a
+  drafted bore's walls resolve by identity (`profileWall(entity: hole)`),
+  closing the topological-naming mission's last "relabels by geometry"
+  case. Draft/taper is now complete except the non-tangent arc joint.
 - Two app deaths mid-exec during this pass did NOT reproduce under
   controlled repeats (fresh doc ×2, then the heavy doc, all monitored):
   no crash report, no jetsam, RSS modest; the simulator-control helper

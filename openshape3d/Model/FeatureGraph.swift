@@ -2035,9 +2035,9 @@ nonisolated extension FeatureGraph {
         })
 
         // B-rep: loft the outer through the stack, then subtract each hole's
-        // own loft. Naming rides the outer loft's history when hole-free; with
-        // holes the subtraction reindexes the faces, so it relabels by geometry
-        // (composed hole-wall naming is the next follow-on, per the doc).
+        // own loft, composing names through each subtraction so the result is
+        // identity-named throughout — outer walls by the outer entity, bore
+        // walls by their hole entity, caps by the outer loft.
         var brep: BRepHandle?
         var names: [Int: ElementName] = [:]
         if OCCTKernel.useOCCTAsSourceOfTruth {
@@ -2048,19 +2048,38 @@ nonisolated extension FeatureGraph {
                 state.errors[node.id] = .kernelFailure("draft-extrude loft failed")
                 return
             }
-            if holeS.isEmpty {
-                names = ElementNaming.extrudeNames(
-                    creator: node.id, ancestry: ShapeAncestry(history),
-                    outer: pick(outerS, stack[0].offset), holes: [])
-            } else {
-                for hs in holeS {
-                    guard let bore = OCCTKernel.loftSolid(
-                            sections: stack.map { (pick(hs, $0.offset), $0.plane) }),
-                          let cut = OCCTKernel.boolean(solid, bore, op: 1) else {
-                        state.errors[node.id] = .kernelFailure("draft-extrude hole cut failed")
-                        return
-                    }
-                    solid = cut
+            // Name the outer loft from its profile. With holes, name each bore
+            // loft from ITS hole profile — so a bore wall carries the hole
+            // entity's identity — and compose through every subtraction
+            // exactly as evalBoolean does. A drafted bore's walls then resolve
+            // by identity for downstream edits, not by geometry.
+            names = ElementNaming.extrudeNames(
+                creator: node.id, ancestry: ShapeAncestry(history),
+                outer: pick(outerS, stack[0].offset), holes: [])
+            for hs in holeS {
+                let boreHistory = OCCTShapeHistory()
+                guard let bore = OCCTKernel.loftSolid(
+                        sections: stack.map { (pick(hs, $0.offset), $0.plane) },
+                        history: boreHistory) else {
+                    state.errors[node.id] = .kernelFailure("draft-extrude hole loft failed")
+                    return
+                }
+                let boreNames = ElementNaming.extrudeNames(
+                    creator: node.id, ancestry: ShapeAncestry(boreHistory),
+                    outer: pick(hs, stack[0].offset), holes: [])
+                switch OCCTKernel.booleanResultWithAncestry(
+                    solid, bore, op: OCCTKernel.booleanOp(.subtract)) {
+                case let .success((outcome, ancestry)):
+                    solid = outcome.handle
+                    names = ElementNaming.composeNames(
+                        operation: node.id, ancestry: ancestry,
+                        inputNames: [names, boreNames])
+                case let .failure(error):
+                    state.errors[node.id] = .kernelFailure("draft-extrude hole cut: \(error.message)")
+                    return
+                case nil:
+                    state.errors[node.id] = .kernelFailure("draft-extrude hole cut failed")
+                    return
                 }
             }
             brep = solid

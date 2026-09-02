@@ -22,9 +22,18 @@ from the B-rep to 1e-4 (`testADraftedSlotIsExactWithConicalEnds`).
 A joint that is neither tangent nor line–line (an arc meeting a line at an
 angle) is refused by `SegmentOffset` (nil) and falls back to the polygon
 path — still valid geometry, just tessellated there.
-STILL OPEN: that non-tangent arc-joint case as an exact offset (it needs
-line–arc / arc–arc intersection trimming), and composed hole-WALL naming
-(the subtraction relabels the holed result by geometry).
+**Composed hole-wall naming LANDED (2026-09-02):** the holed draft no
+longer relabels by geometry after its subtractions. The outer loft is named
+from its profile, each bore loft is lofted WITH a history and named from
+ITS hole profile (so a bore wall carries the hole entity's identity), and
+every subtraction goes through `booleanResultWithAncestry` +
+`ElementNaming.composeNames` — the same composition `evalBoolean` uses.
+`testADraftOnAHoledProfileCutsADraftedBore` asserts the bore's four walls
+are `profileWall(entity: hole)` and the outer's four `profileWall(entity:
+outer)`, all created by the draft node. The naming mission's last "relabels
+by geometry" case is closed.
+STILL OPEN: only the non-tangent arc-joint case as an exact offset (it
+needs line–arc / arc–arc intersection trimming; polygon fallback today).
 
 ## Why
 
