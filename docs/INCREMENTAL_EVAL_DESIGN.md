@@ -111,6 +111,27 @@ a replay the cache is pruned to the nodes still in the graph.
   cache and discard it — fast, and they still never mutate the document or
   the live cache. Undo/redo in the heavy document stops costing a replay.
 
+### Undeclared-input review (2026-09-02, after landing)
+
+Every read of a body from replay state in `FeatureGraph.swift` was mapped to
+its enclosing eval and checked against `consumedBodyIDs`:
+
+- `evalExtrude` and the shared `emitFullSolid` (draft/revolve/sweep/loft's
+  boolean-into-target path) read `boolean.resolvedTargets` — declared.
+- `evalBoolean` reads target + tools; `evalPushPull/MoveFace/ScaleFace/
+  RotateFace/ReplaceFace` read `face.body`; `evalEdgeBlend` (chamfer,
+  fillet), `evalShell`, `evalDeleteFace`, `evalMirror`, `evalPattern` read
+  their `body` — all declared.
+- There are **no scans** over the body set (`.values`, `.first`,
+  `state.order`, iteration): nothing resolves a ref by searching bodies.
+- Faces and edges resolve through the declared body's own face table
+  (`ElementNaming.kernelFace(of:)`), never another body's.
+- `TopoNaming` has one implementation, `SignatureNaming`, a value type with
+  no stored state — so a spliced node skips no naming-side mutation.
+
+So the invariant holds for every kind in the codebase today; gotcha 19 in
+`STATUS_AND_NEXT_STEPS.md` is the rule for keeping it that way.
+
 ### Correctness argument and the conservative default
 
 A node is skipped only when everything it declares as input is unchanged.
