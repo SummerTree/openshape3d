@@ -12,6 +12,39 @@ def problem(pid, volume, unit="mm", features=("Revolve",)):
     return deco
 
 
+@problem("6.6", 21076)
+def p6_6():
+    # Stepped shaft along x: Ø20 (0..7), Ø16 neck (7..10), Ø26 (10..28),
+    # Ø20 (28..42), Ø16 (42..55), Ø12 (55..72), Ø8 (72..82); a Ø5 bore 36
+    # deep with a 118° drill point to 38, all in one revolved profile.
+    outer = [(0, 10), (7, 10), (7, 8), (10, 8), (10, 13), (28, 13), (28, 10), (42, 10),
+             (42, 8), (55, 8), (55, 6), (72, 6), (72, 4), (82, 4), (82, 0)]
+    pts = [(0, 2.5)] + outer + [(38, 0), (36, 2.5)]
+    sk = Sketch(front(0)).poly(pts)
+    return revolve(sk, (20, 5), (0, 0), (1, 0))
+
+
+@problem("6.19", 11704)
+def p6_19():
+    # Post: Ø17 base tapering 4° from vertical; head = a 90° double cone
+    # 24 across, the upper cone 9 high to the apex at 71, the lower cone's
+    # side perpendicular to the upper one down to the shaft. (Built as
+    # drawn; the sheet's number is ~5 % more — see notes.)
+    t = math.tan(math.radians(4))
+    apex, rim_y, rim_r = 71.0, 62.0, 12.0
+    # lower cone side direction ⟂ (rim→apex) = (-12, 9): (-9, -12)
+    # r_lower(y) = rim_r - (rim_y - y) * 9/12
+    lo, hi = 20.0, 61.0
+    for _ in range(60):
+        mid = (lo + hi) / 2
+        f = (8.5 - t * mid) - (rim_r - (rim_y - mid) * 0.75)
+        lo, hi = (mid, hi) if f > 0 else (lo, mid)
+    yj = (lo + hi) / 2
+    rj = 8.5 - t * yj
+    sk = Sketch(front(0)).poly([(0, 0), (8.5, 0), (rj, yj), (rim_r, rim_y), (0, apex)])
+    return revolve(sk, (3, 20), (0, 0), (0, 1))
+
+
 @problem("6.16", 4080)
 def p6_16():
     # Peg: Ø13 base tapering 6° (from vertical) up into a Ø16 ball centred

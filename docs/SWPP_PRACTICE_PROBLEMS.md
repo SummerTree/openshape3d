@@ -44,17 +44,17 @@ output plus the reading of it. The published page carries the same table.*
 7. Assemblies, configurations, collision/interference (Levels 9, 15, 17)
    are outside a single-part modeller.
 
-# SOLIDWORKS practice problems in openshape3d — 26/30 attempted pass (365 in the database)
+# SOLIDWORKS practice problems in openshape3d — 34/41 attempted pass (365 in the database)
 
 | Level | Title | Problems | Attempted | Pass | Fail | Error |
 |---|---|---|---|---|---|---|
 | 1 | Basic Sketch & Extrusion | 20 | 14 | 12 | 2 | 0 |
 | 2 | Sketch Tools & End Conditions | 20 | 5 | 5 | 0 | 0 |
 | 3 | Global Variables & Sketch Patterns | 8 | 0 | 0 | 0 | 0 |
-| 4 | Extrude Cut & Fillet/Chamfer | 70 | 3 | 2 | 1 | 0 |
+| 4 | Extrude Cut & Fillet/Chamfer | 70 | 9 | 6 | 3 | 0 |
 | 5 | Reference Geometry | 15 | 0 | 0 | 0 | 0 |
-| 6 | Revolve Boss/Cut | 20 | 3 | 2 | 1 | 0 |
-| 7 | Feature Patterning | 48 | 2 | 2 | 0 | 0 |
+| 6 | Revolve Boss/Cut | 20 | 5 | 3 | 2 | 0 |
+| 7 | Feature Patterning | 48 | 5 | 5 | 0 | 0 |
 | 8 | Sweep Boss/Cut | 14 | 2 | 2 | 0 | 0 |
 | 9 | Assemblies and Mates | 16 | 0 | 0 | 0 | 0 |
 | 10 | CSWA Exam Level | 19 | 0 | 0 | 0 | 0 |
@@ -94,29 +94,40 @@ output plus the reading of it. The published page carries the same table.*
 | 2.13 (by touch) | Extrude Boss, Sketch: Polygon | 8,009 mm³ | 8,009.076 mm³ | +0.00 % | pass | Built entirely by touch on the simulator (Polygon tool, radius label 17/2/cos(30), Extrude 32); the info bar read 8009.08 mm³. |
 | 2.14 | Extrude Boss, Sketch: Polygon | 23,839 mm³ | 23,838.66 mm³ | -0.00 % | pass |  |
 | 2.15 | Extrude Boss, Sketch: Polygon | 26,512 mm³ | 26,512.081 mm³ | +0.00 % | pass |  |
-| 2.17 | Extrude Boss, Sketch: Slot | 16,206 mm³ | 16,206.214 mm³ | +0.00 % | pass |  |
+| 2.17 | Extrude Boss, Sketch: Slot | 16,206 mm³ | 16,206.214 mm³ | +0.00 % | pass | Slot drawn with the kit's stadium; the two corner angles are from vertical. |
 
 ## Level 4: Extrude Cut & Fillet/Chamfer
 
 | Problem | Features | Sheet | Got | Error | Status | Note |
 |---|---|---|---|---|---|---|
 | 4.10 | Extrude Boss, Extrude Cut | 65,203 mm³ | 65,202.779 mm³ | -0.00 % | pass |  |
+| 4.25 | Extrude Boss, Extrude Cut, Fillet and Chamfer | 17,428 mm³ | 17,332.521 mm³ | -0.55 % | fail | Symmetric tangent sides from (±13, 64) to the R9 top; −0.55 % just outside the tolerance, ~6 mm² of head outline short, so the side tangents probably start slightly higher. Interpretation. |
+| 4.28 | Extrude Boss, Extrude Cut | 412,728 mm³ | 412,728.154 mm³ | +0.00 % | pass |  |
+| 4.38 | Extrude Boss, Extrude Cut | 152,280 mm³ | 151,815.527 mm³ | -0.30 % | pass | Counterbore Ø30 × 12 and the 20 × 16 end cut both from the front face, overlapping as the hint says; −0.3 %. |
 | 4.41 | Extrude Boss, Sketch: Slot, Extrude Cut, Fillet and Chamfer | 107,609 mm³ | 110,002.137 mm³ | +2.22 % | fail | Tube + slot-shaped lugs + R2 edge fillets as drawn; app 110,002 vs my own analytic 110,036 — the sheet's 107,609 implies a narrower neck the drawing does not show. |
+| 4.44 | Extrude Boss, Sketch: Offset, Sketch: Trim, Sketch: Convert, Extrude Cut, Fillet and Chamfer | 90,831 mm³ | 88,815.452 mm³ | -2.22 % | fail | Stem 11 thick with R15 bottom and two Ø13 holes, 64 × 35 × 48 head with 11-wide prongs and a Ø24 half-round across them, R10 at the 11-long junction edges; the sheet's 90,831 is ~2,000 mm³ more than this reading (the R10 fills would have to span the full 48 depth). Interpretation. |
+| 4.45 | Extrude Boss, Sketch: Offset, Extrude Cut, Fillet and Chamfer | 27,348 mm³ | 27,321.432 mm³ | -0.10 % | pass |  |
+| 4.65 | Extrude Boss, Extrude Cut | 90,519 mm³ | 90,518.81 mm³ | -0.00 % | pass | Half-round channel along the top and half-round notch across the bottom, both Ø25, two Ø10 through holes. |
 | 4.69 | Extrude Boss, Sketch: Polygon, Extrude Cut | 11,120 mm³ | 11,120.457 mm³ | +0.00 % | pass |  |
 
 ## Level 6: Revolve Boss/Cut
 
 | Problem | Features | Sheet | Got | Error | Status | Note |
 |---|---|---|---|---|---|---|
+| 6.6 | Revolve | 21,076 mm³ | 21,076.422 mm³ | +0.00 % | pass | One revolved profile carrying the seven diameters and the Ø5 bore with its 118° drill point. |
 | 6.15 | Revolve | 137,296 mm³ | 128,727.479 mm³ | -6.24 % | fail | 5-thick sheet bowl with R25 outer / R20 inner bends and a horizontal rim; the sheet's number needs ~7 % more material (probably Ø75 measured on the inside or the rim cut normal to the wall). Interpretation, not an app error. |
 | 6.16 | Revolve | 4,080 mm³ | 4,080.3 mm³ | +0.01 % | pass |  |
 | 6.18 | Revolve | 10,337 mm³ | 10,336.768 mm³ | -0.00 % | pass |  |
+| 6.19 | Revolve | 11,704 mm³ | 11,118.869 mm³ | -5.00 % | fail | Built as drawn (4° shaft, 9-high upper cone with a perpendicular lower cone); the sheet's number needs ~5 % more, so the head's 'RIGHT ANGLE' and the 9 must be read differently. Interpretation, not an app error. |
 
 ## Level 7: Feature Patterning
 
 | Problem | Features | Sheet | Got | Error | Status | Note |
 |---|---|---|---|---|---|---|
 | 7.21 | Extrude Boss, Extrude Cut, Mirror Pattern | 20,044 mm³ | 20,043.841 mm³ | -0.00 % | pass |  |
+| 7.29 | Extrude Boss, Sketch: Slot, Extrude Cut, Mirror Pattern | 103,384 mm³ | 103,460.165 mm³ | +0.07 % | pass | Mirror + union of the plate-and-web half; R2 concave web fillets and R1 outline rounds picked by edge position; +0.07 %. |
+| 7.31 | Extrude Boss, Sketch: Slot, Sketch: Offset, Extrude Cut, Mirror Pattern | 179,795 mm³ | 179,794.69 mm³ | -0.00 % | pass | One profile extrude (walls, base, T-caps) and an R8 slot cut through the base. |
+| 7.48 | Extrude Cut, Revolve, Sketch: Slot, Circular Pattern | 6,277 mm³ | 6,276.574 mm³ | -0.01 % | pass | Slot cutter patterned circularly: the pattern's total angle is the first→last sweep, so two instances 90° apart take 90, not 180. |
 | 7.49 | Extrude Boss, Sketch: Polygon, Extrude Cut, Axis, Circular Pattern | 10,822 mm³ | 10,822.719 mm³ | +0.01 % | pass | Six slot cutters made with Transform › Pattern (circular) from one extruded cutter, then one Combine › Subtract with all six tools. |
 
 ## Level 8: Sweep Boss/Cut
