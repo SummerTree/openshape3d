@@ -170,6 +170,31 @@ nonisolated struct DistanceConstraint: ConstraintResidual {
     }
 }
 
+/// Distance between A and B measured along ONE axis (0 = x, 1 = y) equals
+/// `distance`: sign·(vB − vA) − d = 0. `sign` is captured from the geometry
+/// the constraint was built on so the pair keeps its orientation — a
+/// rectangle dimensioned to a new width grows or shrinks, never flips
+/// through zero and turns inside out. (A rect's two corners are its only
+/// solver points; this is what makes its width and height dimensionable.)
+nonisolated struct AxisDistanceConstraint: ConstraintResidual {
+    let pA: Int
+    let pB: Int
+    let axis: Int
+    let sign: Double
+    let distance: Double
+    init(pA: Int, pB: Int, axis: Int, sign: Double, distance: Double) {
+        self.pA = pA; self.pB = pB; self.axis = axis
+        self.sign = sign >= 0 ? 1 : -1
+        self.distance = distance
+    }
+
+    var variableIndices: [Int] { [2 * pA + axis, 2 * pB + axis] }
+    var residualCount: Int { 1 }
+    func residuals(_ vars: [Double]) -> [Double] {
+        [sign * (vars[2 * pB + axis] - vars[2 * pA + axis]) - distance]
+    }
+}
+
 /// Perpendicular distance from point `p` to the infinite line A-B equals
 /// `distance` (unsigned distance − d = 0).
 nonisolated struct PointDistanceToLineConstraint: ConstraintResidual {

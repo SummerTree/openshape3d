@@ -109,6 +109,48 @@ final class SketchSolverBridgeTests: XCTestCase {
 
     // MARK: - 3. Dimension change drives geometry
 
+    /// A rectangle's only solver points are its two corners, so its width
+    /// and height are axis distances between them (`.horizontal` /
+    /// `.vertical`), not a corner-to-corner `.distance` (the diagonal). This
+    /// is what lets a Rect-tool rectangle be dimensioned in the UI at all —
+    /// before, a selected rect offered no dimension.
+    func testRectWidthAndHeightDimensionsDriveItsCorners() {
+        let r = UUID()
+        var sketch = Sketch(plane: .ground,
+                            entities: [.rect(id: r, min: SIMD2(0, 0), max: SIMD2(7, 1.2))])
+        sketch.constraints = [
+            SketchConstraint(kind: .fixed, refs: [ConstraintRef(entityID: r, role: .endpointA)]),
+        ]
+        let corners = [ConstraintRef(entityID: r, role: .endpointA),
+                       ConstraintRef(entityID: r, role: .endpointB)]
+        sketch.dimensions = [
+            SketchDimension(kind: .horizontal, refs: corners, value: 950),
+            SketchDimension(kind: .vertical, refs: corners, value: 230),
+        ]
+
+        let (out, dof) = SketchSolverBridge.solve(sketch, movingEntity: nil, dragTarget: nil)
+        XCTAssertEqual(dof, 0, "a fixed corner + width + height pins all four rect DOF")
+        guard case let .rect(_, mn, mx) = out[0] else { return XCTFail("expected the rect back") }
+        XCTAssertEqual(mn.x, 0, accuracy: 1e-6, "fixed corner stays put")
+        XCTAssertEqual(mn.y, 0, accuracy: 1e-6)
+        XCTAssertEqual(mx.x, 950, accuracy: 1e-3, "width dimension drives the far corner's x")
+        XCTAssertEqual(mx.y, 230, accuracy: 1e-3, "height dimension drives the far corner's y")
+
+        // A rect drawn the other way round (max corner fixed) shrinks toward
+        // it instead of flipping through zero: the sign is captured as drawn.
+        var flipped = Sketch(plane: .ground,
+                             entities: [.rect(id: r, min: SIMD2(-40, -10), max: SIMD2(0, 0))])
+        flipped.constraints = [
+            SketchConstraint(kind: .fixed, refs: [ConstraintRef(entityID: r, role: .endpointB)]),
+        ]
+        flipped.dimensions = [SketchDimension(kind: .horizontal, refs: corners, value: 10)]
+        let (out2, _) = SketchSolverBridge.solve(flipped, movingEntity: nil, dragTarget: nil)
+        guard case let .rect(_, mn2, mx2) = out2[0] else { return XCTFail("expected the rect back") }
+        XCTAssertEqual(mx2.x, 0, accuracy: 1e-6)
+        XCTAssertEqual(mn2.x, -10, accuracy: 1e-3, "the min corner moved toward the fixed max corner")
+        XCTAssertLessThan(mn2.x, mx2.x, "still a proper min/max rect")
+    }
+
     func testDistanceDimensionDrivesLength() {
         let l = UUID()
         var sketch = Sketch(plane: .ground,

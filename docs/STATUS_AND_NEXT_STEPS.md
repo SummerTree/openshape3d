@@ -12,6 +12,29 @@ design), `FREECAD_PLAYBOOK.md` (the FreeCAD-derived hardening ledger),
 
 ## Mission log — 2026-09-01 (landed, all committed, 1115/1115 green)
 
+- **Two TraceParts composite robots rebuilt THROUGH THE UI (2026-09-03;
+  suite 1250/1250).** ROKAE CMR-ST600-CR12-C (chassis 950 × 630 × 768 from
+  its TraceParts spec table, CR12 arm at the 1,434 mm datasheet reach) and
+  Lebai LM3 UP (535 × 450 × 1200 standby envelope, LM3 arm at 638 mm reach).
+  TraceParts' 3D viewer and STEP sit behind a sign-in, so the shapes are
+  proportioned from the catalogue images and every dimension that exists
+  in public is exact. The chassis block of each was built BY TOUCH on the
+  simulator (Sketch › Rect drag, the rect's width and height typed as
+  dimensions, Extrude with a typed distance, the History row's distance
+  field), then `scripts/rebuild_composite_robots.py` adopts that body by
+  its bounding box and carries on with the same palette operations
+  (fillets, chamfer, draft extrude, subtract, union ×n, Transform › Rotate
+  for the arm pose), checking every primitive's volume against its
+  analytic and every union for growth; both documents end at 0 invalid
+  B-reps with the chassis footprints exact to the mm. The touch pass
+  found five real app errors, all fixed the same day (gotchas 34–38): a
+  Rect-tool rectangle could not be dimensioned at all, every in-place
+  feature dropped a moved body's placement, `/v1/edges` and `/v1/faces`
+  reported local coordinates against world-space bounds, the extrude
+  bar's Distance field silently commits its stale value from a button
+  tap, and Zoom to Fit ignores sketches. Report:
+  `docs/COMPOSITE_ROBOTS_UI_REPORT.md` (the published page's source).
+
 - **Rebuild regression retest + first HOLLOW-CASTING part (2026-09-01, late;
   suite 1128/1128).** Every prior rebuild script passes again in a fresh
   document (TraceParts wheel/nut/flange ALL PASS; FreeCAD angle exact both
@@ -370,6 +393,11 @@ plane sections, exact face areas, holed-sweep naming, CSG-free render meshes):
   base r28; revolve to 0.05 % of Pappus, 1.5 mm shell with the mouth open,
   two lip fillets) took gotchas 30–33 to get through — a resolver hang, a
   cap normal, C0 splines and the outward shell — all real app errors.
+  Next day (2026-09-03) the two TraceParts composite robots
+  (`scripts/rebuild_composite_robots.py`, chassis blocks built by touch)
+  added gotchas 34–38 the same way; what is NOT exact there is the arm
+  link geometry, which no public drawing gives (scaled to the published
+  reach), and the ROKAE arm's mounting position, read off a 456-px image.
 - ~~Scale as a node~~ — landed 2026-09-02 (below): the composition carries a
   uniform scale (`Transform3D.composed(onto:)`, `delta(from:to:)`), the
   B-rep placement already did (`gp_Trsf::SetValues` admits it), the volume
@@ -412,7 +440,9 @@ plane sections, exact face areas, holed-sweep naming, CSG-free render meshes):
   re-uploading all buffers per tick, measurement caching; S3 untouched.
   Gotcha 26 below.
 
-**Current test baseline (2026-09-02, evening): 1248 unit tests in ~21s** — the
+**Current test baseline (2026-09-03): 1250 unit tests in ~27s** — the rect
+width/height dimension solve and the fillet-keeps-placement regression on
+top of the previous line: **(2026-09-02, evening): 1248 unit tests in ~21s** — the
 day added the exact helix spine, the BEG 55 lineup's bounds/mirror fixes,
 transform-as-a-feature, consumed-edge drafts on both offset paths, plane
 sections (`SectionKit`, `KernelSectionTests`), the exact face areas, and the
@@ -1315,6 +1345,60 @@ first differing frame is the one you want.
     edges and corners (arc joins), which the analytic in
     `testNegativeThicknessShellsOutward` accounts for. Exec accepts a
     non-zero thickness; the History field takes a negative value.
+
+34. **A Rect-tool rectangle could not be dimensioned at all.** A rect is
+    ONE sketch entity whose only solver points are its two corners, and
+    the dimension candidate only knew lines, points and radii — select a
+    rect and the palette's Dimension stayed grey. Now `DimensionKind`
+    has `.horizontal` / `.vertical` (an `AxisDistanceConstraint` between
+    two points along one axis, sign captured as drawn so the box never
+    flips through zero), a selected rect offers its width as the palette
+    candidate and its height as a second label, and both fields take the
+    evaluator's arithmetic ("0.5*0+230" is the quickest way to replace a
+    pre-filled value from a hardware keyboard, which cannot select-all).
+    `testRectWidthAndHeightDimensionsDriveItsCorners`.
+
+35. **Every in-place feature rebuilt its body with `transform: .identity`,
+    so the first fillet after a Transform › Move snapped the body back to
+    where it was drawn.** Fillet, chamfer, shell, delete/replace face and
+    the face pushes all consumed a LOCAL brep and emitted an identity
+    placement; booleans and extrude-into-target bake placements and were
+    fine. The ROKAE deck (moved 154 mm up onto the axes, then rounded)
+    landed back at sketch height and the lidar-notch cut that followed
+    removed nothing. They keep `body.transform` now
+    (`testFilletAfterAMoveKeepsThePlacement`). Note a reopened document
+    shows the PERSISTED bodies until something re-evaluates the graph.
+
+36. **`/v1/edges` midpoints and `/v1/faces` centroids/normals were LOCAL
+    while `/v1/state` bounds are world.** After a move the two disagreed
+    by exactly the move, and "the vertical edges between y=40 and 270"
+    matched nothing. Both endpoints now apply the body's placement
+    (normals through its rotation).
+
+37. **The extrude bar's Distance field is a formatted numeric field: it
+    takes no arithmetic, and a tap on the Extrude button commits whatever
+    value the model already holds, not the text still in the field.** Type
+    the number and press Return (the field's `onSubmit` is what commits);
+    "0*0+630" + Extrude yielded a silent zero-distance no-op with no
+    error. The dimension field, the arrow pill and the History rows all
+    evaluate expressions — the bar is the odd one out. Also: with
+    Symmetric on, Distance is PER SIDE (630 gave a 1,260 mm body; the
+    History row's "630/2" fixed it).
+
+38. **Zoom to Fit frames bodies only (`worldBounds` iterates bodies), so a
+    950 mm sketch on an empty document stays off-screen; Look at Sketch
+    keeps the zoom.** Pinch out to reach a far dimension label, or use
+    the palette's Dimension button, whose field opens focused even when
+    the label itself is off-screen. Live-driving notes that are not app
+    errors: the undo stack holds 50 entries (an agent build of ~60
+    commands cannot be fully undone — adopt or delete the remainder),
+    OCCT's fuse refuses two configurations a person will hit posing arm
+    links — a link end face lying in a plane through its joint housing's
+    axis, and a link whose diameter equals the housing's length (tangent
+    to both end caps); starting each link 10 mm past the axis and keeping
+    housings a few mm larger than their links joins every time — and a
+    boolean that OCCT refuses leaves the target's volume EXACTLY as it
+    was, so a union check must demand growth, not a ratio.
 
 ---
 

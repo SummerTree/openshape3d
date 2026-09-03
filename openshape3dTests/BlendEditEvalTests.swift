@@ -92,6 +92,39 @@ final class BlendEditEvalTests: XCTestCase {
         ])
     }
 
+    /// A body that was MOVED (Transform › Move records a transform node whose
+    /// delta rides in the body's placement) keeps that placement through an
+    /// in-place edit. Every in-place evaluator used to rebuild its output
+    /// with `transform: .identity`, so the first fillet after a move snapped
+    /// the body back to where it was drawn — the ROKAE chassis deck (moved
+    /// 154 mm up onto the axes, then corner-rounded) landed back at its
+    /// sketch height and the lidar-notch cut that followed removed nothing.
+    func testFilletAfterAMoveKeepsThePlacement() throws {
+        let refs = try edgeRefs(2)
+        let moveFeature = FeatureID()
+        var delta = Transform3D()
+        delta.translation = SIMD3(0, 154, 0)
+        let graph = FeatureGraph(nodes: [
+            boxNode(),
+            FeatureNode(id: moveFeature, name: "Move",
+                        kind: .transform(body: bodyRef, delta: delta),
+                        outputBodyIDs: [BodyID()]),
+            FeatureNode(id: blendFeature, name: "Fillet",
+                        kind: .fillet(body: BodyRef(producer: moveFeature, bodyID: boxID),
+                                      edges: refs, radius: Expr(value: 1.5)),
+                        outputBodyIDs: [boxID]),
+        ])
+        let result = evaluate(graph)
+        XCTAssertNil(result.errors[blendFeature], "fillet after a move must evaluate: \(result.errors)")
+        let body = try XCTUnwrap(result.bodies.first { $0.id == boxID })
+        XCTAssertEqual(body.transform.translation.y, 154, accuracy: 1e-9,
+                       "the move's placement survives the fillet")
+        XCTAssertLessThan(volume(body), boxVolume, "and the fillet really happened")
+        let world = MeasureKit.boundingBox(bodies: [body])
+        XCTAssertEqual(try XCTUnwrap(world).min.y, 154, accuracy: 1e-3,
+                       "world bounds sit where the move put the body")
+    }
+
     // MARK: - Recovering the input body
 
     /// Truncating the graph at the blend node yields the body the blend

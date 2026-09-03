@@ -9569,6 +9569,10 @@ final class EditorViewModel {
         selectedSketchEntities.filter { if case .line = $0 { return true }; return false }
     }
 
+    private var selectedRectEntities: [SketchEntity] {
+        selectedSketchEntities.filter { if case .rect = $0 { return true }; return false }
+    }
+
     private var selectedRadiusEntities: [SketchEntity] {
         selectedSketchEntities.filter {
             switch $0 {
@@ -9702,6 +9706,8 @@ final class EditorViewModel {
         case .radius: "Radius " + String(format: "%.2f mm", d.value)
         case .diameter: "Diameter " + String(format: "%.2f mm", d.value)
         case .angle: "Angle " + String(format: "%.1f°", d.value * 180 / .pi)
+        case .horizontal: "Width " + String(format: "%.2f mm", d.value)
+        case .vertical: "Height " + String(format: "%.2f mm", d.value)
         }
     }
 
@@ -10015,6 +10021,8 @@ final class EditorViewModel {
             case .radius: code = "R"
             case .diameter: code = "⌀"
             case .angle: code = "∠"
+            case .horizontal: code = "↔"
+            case .vertical: code = "↕"
             }
             return (id: d.id, code: code, title: title)
         }
@@ -10105,6 +10113,18 @@ final class EditorViewModel {
             guard let a = localPoint(refs[0], in: sketch),
                   let b = localPoint(refs[1], in: sketch) else { return nil }
             return ((a + b) / 2, a, b)
+        case .horizontal, .vertical:
+            // Drawn along the lower (width) or right-hand (height) side of
+            // the box the two points span, where a rect's sides are.
+            guard refs.count == 2, let a = localPoint(refs[0], in: sketch),
+                  let b = localPoint(refs[1], in: sketch) else { return nil }
+            let lo = SIMD2(min(a.x, b.x), min(a.y, b.y)), hi = SIMD2(max(a.x, b.x), max(a.y, b.y))
+            if kind == .horizontal {
+                let s = lo, e = SIMD2(hi.x, lo.y)
+                return ((s + e) / 2, s, e)
+            }
+            let s = SIMD2(hi.x, lo.y), e = hi
+            return ((s + e) / 2, s, e)
         case .radius, .diameter:
             guard let ref = refs.first,
                   let e = sketchEntity(ref.entityID, in: sketch),
@@ -10138,6 +10158,10 @@ final class EditorViewModel {
         case .distance:
             guard let g = dimensionGeometry(kind: kind, refs: refs, in: sketch) else { return nil }
             return simd_distance(g.start, g.end)
+        case .horizontal, .vertical:
+            guard refs.count == 2, let a = localPoint(refs[0], in: sketch),
+                  let b = localPoint(refs[1], in: sketch) else { return nil }
+            return kind == .horizontal ? abs(b.x - a.x) : abs(b.y - a.y)
         case .radius:
             guard let ref = refs.first, let e = sketchEntity(ref.entityID, in: sketch) else { return nil }
             return Self.entityRadius(e)
@@ -10189,7 +10213,19 @@ final class EditorViewModel {
         if radii.count == 1, lines.isEmpty, pts.isEmpty {
             return (.radius, [ConstraintRef(entityID: radii[0].id, role: .whole)])
         }
+        // Single rectangle → width (its height is offered as a second label;
+        // see `sketchDimensionLabels`). A rect's solver points are its two
+        // corners, so width/height are axis distances between them, not the
+        // corner-to-corner `.distance` — that would dimension the diagonal.
+        if let rect = selectedRectEntities.first, selectedRectEntities.count == 1,
+           lines.isEmpty, radii.isEmpty, pts.isEmpty {
+            return (.horizontal, Self.rectCornerRefs(rect.id))
+        }
         return nil
+    }
+
+    static func rectCornerRefs(_ id: UUID) -> [ConstraintRef] {
+        [ConstraintRef(entityID: id, role: .endpointA), ConstraintRef(entityID: id, role: .endpointB)]
     }
 
     /// True when the palette Dimension action can act on the selection.
@@ -10242,16 +10278,23 @@ final class EditorViewModel {
 
         // Live candidate — skip if an existing dimension already covers the
         // same refs+kind (so we don't double-draw once it's committed).
-        if let cand = dimensionCandidate {
-            let refSet = Set(cand.refs.map { "\($0.entityID)-\($0.role.rawValue)" })
+        func appendCandidate(id: String, kind: DimensionKind, refs: [ConstraintRef]) {
+            let refSet = Set(refs.map { "\($0.entityID)-\($0.role.rawValue)" })
             let existing = sketch.dimensions.contains { d in
-                d.kind == cand.kind &&
+                d.kind == kind &&
                 Set(d.refs.map { "\($0.entityID)-\($0.role.rawValue)" }) == refSet
             }
-            if !existing, let value = measuredValue(kind: cand.kind, refs: cand.refs, in: sketch),
-               let label = makeLabel(id: "candidate", dimensionID: nil,
-                                     kind: cand.kind, refs: cand.refs, value: value) {
+            if !existing, let value = measuredValue(kind: kind, refs: refs, in: sketch),
+               let label = makeLabel(id: id, dimensionID: nil, kind: kind, refs: refs, value: value) {
                 labels.append(label)
+            }
+        }
+        if let cand = dimensionCandidate {
+            appendCandidate(id: "candidate", kind: cand.kind, refs: cand.refs)
+            // A selected rectangle offers both its width (the palette's
+            // candidate) and its height, each an editable label on its side.
+            if cand.kind == .horizontal {
+                appendCandidate(id: "candidate-vertical", kind: .vertical, refs: cand.refs)
             }
         }
         return labels

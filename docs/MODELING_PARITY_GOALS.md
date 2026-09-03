@@ -72,7 +72,10 @@ was driven step-by-step against the app on the iPad simulator. It is a good
 parity yardstick because it is the *first* thing a new Shapr3D user does, so
 anything missing there is a wall, not a nicety.
 
-**Held up:** dimension-on-select with typed values driving the solver;
+**Held up:** dimension-on-select with typed values driving the solver
+(with one hole until 2026-09-03: a Rect-tool rectangle offered no
+dimension at all — its solver points are two corners, so width/height are
+the new `.horizontal`/`.vertical` axis-distance kinds, one label per side);
 the constraint menu with hotkey letters and context-sensitive enablement;
 auto-constraints while drawing (`H` badge); tap-a-profile → pull arrow with
 live drag and a typed distance; the boolean-result selector

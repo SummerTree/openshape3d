@@ -601,7 +601,15 @@ final class AgentBridge {
                 "faces": [triple.faceA, triple.faceB],
             ]
             if let mid = midpointByEdge[triple.edge] {
-                row["midpoint"] = [Double(mid.x), Double(mid.y), Double(mid.z)]
+                // WORLD space, like /v1/state's bounds: the render mesh and
+                // the brep are both in the body's local frame, and a body
+                // that has been moved (Transform › Move/Rotate, or a
+                // feature.transform) carries that move in `transform`. A
+                // caller picking "the vertical edges between y=40 and 270"
+                // must see the same numbers the bounds report.
+                let world = context.body.transform.applying(
+                    to: SIMD3(Double(mid.x), Double(mid.y), Double(mid.z)))
+                row["midpoint"] = [world.x, world.y, world.z]
             }
             if let length = lengthByEdge[triple.edge] { row["lengthMM"] = length }
             if let convex = convexByEdge[triple.edge] { row["convex"] = convex }
@@ -637,12 +645,17 @@ final class AgentBridge {
         // (measured 2026-09-01, two faces both claiming index 1). Face
         // geometry from the brep itself cannot misalign and cannot go stale.
         let names = freshNames(for: context.body, session)
+        // Centroids and normals in WORLD space (see listEdges): the brep is
+        // local, the body's `transform` carries any move/rotate it has had.
+        let placement = context.body.transform
         let rows = OCCTKernel.faceInfo(context.brep).map { info -> [String: Any] in
+            let centroid = placement.applying(to: info.centroid)
+            let normal = simd_normalize(placement.rotation.act(info.normal))
             var row: [String: Any] = [
                 "index": info.index,
                 "areaMM2": info.area,
-                "centroid": [info.centroid.x, info.centroid.y, info.centroid.z],
-                "normal": [info.normal.x, info.normal.y, info.normal.z],
+                "centroid": [centroid.x, centroid.y, centroid.z],
+                "normal": [normal.x, normal.y, normal.z],
             ]
             switch info.signature?.kind {
             case .planar:

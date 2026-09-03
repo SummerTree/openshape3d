@@ -72,6 +72,13 @@ nonisolated enum DimensionKind: String, Codable, Equatable, Sendable {
     case radius
     case diameter
     case angle
+    /// Distance between two points measured along the sketch X axis only —
+    /// a rectangle's width (its two corners are its only solver points, so
+    /// a plain `.distance` between them would dimension the diagonal).
+    case horizontal
+    /// Distance between two points measured along the sketch Y axis only —
+    /// a rectangle's height.
+    case vertical
 }
 
 /// A driving dimension: a measured value the solver drives geometry to satisfy.

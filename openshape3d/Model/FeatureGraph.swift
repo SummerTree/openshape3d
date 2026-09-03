@@ -1138,7 +1138,7 @@ nonisolated extension FeatureGraph {
             return
         }
         let result = Body(
-            id: body.id, name: body.name, transform: .identity, primitive: nil,
+            id: body.id, name: body.name, transform: body.transform, primitive: nil,
             euclidMesh: mesh, revision: nextRevision())
         // Carry the old labels forward through the push/pull.
         let newTable: FaceTable
@@ -1188,7 +1188,7 @@ nonisolated extension FeatureGraph {
             return
         }
         let result = Body(
-            id: body.id, name: body.name, transform: .identity, primitive: nil,
+            id: body.id, name: body.name, transform: body.transform, primitive: nil,
             euclidMesh: mesh, revision: nextRevision())
         let newTable: FaceTable
         if let table {
@@ -1229,7 +1229,7 @@ nonisolated extension FeatureGraph {
             return
         }
         let result = Body(
-            id: body.id, name: body.name, transform: .identity, primitive: nil,
+            id: body.id, name: body.name, transform: body.transform, primitive: nil,
             euclidMesh: mesh, revision: nextRevision())
         let newTable: FaceTable
         if let table {
@@ -1279,7 +1279,7 @@ nonisolated extension FeatureGraph {
             return
         }
         let result = Body(
-            id: body.id, name: body.name, transform: .identity, primitive: nil,
+            id: body.id, name: body.name, transform: body.transform, primitive: nil,
             euclidMesh: mesh, revision: nextRevision())
         let newTable: FaceTable
         if let table {
@@ -1341,7 +1341,7 @@ nonisolated extension FeatureGraph {
                 switch blended {
                 case let .success((handle, ancestry)):
                     var result = Body(
-                        id: body.id, name: body.name, transform: .identity,
+                        id: body.id, name: body.name, transform: body.transform,
                         primitive: nil, euclidMesh: body.euclidMesh(),
                         revision: nextRevision())
                     guard result.adoptBRep(handle) else {
@@ -1460,7 +1460,7 @@ nonisolated extension FeatureGraph {
                 return
             }
             var result = Body(
-                id: body.id, name: body.name, transform: .identity, primitive: nil,
+                id: body.id, name: body.name, transform: body.transform, primitive: nil,
                 euclidMesh: body.euclidMesh(), revision: nextRevision())
             guard result.adoptBRep(blended) else {
                 state.errors[node.id] = .emptyGeometry
@@ -1479,7 +1479,7 @@ nonisolated extension FeatureGraph {
             return
         }
         let result = Body(
-            id: body.id, name: body.name, transform: .identity, primitive: nil,
+            id: body.id, name: body.name, transform: body.transform, primitive: nil,
             euclidMesh: mesh, revision: nextRevision())
         // A blend changes face count/areas; relabel by geometry. Downstream
         // FaceRefs re-resolve by signature scoring against the surviving faces.
@@ -1543,7 +1543,7 @@ nonisolated extension FeatureGraph {
                 tolerance: OCCTKernel.matchTolerance(for: brep)) {
             case let .success((hollow, ancestry)):
                 var result = Body(
-                    id: body.id, name: body.name, transform: .identity, primitive: nil,
+                    id: body.id, name: body.name, transform: body.transform, primitive: nil,
                     euclidMesh: body.euclidMesh(), revision: nextRevision())
                 guard result.adoptBRep(hollow) else {
                     state.errors[node.id] = .emptyGeometry
@@ -1577,7 +1577,7 @@ nonisolated extension FeatureGraph {
             return
         }
         let result = Body(
-            id: body.id, name: body.name, transform: .identity, primitive: nil,
+            id: body.id, name: body.name, transform: body.transform, primitive: nil,
             euclidMesh: mesh, revision: nextRevision())
         // Shelling rebuilds every face; relabel by geometry like the blends.
         let newTable = state.naming.faceTable(for: result, createdBy: node.id, scheme: .generic)
@@ -1643,7 +1643,7 @@ nonisolated extension FeatureGraph {
             return
         }
         var result = Body(
-            id: body.id, name: body.name, transform: .identity, primitive: nil,
+            id: body.id, name: body.name, transform: body.transform, primitive: nil,
             euclidMesh: body.euclidMesh(), revision: nextRevision())
         guard result.adoptBRep(healed) else {
             state.errors[node.id] = .emptyGeometry
@@ -1713,7 +1713,7 @@ nonisolated extension FeatureGraph {
            let (replaced, ancestry) = ReplaceFaceKit.applyBRepWithAncestry(
                 to: brep, face: planar, plan: plan) {
             result = Body(
-                id: body.id, name: body.name, transform: .identity, primitive: nil,
+                id: body.id, name: body.name, transform: body.transform, primitive: nil,
                 render: body.render, revision: nextRevision())
             guard result.adoptBRep(replaced) else {
                 state.errors[node.id] = .emptyGeometry
@@ -1735,7 +1735,7 @@ nonisolated extension FeatureGraph {
                 return
             }
             result = Body(
-                id: body.id, name: body.name, transform: .identity, primitive: nil,
+                id: body.id, name: body.name, transform: body.transform, primitive: nil,
                 euclidMesh: mesh, revision: nextRevision())
         }
         // Roles relabel by geometry; the IDENTITIES that survived the boolean

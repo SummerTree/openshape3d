@@ -600,6 +600,16 @@ nonisolated enum SketchSolverBridge {
                 if let (a1, b1, a2, b2) = twoLines(d.refs) {
                     lower(AngleConstraint(l1A: a1, l1B: b1, l2A: a2, l2B: b2, angle: d.value))
                 }
+            case .horizontal, .vertical:
+                // Width / height between two points (a rect's corners). The
+                // orientation sign comes from the geometry as drawn so the
+                // solver drives the pair apart or together, never through zero.
+                let axis = d.kind == .horizontal ? 0 : 1
+                if d.refs.count == 2, let p0 = pointOperand(d.refs[0]), let p1 = pointOperand(d.refs[1]) {
+                    let drawn = initial[2 * p1 + axis] - initial[2 * p0 + axis]
+                    lower(AxisDistanceConstraint(pA: p0, pB: p1, axis: axis,
+                                                 sign: drawn >= 0 ? 1 : -1, distance: d.value))
+                }
             }
         }
 
