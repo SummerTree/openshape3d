@@ -1218,6 +1218,17 @@ struct EditorView: View {
                         .controlSize(.small)
                         .keyboardShortcut(.cancelAction)
                     }
+                } else if case .pickingFeatureFace = viewModel.mode {
+                    statusPill(
+                        icon: "square.on.square.dashed",
+                        text: viewModel.featureFacePickPrompt ?? "Tap the face"
+                    ) {
+                        Button("Cancel") {
+                            viewModel.cancelFeatureFacePick()
+                        }
+                        .controlSize(.small)
+                        .keyboardShortcut(.cancelAction)
+                    }
                 } else if case .pickingRevolveAxis = viewModel.mode {
                     statusPill(
                         icon: "arrow.triangle.2.circlepath",

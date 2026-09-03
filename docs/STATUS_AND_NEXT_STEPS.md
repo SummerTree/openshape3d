@@ -347,10 +347,12 @@ plane sections, exact face areas, holed-sweep naming, CSG-free render meshes):
   all of them: an errored row shows its re-pick inline under the error
   (`HistoryRepair-<name>`), and "Edit Body" on mirror / pattern /
   transform rows through a generic body-pick mode
-  (`pickingFeatureBody`, `HistoryBodyEditTests`). Left: re-pick for the
-  creators' profiles / planes / axes (and with them their boolean intent)
-  and the face of push-pull / move / scale / rotate face; then G9's
-  per-tool variants sit on top.
+  (`pickingFeatureBody`, `HistoryBodyEditTests`), and "Edit Face" on
+  push-pull / move / scale / rotate-face rows (`pickingFeatureFace`,
+  `HistoryFaceOperandEditTests`). Left: re-pick for the creators'
+  profiles / planes / axes (and with them their boolean intent — the one
+  reference family without a re-pick), the radial push/pull's cylindrical
+  face; then G9's per-tool variants sit on top.
 - ~~Scale as a node~~ — landed 2026-09-02 (below): the composition carries a
   uniform scale (`Transform3D.composed(onto:)`, `delta(from:to:)`), the
   B-rep placement already did (`gp_Trsf::SetValues` admits it), the volume
@@ -393,7 +395,7 @@ plane sections, exact face areas, holed-sweep naming, CSG-free render meshes):
   re-uploading all buffers per tick, measurement caching; S3 untouched.
   Gotcha 26 below.
 
-**Current test baseline (2026-09-02, evening): 1241 unit tests in ~21s** — the
+**Current test baseline (2026-09-02, evening): 1243 unit tests in ~21s** — the
 day added the exact helix spine, the BEG 55 lineup's bounds/mirror fixes,
 transform-as-a-feature, consumed-edge drafts on both offset paths, plane
 sections (`SectionKit`, `KernelSectionTests`), the exact face areas, and the

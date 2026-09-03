@@ -420,6 +420,13 @@ feature-produced / created-before rules as a boolean's tool, the node's
 operand rewritten with its options and delta untouched
 (`HistoryBodyEditTests`: a mirror re-sourced from A to B replays across the
 plane at B; a transform re-targeted; a late body refused; cancel inert).
+**Edit Face** on push/pull / move / scale / rotate-face rows closed the
+operand set (`pickingFeatureFace`, `beginFeatureFaceEdit`): the tap is
+re-resolved on the CONSUMED body (the document's copy already carries the
+push), the planar `FaceRef` is minted with the tools' own signature and box
+role, the node keeps its distance / delta / factor / angle; a radial
+push/pull (cylindrical face) refuses for now. `HistoryFaceOperandEditTests`
+moves a push from a box's top to its +x side and watches the bounds swap.
 Still open in G8: the
 reference rows (re-pick profile / body / faces / edges), the boolean
 INTENT of extrude / revolve / sweep / loft (changing new-body → subtract

@@ -2620,6 +2620,7 @@ final class EditorViewModel {
         cancelSplitCutterPick()
         cancelBooleanPicking()
         cancelFeatureBodyPick()
+        cancelFeatureFacePick()
         cancelSectionPlanePick()
         cancelImagePlanePick()
         resetBlendState()
@@ -2966,6 +2967,7 @@ final class EditorViewModel {
         case .shell, .deleteFace: return "Edit Faces"
         case .boolean: return "Edit Tool"
         case .mirror, .pattern, .transform: return "Edit Body"
+        case .pushPull, .moveFace, .scaleFace, .rotateFace: return "Edit Face"
         default: return nil
         }
     }
@@ -2980,6 +2982,7 @@ final class EditorViewModel {
         case .deleteFace: return beginDeleteFaceEdit(id)
         case .boolean: return beginBooleanEdit(id)
         case .mirror, .pattern, .transform: return beginFeatureBodyEdit(id)
+        case .pushPull, .moveFace, .scaleFace, .rotateFace: return beginFeatureFaceEdit(id)
         default: return false
         }
     }
@@ -4987,6 +4990,8 @@ final class EditorViewModel {
             handleBooleanToolTap(kind: kind, targetID: targetID, ray: ray)
         case .pickingFeatureBody(let featureID):
             handleFeatureBodyTap(featureID: featureID, ray: ray)
+        case .pickingFeatureFace(let featureID):
+            handleFeatureFaceTap(featureID: featureID, ray: ray)
         case .pickingSplitCutter(let target):
             handleSplitCutterTap(target: target, ray: ray)
         case .patterning:
@@ -5537,6 +5542,119 @@ final class EditorViewModel {
 
     func cancelFeatureBodyPick() {
         if case .pickingFeatureBody = mode { mode = .idle }
+    }
+
+    // MARK: - Face operand re-pick (History "Edit Face" on push/pull and the face tools)
+
+    /// The body a face re-pick resolves against: the node's CONSUMED input,
+    /// replayed — the document's copy already carries the push / move.
+    private var featureFaceEditSource: Body?
+
+    /// The `FaceRef` a node's face operand holds, for the kinds that have one.
+    private static func faceOperand(of kind: FeatureKind) -> FaceRef? {
+        switch kind {
+        case let .pushPull(face, _, _): return face
+        case let .moveFace(face, _): return face
+        case let .scaleFace(face, _): return face
+        case let .rotateFace(face, _, _): return face
+        default: return nil
+        }
+    }
+
+    /// Re-enter a face pick for an existing push/pull / move / scale /
+    /// rotate-face node. False for other kinds, a radial push/pull (its face
+    /// is cylindrical — the pick here is planar), or an input that cannot be
+    /// replayed.
+    @discardableResult
+    func beginFeatureFaceEdit(_ id: FeatureID) -> Bool {
+        guard let node = session.document.features.node(id),
+              let face = Self.faceOperand(of: node.kind) else { return false }
+        if case .pushPull(_, _, .cylinderRadial) = node.kind {
+            errorMessage = "A radial push/pull follows a cylindrical face — re-pick is planar-only for now."
+            return false
+        }
+        guard let source = session.inputBody(for: id, bodyID: face.body.bodyID) else {
+            errorMessage = "Couldn't rebuild the shape this \(node.name.lowercased()) started from."
+            return false
+        }
+        cancelTransientPicks()
+        cancelTool()
+        featureFaceEditSource = source
+        selection = session.document.body(with: face.body.bodyID) != nil ? [face.body.bodyID] : []
+        mode = .pickingFeatureFace(id)
+        return true
+    }
+
+    func cancelFeatureFacePick() {
+        featureFaceEditSource = nil
+        if case .pickingFeatureFace = mode { mode = .idle }
+    }
+
+    /// The status pill's prompt while a face operand is being re-picked.
+    var featureFacePickPrompt: String? {
+        guard case let .pickingFeatureFace(id) = mode,
+              let node = session.document.features.node(id) else { return nil }
+        return "Tap the face for \(node.name)"
+    }
+
+    /// A planar `FaceRef` on `source` from a seed triangle — the signature
+    /// `pushPullFaceRef` mints, without needing a tool context.
+    private func planarFaceRef(on source: Body, seedTriangle seed: Int, bodyRef: BodyRef) -> FaceRef? {
+        guard let face = FaceTopology.planarFace(in: source.render, seedTriangle: seed) else { return nil }
+        let n = SIMD3<Double>(Double(face.normal.x), Double(face.normal.y), Double(face.normal.z))
+        var area = abs(Profile.signedArea(face.outline))
+        for hole in face.holes { area -= abs(Profile.signedArea(hole)) }
+        let signature = FaceSignature(
+            kind: .planar, normal: n, centroid: face.origin,
+            area: max(area, 0), planeOffset: simd_dot(n, face.origin))
+        let role: FaceRole
+        if case .primitive(let spec, _)? = session.document.features.node(bodyRef.producer)?.kind,
+           case .box = spec {
+            role = .boxFace(Self.boxFace(for: n))
+        } else {
+            role = .derived(index: 0)
+        }
+        return FaceRef(body: bodyRef, creator: bodyRef.producer, role: role, signature: signature,
+                       elementName: mintElementName(body: source, triangle: seed))
+    }
+
+    private func handleFeatureFaceTap(featureID: FeatureID, ray: Ray) {
+        guard let node = session.document.features.node(featureID),
+              let current = Self.faceOperand(of: node.kind),
+              let source = featureFaceEditSource
+        else { cancelFeatureFacePick(); return }
+        guard let hit = HitTester.pickBody(ray: ray, in: scene) else { return }
+        // The edit stays on its own body.
+        guard hit.bodyID == current.body.bodyID else { return }
+        // The document's copy already carries the push / move: re-pick the
+        // face on the replayed INPUT (the shell and delete-face edits' trap).
+        let originalScene = ViewportScene(bodies: [BodyDrawable(
+            id: source.id, renderMesh: source.render, edges: source.edges,
+            meshRevision: source.meshRevision, modelMatrix: source.transform.matrixFloat,
+            baseColor: SIMD4(0.72, 0.74, 0.78, 1), selectionState: SelectionStateNone.rawValue)])
+        guard let originalHit = HitTester.pickBody(ray: ray, in: originalScene),
+              let ref = planarFaceRef(on: source, seedTriangle: originalHit.triangleIndex, bodyRef: current.body)
+        else {
+            errorMessage = "Tap a flat face — only planar faces can be re-picked here."
+            return
+        }
+        let after: FeatureKind
+        switch node.kind {
+        case let .pushPull(_, distance, pushMode): after = .pushPull(face: ref, distance: distance, mode: pushMode)
+        case let .moveFace(_, delta): after = .moveFace(face: ref, delta: delta)
+        case let .scaleFace(_, factor): after = .scaleFace(face: ref, factor: factor)
+        case let .rotateFace(_, angle, axis): after = .rotateFace(face: ref, angle: angle, axis: axis)
+        default: cancelFeatureFacePick(); return
+        }
+        let bodyID = current.body.bodyID
+        cancelFeatureFacePick()
+        prepareForHistoryChange()
+        session.editFeature(featureID, to: after)
+        session.save()
+        if session.document.body(with: bodyID) != nil {
+            selection = [bodyID]
+            mode = .selected(bodyID)
+        }
     }
 
     /// The status pill's prompt while a body operand is being re-picked.

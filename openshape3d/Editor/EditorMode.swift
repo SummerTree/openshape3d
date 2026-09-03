@@ -79,6 +79,11 @@ enum EditorMode: Equatable {
     /// transform node (History "Edit Body"): the next tapped body becomes
     /// the node's operand and the rebuild replays it.
     case pickingFeatureBody(FeatureID)
+    /// Re-picking the FACE operand of an existing push/pull / move / scale /
+    /// rotate-face node (History "Edit Face"): the next tapped planar face
+    /// on the node's body — resolved on the body the feature CONSUMED —
+    /// becomes its face.
+    case pickingFeatureFace(FeatureID)
     /// Pattern bar active (linear/circular); parameters live in
     /// `EditorViewModel.patternState`, instances preview as ghosts.
     case patterning
