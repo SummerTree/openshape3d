@@ -289,6 +289,13 @@ nonisolated enum ProjectMergeKit {
                 // Angle + axis are intrinsic to the face's basis, so a translation
                 // only remaps the face reference.
                 return .rotateFace(face: remap(face, translation: t), angle: angle, axis: axis)
+            case let .draftFace(face, origin, normal, angle):
+                // The neutral plane is a WORLD plane, so its origin travels with
+                // the merge while its normal (a direction) does not.
+                return .draftFace(
+                    face: remap(face, translation: t),
+                    neutralOrigin: PointWrapper(origin.point + t),
+                    neutralNormal: normal, angle: angle)
             case let .chamfer(body, edges, setback):
                 return .chamfer(body: remap(body),
                                 edges: edges.map { remap($0, translation: t) },

@@ -81,6 +81,30 @@ design), `FREECAD_PLAYBOOK.md` (the FreeCAD-derived hardening ledger),
   count: the deferred sheets are drawings whose callouts don't fix the
   geometry or whose printed volume no reading matches.
 
+- **Draft of an existing face (2026-09-03).** The next capability gap the
+  sheets named (Level 12's "ALL DRAFT 5°", Levels 13's shelled castings):
+  `KernelOps.draftFace` tapers a resolved planar face about the line where
+  it meets a world NEUTRAL PLANE. It is a **shear, not a rotation**, and
+  that is the whole design: the first version routed through `rotateFace`
+  with a pivot and failed its own tests, because a rigid rotation carries
+  the wall's top edge along an ARC — the edge drops by h(1 − cos θ), which
+  drags the adjacent top face out of plane and shortens the part. Draft
+  must leave every neighbouring face exactly where it is, so each vertex
+  moves within its own height instead: `p' = p − tanθ · h · f⊥`, where h is
+  the height above the neutral plane and f⊥ the face normal with the
+  neutral direction removed. Points on the neutral plane do not move and
+  the wall meets the top face h·tanθ in — the number a draft callout means.
+  Recorded as a `.draftFace` graph node (History row "Draft Face 5°"), and
+  driven over the bridge by `feature.draftFace` {face, angleDegrees,
+  neutralOrigin, neutralNormal}. Live: one wall of a 100 × 60 × 20 block at
+  5° removes 1049.86 mm³ against the closed form's 1049.86.
+  **Known limit:** like every other face-deformation op (move/scale/rotate
+  face), it works on the Euclid mesh, so the drafted body comes back
+  mesh-only — `/v1/check` reports no brep. An OCCT `BRepOffsetAPI_DraftAngle`
+  path is the follow-up if a sheet needs an exact drafted casting.
+  `DraftFaceTests` (6): the wedge ½h²·tanθ·d, the sign, the four-wall
+  frustum, and the refusal when the face is parallel to the neutral plane.
+
 - **Two TraceParts composite robots rebuilt THROUGH THE UI (2026-09-03;
   suite 1250/1250).** ROKAE CMR-ST600-CR12-C (chassis 950 × 630 × 768 from
   its TraceParts spec table, CR12 arm at the 1,434 mm datasheet reach) and

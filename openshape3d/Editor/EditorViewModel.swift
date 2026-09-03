@@ -12199,6 +12199,8 @@ final class EditorViewModel {
             return "Scale Face ×\(fmt(factor.value))"
         case let .rotateFace(_, angle, _):
             return "Rotate Face \(fmt(angle.value * 180 / .pi))°"
+        case let .draftFace(_, _, _, angle):
+            return "Draft Face \(fmt(angle.value))°"
         case let .revolve(_, _, _, angle, _):
             return "Revolve \(fmt(angle.value))°"
         case .sweep: return "Sweep"

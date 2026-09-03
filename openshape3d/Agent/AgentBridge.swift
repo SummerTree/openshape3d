@@ -383,6 +383,10 @@ final class AgentBridge {
         case let .deleteFace(bodyID, faces):
             return execDeleteFace(body: bodyID, faces: faces, on: viewModel)
 
+        case let .draftFace(bodyID, face, neutralOrigin, neutralNormal, angleDegrees):
+            return execDraftFace(body: bodyID, face: face, neutralOrigin: neutralOrigin,
+                                 neutralNormal: neutralNormal, degrees: angleDegrees,
+                                 on: viewModel)
         case let .replaceFace(bodyID, face, origin, normal, flip):
             return execReplaceFace(body: bodyID, face: face,
                                    targetOrigin: origin, targetNormal: normal,
@@ -832,6 +836,35 @@ final class AgentBridge {
         return record(FeatureNode(
             name: "Delete Face",
             kind: .deleteFace(body: ref, faces: refs),
+            outputBodyIDs: [bodyID]), on: viewModel)
+    }
+
+    /// feature.draftFace: taper an existing face about its intersection with a
+    /// world neutral plane (spec: SOLIDWORKS Draft). Recorded as a graph node,
+    /// so it replays and shows in History like every other feature.
+    private func execDraftFace(body bodyID: BodyID, face: Int,
+                               neutralOrigin: SIMD3<Double>,
+                               neutralNormal: SIMD3<Double>,
+                               degrees: Double,
+                               on viewModel: EditorViewModel) -> AgentResponse {
+        let session = viewModel.session
+        let context: (body: Body, brep: BRepHandle)
+        switch identityContext(bodyID, session) {
+        case let .ok(body, brep): context = (body, brep)
+        case let .reply(reply): return reply
+        }
+        let ref = bodyRef(bodyID, session)
+        let refs: [FaceRef]
+        switch mintFaceRefs([face], context: context, bodyRef: ref, session) {
+        case let .ok(minted): refs = minted
+        case let .reply(reply): return reply
+        }
+        return record(FeatureNode(
+            name: "Draft Face",
+            kind: .draftFace(face: refs[0],
+                             neutralOrigin: PointWrapper(neutralOrigin),
+                             neutralNormal: PointWrapper(neutralNormal),
+                             angle: Expr(value: degrees)),
             outputBodyIDs: [bodyID]), on: viewModel)
     }
 

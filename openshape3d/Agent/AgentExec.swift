@@ -123,6 +123,11 @@ nonisolated enum AgentExecOp: Sendable, Equatable {
     /// Faces are 1-based kernel indices from `GET /v1/faces?body=` — OCCT
     /// heals the surrounding faces over the removed ones (spec §4.16).
     case deleteFace(body: BodyID, faces: [Int])
+    /// Draft an EXISTING face about its intersection with a world neutral
+    /// plane (SOLIDWORKS Draft). Positive narrows the body away from that
+    /// plane; the face keeps its neighbours' planes, unlike `rotateFace`.
+    case draftFace(body: BodyID, face: Int, neutralOrigin: SIMD3<Double>,
+                   neutralNormal: SIMD3<Double>, angleDegrees: Double)
     /// Extend/trim one face until it lies on the given world plane
     /// (spec §4.12). The target is a PLANE, not a face ref — same v1
     /// limitation as the interactive tool, for the same reason.
@@ -143,7 +148,7 @@ nonisolated enum AgentExec {
         "feature.fillet", "feature.chamfer", "feature.shell",
         "feature.sweep", "feature.loft", "feature.pushPull",
         "feature.moveFace", "feature.scaleFace", "feature.rotateFace",
-        "feature.deleteFace", "feature.replaceFace",
+        "feature.deleteFace", "feature.replaceFace", "feature.draftFace",
     ]
 
     static let booleanKinds = ["union", "subtract", "intersect"]
@@ -179,6 +184,7 @@ nonisolated enum AgentExec {
         case "feature.scaleFace":  return parseScaleFace(args)
         case "feature.rotateFace": return parseRotateFace(args)
         case "feature.deleteFace": return parseDeleteFace(args)
+        case "feature.draftFace":  return parseDraftFace(args)
         case "feature.replaceFace": return parseReplaceFace(args)
         default:
             return .failure(.init(code: "unknown_op",
@@ -572,6 +578,34 @@ nonisolated enum AgentExec {
                                       message: "\"factor\" must be > 0 (1.0 is no change)."))
             }
             return .success(.scaleFace(body: body, face: face, factor: factor))
+        } catch let e as AgentExecError { return .failure(e) } catch { return .failure(unexpected) }
+    }
+
+    private static func parseDraftFace(_ a: [String: Any]) -> Result<AgentExecOp, AgentExecError> {
+        do {
+            let (body, face) = try oneFace(a)
+            let angle = try angleDegrees(a, "angleDegrees", default: .nan)
+            guard angle.isFinite else {
+                return .failure(.init(code: "missing_angleDegrees",
+                                      message: "\"angleDegrees\" is required (the draft angle, ±89)."))
+            }
+            guard abs(angle) > 1e-9 else {
+                return .failure(.init(code: "zero_angle", message: "a zero draft does nothing."))
+            }
+            guard abs(angle) < 89 else {
+                return .failure(.init(code: "draft_too_steep",
+                                      message: "\"angleDegrees\" must be under 89° — at 90° the face folds flat."))
+            }
+            // The neutral plane is a WORLD plane: where the draft pivots and
+            // what nothing moves on. Defaults to the ground (y = 0, +Y up).
+            let origin = try vector3(a, "neutralOrigin", default: .zero)
+            let normal = try vector3(a, "neutralNormal", default: SIMD3(0, 1, 0))
+            guard simd_length(normal) > 1e-9 else {
+                return .failure(.init(code: "degenerate_normal",
+                                      message: "\"neutralNormal\" must be non-zero."))
+            }
+            return .success(.draftFace(body: body, face: face, neutralOrigin: origin,
+                                       neutralNormal: normal, angleDegrees: angle))
         } catch let e as AgentExecError { return .failure(e) } catch { return .failure(unexpected) }
     }
 

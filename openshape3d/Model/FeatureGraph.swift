@@ -187,6 +187,12 @@ nonisolated enum FeatureKind: Codable, Sendable {
     /// to the face and replays correctly after an upstream edit (an in-plane axis
     /// tilts the solid, the normal axis twists it).
     case rotateFace(face: FaceRef, angle: Expr, axis: PointWrapper)
+    /// Draft (taper) an EXISTING face by `angle` degrees about the line where
+    /// it meets the neutral plane — SOLIDWORKS' Draft, the "ALL DRAFT 5°" of a
+    /// cast part. Positive narrows the body away from the neutral plane.
+    /// Distinct from `draftExtrude`, which tapers as it CREATES the prism.
+    case draftFace(face: FaceRef, neutralOrigin: PointWrapper,
+                   neutralNormal: PointWrapper, angle: Expr)
     /// Phase E: bevel the referenced convex edges of `body` by a flat `setback`.
     case chamfer(body: BodyRef, edges: [EdgeRef], setback: Expr)
     /// Phase E: round the referenced convex edges of `body` to `radius`.
@@ -269,8 +275,8 @@ nonisolated extension FeatureNode {
         case let .mirror(_, plane, _):
             addPlane(plane)
         case .primitive, .boolean, .transform, .pattern, .pushPull, .moveFace,
-             .scaleFace, .rotateFace, .chamfer, .fillet, .shell, .deleteFace,
-             .replaceFace:
+             .scaleFace, .rotateFace, .draftFace, .chamfer, .fillet, .shell,
+             .deleteFace, .replaceFace:
             break
         }
         return ids
@@ -289,8 +295,8 @@ nonisolated extension FeatureNode {
              let .mirror(_, plane, _):
             add(plane)
         case .primitive, .loft, .boolean, .transform, .pattern, .pushPull, .moveFace,
-             .scaleFace, .rotateFace, .chamfer, .fillet, .shell, .deleteFace,
-             .replaceFace:
+             .scaleFace, .rotateFace, .draftFace, .chamfer, .fillet, .shell,
+             .deleteFace, .replaceFace:
             break
         }
         return ids
@@ -315,7 +321,8 @@ nonisolated extension FeatureNode {
              let .deleteFace(body, _):
             return [body.bodyID]
         case let .pushPull(face, _, _), let .moveFace(face, _), let .scaleFace(face, _),
-             let .rotateFace(face, _, _), let .replaceFace(face, _, _, _):
+             let .rotateFace(face, _, _), let .draftFace(face, _, _, _),
+             let .replaceFace(face, _, _, _):
             return [face.body.bodyID]
         }
     }
@@ -548,6 +555,10 @@ nonisolated extension FeatureGraph {
         case let .rotateFace(face, angle, axis):
             evalRotateFace(node, face: face, angle: angle.value, axis: axis.point,
                            into: &state, next: nextRevision)
+        case let .draftFace(face, neutralOrigin, neutralNormal, angle):
+            evalDraftFace(node, face: face, neutralOrigin: neutralOrigin.point,
+                          neutralNormal: neutralNormal.point, degrees: angle.value,
+                          into: &state, next: nextRevision)
         case let .revolve(profile, plane, axis, angle, boolean):
             evalRevolve(
                 node, profileRef: profile, planeRef: plane, axisRef: axis,
@@ -1056,6 +1067,9 @@ nonisolated extension FeatureGraph {
             return .scaleFace(face: upgraded, factor: factor)
         case let .rotateFace(face, angle, axis) where face == ref:
             return .rotateFace(face: upgraded, angle: angle, axis: axis)
+        case let .draftFace(face, origin, normal, angle) where face == ref:
+            return .draftFace(face: upgraded, neutralOrigin: origin,
+                              neutralNormal: normal, angle: angle)
         case let .replaceFace(face, origin, normal, flip) where face == ref:
             return .replaceFace(face: upgraded, targetOrigin: origin,
                                 targetNormal: normal, flip: flip)
@@ -1274,6 +1288,51 @@ nonisolated extension FeatureGraph {
 
         let mesh = KernelOps.rotateFace(
             mesh: body.euclidMesh(), face: planar, angle: angle, axis: axis)
+        guard !mesh.polygons.isEmpty else {
+            state.errors[node.id] = .emptyGeometry
+            return
+        }
+        let result = Body(
+            id: body.id, name: body.name, transform: body.transform, primitive: nil,
+            euclidMesh: mesh, revision: nextRevision())
+        let newTable: FaceTable
+        if let table {
+            newTable = state.naming.propagate(inputs: [table], output: result, op: .pushPull)
+        } else {
+            newTable = state.naming.faceTable(for: result, createdBy: node.id, scheme: .generic)
+        }
+        state.put(result, table: newTable)
+    }
+
+    /// Draft an existing face: resolve the ref, then shear the face about its
+    /// intersection with the neutral plane (`KernelOps.draftFace`). The neutral
+    /// plane is stored as a WORLD plane rather than a `FaceRef` — the same v1
+    /// simplification `replaceFace` makes, and for the same reason: a parting
+    /// line is usually a datum, not a face this body owns.
+    private func evalDraftFace(
+        _ node: FeatureNode,
+        face: FaceRef,
+        neutralOrigin: SIMD3<Double>,
+        neutralNormal: SIMD3<Double>,
+        degrees: Double,
+        into state: inout EvalState,
+        next nextRevision: () -> UInt64
+    ) {
+        guard let body = state.bodies[face.body.bodyID] else {
+            state.errors[node.id] = .brokenRef("draftFace body unresolved")
+            return
+        }
+        let table = state.faceTables[body.id]
+        guard let resolved = state.naming.resolve(face, in: body, table: table),
+              let planar = resolved.planar else {
+            state.errors[node.id] = .brokenRef("draftFace face did not resolve")
+            return
+        }
+        proposeUpgrade(node, ref: face, resolved: resolved, into: &state)
+
+        let mesh = KernelOps.draftFace(
+            mesh: body.euclidMesh(), face: planar,
+            neutralOrigin: neutralOrigin, neutralNormal: neutralNormal, degrees: degrees)
         guard !mesh.polygons.isEmpty else {
             state.errors[node.id] = .emptyGeometry
             return

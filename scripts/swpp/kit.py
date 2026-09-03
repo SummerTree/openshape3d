@@ -483,3 +483,11 @@ def run_problem(pid, meta, build, fresh=True):
         extra += " | " + ", ".join(f"{c['label']} {c['got']}/{c['expected']} ({c['errorPct']:+.2f}%)" for c in row["configs"])
     print(f"[{flag}] {pid}: {extra}  [{row['seconds']} s]")
     return row
+
+
+def draft_face(bid, face, degrees, neutral_origin=(0, 0, 0), neutral_normal=(0, 1, 0)):
+    """Modify › Draft: taper an EXISTING face about its intersection with the
+    neutral plane. Positive narrows the body away from that plane."""
+    X("feature.draftFace", {"bodyID": bid, "face": [face], "angleDegrees": degrees,
+                            "neutralOrigin": list(neutral_origin),
+                            "neutralNormal": list(neutral_normal)})

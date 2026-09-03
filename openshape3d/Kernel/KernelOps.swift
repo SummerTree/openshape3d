@@ -1217,6 +1217,87 @@ nonisolated extension KernelOps {
             .smoothingNormals(forAnglesGreaterThan: .degrees(44))
     }
 
+    /// Draft (taper) an existing face by `degrees` about the line where its
+    /// plane meets the neutral plane — the mould-making operation SOLIDWORKS
+    /// calls Draft, and what "ALL DRAFT 5°" on a cast part means.
+    ///
+    /// It is a SHEAR, not a rotation, and that distinction is the whole reason
+    /// this is not just `rotateFace` with a pivot (which is what it was first
+    /// written as, 2026-09-03). A rigid rotation of a wall carries its top edge
+    /// along an ARC: the edge drops by h(1 − cos θ), which drags the adjacent
+    /// top face out of its own plane and shortens the part. Draft has to leave
+    /// every neighbouring face where it is — only the drafted wall's slope
+    /// changes — so each vertex moves within its own height instead:
+    ///
+    ///     p' = p − tan(θ) · h · f⊥ ,  h = (p − neutralOrigin) · n̂
+    ///
+    /// where `f⊥` is the face normal with the neutral direction removed. Points
+    /// ON the neutral plane (h = 0) do not move, and the wall meets the top
+    /// face at h·tanθ in — the number a draft callout means.
+    ///
+    /// A positive angle leans the face INWARD as it recedes along the neutral
+    /// normal, so the body narrows away from the parting line (the sign a mould
+    /// wants); negative widens it.
+    ///
+    /// Returns the mesh unchanged when the face is parallel to the neutral
+    /// plane (no hinge exists) or the angle is zero.
+    static func draftFace(
+        mesh: Euclid.Mesh,
+        face: FaceTopology.PlanarFace,
+        neutralOrigin: SIMD3<Double>,
+        neutralNormal: SIMD3<Double>,
+        degrees: Double
+    ) -> Euclid.Mesh {
+        guard abs(degrees) > 1e-9, simd_length(neutralNormal) > 1e-9 else { return mesh }
+        let n = simd_normalize(neutralNormal)
+        let plane = SketchPlane(origin: face.origin, xAxis: face.basisX, yAxis: face.basisY)
+        let faceNormal = simd_normalize(plane.normal)
+        // The component of the face normal lying IN the neutral plane. It
+        // vanishes exactly when the face is parallel to the neutral plane,
+        // which is the case with no hinge to draft about.
+        let perpendicular = faceNormal - simd_dot(faceNormal, n) * n
+        guard simd_length(perpendicular) > 1e-6 else { return mesh }
+        let slide = simd_normalize(perpendicular) * tan(degrees * .pi / 180)
+
+        func onFace(_ position: Vector) -> Bool {
+            let w = SIMD3<Double>(position.x, position.y, position.z)
+            guard abs(simd_dot(w - face.origin, faceNormal)) <= Self.moveFacePlaneTolerance
+            else { return false }
+            let local = plane.toLocal(w)
+            guard Self.pointInLoopInclusive(local, face.outline) else { return false }
+            for hole in face.holes where Self.pointStrictlyInLoop(local, hole) {
+                return false
+            }
+            return true
+        }
+
+        func drafted(_ position: Vector) -> Vector {
+            let w = SIMD3<Double>(position.x, position.y, position.z)
+            let height = simd_dot(w - neutralOrigin, n)
+            let moved = w - height * slide
+            return Vector(moved.x, moved.y, moved.z)
+        }
+
+        var polygons = [Euclid.Polygon]()
+        for polygon in EuclidBridge.triangles(of: mesh) {
+            let verts = polygon.vertices
+            guard verts.count == 3, verts.contains(where: { onFace($0.position) }) else {
+                polygons.append(polygon)
+                continue
+            }
+            // The drafted wall stays planar, so no subdivision is needed: move
+            // the on-face vertices and re-normal from the moved geometry (a
+            // carried-over normal would light the wall as if it had not moved).
+            let moved = verts.map { onFace($0.position) ? drafted($0.position) : $0.position }
+            let normal = Self.newellNormal(moved)
+            if let tri = Euclid.Polygon(moved.map { Euclid.Vertex($0, normal) }) {
+                polygons.append(tri)
+            }
+        }
+        guard !polygons.isEmpty else { return mesh }
+        return Euclid.Mesh(polygons).makeWatertight()
+    }
+
     /// Robust polygon normal via Newell's method — consistent with the vertex
     /// winding and stable for near-degenerate triangles (unlike a single cross
     /// product). Used to re-normal deformed faces so shading matches the winding.

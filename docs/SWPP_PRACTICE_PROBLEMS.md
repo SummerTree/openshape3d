@@ -41,8 +41,10 @@ output plus the reading of it. The published page carries the same table.*
    an angle, through a line or by three points (5.1 needs 35°).
 5. No sketch patterns and no named global variables driving sketches
    (Level 3, 16); History fields do evaluate arithmetic.
-6. Draft only at extrude time (taper), no draft of existing faces
-   ("ALL DRAFT 5°" in 12.1); no loft normal-to-profile controls (12.2).
+6. Draft of existing faces now exists (Modify › Draft over the bridge,
+   about a world neutral plane), but it returns a mesh-only body, so a
+   drafted casting cannot then be filleted analytically or exported to
+   STEP. No loft normal-to-profile controls (12.2).
 7. Assemblies, configurations, collision/interference (Levels 9, 15, 17)
    are outside a single-part modeller.
 
