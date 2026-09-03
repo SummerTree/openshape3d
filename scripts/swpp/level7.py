@@ -102,3 +102,19 @@ def p7_21():
     union(half, others)
     assert abs(vol(half) - 2 * before) < 1e-3 * before, "mirror + union should double the half"
     return half
+
+
+@problem("7.4", 421, features=("Revolve", "Extrude Boss", "Pattern: Circular"))
+def p7_4():
+    # Bead bracelet: a band of outer R14.5 with a 2 (radial) × 1 (axial)
+    # section, and 8 bead rings (outer R3, inner R2, 2 wide) whose axes are
+    # tangent to the band, centred on the band's centreline r = 13.5. The
+    # band passes through each bead's hole without touching it, so the
+    # bodies stay separate and the sheet's volume is their sum:
+    # 2π·13.5·2 + 8·2π·2.5·2 = 169.6 + 251.3 = 420.9.
+    band = revolve(Sketch(front(0)).rect(12.5, -0.5, 14.5, 0.5), (13.5, 0), (0, 0), (0, 1))
+    bead = extrude(Sketch(front(-1)).circle((13.5, 0), 3).circle((13.5, 0), 2), (13.5, 2.5), 2)
+    pattern(bead, "circular", 8, axis=(0, 1, 0), center=(0, 0, 0), total_angle=315)
+    ids = [b["id"] for b in bodies()]
+    assert len(ids) == 9, f"expected 9 bodies, found {len(ids)}"
+    return ids

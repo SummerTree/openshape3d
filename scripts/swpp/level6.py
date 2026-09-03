@@ -106,3 +106,37 @@ def p6_18():
     rw = 8.5 - t4 * yw
     sk = (Sketch(front(0)).poly([(0, 0), (8.5, 0), (rw, yw), (9, 68), (0, 70)]))
     return revolve(sk, (3, 20), (0, 0), (0, 1))
+
+
+@problem("6.1", 5996, features=("Revolve",))
+def p6_1():
+    # Pawn, 38 tall, one axis. Base Ø18 × 3 with an R1.5 bottom rim;
+    # body from a Ø13 foot on the base: an R6 bulb through the foot and
+    # tangent to the R15 concave neck that meets the collar at Ø8; collar
+    # Ø13 × 3 (R1.5 top rim) with its top 12.5 below the crown of the R7.5
+    # sphere. The bulb centre (c, h) solves |C-(6.5,3)| = 6 and
+    # |C-(19,22.5)| = 21 (tangent to the neck arc centred 15 out from Ø8).
+    d = math.hypot(12.5, 19.5)
+    a = (36 - 441 + d * d) / (2 * d)
+    hh = math.sqrt(36 - a * a)
+    px, py = 6.5 + a * 12.5 / d, 3 + a * 19.5 / d
+    c, h = px - hh * 19.5 / d, py + hh * 12.5 / d          # the bulb-side root
+    tx, ty = c + 6 * (19 - c) / 21, h + 6 * (22.5 - h) / 21  # tangency point
+    a0 = math.degrees(math.atan2(3 - h, 6.5 - c))
+    a1 = math.degrees(math.atan2(ty - h, tx - c))
+    n1 = math.degrees(math.atan2(ty - 22.5, tx - 19)) % 360
+    axis = ((0, 0), (0, 1))
+    # Each R1.5 callout names ONE edge: the base's bottom rim and the
+    # collar's top rim; the other edge of each stays sharp (a full round on
+    # both rings reads 0.8 % light).
+    base = revolve(Sketch(front(0)).line((0, 0), (7.5, 0)).arc((7.5, 1.5), 1.5, -90, 0)
+                   .line((9, 1.5), (9, 3)).line((9, 3), (0, 3)).line((0, 3), (0, 0)), (3, 1.5), *axis)
+    body = (Sketch(front(0)).line((0, 3), (6.5, 3)).arc((c, h), 6, a0, a1)
+            .arc((19, 22.5), 15, 180, n1).line((4, 22.5), (0, 22.5)).line((0, 22.5), (0, 3)))
+    revolve(body, (2, 10), *axis, union=[base])
+    collar = (Sketch(front(0)).line((0, 22.5), (6.5, 22.5)).line((6.5, 22.5), (6.5, 24))
+              .arc((5, 24), 1.5, 0, 90).line((5, 25.5), (0, 25.5)).line((0, 25.5), (0, 22.5)))
+    revolve(collar, (2.5, 24), *axis, union=[base])
+    sphere = Sketch(front(0)).arc((0, 30.5), 7.5, -90, 90).line((0, 38), (0, 23))
+    revolve(sphere, (3, 30.5), *axis, union=[base])
+    return base

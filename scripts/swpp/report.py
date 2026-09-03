@@ -95,6 +95,20 @@ def main():
             mode = " (by touch)" if r.get("mode") == "touch" else ""
             print(f"| {r['problem']}{mode} | {feats} | {r['expected']:,} {unit} | {got} | {err} | {r['status']} | {note} |")
         print()
+    deferred_path = os.path.join(HERE, "deferred.json")
+    if os.path.exists(deferred_path):
+        deferred = json.load(open(deferred_path))
+        def key(pid):
+            a, b = pid.split("."); return (int(a), int("".join(ch for ch in b if ch.isdigit())), b)
+        print(f"## Read but not attempted ({len(deferred)} sheets)\n")
+        print("Sheets read from their drawings and set aside: the drawing does not fix")
+        print("the geometry, or the printed volume contradicts every reading tried. None")
+        print("is an app limitation.\n")
+        print("| Problem | Why it was set aside |")
+        print("|---|---|")
+        for pid in sorted(deferred, key=key):
+            print(f"| {pid} | {deferred[pid]} |")
+        print()
 
 
 if __name__ == "__main__":

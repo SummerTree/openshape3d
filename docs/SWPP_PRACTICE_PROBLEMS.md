@@ -58,17 +58,17 @@ output plus the reading of it. The published page carries the same table.*
 - **Extrude end conditions** (above), with the direction taken from the
   sign of the distance already in the field.
 
-# SOLIDWORKS practice problems in openshape3d — 35/43 attempted pass (365 in the database)
+# SOLIDWORKS practice problems in openshape3d — 38/46 attempted pass (365 in the database)
 
 | Level | Title | Problems | Attempted | Pass | Fail | Error |
 |---|---|---|---|---|---|---|
 | 1 | Basic Sketch & Extrusion | 20 | 14 | 12 | 2 | 0 |
-| 2 | Sketch Tools & End Conditions | 20 | 7 | 6 | 1 | 0 |
+| 2 | Sketch Tools & End Conditions | 20 | 8 | 7 | 1 | 0 |
 | 3 | Global Variables & Sketch Patterns | 8 | 0 | 0 | 0 | 0 |
 | 4 | Extrude Cut & Fillet/Chamfer | 70 | 9 | 6 | 3 | 0 |
 | 5 | Reference Geometry | 15 | 0 | 0 | 0 | 0 |
-| 6 | Revolve Boss/Cut | 20 | 5 | 3 | 2 | 0 |
-| 7 | Feature Patterning | 48 | 5 | 5 | 0 | 0 |
+| 6 | Revolve Boss/Cut | 20 | 6 | 4 | 2 | 0 |
+| 7 | Feature Patterning | 48 | 6 | 6 | 0 | 0 |
 | 8 | Sweep Boss/Cut | 14 | 2 | 2 | 0 | 0 |
 | 9 | Assemblies and Mates | 16 | 0 | 0 | 0 | 0 |
 | 10 | CSWA Exam Level | 19 | 0 | 0 | 0 | 0 |
@@ -104,6 +104,7 @@ output plus the reading of it. The published page carries the same table.*
 
 | Problem | Features | Sheet | Got | Error | Status | Note |
 |---|---|---|---|---|---|---|
+| 2.4 | Extrude Boss, Extrude Cut, Sketch: Arcs | 42,236 mm³ | 42,236.368 mm³ | +0.00 % | pass |  |
 | 2.7 | Extrude Boss, Sketch: Slot, Sketch: Trim | 56,490 mm³ | 56,489.554 mm³ | -0.00 % | pass | The 86 on the sheet runs from the left end to the origin, not the overall length; the slot is the kit's stadium (two arcs + two tangent lines). |
 | 2.8 | Extrude Boss, Sketch: Offset, Sketch: Trim | 118,440 mm³ | 117,680.513 mm³ | -0.64 % | fail | Outer triangle with a 15 offset inner outline; the inner top edge is 5.9 long so two R6 rounds cannot both fit (their tangent points cross and the loop self-intersects — the app refuses such a loop, correctly). Built with three rounds; the sheet's number needs ~96 mm² more material than the offset gives. Interpretation. |
 | 2.11 | Extrude Boss, Sketch: Trim, Sketch: Convert, Sketch: Mirror/Dynamic Mirror | 1,387 mm³ | 1,386.639 mm³ | -0.03 % | pass | Ø25 disc with flats, Ø8 hole, two 3-wide rails 2 tall along the flats (the middle is the channel); one rail mirrored with Transform › Mirror (replace) and unioned. |
@@ -130,6 +131,7 @@ output plus the reading of it. The published page carries the same table.*
 
 | Problem | Features | Sheet | Got | Error | Status | Note |
 |---|---|---|---|---|---|---|
+| 6.1 | Revolve | 5,996 mm³ | 5,992.42 mm³ | -0.06 % | pass |  |
 | 6.6 | Revolve | 21,076 mm³ | 21,076.422 mm³ | +0.00 % | pass | One revolved profile carrying the seven diameters and the Ø5 bore with its 118° drill point. |
 | 6.15 | Revolve | 137,296 mm³ | 128,727.479 mm³ | -6.24 % | fail | 5-thick sheet bowl with R25 outer / R20 inner bends and a horizontal rim; the sheet's number needs ~7 % more material (probably Ø75 measured on the inside or the rim cut normal to the wall). Interpretation, not an app error. |
 | 6.16 | Revolve | 4,080 mm³ | 4,080.3 mm³ | +0.01 % | pass |  |
@@ -140,6 +142,7 @@ output plus the reading of it. The published page carries the same table.*
 
 | Problem | Features | Sheet | Got | Error | Status | Note |
 |---|---|---|---|---|---|---|
+| 7.4 | Revolve, Extrude Boss, Pattern: Circular | 421 mm³ | 420.973 mm³ | -0.01 % | pass |  |
 | 7.21 | Extrude Boss, Extrude Cut, Mirror Pattern | 20,044 mm³ | 20,043.841 mm³ | -0.00 % | pass |  |
 | 7.29 | Extrude Boss, Sketch: Slot, Extrude Cut, Mirror Pattern | 103,384 mm³ | 103,460.165 mm³ | +0.07 % | pass | Mirror + union of the plate-and-web half; R2 concave web fillets and R1 outline rounds picked by edge position; +0.07 %. |
 | 7.31 | Extrude Boss, Sketch: Slot, Sketch: Offset, Extrude Cut, Mirror Pattern | 179,795 mm³ | 179,794.69 mm³ | -0.00 % | pass | One profile extrude (walls, base, T-caps) and an R8 slot cut through the base. |
@@ -158,4 +161,45 @@ output plus the reading of it. The published page carries the same table.*
 | Problem | Features | Sheet | Got | Error | Status | Note |
 |---|---|---|---|---|---|---|
 | 11.1 | Hole Wizard | 12.7 in³ | 12.724 in³ | +0.19 % | pass | No hole wizard in the app: each counterbore is two stacked cylinders (ANSI #8 / #10 SHCS sizes) unioned into a cutter, patterned 3 × 3 and 1 × 2 with Transform › Pattern (linear), then subtracted; the sheet rounds to 12.7. |
+
+## Read but not attempted (32 sheets)
+
+Sheets read from their drawings and set aside: the drawing does not fix
+the geometry, or the printed volume contradicts every reading tried. None
+is an app limitation.
+
+| Problem | Why it was set aside |
+|---|---|
+| 1.2 | Wedge block with pins and a sloped slot: the 58/36/24/16 heights don't compose into one profile from the views given. |
+| 1.7 | Bracket of plate, arms and tab: the feature placement across the three views is not fully fixed (REF dims only). |
+| 1.8 | V-roof block: a right-angle apex at 125 over a 200 width contradicts the 50 base, and the roof channels are undimensioned. |
+| 1.10 | Bent lug bracket: the central plate outline and the flanges' 35° bend geometry are only shown pictorially. |
+| 2.2 | Section A-A's 1 mm walls contradict the 13031 mm³ (a 1 mm shell is ~3800, a solid bar ~16000); the floor thickness is not given. |
+| 2.3 | Rib/rim thin-wall flange: the outline's tangent lines and the 8 ribs' placement are not dimensioned beyond 'thickness all around 3'. |
+| 2.5 | Wedge bracket: the 25° face, 33 and 45/41 dims admit several bodies; the slotted plate's attachment is only shown pictorially. |
+| 4.1 | Punch tip: the 25 taper length, 4° TYP and R5 TYP blends can't be reconciled into one flat-and-round transition from the sheet. |
+| 4.2 | Clevis: R30/R10 tangencies with the 60° and 90° edges and the lug's 12/25/45 section need the model to infer. |
+| 4.3 | Shaft collar: the plan's 21 and 9 callouts conflict with Ø35 and the 10173 mm³ under every reading tried (OD 42/48/52/53). |
+| 4.4 | Tool block: T-groove (Detail A 40°/100°) plus 60°/24° faces and 10.67/28.80 offsets — too many inferred positions. |
+| 6.2 | Pressed dome: the cone height is not given (only Ø45, 100°, R9/R6, 3 TYP). |
+| 6.3 | Hex bit: the R4.50 revolved groove's centre and the 4 A/F tip's chamfer geometry are not fixed by the callouts. |
+| 6.4 | Elbow: the straight leg lengths are not given; bend + flanges alone give ~240k of the 370322 mm³. |
+| 6.7 | Eye bolt: the eye's arched side profile is undimensioned; the stadium ring × 15 reads 10 % heavy. |
+| 6.8 | Angled U boss on a disc: its angle is only shown pictorially ('edge of U contacts origin'). |
+| 7.1 | Rook: revolve profile of tangent R15/R15/R6 arcs and the crown's 10° taper — positions inferred. |
+| 7.3 | Muffin tin: plate outline size not given; cup profile (Ø12 callout) ambiguous. |
+| 7.5 | Chuck body: Y-slots, V groove and radial counterbores from a 1:2 detail — too much inferred. |
+| 7.6 | Z-bracket: the plan chain (210) contradicts the front view (80 + 150 = 230). |
+| 7.7 | Tee nut prongs: bent blades of 1 mm with an R3 curl are drawn, not dimensioned. |
+| 7.8 | T-slot plate: 850 × 225 × 90 is smaller than the 18306608 mm³ printed; the end view's 200/65 callouts don't match 225. |
+| 10.1 | Block with diagonal R25 scallops: the section A-A's construction can't be reconciled with the corner arcs drawn. |
+| 10.2 | LEGO brick: wall callouts read 1.1 and 1.2 in different views, a 5 % swing on the volume; pips and tube bores ambiguous. |
+| 10.3 | Rope thimble: the channel cross-section (R6 groove, 3, 2) is not fully dimensioned. |
+| 10.4 | Chuck jaw: serrations, 30° nose and stepped section — too many inferred positions. |
+| 13.1 | Shelled L-block: which face the 3 mm shell opens on isn't fixed; every reading is 10–15 % off the 18931 mm³. |
+| 13.2 | Nozzle: a 26° tube lofted into a 55°/3° drafted foot with a 2 mm shell — the foot's outline is not fully dimensioned. |
+| 13.3 | Kidney cup: 2° draft, 2 mm shell and a 3 × 6 flange combine; the outline's R40/R16/R8 centres are only partly given. |
+| 13.6 | Oil pan: multi-level drafted shell with a 20-hole flange — beyond what the sheet dimensions. |
+| 14.4 | Needs the provided 14.4Rib_START part (the 13.4 shell), which is not in the sheet set. |
+| 14.8 | Needs the provided 14.8Rib_START part; only the rib dims are on the sheet. |
 

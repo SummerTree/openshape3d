@@ -128,3 +128,65 @@ def p2_14():
     # Hex prism 21 across flats × 60 with a Ø14 × 6 boss on top.
     body = extrude(Sketch(top(0)).polygon_flats((0, 0), 21, 6), (0, 0), 60)
     return extrude(Sketch(top(60)).circle((0, 0), 7), (0, 0), 6, union=[body])
+
+
+def _lobed_outline(sk, R, rl, rf, d, angles_deg):
+    """Closed outline: a disc of radius R with lobes of radius rl centred d
+    from the origin at `angles_deg`, joined by concave fillets of radius rf
+    (tangent to both). Offsetting inward by t is the same call with
+    (R-t, rl-t, rf+t): the fillet centres do not move."""
+    import math
+    cosT = ((R + rf) ** 2 + d ** 2 - (rl + rf) ** 2) / (2 * (R + rf) * d)
+    th = math.degrees(math.acos(cosT))
+    u = lambda a: (math.cos(math.radians(a)), math.sin(math.radians(a)))
+    ang = lambda v: math.degrees(math.atan2(v[1], v[0])) % 360
+    n = len(angles_deg)
+    for i, a in enumerate(angles_deg):
+        a_prev = angles_deg[i - 1]
+        s, e = (a_prev + th) % 360, (a - th) % 360
+        if e < s:
+            e += 360
+        sk.arc((0, 0), R, s, e)                      # disc arc between lobes
+        L = (d * u(a)[0], d * u(a)[1])
+        F = {}
+        for sign in (-1, +1):
+            fa = a + sign * th
+            F[sign] = ((R + rf) * u(fa)[0], (R + rf) * u(fa)[1])
+            a1 = (fa + 180) % 360                    # towards the disc tangent point
+            a2 = ang((L[0] - F[sign][0], L[1] - F[sign][1]))  # towards the lobe tangent point
+            lo, hi = sorted((a1, a2))
+            if hi - lo > 180:
+                lo, hi = hi, lo + 360
+            sk.arc(F[sign], rf, lo, hi)               # concave fillet
+        pm = ang((F[-1][0] - L[0], F[-1][1] - L[1]))
+        pp = ang((F[+1][0] - L[0], F[+1][1] - L[1]))
+        s2, e2 = pm, pp
+        if e2 < s2:
+            e2 += 360
+        aa = a % 360
+        if not (s2 <= aa <= e2 or s2 <= aa + 360 <= e2):
+            s2, e2 = pp, (pm + 360 if pm < pp else pm)
+        sk.arc(L, rl, s2, e2)                         # lobe arc through the tip
+    return sk
+
+
+@problem("2.4", 42236, features=("Extrude Boss", "Extrude Cut", "Sketch: Arcs"))
+def p2_4():
+    # Three-lobed cover: R43 disc, 3 lobes R15 centred 43 out at 90/210/330°,
+    # 6 concave R7 fillets; base layer 3 thick, a second layer 3 thick inset
+    # 3 all round (Detail B); Ø16 bosses to 18 total at the lobe centres,
+    # Ø11 bored, over Ø6 holes through the plate.
+    import math
+    angles = (90, 210, 330)
+    L = [(43 * math.cos(math.radians(a)), 43 * math.sin(math.radians(a))) for a in angles]
+    body = extrude(_lobed_outline(Sketch(top(0)), 43, 15, 7, 43, angles), (0, 0), 3)
+    extrude(_lobed_outline(Sketch(top(3)), 40, 12, 10, 43, angles), (0, 0), 3, union=[body])
+    for c in L:
+        extrude(Sketch(top(6)).circle(c, 8), c, 12, union=[body])
+    # Ø11 bores the full boss height, Ø6 through the two plate layers (the
+    # section shows the boss as a cup over the small hole); read the other
+    # way round the part is 1202 mm³ heavy — exactly 3 × Ø11 × 6 more bore.
+    for c in L:
+        extrude(Sketch(top(18)).circle(c, 5.5), c, -12, cut=[body])
+        extrude(Sketch(top(0)).circle(c, 3), c, 6, cut=[body])
+    return body
