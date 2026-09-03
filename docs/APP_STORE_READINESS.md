@@ -1,228 +1,158 @@
 # App Store readiness audit
 
-## 0. BLOCKER — no privacy manifest (`PrivacyInfo.xcprivacy`)
+**Last verified: 2026-09-03** against `main` @ `f341924`. The ship-configuration
+blockers from the original (2026-08-25 → 08-31) audit are **closed and verified
+in a real signed archive**; what remains is listed under "Still open" and
+"Untested". Re-verify with the commands in "How this was checked" before any
+future submission — a build setting that was right once is not right forever.
 
-The app has **no privacy manifest**, but it uses `UserDefaults` (2 files) — a
-"required reason" API. Since spring 2024 Apple requires apps using such APIs to
-ship a `PrivacyInfo.xcprivacy` declaring them; uploads without one are flagged or
-rejected at App Store Connect.
+## Verdict
 
-Minimal manifest to add to the app target:
+**The build is submittable.** `xcodebuild archive` for `generic/platform=iOS`
+succeeds, signs with the team's automatic profile, and produces a correct
+33 MB arm64 bundle. The unit suite is green. The one genuine risk left is that
+the app — a **custom Metal renderer** — has still never run on real hardware.
 
-```xml
-<key>NSPrivacyAccessedAPITypes</key>
-<array>
-  <dict>
-    <key>NSPrivacyAccessedAPIType</key>
-    <string>NSPrivacyAccessedAPICategoryUserDefaults</string>
-    <key>NSPrivacyAccessedAPITypeReasons</key>
-    <array><string>CA92.1</string></array>   <!-- app's own use -->
-  </dict>
-</array>
-```
+## Closed since the original audit (verified 2026-09-03)
 
-Also set `NSPrivacyTracking` = false, and empty `NSPrivacyCollectedDataTypes` /
-`NSPrivacyTrackingDomains` (the app collects nothing). Checked and NOT needed:
-file timestamps, system uptime, and free-disk-space APIs are unused.
+All four ship-config items landed in `9a34aca` ("Ship config: privacy manifest,
+iOS 17.0 floor, display name, encryption key"). Verified by reading the
+`Info.plist` out of the signed archive, not from the project file:
 
-## What has NOT been tested — read before submitting
+| Was | Now | Verified how |
+| --- | --- | --- |
+| **BLOCKER: no `PrivacyInfo.xcprivacy`** | `openshape3d/PrivacyInfo.xcprivacy` declares `NSPrivacyTracking=false`, empty collected-data/tracking-domain arrays, and `UserDefaults` ▸ `CA92.1` | present in the archived bundle (924 B). It is picked up by the target's file-system-synchronized group — there is no `pbxproj` reference to break, but also none to protect it |
+| **`MinimumOSVersion = 26.2`** — excluded essentially the whole installed base | `MinimumOSVersion = 17.0` | shipped `Info.plist`. (The 26.2 value survives on the *test* targets only, which never ship) |
+| **No `CFBundleDisplayName`** — installed as "openshape3d" | `CFBundleDisplayName = "OpenShape 3D"` | shipped `Info.plist`. `CFBundleName` is still lowercase `openshape3d`; the display name is what the home screen and listing use |
+| **No export-compliance key** — ASC asked the encryption question every upload | `ITSAppUsesNonExemptEncryption = false` | shipped `Info.plist` |
 
-Everything verified so far was on the **Simulator**. That leaves real gaps:
+Two more original findings are also closed:
+
+- **§5 "Debug hooks ship in the release binary" — closed.** `OS3D_DEBUG_SEED*`,
+  `OS3D_FRESH`, `OS3D_AUTO_OPEN`, `OS3D_GIZMO_DEBUG` and the destructive
+  `OS3D_RESET_STORE` are each inside `#if DEBUG`. Confirmed empirically:
+  `strings` over the shipped binary finds **zero** `OS3D_*` symbols.
+- **§1b "iPhone layout is broken" — closed.** `openshape3d/UI/AdaptiveBar.swift`
+  gives the bottom bars a compact-width layout (horizontally scrollable rows,
+  labels at natural width); 18 call sites across `EditorView` and
+  `NumericInputBar` cover every contextual bar. `CompactWidthBarUITests` guards
+  it, and `docs/screenshots/iphone-*.jpg` show the result. `TARGETED_DEVICE_FAMILY`
+  stays `1,2` — the iPad-only fallback (option B) was not needed.
+
+The **DEBUG agent bridge does not ship.** `openshape3d/Agent/*.swift` are each
+wrapped in a single file-level `#if DEBUG`, both call sites
+(`openshape3dApp.init`, `EditorView.onAppear/onDisappear`) are gated, and
+`ENABLE_INCOMING_NETWORK_CONNECTIONS = YES` is set on the **Debug**
+configuration only. Confirmed empirically: `strings` over the shipped binary
+finds **zero** `AgentServer` / `AgentBridge` / `AgentRouter` / `v1/…` symbols.
+Outside that bridge the app makes **no network calls at all** — no `URLSession`
+anywhere in the target.
+
+## Still open
+
+### 1. No document type declarations (unchanged — not a blocker, real UX cost)
+
+The app has its own `.os3d` format and imports STEP / STL / OBJ / DXF, but
+declares no `CFBundleDocumentTypes`, `UTExportedTypeDeclarations` or
+`UTImportedTypeDeclarations`. Consequences today:
+
+- A user cannot open a `.os3d`, `.step` or `.dxf` file from Files or Mail into
+  the app, and none of those types is registered to it.
+- `UTType(filenameExtension:)` returns a **dynamic** type for each, and a picker
+  filtered to a dynamic type matches no file. The importers work around it by
+  also allowing `.data` (`EditorView.swift:208-219`,
+  `ProjectGalleryView.swift:133`), so **the STEP, DXF and `.os3d` pickers show
+  every file on the device** rather than the ones they can read.
+
+**Sequencing:** this cannot be added while `GENERATE_INFOPLIST_FILE = YES` —
+Xcode then ignores `INFOPLIST_FILE` and the keys never reach the bundle. Moving
+the app target to a checked-in `Info.plist` is the actual first step. That is
+why it is still open: it is a project-structure change, not a one-line key.
+
+### 2. Fillet on a twisted solid (status unconfirmed)
+
+The original audit found fillet tearing curved solids — failing destructively
+instead of refusing. Blend work has landed since (`33baa83` stop the crash /
+silent no-op, `de02de9` blends on a B-spline wall "build or refuse cleanly",
+`88cf0dd` a TraceParts wheel fillet/chamfer stress test found no bug), so this
+is **probably** fixed, but **the specific twisted-solid case was not re-run for
+this audit**. Reproduce before relying on it: twist a solid, then fillet a
+corner edge, and confirm it either blends or refuses — never tears.
+
+### 3. App Store Connect material is not prepared
+
+Nothing in the repo covers the listing side, and it is all still to do:
+screenshots at ASC's required sizes, description, keywords, category, age
+rating, and the privacy "nutrition label" (which must agree with the manifest:
+no tracking, no collection). Note `docs/screenshots/*.jpg` are **README-sized**
+(iPad 900×1200, iPhone 420×912) — usable as a shot list, not as submission
+assets. `marketing/` is gitignored and does not exist in this checkout.
+
+## Untested — read before submitting
 
 | Untested | Why it matters |
 | --- | --- |
-| **Any real device** | The app is a custom **Metal** renderer. Simulator Metal is a different implementation — shader behaviour, precision and performance differ. This is the single biggest untested risk. |
-| **`xcodebuild archive` + export** | Archiving is a different path from `build`; it can fail (symbols, entitlements, bitcode settings) where a build succeeds. All builds here used `CODE_SIGNING_ALLOWED=NO`. |
-| **Code signing / provisioning** | Never exercised with a distribution cert or profile. |
-| **Import / Export** | Headline feature, real file I/O — a prime crash area. STEP was exercised end-to-end on the Simulator on 2026-08-29 (export → Files → import → re-export, geometry verified); STL/OBJ/DXF/3MF/GLB still have only had their menu entries opened, and nothing has been through a real device's file providers. |
-| **Apple Pencil** | Implemented but the Simulator cannot test it. |
+| **Any real device** | Still the single biggest risk. The renderer is custom **Metal**; the Simulator's Metal is a different implementation, so shader behaviour, precision and performance all differ. A `Laan iPad Pro (11-inch, 3rd gen)` is paired and available on this machine — installing the archive on it is the highest-value remaining check. |
+| **Export from the archive** | `archive` now verified; `-exportArchive` with a distribution profile, and the ASC upload itself, are not. |
+| **iOS 17 at runtime** | 17.0 is compile- and archive-verified only. An API that compiles but is unavailable at runtime would crash on a real 17.x device. |
+| **Import / export on device** | STEP was exercised end-to-end on the Simulator (2026-08-29). STL/OBJ/DXF/3MF/GLB have only had their menu entries opened, and nothing has been through a real device's file providers. |
+| **Apple Pencil** | Implemented; the Simulator cannot test it. |
 | **AR Quick Look** | Needs a device. |
-| **iOS 17 at runtime** | 17.0 is compile-verified only. An API that compiles but is unavailable at runtime would crash on a real 17.x device. |
-| **Performance / memory on a heavy model** | Never profiled. A twist alone can reach ~11k triangles; real models go far beyond. |
-| **Persistence across cold launch** | Testing mostly used `OS3D_FRESH`, which starts empty and bypasses existing stored projects and any SwiftData migration path. |
+| **Performance / memory on a heavy model** | Never profiled. |
+| **Persistence across cold launch** | Testing leans on `OS3D_FRESH`, which starts empty and bypasses stored projects and any SwiftData migration path. Note `openshape3dApp.swift:43` still `fatalError`s if the `ModelContainer` fails to open — acceptable for 1.0 (no prior schema to migrate from), but it means a corrupted store is an unrecoverable launch crash. |
 
+## Verified good (2026-09-03)
 
-Findings from the pre-submission pass. Ordered by how much they matter for a
-1.0 launch. Nothing here blocks the build — the Release/device build succeeds —
-these are shipping-configuration issues.
-
-## 1. Deployment target is iOS 26.2 — almost certainly wrong
-
-`IPHONEOS_DEPLOYMENT_TARGET = 26.2`, and the shipped `Info.plist` carries
-`MinimumOSVersion = 26.2`. That restricts the app to devices on the newest OS
-and excludes essentially the entire installed base. It reads like an inherited
-Xcode 26 default rather than a decision.
-
-The realistic floor is set by what the code actually uses:
-
-| Requirement | Minimum iOS |
-| --- | --- |
-| `@Observable` (Observation) | 17.0 |
-| SwiftData (`ModelContainer`, `@Query`) | 17.0 |
-| `PhotosPicker` | 16.0 |
-| `Task.sleep(for:)` | 16.0 |
-
-**Verified: the project compiles cleanly at both 18.0 and 17.0.** A full Release
-build for device (`generic/platform=iOS`, arm64) at
-`IPHONEOS_DEPLOYMENT_TARGET=17.0` produced zero errors. iOS 17.0 is the floor —
-SwiftData and `@Observable` both require it.
-
-So this is a **one-line change with a verified compile**:
-
-```
-IPHONEOS_DEPLOYMENT_TARGET = 17.0
-```
-
-Still worth a smoke test on a 17.x simulator before shipping (compiling is not
-the same as running — an unavailable-API call guarded only at runtime would slip
-through), but the expensive unknown is answered: nothing in the codebase needs
-iOS 26. This is the single highest-value fix before launch.
-
-## 2. `CFBundleDisplayName` is missing
-
-The app installs as **"openshape3d"** — lowercase, no spaces. Set a display name
-(e.g. "OpenShape 3D") so the home screen and App Store listing read properly.
-
-## 3. No export-compliance declaration
-
-`ITSAppUsesNonExemptEncryption` is absent, so App Store Connect asks the
-encryption question on **every** upload. Adding it (almost certainly `false` —
-the app ships no custom crypto) removes that friction permanently.
-
-## 4. No document type declarations
-
-The app has its own `.os3d` project format and imports STEP / STL / OBJ / DXF,
-but declares no `CFBundleDocumentTypes`, `UTExportedTypeDeclarations` or
-`UTImportedTypeDeclarations`. Today a user cannot open a `.os3d` file from Files
-or Mail into the app, and the type isn't registered to it. Not a blocker; a real
-UX gap for a CAD app, and it makes a good listing bullet ("open STEP/STL files
-straight from Files").
-
-**This now has a second, concrete cost (found 2026-08-29).** Because nothing
-declares `.step`, `.stp`, `.dxf` or `.os3d`, `UTType(filenameExtension:)`
-returns a DYNAMIC type for each, and a document picker filtered to a dynamic
-type matches no file at all. The importers work around it by also allowing
-`.data`, which means the STEP and DXF pickers show every file on the device
-rather than the ones they can read. Declaring the types fixes the filtering and
-the Files integration together.
-
-**Sequencing note:** the declaration cannot be added while
-`GENERATE_INFOPLIST_FILE = YES` — Xcode then ignores `INFOPLIST_FILE` outright
-(tried it; the keys never reach the built bundle). Moving the app to a checked-in
-Info.plist is the actual first step.
-
-## 5. Debug hooks ship in the release binary
-
-`OS3D_DEBUG_SEED`, `OS3D_DEBUG_SEED_CYLINDER/BOOLEAN/PRIMBOOL/IMAGE`,
-`OS3D_FRESH`, `OS3D_AUTO_OPEN` are read via `ProcessInfo.environment` without an
-`#if DEBUG` guard, so the seeding code is compiled into the shipping app.
-
-Not exploitable — a user can't set environment variables for an App Store app,
-and `OS3D_FRESH` only creates a new empty project (it does not delete data). This
-is hygiene, not a security issue. Worth wrapping in `#if DEBUG` so the paths and
-their seed assets don't ship.
-
-## 1b. iPhone layout is broken — decide iPhone vs iPad-only
-
-The app declares iPhone support (`UIDeviceFamily = [1, 2]`) but the bottom bars
-are unusable at iPhone width. On an iPhone 17 Pro Max:
-
-- **Primitive-dimension bar**: labels truncate to single characters ("E", "c",
-  "x"), the bar clips vertically, and the Copy button overlaps it.
-  → `marketing/bugs/iphone-primitive-bar-truncated.png`
-- **Extrude bar** (much worse): "Extrude", "Offset Plane" and "Cancel" each wrap
-  **vertically, one letter per line**; the Extrude button renders as an
-  unlabeled blue pill; the bar eats ~40% of the screen; and the tool palette is
-  cut off so Material / Select / Delete are unreachable.
-  → `marketing/bugs/iphone-extrude-bar-broken.png`
-
-Likely cause: the bars lay out as a single fixed `HStack` sized for iPad width,
-so at iPhone width SwiftUI compresses each label to its minimum and wraps
-per-character.
-
-Two paths — this is a product decision:
-
-- **(A) Make the bars adaptive** — compact size class gets a scrollable/2-row
-  layout, icons instead of words, `lineLimit(1)` + `minimumScaleFactor`, and a
-  scrollable tool palette.
-- **(B) Ship iPad-only for 1.0** — `TARGETED_DEVICE_FAMILY = 2`. Common for CAD
-  apps, removes the entire problem class, and means only iPad screenshots are
-  needed.
-
-Reviewers do exercise iPhone layout when an app declares iPhone support, so
-shipping as-is on both families invites a rejection.
-
-## 2b. Fillet tears curved solids
-
-Filleting edges of a **twisted** solid produces torn, self-intersecting geometry
-rather than a blend or a clean refusal.
-→ `marketing/bugs/fillet-on-twisted-solid-broken.png`
-
-Fillet is correct on prismatic edges (verified on a plain box — clean rounded
-corner). A twisted solid's corner rails are helical, outside the documented
-mesh-fillet v1 envelope; the problem is that it fails **destructively** instead
-of detecting the unsupported input and refusing.
-
-## Verified good
-
-- **Release build for device (arm64) succeeds.** Only warning is `sprintf`
-  deprecation from OpenCASCADE's own headers (third-party, harmless).
-- **OCCT.xcframework has both slices** — `ios-arm64` and `ios-arm64-simulator`
-  — so the device archive links.
-- **App icon set is complete**, including the 1024×1024 marketing icon.
-- **`UIDeviceFamily = [1, 2]`** (iPhone + iPad). The `7` in
-  `TARGETED_DEVICE_FAMILY` only applies to a visionOS destination and does not
-  leak into the iOS build.
+- **`ARCHIVE SUCCEEDED`** for `generic/platform=iOS`, Release, with automatic
+  signing against team `34FWY7G2HB` and a real provisioning profile embedded.
+- **Bundle**: 33 MB, single-arch **arm64**, `_CodeSignature` present,
+  `default.metallib` compiled, `PrivacyInfo.xcprivacy` and `Assets.car`
+  included, `embedded.mobileprovision` present.
+- **Unit suite: 1263 tests, 0 failures, 1 skipped by design** (24 s, iPad Pro
+  13-inch (M5) simulator, `-parallel-testing-enabled NO`).
+- **App icon set complete**, and the 1024×1024 marketing icon has **no alpha
+  channel** (`sips -g hasAlpha` → `no`) — the usual silent ASC rejection.
+- **OCCT.xcframework has all three slices** — `ios-arm64`,
+  `ios-arm64-simulator`, `ios-arm64-maccatalyst` — and all three static libs
+  are **materialized through Git LFS** (~147 MB each), not left as pointers.
+- **One third-party SPM dependency**: Euclid, MIT, pinned in a tracked
+  `Package.resolved` to `0.8.18` / `be1096bc`.
 - **No privacy usage strings needed.** `PhotosPicker` and `QLPreviewController`
-  (AR Quick Look) both run out-of-process, so neither requires
-  `NSPhotoLibraryUsageDescription` nor `NSCameraUsageDescription`.
-- **Orientations**: all four on iPad, three on iPhone.
-- **746 unit tests pass** (0 failures).
+  both run out-of-process.
+- Only 6 `print(` calls in the whole target; one `fatalError` (above).
 
-## Automated suite results
+### Not a defect: the x86_64 simulator link failure
 
-| Suite | Result |
-| --- | --- |
-| `openshape3dTests` (unit) | **746 passed, 0 failed** |
-| `openshape3dUITests` | **85 tests / 43 suites, 3 failed** (39 min) |
+A Release build for `generic/platform=iOS Simulator` **fails to link x86_64**
+("symbol(s) not found for architecture x86_64"). OCCT ships an arm64-only
+simulator slice. The arm64 simulator slice and the arm64 device slice both link
+fine, and nothing ships x86_64 — Apple Silicon simulators are arm64 and the
+store build is device-only. Build simulator Release with
+`-destination 'platform=iOS Simulator,name=<an arm64 sim>'` rather than
+`generic/…` if you need it.
 
-The three UI failures, each re-run in isolation:
+## How this was checked
 
-| Test | Isolation | Verdict |
-| --- | --- | --- |
-| `ItemsUITests.testItemsPanelVisibilityRenameAndDelete` | **passes** | long-run flake |
-| `SymbolUITests.testMakeSymbolInsertTwiceAndRenameInItems` | **passes** | long-run flake |
-| `FaceFlowUITests.testTypeNegativeIntoArrowPill` | **still fails** | real — see below |
+```
+export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer   # this machine
 
-The two flakes share a signature — both assert *"Submitting the field should
-rename…"* and both drive a rename text field. That points at keyboard/focus
-state leaking between tests in a long run rather than an app defect, but it is
-worth stabilising so the suite is trustworthy as a release gate.
+xcodebuild -project openshape3d.xcodeproj -scheme openshape3d \
+  -configuration Release -destination 'generic/platform=iOS' \
+  -archivePath /tmp/openshape3d.xcarchive archive
 
-`testTypeNegativeIntoArrowPill` is **not** a flake: it fails in the full run AND
-in isolation on **iPad Air 13-inch (M3)**, while passing repeatedly on **iPad Pro
-13-inch (M5)**. Device-dependent, so either the test hardcodes coordinates that
-don't map on the Air, or typing a negative into the pill genuinely fails to
-commit an inward push at that geometry. Needs a look before relying on the
-suite as a gate — and if it is the latter, it is a user-facing bug.
+plutil -p /tmp/openshape3d.xcarchive/Products/Applications/openshape3d.app/Info.plist
+strings   /tmp/openshape3d.xcarchive/Products/Applications/openshape3d.app/openshape3d \
+  | grep -E 'AgentServer|AgentBridge|OS3D_'        # must be empty
+sips -g hasAlpha openshape3d/Assets.xcassets/AppIcon.appiconset/icon-ios-1024x1024.png
 
-## Feature walkthrough on iPad — all worked
+xcodebuild test -project openshape3d.xcodeproj -scheme openshape3d \
+  -destination 'platform=iOS Simulator,name=iPad Pro 13-inch (M5)' \
+  -parallel-testing-enabled NO -only-testing:openshape3dTests
+```
 
-Driven by hand on an iPad Air 13". Everything below produced correct geometry
-and correct measurements:
-
-| Flow | Result |
-| --- | --- |
-| Sketch on the ground plane (Rect) | ✓ |
-| Extrude to a solid, live preview + numeric distance | ✓ Volume 0.93 mm³ |
-| Face select → Transform ▸ Rotate → **twist** | ✓ smooth screw walls, top face area preserved |
-| Modify ▸ Fillet on a plain box | ✓ clean rounded edge |
-| **Sketch on a face** of a filleted solid | ✓ strokes clearly visible, stayed on the face |
-| **Pass-through cut** (sketch on face → extrude −5.5 mm, Auto → subtract) | ✓ real opening, interior walls visible |
-| X-Ray display mode | ✓ shows the cut passing clean through |
-| Display modes menu (Shaded / No Edges / Wireframe / X-Ray / Hidden Edges) | ✓ |
-| Parametric History panel | ✓ Extrude node with editable value |
-
-Note: the History panel is **empty for debug-seeded bodies** — the seed adds a
-body directly and bypasses the feature graph. That is expected, not a bug; a
-real sketch→extrude records a feature node as it should.
+The **UI suite was not re-run for this audit**. Its last full measurement is
+2026-09-02 (`docs/STATUS_AND_NEXT_STEPS.md`): 104 executed, 2 skipped, 46m19s,
+1 failure (`DragSolveUITests.testDragTopCornerKeepsHorizontalEdgeAndCoalesces`)
+that passed clean in isolation — the documented long-run-flake pattern. That
+predates the commits on `main` from 2026-09-03, so run it once more before
+submitting.
