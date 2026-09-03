@@ -79,6 +79,11 @@ fp(node) = hash( json(node.kind, sortedKeys), node.suppressed,
 ### 2. Journal (per node, recorded while it runs)
 
 `put` and `remove` are the only two mutation choke points in `EvalState`.
+(Adoption caveat, 2026-09-02: when the session adopts the document's
+post-apply bodies into the memo, only the LAST node in replay order that
+`put` a given id takes the document body — in-place ops re-put their
+target's id, and the producer's own snapshot must survive for the day the
+downstream op errors or is removed. STATUS gotcha 28.)
 While node N evaluates, `state.currentNode = N` and every `put`/`remove`
 appends to `journal[N]` as an ORDERED op list; at node end each put is
 back-filled with the kernel-face names the op wrote after its put, and the

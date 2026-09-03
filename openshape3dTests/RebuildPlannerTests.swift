@@ -34,7 +34,8 @@ final class RebuildPlannerTests: XCTestCase {
                 leadingCommands: leading, title: "Rebuild")
             for command in plan.commands { command.apply(to: &doc) }
             doc.features = graph
-            cache.adopt(Dictionary(uniqueKeysWithValues: doc.bodies.map { ($0.id, $0) }))
+            cache.adopt(Dictionary(uniqueKeysWithValues: doc.bodies.map { ($0.id, $0) }),
+                        order: doc.features.nodes.map(\.id))
             return plan
         }
     }

@@ -60,11 +60,27 @@ nonisolated struct EvalCache: Sendable {
     /// needless replace, no GPU rebuild) and the memo does not double the
     /// geometry it remembers. Metadata and transform stay the replay's own:
     /// `performRebuild` re-applies the live name/hidden/material itself.
-    mutating func adopt(_ live: [BodyID: Body]) {
+    ///
+    /// Only the LAST node in `order` that puts a body id adopts it. An
+    /// in-place op (boolean, blend, shell, push-pull) re-puts its target's
+    /// id, so the document body is the LAST putter's output — the producer's
+    /// own put must keep its snapshot. Adopting it too handed every later
+    /// replay an already-cut plate as the plate node's "output": a boolean
+    /// whose tool went stale left the old pocket in place, and re-picking
+    /// the tool cut the pocketed body again (found live, 2026-09-02).
+    mutating func adopt(_ live: [BodyID: Body], order: [FeatureID]) {
+        var lastPutter: [BodyID: FeatureID] = [:]
+        for id in order {
+            guard let entry = entries[id] else { continue }
+            for op in entry.delta.ops {
+                if case let .put(body, _, _) = op { lastPutter[body.id] = id }
+            }
+        }
         for (id, entry) in entries {
             var delta = entry.delta
             delta.ops = delta.ops.map { op in
-                guard case let .put(body, table, names) = op, let doc = live[body.id] else { return op }
+                guard case let .put(body, table, names) = op, lastPutter[body.id] == id,
+                      let doc = live[body.id] else { return op }
                 var adopted = body
                 adopted.meshRevision = doc.meshRevision
                 adopted.render = doc.render

@@ -392,7 +392,7 @@ plane sections, exact face areas, holed-sweep naming, CSG-free render meshes):
   re-uploading all buffers per tick, measurement caching; S3 untouched.
   Gotcha 26 below.
 
-**Current test baseline (2026-09-02, evening): 1238 unit tests in ~21s** — the
+**Current test baseline (2026-09-02, evening): 1239 unit tests in ~21s** — the
 day added the exact helix spine, the BEG 55 lineup's bounds/mirror fixes,
 transform-as-a-feature, consumed-edge drafts on both offset paths, plane
 sections (`SectionKit`, `KernelSectionTests`), the exact face areas, and the
@@ -1219,6 +1219,22 @@ first differing frame is the one you want.
     with `accessibilityValue` "on"/"off" so the UI test can read the state
     the row re-derives from the document. Same rule for anything else that
     goes into a tappable row: make it a Button, or it is a selection tap.
+
+28. **The memo's `adopt` must only touch the LAST node that put a body id.**
+    Found live through the new repair flow (2026-09-02): delete the node
+    that made a subtract's tool → the subtract errors, fine — but the plate
+    kept the OLD pocket, and re-picking the tool cut the pocketed plate
+    again (10,191 → 8,911 instead of 9,551). `EvalCache.adopt` rewrote
+    EVERY cached `.put` of a body id with the document's final body, so
+    after an in-place op (boolean / blend / shell / push-pull re-put their
+    target's id) the PRODUCER node's cached output was the already-cut
+    body, and every later splice started from it. `adopt(_:order:)` now
+    adopts only where the node is the last putter of that id in replay
+    order; earlier putters keep their own snapshots (they are intermediate
+    state, never diffed against the document unless a downstream node goes
+    away — when their snapshot is exactly what must come back).
+    `HistoryBooleanRepairReplayTests` pins subtract → delete the tool's
+    node (8,000 again) → re-pick (8,000 − the new overlap only).
 
 ---
 

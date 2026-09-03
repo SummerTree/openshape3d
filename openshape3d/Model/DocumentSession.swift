@@ -436,7 +436,8 @@ final class DocumentSession {
     /// compare equal to what is live and the memo does not double the
     /// geometry it remembers — see `EvalCache.adopt`.
     private func adoptCachedBodies() {
-        evalCache.adopt(Dictionary(uniqueKeysWithValues: document.bodies.map { ($0.id, $0) }))
+        evalCache.adopt(Dictionary(uniqueKeysWithValues: document.bodies.map { ($0.id, $0) }),
+                        order: document.features.nodes.map(\.id))
     }
 
     /// Stamp which body revisions `lastFaceTables`/`lastKernelNames`
