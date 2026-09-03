@@ -11007,6 +11007,9 @@ final class EditorViewModel {
         /// angle, radius, thickness, factor, draft — empty for kinds with none
         /// (G8: every scalar a feature has is editable in its History row).
         var scalars: [FeatureScalar] = []
+        /// The node's editable options — Bool toggles (symmetric, keep
+        /// original) and choices (a boolean's type) — empty when it has none.
+        var options: [FeatureOption] = []
 
         /// True when this row edits a linear/circular pattern.
         var isPattern: Bool { patternSpec != nil }
@@ -11044,6 +11047,45 @@ final class EditorViewModel {
         case taperAngle
         /// Face rotate: shown in degrees, stored in radians (the kernel's unit).
         case rotateAngle
+    }
+
+    /// One editable option of a feature, as the History row shows it: a
+    /// Bool toggle or a choice among named alternatives.
+    struct FeatureOption: Identifiable, Equatable, Sendable {
+        enum Value: Equatable, Sendable {
+            case toggle(Bool)
+            case choice(selected: String, choices: [String])
+        }
+        let key: FeatureOptionKey
+        let label: String
+        let value: Value
+        var id: FeatureOptionKey { key }
+    }
+
+    enum FeatureOptionKey: String, Hashable, Sendable {
+        case symmetric
+        case keepOriginal
+        case booleanKind
+    }
+
+    private static let booleanKindChoices: [(kind: BooleanKind, label: String)] = [
+        (.union, "Union"), (.subtract, "Subtract"), (.intersect, "Intersect"),
+    ]
+
+    /// The editable options of a feature kind, in display order.
+    static func options(of kind: FeatureKind) -> [FeatureOption] {
+        switch kind {
+        case let .extrude(_, _, _, symmetric, _, _), let .draftExtrude(_, _, _, _, symmetric, _):
+            return [FeatureOption(key: .symmetric, label: "Symmetric", value: .toggle(symmetric))]
+        case let .mirror(_, _, keepOriginal):
+            return [FeatureOption(key: .keepOriginal, label: "Keep original", value: .toggle(keepOriginal))]
+        case let .boolean(booleanKind, _, _):
+            let selected = booleanKindChoices.first { $0.kind == booleanKind }?.label ?? "Union"
+            return [FeatureOption(key: .booleanKind, label: "Type",
+                                  value: .choice(selected: selected, choices: booleanKindChoices.map(\.label)))]
+        default:
+            return []
+        }
     }
 
     /// The editable scalars of a feature kind, in display order.
@@ -11236,7 +11278,8 @@ final class EditorViewModel {
                 errorText: error.map(Self.errorText),
                 isRolledBack: index >= cut,
                 patternSpec: patternSpec,
-                scalars: Self.scalars(of: node.kind)
+                scalars: Self.scalars(of: node.kind),
+                options: Self.options(of: node.kind)
             )
         }
     }
@@ -11379,6 +11422,45 @@ final class EditorViewModel {
             session.editFeature(id, to: .rotateFace(face: face, angle: Expr(value: radians), axis: axis))
             session.save()
         }
+    }
+
+    /// Flip one of a feature's Bool options (History row toggles). A key the
+    /// kind does not have, or a value it already has, changes nothing.
+    func setFeatureOption(_ id: FeatureID, key: FeatureOptionKey, toggle on: Bool) {
+        guard let node = session.document.features.node(id) else { return }
+        let after: FeatureKind
+        switch (key, node.kind) {
+        case let (.symmetric, .extrude(profile, plane, distance, symmetric, boolean, extras)):
+            guard symmetric != on else { return }
+            after = .extrude(profile: profile, plane: plane, distance: distance,
+                             symmetric: on, boolean: boolean, extraProfiles: extras)
+        case let (.symmetric, .draftExtrude(profile, plane, distance, taperAngle, symmetric, boolean)):
+            guard symmetric != on else { return }
+            after = .draftExtrude(profile: profile, plane: plane, distance: distance,
+                                  taperAngle: taperAngle, symmetric: on, boolean: boolean)
+        case let (.keepOriginal, .mirror(body, plane, keepOriginal)):
+            guard keepOriginal != on else { return }
+            after = .mirror(body: body, plane: plane, keepOriginal: on)
+        default:
+            return
+        }
+        prepareForHistoryChange()
+        session.editFeature(id, to: after)
+        session.save()
+    }
+
+    /// Pick one of a feature's choice options by its label (History row
+    /// menus). Today that is a boolean node's type; its operands are kept.
+    func setFeatureOption(_ id: FeatureID, key: FeatureOptionKey, choice: String) {
+        guard key == .booleanKind,
+              let node = session.document.features.node(id),
+              case let .boolean(current, target, tools) = node.kind,
+              let picked = Self.booleanKindChoices.first(where: { $0.label == choice })?.kind,
+              picked != current
+        else { return }
+        prepareForHistoryChange()
+        session.editFeature(id, to: .boolean(kind: picked, target: target, tools: tools))
+        session.save()
     }
 
     /// The same feature kind with its primary scalar replaced, or nil if it has

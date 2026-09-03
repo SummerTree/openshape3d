@@ -380,9 +380,16 @@ carries `[FeatureScalar]` (`EditorViewModel.scalars(of:)`), the panel renders
 one field per scalar, and `editFeatureScalar(_:key:value:)` rewrites the
 node's `Expr` through `session.editFeature` (one undo step, rebuild
 downstream). Before this the panel showed a bare "mm" field for five kinds
-and nothing for the other four. Still open in G8: the reference rows
-(re-pick profile / body / faces / edges), the option controls (symmetric,
-boolean intent, keep-original), and the stale-reference repair flow.
+and nothing for the other four. **The option slice followed the same
+evening:** `[FeatureOption]` on the row (`options(of:)`) — extrude and draft
+extrude *Symmetric*, mirror *Keep original* as switches, a boolean node's
+*Type* (Union / Subtract / Intersect) as a menu — through
+`setFeatureOption(_:key:toggle:)` / `(_:key:choice:)`, operands untouched,
+one undo step each (`HistoryOptionEditTests`). Still open in G8: the
+reference rows (re-pick profile / body / faces / edges), the boolean
+INTENT of extrude / revolve / sweep / loft (changing new-body → subtract
+needs a target pick, so it belongs with the reference rows), and the
+stale-reference repair flow.
 
 **Acceptance**
 - Every `FeatureKind` case renders its full parameter set in its History row.

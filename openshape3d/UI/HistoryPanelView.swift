@@ -43,6 +43,8 @@ struct HistoryPanelView: View {
                             ? { viewModel.beginBlendEdit(row.id) }
                             : nil,
                         onEditScalar: { viewModel.editFeatureScalar(row.id, key: $0, value: $1) },
+                        onSetOptionToggle: { viewModel.setFeatureOption(row.id, key: $0, toggle: $1) },
+                        onSetOptionChoice: { viewModel.setFeatureOption(row.id, key: $0, choice: $1) },
                         onEditPatternCount: { viewModel.editPatternCount(row.id, $0) },
                         onEditPatternSpacing: { viewModel.editPatternSpacing(row.id, $0) },
                         onEditPatternAngle: { viewModel.editPatternAngle(row.id, $0) }
@@ -171,6 +173,8 @@ private struct HistoryRowView: View {
     /// Non-nil for chamfer / fillet: offers "Edit Edges".
     let onEditEdges: (() -> Void)?
     let onEditScalar: (EditorViewModel.FeatureScalarKey, Double) -> Void
+    let onSetOptionToggle: (EditorViewModel.FeatureOptionKey, Bool) -> Void
+    let onSetOptionChoice: (EditorViewModel.FeatureOptionKey, String) -> Void
     let onEditPatternCount: (Int) -> Void
     let onEditPatternSpacing: (Double) -> Void
     let onEditPatternAngle: (Double) -> Void
@@ -283,6 +287,44 @@ private struct HistoryRowView: View {
                 .background(.quaternary, in: RoundedRectangle(cornerRadius: 6))
                 .padding(.leading, 32)
                 // Editing a rolled-back node is a silent no-op; block the fields.
+                .disabled(row.isRolledBack)
+            }
+
+            if !row.options.isEmpty {
+                VStack(alignment: .leading, spacing: 4) {
+                    ForEach(row.options) { option in
+                        switch option.value {
+                        case let .toggle(isOn):
+                            Toggle(option.label, isOn: Binding(
+                                get: { isOn },
+                                set: { onSetOptionToggle(option.key, $0) }))
+                            .toggleStyle(.switch)
+                            .controlSize(.mini)
+                            .font(.caption2)
+                            .foregroundStyle(.barLabel)
+                            .accessibilityIdentifier("HistoryOption-\(option.key.rawValue)-\(row.name)")
+                        case let .choice(selected, choices):
+                            HStack(spacing: 4) {
+                                Text(option.label)
+                                    .font(.caption2)
+                                    .foregroundStyle(.barLabel)
+                                Picker(option.label, selection: Binding(
+                                    get: { selected },
+                                    set: { onSetOptionChoice(option.key, $0) })) {
+                                    ForEach(choices, id: \.self) { Text($0).tag($0) }
+                                }
+                                .pickerStyle(.menu)
+                                .labelsHidden()
+                                .accessibilityIdentifier("HistoryOption-\(option.key.rawValue)-\(row.name)")
+                            }
+                        }
+                    }
+                }
+                .font(.caption.weight(.semibold))
+                .padding(.horizontal, 6)
+                .padding(.vertical, 3)
+                .background(.quaternary, in: RoundedRectangle(cornerRadius: 6))
+                .padding(.leading, 32)
                 .disabled(row.isRolledBack)
             }
 
