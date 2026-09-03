@@ -6418,6 +6418,29 @@ final class EditorViewModel {
 
     func cancelExtrudeArrowEdit() { editingExtrudeArrow = false }
 
+    /// Extrude end condition (Through All / Up To Next): resolve it against
+    /// the document's bodies from the profile's centroid along the current
+    /// direction, apply it as the tool's distance and return the value in
+    /// mm (signed like the current distance). nil when nothing lies ahead —
+    /// the caller tells the person and leaves the distance alone.
+    @discardableResult
+    func resolveExtrudeEnd(_ end: ExtrudeEnd) -> Double? {
+        guard let context = toolContext, case .extrude(let current) = context.kind else { return nil }
+        let sign: Double = current < 0 ? -1 : 1
+        let direction = sign * context.plane.normal
+        guard let mm = ExtrudeEndKit.resolve(end, plane: context.plane, seed: context.profile.centroid,
+                                             direction: direction, symmetric: context.symmetric,
+                                             bodies: session.document.bodies) else {
+            errorMessage = "\(end.title): nothing ahead of the sketch along the extrude direction."
+            return nil
+        }
+        // With Symmetric on the field is per side; Through All resolved the
+        // farther reach already, so it is the per-side value as it stands.
+        let signed = sign * mm
+        setExtrudeDistance(signed)
+        return signed
+    }
+
     func setExtrudeSymmetric(_ symmetric: Bool) {
         guard var context = toolContext, case .extrude = context.kind,
               context.symmetric != symmetric
@@ -6794,6 +6817,35 @@ final class EditorViewModel {
         // Cut scope (spec §4.1): a subtract applies to EVERY intersected
         // body; union/intersect keep the first touched target.
         let targets = kind == .subtract ? touched : [touched[0]]
+        let hides = consumedSketchHideCommands(context)
+
+        // Phase D: a SINGLE feature-owned target replays through the graph, so
+        // the committed body is the evaluator's result — an OCCT B-rep with
+        // analytic holes, STEP export and fast blends — not the Euclid mesh the
+        // preview was drawn from. Found live 2026-09-03: a touch-committed cut
+        // left the body mesh-only (a 25 mm hole came out a 48-gon, 0.29 %
+        // small) while the same node over the agent bridge stayed exact,
+        // because the node was appended here but never evaluated. The mesh
+        // result below stays the fallback when the replay reports an error,
+        // and the path for multi-body cuts and non-feature targets, which the
+        // evaluators can't replay.
+        if targets.count == 1,
+           let targetOwner = featureNode(owning: targets[0].target.id),
+           let node = toolFeatureNode(
+               context: context,
+               boolean: BooleanIntent(
+                   op: kind.featureOp,
+                   resolvedTargets: [BodyRef(
+                       producer: targetOwner.id, bodyID: targets[0].target.id)]),
+               outputBodyIDs: [targets[0].target.id]) {
+            session.recordAndRebuild([node], extra: hides, title: title)
+            if session.lastEvalErrors[node.id] == nil {
+                finishToolCommit(selecting: targets[0].target.id)
+                return
+            }
+            session.undo()
+        }
+
         var commands: [DocumentCommand] = []
         for entry in targets {
             let merged: Euclid.Mesh
@@ -6831,11 +6883,11 @@ final class EditorViewModel {
 
         // Shapr3D parity (spec §11): sketches auto-hide once a tool consumes
         // them into a body, in the same undo step.
-        commands.append(contentsOf: consumedSketchHideCommands(context))
-        // Phase D: record the tool's feature node (extrude in tranche 1;
-        // revolve / sweep / loft in tranche 2) with the resolved boolean intent,
-        // but only for a SINGLE feature-owned target — the evaluators apply one
-        // boolean into one target, so a multi-body cut or a non-feature target
+        commands.append(contentsOf: hides)
+        // Record the tool's feature node with the resolved boolean intent even
+        // on this mesh path (as before the replay above existed), but only for
+        // a SINGLE feature-owned target — the evaluators apply one boolean
+        // into one target, so a multi-body cut or a non-feature target
         // couldn't be faithfully replayed.
         if targets.count == 1,
            let targetOwner = featureNode(owning: targets[0].target.id),
@@ -6854,10 +6906,14 @@ final class EditorViewModel {
             // Multi-body cut is one undo step.
             session.perform(CompositeCommand(title: title, commands: commands))
         }
-        let selected = targets[0].target.id
+        finishToolCommit(selecting: targets[0].target.id)
+    }
+
+    /// The tool is down; its result is the selection.
+    private func finishToolCommit(selecting id: BodyID) {
         toolContext = nil
-        mode = .selected(selected)
-        selection = [selected]
+        mode = .selected(id)
+        selection = [id]
         session.save()
     }
 
@@ -6878,10 +6934,24 @@ final class EditorViewModel {
             euclidMesh: localMesh,
             revision: preview.meshRevision
         )
+        let hides = consumedSketchHideCommands(context)
+        // A new stand-alone tool body is a `.newBody` history node; replaying
+        // it makes the body the evaluator's B-rep (see `commitToolResult`).
+        // The preview mesh below is the fallback when the replay errors.
+        if let node = toolFeatureNode(
+            context: context,
+            boolean: BooleanIntent(op: .newBody, resolvedTargets: []),
+            outputBodyIDs: [body.id]) {
+            session.recordAndRebuild([node], extra: hides, title: title)
+            if session.lastEvalErrors[node.id] == nil,
+               session.document.bodies.contains(where: { $0.id == body.id }) {
+                finishToolCommit(selecting: body.id)
+                return
+            }
+            session.undo()
+        }
         var commands: [DocumentCommand] = [AddBodyCommand(body: body, title: title)]
-        commands.append(contentsOf: consumedSketchHideCommands(context))
-        // Phase D: a new stand-alone tool body becomes a `.newBody` history node
-        // — extrude in tranche 1, or revolve / sweep / loft in tranche 2.
+        commands.append(contentsOf: hides)
         if let node = toolFeatureNode(
             context: context,
             boolean: BooleanIntent(op: .newBody, resolvedTargets: []),
@@ -6893,10 +6963,7 @@ final class EditorViewModel {
         } else {
             session.perform(CompositeCommand(title: title, commands: commands))
         }
-        toolContext = nil
-        mode = .selected(body.id)
-        selection = [body.id]
-        session.save()
+        finishToolCommit(selecting: body.id)
     }
 
     /// Hide-the-consumed-sketch commands for a committing tool (Shapr3D

@@ -584,6 +584,29 @@ struct NumericInputBar: View {
                 }
             }
 
+            // End condition: Through All / Up To Next resolve to a distance
+            // from the bodies in the document and land in the field, where
+            // the person can still change it (spec: SOLIDWORKS end conditions).
+            Menu {
+                ForEach(ExtrudeEnd.allCases, id: \.self) { end in
+                    Button(end.title) {
+                        if end == .blind { return }
+                        // Text typed but not yet submitted still decides the
+                        // direction (its sign), so apply it first.
+                        if extrudeDistanceText != extrudeDistanceDisplay(context.distance) {
+                            _ = applyExtrudeDistanceText()
+                        }
+                        if let mm = viewModel.resolveExtrudeEnd(end) {
+                            extrudeDistanceText = extrudeDistanceDisplay(mm)
+                        }
+                    }
+                }
+            } label: {
+                Label("End", systemImage: "arrow.down.to.line")
+                    .labelStyle(.titleOnly)
+            }
+            .accessibilityIdentifier("ExtrudeEndMenu")
+
             // Symmetric sides: distance is per-side, total depth 2×.
             Button("Symmetric") {
                 viewModel.setExtrudeSymmetric(!context.symmetric)

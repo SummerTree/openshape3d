@@ -33,6 +33,36 @@ design), `FREECAD_PLAYBOOK.md` (the FreeCAD-derived hardening ledger),
   draft of existing faces, loft profile normals. Sheets are fetched to
   the scratchpad from the database's `/api/headless/problems` index
   (some are zips; the server throttles after ~150 downloads).
+  Second pass (same day): 43 sheets, 35 pass; and the first gap closed —
+  **extrude end conditions**: `ExtrudeEndKit` resolves Through All (the
+  targets' extent along the normal + 1 mm) and Up To Next (the first
+  face a ray from the profile centroid hits, the sketch's own face
+  skipped) into the node's distance at commit time, from the bodies'
+  world-space render meshes. Reached from the Extrude bar's new End menu
+  (the value lands in the Distance field, still editable) and from the
+  agent (`feature.extrude` `"end"`, the distance's sign giving the
+  direction). The node stays a plain distance, so the History row and
+  every downstream consumer are unchanged; a live re-evaluating end
+  condition is the next step if the sheets need it.
+  `ExtrudeEndKitTests`, `testExtrudeEndConditionReplacesTheDistance`.
+  Third pass (2026-09-03, by touch on the simulator): the End menu
+  checked with the fingers — a 25 mm circle on a block's top face, `-1`
+  typed, End › Up To Next writes −20 into the field, Extrude cuts it —
+  and that check found the campaign's biggest UI finding: **every
+  touch-committed create tool left a MESH-ONLY body.** `commitToolResult`
+  did the boolean in Euclid, replaced the body with that mesh and
+  appended the feature node without evaluating it, so the hole was a
+  48-gon (0.29 % small), `brep: false`, no STEP, mesh-path blends —
+  while the same node over the agent bridge was exact, because the
+  bridge calls `rebuildFrom`. Now both commit paths (boolean and
+  stand-alone) go through `session.recordAndRebuild` (which grew an
+  `extra:` for the sketch auto-hides, same undo step); the Euclid result
+  stays the fallback when the replay reports an error, and the path for
+  multi-body cuts and non-feature targets. Live after the fix: the cut
+  reads 80730.09 (analytic) with `brep: true`, and a stand-alone
+  cylinder 19634.95, both `/v1/check` clean. Rebuilt sheet volumes from
+  the runner were never affected (bridge path); touch-built ones (2.13's
+  8009.08) were exact only because they had no round edges.
 
 - **Two TraceParts composite robots rebuilt THROUGH THE UI (2026-09-03;
   suite 1250/1250).** ROKAE CMR-ST600-CR12-C (chassis 950 × 630 × 768 from
@@ -660,6 +690,10 @@ goals G7–G9. Headlines:
 (`FaceFlowUITests/testTypeNegativeIntoArrowPill`,
 `SweepLoftUITests/testSweepCircleAlongTwoSegmentLinePath`) are long-run flaky
 (pass in isolation) — rerun individually before suspecting a regression.
+`HistoryReorderUITests/testDragReorderTwoExtrudes` fails outright as of
+2026-09-03 ("Not hittable: HistoryRow-Extrude" at the press-and-drag, both
+rows visibly present) — on HEAD before the touch-commit change too, verified
+by stashing; it is a pre-existing break, not a regression of that work.
 
 **If the whole test target dies at bootstrap** with *"Early unexpected exit …
 Test crashed with signal bus before establishing connection"*, and the app also
@@ -1434,6 +1468,29 @@ first differing frame is the one you want.
     arcs must derive endpoints from the same numbers the lines use. The
     refusal of an impossible fillet pair is correct behaviour, just
     silent — the message could name the crossing entities.
+
+40. **A touch-committed create tool used to land the Euclid preview mesh
+    as the body.** `commitToolResult`/`addStandaloneToolBody` appended
+    the feature node but never evaluated it, so the document body was
+    mesh-only until a History edit replayed the graph (2026-09-03, found
+    by `/v1/check` after a touch cut: `brep: false`, hole a 48-gon).
+    Both now `recordAndRebuild`; if you add a create tool, commit
+    through the graph and keep the mesh as the fallback, not the result.
+
+41. **Two camera commands in the same instant cancel each other.**
+    `animateToStandardView` and `fitScene` share one `CameraAnimator`;
+    the second call invalidates the first's display link and computes
+    its target from the camera as it is NOW, so `view.top` immediately
+    followed by `view.fit` over the bridge leaves the old orientation,
+    fitted. Pause ~0.5 s between them (the runner does). A fit that
+    chains after a pending standard view is the proper fix.
+
+42. **`scripts/swpp/kit.py`'s `Sketch` sends its entities only when a
+    feature consumes it or `commit()` is called.** A sketch built for a
+    touch check without either exists in the app as an EMPTY sketch: no
+    lines drawn, nothing to tap, and the tap falls through to whatever
+    consumed sketch shares the screen point (the base rect at y=0 stole
+    two probes before this was noticed).
 
 ---
 

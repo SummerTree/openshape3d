@@ -213,12 +213,30 @@ final class AgentBridge {
                 "undoSteps": steps,
             ])
 
-        case let .extrude(sketchID, seed, distance, symmetric, taperDegrees, booleanOp, targets):
-            guard session.document.sketches.contains(where: { $0.id == sketchID }) else {
+        case let .extrude(sketchID, seed, requested, symmetric, taperDegrees, booleanOp, targets, end):
+            guard let sketch = session.document.sketches.first(where: { $0.id == sketchID }) else {
                 return execMissing("sketch", sketchID.raw.uuidString)
             }
             if let bad = missingBody(targets, session) { return bad }
             let intent = BooleanIntent(op: booleanOp, resolvedTargets: targets.map { bodyRef($0, session) })
+            // An end condition resolves to the distance it stands for, from
+            // the boolean's targets (or every body when there are none),
+            // along the plane normal in the requested sign's direction.
+            var distance = requested
+            if let end {
+                let candidates = targets.isEmpty
+                    ? session.document.bodies
+                    : session.document.bodies.filter { targets.contains($0.id) }
+                let direction = requested >= 0 ? sketch.plane.normal : -sketch.plane.normal
+                guard let resolved = ExtrudeEndKit.resolve(end, plane: sketch.plane, seed: seed,
+                                                           direction: direction, symmetric: symmetric,
+                                                           bodies: candidates) else {
+                    return .failure(422, "Unprocessable Entity", error: "no_end_found",
+                                    message: "\"end\": \(end.rawValue) found no face ahead of the profile "
+                                           + "along the plane normal — give a \"distance\" instead.")
+                }
+                distance = requested >= 0 ? resolved : -resolved
+            }
             let profile = execProfileRef(sketchID: sketchID, seed: seed, in: session)
             let plane = PlaneRef(source: .sketch(sketchID))
             // A non-zero taper is a genuinely different construction (a loft),

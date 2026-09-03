@@ -278,11 +278,15 @@ class Sketch:
 
 # --------------------------------------------------------------- features ---
 
-def extrude(sk, seed, distance, symmetric=False, taper=0.0, cut=None, union=None, new_body=False):
+def extrude(sk, seed, distance, symmetric=False, taper=0.0, cut=None, union=None, new_body=False, end=None):
     """Modify › Extrude. `cut=[bodyIDs]` subtracts, `union=[bodyIDs]` joins;
-    otherwise a new body. Returns the produced or target body id."""
+    otherwise a new body. `end="throughAll"|"upToNext"` resolves the
+    distance from the bodies (only the sign of `distance` is used then).
+    Returns the produced or target body id."""
     sk.commit()
     args = {"sketchID": sk.id, "seedPoint": list(seed), "distance": distance, "symmetric": symmetric}
+    if end:
+        args["end"] = end
     if taper:
         args["taperDegrees"] = taper
     if cut:

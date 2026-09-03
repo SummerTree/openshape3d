@@ -64,9 +64,12 @@ nonisolated enum AgentExecOp: Sendable, Equatable {
     /// `taperDegrees` ≠ 0 makes this a DRAFT extrude (the profile lofts to an
     /// offset copy, walls sloped by the angle — cast/mould release); 0 is a
     /// plain straight prism. Positive contracts the section along the extrude.
+    /// `end` (Through All / Up To Next) replaces `distance`: the bridge
+    /// resolves it against the document's bodies at record time, so the
+    /// node still carries a plain distance (see `ExtrudeEndKit`).
     case extrude(sketch: SketchID, seed: SIMD2<Double>, distance: Double,
                  symmetric: Bool, taperDegrees: Double,
-                 boolean: BooleanIntent.Op, targets: [BodyID])
+                 boolean: BooleanIntent.Op, targets: [BodyID], end: ExtrudeEnd?)
     /// Degrees, NOT radians. `FeatureKind.revolve`'s `Expr` stores degrees and
     /// `FeatureGraph` converts once at the OCCT boundary (`angle.value * .pi / 180`).
     /// Converting here too silently produced a 6.28-DEGREE revolve that still
@@ -235,20 +238,34 @@ nonisolated enum AgentExec {
         do {
             let sketch = SketchID(raw: try uuid(a, "sketchID"))
             let seed = try vector2(a, "seedPoint")
-            let distance = try double(a, "distance")
+            // "end": "throughAll" | "upToNext" — then "distance" is optional
+            // and only its SIGN matters (which way along the plane normal).
+            var end: ExtrudeEnd? = nil
+            if let raw = a["end"] {
+                guard let s = raw as? String, let parsed = ExtrudeEnd(rawValue: s) else {
+                    return .failure(.init(code: "unknown_end",
+                                          message: "\"end\" must be one of \(ExtrudeEnd.allCases.map(\.rawValue).joined(separator: ", "))."))
+                }
+                end = parsed == .blind ? nil : parsed
+            }
+            let distance = try optionalDouble(a, "distance") ?? (end != nil ? 1 : 0)
             guard abs(distance) > 1e-9 else {
                 return .failure(.init(code: "zero_distance",
-                                      message: "A zero-distance extrude produces nothing. Give a non-zero \"distance\" in mm."))
+                                      message: "A zero-distance extrude produces nothing. Give a non-zero \"distance\" in mm, or an \"end\" of throughAll / upToNext."))
             }
             let taper = try optionalDouble(a, "taperDegrees") ?? 0
             guard abs(taper) < 89 else {
                 return .failure(.init(code: "bad_taper",
                                       message: #""taperDegrees" must be within ±89 (0 = straight)."#))
             }
+            guard end == nil || abs(taper) < 1e-9 else {
+                return .failure(.init(code: "end_with_taper",
+                                      message: "\"end\" conditions apply to straight extrudes; drop \"taperDegrees\" or give a distance."))
+            }
             let (op, targets) = try booleanIntent(a)
             return .success(.extrude(sketch: sketch, seed: seed, distance: distance,
                                      symmetric: a["symmetric"] as? Bool ?? false,
-                                     taperDegrees: taper, boolean: op, targets: targets))
+                                     taperDegrees: taper, boolean: op, targets: targets, end: end))
         } catch let e as AgentExecError { return .failure(e) } catch { return .failure(unexpected) }
     }
 

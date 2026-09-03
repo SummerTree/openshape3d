@@ -357,8 +357,35 @@ final class AgentExecTests: XCTestCase {
 
     // MARK: feature.extrude
 
+    /// "end": throughAll / upToNext stands in for the distance (only its
+    /// sign is read); a bad name is refused by name, and a taper cannot
+    /// combine with an end condition.
+    func testExtrudeEndConditionReplacesTheDistance() {
+        guard case let .extrude(_, _, distance, _, _, _, _, end)?
+            = op("""
+            {"op":"feature.extrude","args":{"sketchID":"\(sketchUUID)",
+             "seedPoint":[3,4],"end":"throughAll","boolean":"subtract",
+             "booleanTargets":["\(bodyUUID)"]}}
+            """) else { return }
+        XCTAssertEqual(end, .throughAll)
+        XCTAssertEqual(distance, 1, "no distance given → +1 placeholder carries the direction sign")
+        guard case let .extrude(_, _, signed, _, _, _, _, end2)?
+            = op("""
+            {"op":"feature.extrude","args":{"sketchID":"\(sketchUUID)",
+             "seedPoint":[3,4],"end":"upToNext","distance":-5}}
+            """) else { return }
+        XCTAssertEqual(end2, .upToNext)
+        XCTAssertEqual(signed, -5, "a given distance keeps its sign for the direction")
+        XCTAssertEqual(code("""
+            {"op":"feature.extrude","args":{"sketchID":"\(sketchUUID)","seedPoint":[3,4],"end":"upToSurface"}}
+            """), "unknown_end")
+        XCTAssertEqual(code("""
+            {"op":"feature.extrude","args":{"sketchID":"\(sketchUUID)","seedPoint":[3,4],"end":"throughAll","taperDegrees":5}}
+            """), "end_with_taper")
+    }
+
     func testExtrudeCarriesSeedAndDistance() {
-        guard case let .extrude(sketch, seed, distance, symmetric, taper, boolean, targets)?
+        guard case let .extrude(sketch, seed, distance, symmetric, taper, boolean, targets, _)?
             = op("""
             {"op":"feature.extrude","args":{"sketchID":"\(sketchUUID)",
              "seedPoint":[3,4],"distance":12,"symmetric":true}}
@@ -373,7 +400,7 @@ final class AgentExecTests: XCTestCase {
     }
 
     func testTaperDegreesMakesADraftExtrude() {
-        guard case let .extrude(_, _, _, _, taper, _, _)? = op("""
+        guard case let .extrude(_, _, _, _, taper, _, _, _)? = op("""
         {"op":"feature.extrude","args":{"sketchID":"\(sketchUUID)","seedPoint":[0,0],
          "distance":20,"taperDegrees":10}}
         """) else { return XCTFail("expected .extrude with taper") }
@@ -401,7 +428,7 @@ final class AgentExecTests: XCTestCase {
     }
 
     func testBooleanExtrudeWithTargetsParses() {
-        guard case let .extrude(_, _, _, _, _, boolean, targets)? = op("""
+        guard case let .extrude(_, _, _, _, _, boolean, targets, _)? = op("""
         {"op":"feature.extrude","args":{"sketchID":"\(sketchUUID)","seedPoint":[0,0],
          "distance":5,"boolean":"subtract","booleanTargets":["\(bodyUUID)"]}}
         """) else { return }

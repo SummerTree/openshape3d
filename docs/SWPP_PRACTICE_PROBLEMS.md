@@ -29,9 +29,11 @@ output plus the reading of it. The published page carries the same table.*
 
 ## Where the app falls short of the database
 
-1. Extrude end conditions: distance and mid-plane only. No up-to-surface,
-   up-to-next, through-all or offset-from-surface (Level 2 is named for
-   them; every rib in Level 14 needs up-to-next).
+1. Extrude end conditions: Through All and Up To Next now exist (the
+   Extrude bar's End menu, `feature.extrude` `"end"` over the bridge),
+   resolved to a distance at commit time. Still no up-to-surface or
+   offset-from-surface, and the resolved distance does not re-evaluate
+   when the body it reached later moves.
 2. Patterns and mirrors act on bodies, not features: a patterned cut is a
    cutter body, patterned, then subtracted (7.49, 11.1).
 3. No hole wizard: counterbores are stacked cylinders with typed sizes.
@@ -43,6 +45,18 @@ output plus the reading of it. The published page carries the same table.*
    ("ALL DRAFT 5°" in 12.1); no loft normal-to-profile controls (12.2).
 7. Assemblies, configurations, collision/interference (Levels 9, 15, 17)
    are outside a single-part modeller.
+
+## Fixed during the campaign
+
+- **Touch-committed tools left mesh-only bodies.** Checking the End menu
+  by touch showed that an extrude committed with the fingers (cut, union
+  or stand-alone) kept the Euclid preview mesh as the body: a 25 mm hole
+  was a 48-gon, 0.29 % small, with no B-rep. The same feature through
+  the bridge was exact. Both commit paths now replay through the feature
+  graph (OCCT), the mesh staying as the fallback; the touch cut reads
+  80730.09 mm³ against the analytic 80730.09.
+- **Extrude end conditions** (above), with the direction taken from the
+  sign of the distance already in the field.
 
 # SOLIDWORKS practice problems in openshape3d — 35/43 attempted pass (365 in the database)
 

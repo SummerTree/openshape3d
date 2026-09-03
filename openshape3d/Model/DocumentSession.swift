@@ -238,13 +238,16 @@ final class DocumentSession {
     /// tools commit through here: a gizmo move becomes a `.transform` node,
     /// and from then on the graph owns the placement — `RebuildPlanner`
     /// deliberately resets document-level transforms on every replay.
-    func recordAndRebuild(_ nodes: [FeatureNode], title: String) {
-        guard let first = nodes.first else { return }
+    ///
+    /// `extra` rides in the same composite after the appends — the sketch
+    /// auto-hides a committing create tool owes (spec §11), so one undo
+    /// also brings the sketch back.
+    func recordAndRebuild(_ nodes: [FeatureNode], extra: [DocumentCommand] = [], title: String) {
+        guard !nodes.isEmpty else { return }
         var editedGraph = document.features
         editedGraph.nodes.append(contentsOf: nodes)
         let appends: [DocumentCommand] = nodes.map { AppendFeatureCommand(node: $0, title: title) }
-        _ = first
-        performRebuild(editedGraph, leadingCommands: appends, title: title)
+        performRebuild(editedGraph, leadingCommands: appends + extra, title: title)
     }
 
     /// Suppress / un-suppress a node and rebuild everything downstream in one
