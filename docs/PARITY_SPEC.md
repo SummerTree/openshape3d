@@ -1,6 +1,6 @@
-# Shapr3D Parity Specification
+# Parity Specification
 
-**openshape3d** — feature-for-feature product spec derived from the Shapr3D Help
+**openshape3d** — feature-for-feature product spec derived from the reference app's published help
 Center (manual + tutorial corpus, extracted 2026-07-18), with an honest status
 audit against the current source tree.
 
@@ -28,11 +28,11 @@ audit against the current source tree.
 - `[mesh-kernel OK]` — achievable with the current Euclid mesh-CSG kernel plus
   app/renderer/UI code. No commercial component required.
 - `[needs constraint solver]` — requires a 2D geometric constraint solver
-  (Shapr3D uses Siemens D-Cubed; open fallback: planegcs / SolveSpace solver).
+  (the reference app uses Siemens D-Cubed; open fallback: planegcs / SolveSpace solver).
 - `[needs history engine]` — requires a parametric feature graph with
   re-evaluation (feature tree, dependency tracking, rebuild).
 - `[needs B-rep kernel]` — requires exact boundary representation
-  (Shapr3D uses Siemens Parasolid; open fallback: OpenCASCADE).
+  (the reference app uses Siemens Parasolid; open fallback: OpenCASCADE).
 - `[platform/service]` — cloud, account, collaboration, or OS-integration
   work; no geometry involved.
 
@@ -56,7 +56,7 @@ Status verified against: `openshape3d/Kernel/` (`KernelOps`, `ProfileDetector`,
 
 # 1. Sketch menu
 
-Shapr3D top-level structure: sketches are 2D, drawn on a sketch plane or planar
+The reference app's top-level structure: sketches are 2D, drawn on a sketch plane or planar
 body face; they define profiles for Extrude, Revolve, Loft, Sweep. Closed
 sketches are extrudable/revolvable regions; open sketches serve sweeps, guide
 rails, and projected curves. Item colors: GREEN = fully defined, BLUE =
@@ -98,7 +98,7 @@ finishes the chain (`EditorViewModel.beginSketchStroke/endSketchStroke`,
 midpoint, centre (rectangles now expose edge midpoints and a centre snap) and
 grid, ranked so the expected snap wins when several are in range. The snap
 under the pointer is NAMED on screen while drawing — "Endpoint" / "Midpoint" /
-"Center" (`SnapChipOverlay`), the way Shapr3D makes an otherwise invisible
+"Center" (`SnapChipOverlay`), the way the reference app makes an otherwise invisible
 snap legible before the stroke commits; the grid stays unnamed since it is
 always on.
 Missing: tap-tap polyline chaining, Escape/Enter semantics, numeric length
@@ -240,7 +240,7 @@ mode: taps toggle sketch entities, the bar carries the Single/Chain type and
 a signed distance, the result previews live in the pending colour while the
 picked sources highlight, and Apply commits the offset copies as new sketch
 entities in one undoable step. Committing keeps the tool armed for the next
-offset, matching Shapr3D. `SketchOffset.entitiesToOffset` does the Single vs
+offset, matching the reference app. `SketchOffset.entitiesToOffset` does the Single vs
 Chain expansion (Chain walks `ProfileDetector.connectedEntityIDs`, and
 returns in SKETCH order because the mitring walk depends on it); the offset
 itself is the existing unit-tested `SketchOffset`. Covered by
@@ -507,7 +507,7 @@ sketch tool with no plane shows the THREE world-plane tiles at the origin
 or the bare ground starts the sketch there with a head-on camera animation
 (`handlePlanePick`, `moveCameraHeadOn` for arbitrary planes); a selected
 face also offers "Sketch" directly (`startSketch` reads the face plane).
-Same-plane sketches are reused as one sketch item (Shapr3D's rule), and
+Same-plane sketches are reused as one sketch item (the reference app's rule), and
 re-opening an auto-hidden sketch makes it visible again (`beginSketch`).
 Missing: hover grid-follow, Space-bar entry, body-intersection snap points
 and the associative intersection coincidence, Normal to Sketch button.
@@ -630,7 +630,7 @@ active sketch), **Always Show Dimensions** (all locked dimensions shown).
 fixed when a constraint is applied (existing constraints override).
 **Status:** 🟡 partial (Phase C). `ConstraintSettingsView` ships a constraint
 settings surface, and the solver honours the auto-constrain toggles.
-**Missing:** the full per-constraint-type enable/disable matrix Shapr3D
+**Missing:** the full per-constraint-type enable/disable matrix the reference app
 exposes. **Feasibility:** [mesh-kernel OK] (solver already ships)
 
 ### 3.2 The constraint set
@@ -688,7 +688,7 @@ exclusion + dashed rendering — no solver needed)
 
 # 4. Tools menu
 
-**Body types (glossary):** Shapr3D distinguishes **Regular bodies**
+**Body types (glossary):** the reference app distinguishes **Regular bodies**
 (watertight B-rep solids), **Sheet/Surface bodies** (zero-thickness surfaces
 that do not enclose volume — produced e.g. as leftovers of face deletion and
 cleaned up by deleting the leftover surfaces, §4.16), **Mesh bodies**
@@ -696,7 +696,7 @@ cleaned up by deleting the leftover surfaces, §4.16), **Mesh bodies**
 openshape3d currently models a single body kind — a triangle mesh treated as
 a solid — and none of the other types.
 
-**Documented scope limits:** Shapr3D supports NO swept cuts and NO feature
+**Documented scope limits:** the reference app supports NO swept cuts and NO feature
 patterns — Pattern operates on BODIES and SKETCHES only. The documented
 workaround for both gaps is the same: "pattern the tool bodies, then
 Subtract" (Quick concepts pt 2; Bodies and patterns pt 1).
@@ -1184,7 +1184,7 @@ move, planar move); a Flip badge rotates 180°. Snap-to-likely-positions
 while dragging: aligned vertices, collinear edges, coplanar arcs (with a
 "coplanar arcs" snapping hint), coplanar faces, parallel edges. Selecting
 two cylindrical faces auto-centers them COLLINEARLY (Parametric Clamp). The
-relation is static — no persistent mates (Shapr3D has no native
+relation is static — no persistent mates (the reference app has no native
 assemblies). History param: Target Body.
 **Status:** 🟡 partial — vertex-onto-vertex mating: palette "Align" (needs
 ≥2 bodies), tap a snap point on the body to move, then a point on another
@@ -1353,7 +1353,7 @@ see §12.
 
 ### 6.5 Insert Project
 
-**Spec:** Insert > Project imports another Shapr3D project from the Dashboard
+**Spec:** Insert > Project imports another native project from the Dashboard
 into the current one INCLUDING its full history — its feature steps appear
 individually in History and stay editable (used to insert a motor reference
 model in the Wall Clock tutorial).
@@ -1418,7 +1418,7 @@ today).
 camera; pinch zooms; with 2-Finger Rotation enabled a two-finger twist rotates
 the view. Pencil never orbits — it draws/selects. Double-tap a face with a
 finger = zoom to face; double-tap the Orientation Cube = reset view. Camera
-never locks up mid-tool. Desktop mappings + Navigation Presets (Shapr3D
+never locks up mid-tool. Desktop mappings + Navigation Presets (the reference app
 Default/Classic + Alias/CATIA/NX/Blender/Plasticity/Fusion 360/OnShape/Rhino/
 SketchUp/SolidWorks emulations).
 **Status:** 🟡 partial — two-finger pan and pinch zoom are implemented and
@@ -1430,7 +1430,7 @@ to the `ViewportView.gestureDragBegan` delegate first and falls back to
 orbit only when no tool claims it). Mid-sketch orbit: tapping the ACTIVE
 sketch tool deselects it (`deselectSketchTool`, `tool: nil`), after which
 empty-space drags orbit and "Look at Sketch" restores head-on. That
-mirrors Shapr3D's own
+mirrors the reference app's own
 convention, so the level stands (`TurntableCamera.orbit/pan/zoom`);
 double-tap empty space fits the scene. The Apple Pencil now draws sketch
 strokes (`.pencil` accepted on the one-finger recognizer, with
@@ -1744,7 +1744,7 @@ Visibility. Names are shared with History (rename in one place updates both).
 `ItemsPanelView`) lists bodies, sketches, construction planes, **images**,
 and **symbols** with type icons; per row: visibility eye
 (`SetItemVisibilityCommand`), inline rename (`RenameItemCommand`), delete,
-tap-to-select, and Zoom To (camera fit to the item's AABB). Shapr3D parity:
+tap-to-select, and Zoom To (camera fit to the item's AABB). Parity target:
 sketches consumed into a body (extrude/revolve/sweep/loft — profile, loft
 sections, sweep spine) auto-hide in the same undo step
 (`consumedSketchHideCommands`); the eye un-hides them, and re-opening a
@@ -1762,12 +1762,13 @@ shared names with History (no history engine).
 
 **Spec:** Formats — 2D: DWG, DXF (lines, polylines, beziers, arcs, circles/
 ellipses, polygons; annotations/layers/colors dropped). 3D: X_T/X_B
-(Parasolid), STEP, IGES, STL (reference only), SHAPR, SLDPRT, SLDASM
+(Parasolid), STEP, IGES, STL (reference only), its own native format,
+SLDPRT, SLDASM
 (+ Enterprise: NX, CATIA, Creo, Solid Edge, JT). Images: PNG/JPG/PDF(1 page)/
 TIFF/BMP/ICO/RAW/GIF. Limits: 1 km³ design space. Import Preferences (STEP/
 IGES/CATIA/SolidWorks/Solid Edge): Simplify Geometry, Advanced Healing
 (Parasolid Bodyshop), Healing (HOOPS), Accurate Edge Computation, Sewing,
-Import Planar Curves as Sketches. .shapr imports keep editable per-feature
+Import Planar Curves as Sketches. Native-format imports keep editable per-feature
 history; all other formats arrive as a single Import history step. STEP
 assembly hierarchy → nested folders. Mesh rules: booleans work only on closed
 mesh bodies; any boolean involving a mesh yields a mesh.
@@ -1793,7 +1794,7 @@ images [mesh-kernel OK]
 
 ### 12.2 Export
 
-**Spec:** Formats — 3D: SHAPR, X_T/X_B, STEP (AP203/AP214/AP242, ASCII/
+**Spec:** Formats — 3D: its native format, X_T/X_B, STEP (AP203/AP214/AP242, ASCII/
 binary), IGES, 3MF, STL, OBJ (with colors), GLB, USDZ; 2D: DWG, DXF, SVG,
 PDF, JPEG, PNG; Slicer (by Prusa) hand-off (EasyPrint browser / PrusaSlicer
 desktop; Resolution Low/High/Custom, Include Mesh Bodies default ON, Include
@@ -1804,7 +1805,7 @@ deviation + angle tolerances, Save Each First-Level Item Separately (ZIP),
 Save Each Sketch Plane Separately (ZIP), Units (mm/cm/m/in/ft — STL is
 unitless so the unit is declared at export). Favorite formats (star) persist;
 batch export multiple formats; isolated parts exportable in any type except
-.shapr. Screenshot tool: grid on/off, transparency, body edges, item chooser,
+the native one. Screenshot tool: grid on/off, transparency, body edges, item chooser,
 resolution Actual/Double/FullHD/4K/8K, remembers settings, clipboard shortcut.
 **Status:** 🟡 partial. **STEP (AP214) export now ships** via OCCT
 DataExchange (`OCCTKernel.writeSTEP`) — unlike every mesh format below it
@@ -1819,7 +1820,7 @@ is hidden elsewhere, never faked), and **DXF** of the active/ground sketch
 (`DXFKit`, R12 ASCII). OBJ and GLB open an options sheet with a "Separate
 File per Body" split (per-item files). Plus a **PNG screenshot** entry with
 an options sheet: resolution multiplier, transparent background, and grid
-on/off (offscreen renderer capture). Missing: SHAPR/X_T/STEP/IGES, DWG/SVG/
+on/off (offscreen renderer capture). Missing: native/X_T/STEP/IGES, DWG/SVG/
 PDF, unit options, hidden-item filtering, vertex colors, favorites/batch,
 slicer hand-off.
 **Feasibility:** OBJ/3MF/GLB/USDZ/PNG [mesh-kernel OK]; STEP/IGES
@@ -1839,7 +1840,7 @@ Drafts (personal, device-sync only), Spaces (team-shared areas with folders),
 Learn hub. Project tiles: thumbnail, title, last-edited-by, storage-state
 icon. Context menu: Open, Rename, Duplicate, Manage storage, Show Versions,
 Export, Delete (cloud-wide, unrecoverable), Quick Export to Favorite Formats
-(batch), Save as .shapr. Folders with drag-and-drop, breadcrumbs, sort by
+(batch), Save a native-format copy. Folders with drag-and-drop, breadcrumbs, sort by
 name/date. One-person-at-a-time editing guidance.
 **Status:** 🟡 partial — a project gallery exists: grid of cards with rendered
 thumbnails, create, open, rename (alert), duplicate (with bodies/sketches/
@@ -1849,7 +1850,7 @@ teams/spaces/drafts, storage states, everything cloud.
 **Feasibility:** local features [mesh-kernel OK]; teams/spaces
 [platform/service]
 
-### 13.2 Shapr3D Sync / cloud backup
+### 13.2 Cloud sync / backup
 
 **Spec:** Projects sync to the account across devices; per-project storage
 states Local only | Synced | Cloud only; Download Now / Remove Download;
@@ -1895,7 +1896,7 @@ placement/capture UI, shared-link AR, Vision Pro.
 **Feasibility:** USDZ + QuickLook AR [mesh-kernel OK] (ModelIO/RealityKit);
 shared-link AR [platform/service]
 
-**Note — subscription plan gating (deliberate scope cut):** Shapr3D gates
+**Note — subscription plan gating (deliberate scope cut):** the reference app gates
 behavior by plan: Basic is limited to 2 projects and export to
 low-resolution STL/3MF only; Pro unlocks custom mesh export tolerance;
 advanced import formats (NX/CATIA/Creo/Solid Edge/JT) and Vision Pro review

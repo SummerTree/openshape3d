@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Rebuild the Shapr3D "Frame" main tubes through POST /v1/exec — a PROBE.
+"""Rebuild the reference tutorial's "Frame" main tubes through POST /v1/exec — a PROBE.
 
 The Frame is the last tutorial model with real history, and the most
 demanding: 35 steps, sketches on DERIVED construction planes, two sweeps,

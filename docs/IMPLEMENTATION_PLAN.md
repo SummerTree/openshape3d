@@ -1,7 +1,7 @@
-# Implementation Plan — Maximizing Shapr3D Parity
+# Implementation Plan — Maximizing the reference app Parity
 
-Companion to `SHAPR3D_PARITY_SPEC.md`. Phases are ordered by (1) what the
-current Euclid mesh kernel can honestly deliver, (2) prominence in Shapr3D's
+Companion to `PARITY_SPEC.md`. Phases are ordered by (1) what the
+current Euclid mesh kernel can honestly deliver, (2) prominence in the reference app's
 own tutorials/manual (what users hit in the first hour), and (3) dependency
 order — the constraint solver and history engine each unlock a whole tier of
 features and must land before the features that ride on them.
@@ -17,7 +17,7 @@ those three seams rather than adding new ones.
 ## Phase A — Next tranche (mesh-kernel feasible, highest tutorial prominence)
 
 Everything in this phase is `[mesh-kernel OK]`, needs no solver/history/B-rep,
-and appears in the first two Shapr3D tutorial series ("Solid modeling
+and appears in the first two the reference app tutorial series ("Solid modeling
 basics", "3D modeling fundamentals"). Ordering within the phase is the
 suggested build order; A1–A3 unblock A4–A6.
 
@@ -45,7 +45,7 @@ origin/basis; only the ground plane is ever created today
     creation UI = select world plane/face → "Offset Plane" → drag arrow or type
     distance (reuse the pull-arrow + `NumericInputBar` pattern from Extrude).
 - Sketch bookkeeping: `startSketch` finds-or-creates a `Sketch` whose `plane`
-  matches (same rule Shapr3D uses: continuing on the same plane immediately
+  matches (same rule the reference app uses: continuing on the same plane immediately
   edits the same sketch item).
 - Persistence: `ConstructionPlane` is Codable → new `PersistedPlane` SwiftData
   model beside `PersistedSketch`.
@@ -111,7 +111,7 @@ The #2 modeling tool in every tutorial (bottles, shafts, caps).
   map the profile into a `Euclid.Path` in a plane containing the axis, use
   `Euclid.Mesh.lathe(_:slices:)` for 360°; for partial angles build the wedge
   manually (rotate profile copies by angle steps and stitch, or lathe ∩ wedge
-  solid). Validate profile does not cross the axis (Shapr3D errors there too).
+  solid). Validate profile does not cross the axis (the reference app errors there too).
 - Interaction: select a profile fill + tap a line entity (the axis; also allow
   world axes). Reuse `ExtrudeContext` shape: a `RevolveContext` with angle
   instead of distance, same preview-body pipeline
@@ -138,7 +138,7 @@ The #2 modeling tool in every tutorial (bottles, shafts, caps).
 - **Cut scope:** when a cut intersects multiple bodies, apply to all
   intersected bodies (current code stops at the first candidate) and surface
   a per-body include/exclude list in the extrude bar — the mesh-level
-  equivalent of Shapr3D's "Subtract From" scope.
+  equivalent of the reference app's "Subtract From" scope.
 - **Commit convention:** profile extrudes commit on ANY tap while face pulls
   cancel on empty tap (committing via the extrude bar's button, the distance
   field's onSubmit, or the Done pill). Unify on the spec's rule — tapping
@@ -221,14 +221,14 @@ The #2 modeling tool in every tutorial (bottles, shafts, caps).
   work since everything is a mesh here). Export unit option (mm default) on
   both import and export per the STL-units spec.
 - `OBJExporter` (trivial from `RenderMesh`), `3MFExporter` (zip + XML —
-  3D-print parity; Shapr3D preselects 3MF for printing), "save each body
+  3D-print parity; the reference app preselects 3MF for printing), "save each body
   separately" toggle.
 - Screenshot tool: the offscreen thumbnail path
   (`EditorViewModel.thumbnailProvider` → renderer offscreen capture) already
   renders the scene; add resolution options + transparent background +
   grid/edge toggles.
 
-**Phase A exit criteria:** the Shapr3D "Solid Modeling basics" tutorial
+**Phase A exit criteria:** the reference app "Solid Modeling basics" tutorial
 (sketch on plane → revolve → subtract → offset-edge wall → through-hole cut)
 is reproducible except for constraints/dimensions and Offset Edge, and the
 water-bottle "3D modeling fundamentals" flow works minus loft rails.
@@ -333,7 +333,7 @@ water-bottle "3D modeling fundamentals" flow works minus loft rails.
 
 ## Phase C — Constraint solver tier
 
-**Dependency:** a 2D variational solver. Shapr3D uses Siemens **D-Cubed 2D
+**Dependency:** a 2D variational solver. The reference app uses Siemens **D-Cubed 2D
 DCM** — commercial, not an option. Open-source fallback (see "Out of reach"
 table): **planegcs** (FreeCAD's solver, LGPL, C++ — clean to wrap in a Swift
 package the way Euclid is wrapped today) or a purpose-built
@@ -480,7 +480,7 @@ Unlocked features (rough order):
 2. **Sync** — CloudKit-backed project sync (offline-first, per-project
    Local/Synced/Cloud-only states, Download Now / Remove Download);
    project Versions as periodic snapshots with Restore-as-Latest.
-3. **Sharing** — .shapr-equivalent archive of our document (already have a
+3. **Sharing** — a native-archive equivalent of our document (already have a
    compact "OS3D" mesh blob format — wrap document + sketches + thumbnail);
    share links require a service: self-hosted web viewer (three.js/model-viewer
    with GLB) for Published-Versions-style review, with optional link
@@ -500,15 +500,15 @@ Unlocked features (rough order):
 
 ## Permanently out of reach without commercial components
 
-| Shapr3D component | Why it's closed | Open-source fallback (and the honest gap) |
+| the reference app component | Why it's closed | Open-source fallback (and the honest gap) |
 |---|---|---|
 | **Parasolid kernel** (exact B-rep modeling, robust booleans, fillets/shell/offset quality) | Siemens license, per-seat royalty; no OSS distribution possible | **OpenCASCADE (LGPL)** behind `KernelOps`. Gap: boolean robustness on dirty geometry, advanced blends (G2/variable-radius, Y-blends, overflow control), performance. Euclid mesh CSG remains the fallback-of-the-fallback for preview speed. |
 | **D-Cubed 2D DCM** (constraint solver) | Siemens license | **planegcs** (FreeCAD, LGPL) wrapped as a Swift package; or SolveSpace's solver (GPLv3 — license-incompatible with our MIT app unless isolated/relicensed; prefer planegcs). Gap: solve speed on large sketches, diagnosis quality (which constraint conflicts), drag stability. |
-| **X_T / X_B (Parasolid format) import/export** | Proprietary format tied to Parasolid | None viable. Fallback: STEP AP242 as the exact-geometry interchange; document "use STEP" where Shapr3D docs say X_T. |
-| **SLDPRT/SLDASM, CATIA, NX, Creo, Solid Edge, JT import** | Requires HOOPS Exchange / Datakit / vendor SDK licenses | No practical OSS readers with usable coverage. Fallback: instruct users to export STEP/IGES from the source CAD (the Shapr3D docs themselves recommend Parasolid/STEP export for SolidWorks assemblies). JT: the ISO spec exists but OSS tooling is effectively absent. |
+| **X_T / X_B (Parasolid format) import/export** | Proprietary format tied to Parasolid | None viable. Fallback: STEP AP242 as the exact-geometry interchange; document "use STEP" where the reference app docs say X_T. |
+| **SLDPRT/SLDASM, CATIA, NX, Creo, Solid Edge, JT import** | Requires HOOPS Exchange / Datakit / vendor SDK licenses | No practical OSS readers with usable coverage. Fallback: instruct users to export STEP/IGES from the source CAD (the reference app docs themselves recommend Parasolid/STEP export for SolidWorks assemblies). JT: the ISO spec exists but OSS tooling is effectively absent. |
 | **HOOPS + Parasolid Bodyshop healing** (import repair options) | Commercial | OCCT ShapeHealing (fix small edges, sewing, tolerance repair). Gap: success rate on pathological files. |
 | **DWG** read/write | Format controlled by Autodesk; robust libs (ODA) are commercial; libredwg is GPLv3 | Support **DXF** both ways (fully documented, MIT-friendly parsers); mark DWG unsupported. |
-| **Shapr3D Cloud** (Sync service, Spaces, Published Versions viewer, comments, link permissions) | First-party service | CloudKit for personal sync (free with Apple account, no server to run); optional self-hosted GLB web viewer for share links. Gap: teams, permissions, comments, cross-platform accounts. |
+| **the reference app Cloud** (Sync service, Spaces, Published Versions viewer, comments, link permissions) | First-party service | CloudKit for personal sync (free with Apple account, no server to run); optional self-hosted GLB web viewer for share links. Gap: teams, permissions, comments, cross-platform accounts. |
 | **Generative Render** (AI enhancement) | First-party hosted model | External image-model API hook (user-supplied key) or omit. |
 | **Vision Pro immersive review (Enterprise)** | Service-bound + Enterprise licensing | A local visionOS volumetric viewer of USDZ exports is feasible; the collaborative session part is service-bound. |
 | **100+ material library** (content, not code) | Licensed asset library | Build a small original PBR set + accept community/CC0 materials (ambientCG etc.); support custom GLB material import (Phase F). |

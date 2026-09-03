@@ -5,7 +5,7 @@ helix sweep — see the mission log just below). This is the living
 handoff document: what is DONE, how the newest subsystems work, the dev
 workflow, and the prioritized next missions.
 Companions: `IMPLEMENTATION_PLAN.md` (original phase plan),
-`SHAPR3D_PARITY_SPEC.md` (feature spec), `PHASE_D_DESIGN.md` (feature-graph
+`PARITY_SPEC.md` (feature spec), `PHASE_D_DESIGN.md` (feature-graph
 design), `FREECAD_PLAYBOOK.md` (the FreeCAD-derived hardening ledger),
 `TOPO_NAMING_HISTORY_DESIGN.md` (element-naming design, now complete), and
 `AGENT_CONTROL.md` (the `/v1/exec` scripting surface).
@@ -426,7 +426,7 @@ design), `FREECAD_PLAYBOOK.md` (the FreeCAD-derived hardening ledger),
   `scripts/rebuild_freecad_angle.py`), TraceParts catalogue parts (a
   RÄDER-VOGEL cast-iron wheel matched its datasheet weight to 0.7%; a
   hex nut and bolt-circle flange to exact volumes — `rebuild_traceparts.py`),
-  and the Shapr3D models. A published comparison artifact shows five of them
+  and the reference app models. A published comparison artifact shows five of them
   reference-vs-render. Fillet/chamfer stress tests on curved revolved
   geometry are robust (valid or graceful typed failure, never crash/hang).
 - **`/v1/exec` scripting surface COMPLETE.** Now exposes every FeatureKind
@@ -478,7 +478,7 @@ plane sections, exact face areas, holed-sweep naming, CSG-free render meshes):
   the cover's two 10° drafts are on their recipes now (and exposed gotcha
   29 on the way). Left, and NOT app errors: the cover's engraving spline
   and the frame's face-offset / align / shell operands need values only
-  the `.shapr` recipes hold (not on this machine); the BEG 55 volume
+  the imported recipes hold (not on this machine); the BEG 55 volume
   deviations (cover −9.5 %, plate +6.3 %) are modelling depth against a
   tessellated capture with no drawing behind it. The Tufts CAD-modeling
   tutorial's Coca-Cola bottle (`scripts/rebuild_coke_bottle.py`: the
@@ -666,7 +666,7 @@ recommended first slice S1a, a synchronous facade over a detached evaluate,
 because `performRebuild` has 9 session callers and 17 external call sites
 that all read results immediately.
 
-Also landed recently (all on `main`): context-sensitive Shapr3D-style tool
+Also landed recently (all on `main`): context-sensitive direct-touch tool
 palette with flyout groups; extrude gizmo = SF Symbol `arrow.up.and.down` +
 value pill; drag-reorder of History rows; bug-hunt regression tests.
 
@@ -684,7 +684,7 @@ Sketch/select UX pass (2026-07-21):
   (`toggleSketchEntityUnderRay`) + marquee candidates now built for the
   Sketches-only filter too (was `filter == .bodiesAndSketchEntities`).
 - **Consumed sketches auto-hide again (2026-08-25, reversing 2026-07-21)** —
-  the user ruled the stay-visible behavior a bug vs Shapr3D: a tool that
+  the user ruled the stay-visible behavior a bug vs the reference app: a tool that
   makes a body now hides every sketch that fed it (profile + loft sections +
   sweep spine) via `consumedSketchHideCommands`, in the same undo step. The
   Items eye (a11y value "hidden"/"visible") brings a sketch back.
@@ -703,14 +703,14 @@ Sketch/select UX pass (2026-07-21):
   mode (checked before all mode-specific drag handling); a tap still snaps to
   the view. See spec §7.2.
 
-### Shapr3D tutorial + manual parity audit (2026-08-26/27)
+### the reference app tutorial + manual parity audit (2026-08-26/27)
 
-Drove the "Introducing Shapr3D basics" starter series against the app on the
+Drove the "Introducing the reference app basics" starter series against the app on the
 iPad sim, then read the official 343-page manual (pages 77–259 = sketching +
 modeling) tool-by-tool. Full write-up in `MODELING_PARITY_GOALS.md` §2 and
 goals G7–G9. Headlines:
 
-- `SHAPR3D_PARITY_SPEC.md` is accurate — every manual tool maps to a spec
+- `PARITY_SPEC.md` is accurate — every manual tool maps to a spec
   section, and the statuses spot-checked against code were all correct.
 - **The gap is depth, not breadth**: nearly every tool exists, but only as its
   default path. That became G9 (tool variants/options) and G8 (History exposes
@@ -768,7 +768,7 @@ The rotate half of the same parity pass — `RotationOrbitOverlay`, the twin of
   off-screen, and the software keyboard owns the bottom half. That radius is
   also why the whole control only reads properly when the body is NOT filling
   the viewport — zoomed right in, the rim and the swept arc leave the screen
-  and the clamped pill is all that survives. Shapr3D has the same property.
+  and the clamped pill is all that survives. The reference app has the same property.
 - A mid-drag capture of the finished control (orbit + swept arc + live pill +
   highlighted handle) was taken on the iPad sim; it lives at
   `marketing/screenshots/feature-rotate-orbit-mid-drag.png`, which is in the
@@ -777,7 +777,7 @@ The rotate half of the same parity pass — `RotationOrbitOverlay`, the twin of
 
 ### Move gizmo parity pass (2026-08-28)
 
-Driven from side-by-side screenshots of Shapr3D's move control. Everything
+Driven from side-by-side screenshots of the reference app's move control. Everything
 lives in `GizmoScreenLayout` (the one source of truth for where handles are)
 + `MoveGizmoOverlay` (drawing) + `ViewportView` (gestures).
 
@@ -2173,7 +2173,7 @@ These record what a review covered and what it deliberately left. Anything
 still open from them is promoted into §4 above; read these for the reasoning,
 not for a task list.
 
-### Agent exec endpoint + Shapr3D recipe extraction (2026-08-31)
+### Agent exec endpoint + the reference app recipe extraction (2026-08-31)
 
 `POST /v1/exec` (`openshape3d/Agent/AgentExec.swift`), the parameterized half
 `/v1/command` could not provide: one request carries an operation AND its
@@ -2201,12 +2201,12 @@ hop is in `AgentBridge`, per gotcha 1.
    touch**, so revision-diffing cannot tell you a feature failed either. The
    reliable signal is `lastEvalErrors[node.id]`.
 
-**Shapr3D `.shapr` is readable** — see the `shapr-file-format` memory. ZIP →
+**the reference app's native archive is readable** — see the file-format memory. ZIP →
 SQLite. Bodies are Parasolid XT (OCCT cannot read it, and no open converter
 exists), but `SketchCurves.Data` is plain JSON and `HistoryTreeNodes` type 2 is
 the feature graph, with type-3 literals decoding as `<uint32 tag><payload>`
 where tag 3 + 8 bytes is a double in METRES. An extractor lives in the session
-scratchpad (`shapr_extract.py`), not in the repo.
+scratchpad (the extractor script), not in the repo.
 
 Of the 8 tutorial models, only 4 carry sketches + history (Frame, Block casting,
 Motorcycle cover, 4 motorcycle wheel); Rod clamp / Piston / Piston rod are
@@ -2225,9 +2225,9 @@ and second Boolean, and the smaller 12.7 mm bolt-hole circle.
 to NAME an edge or face over the wire. That is a design question, not a
 mechanical addition. `Align` has no `FeatureKind` at all.
 
-### Shapr3D UI parity review (2026-07-23)
+### the reference app UI parity review (2026-07-23)
 
-A pass over the sketch and solid-modeling UI against Shapr3D, driving the app
+A pass over the sketch and solid-modeling UI against the reference app, driving the app
 on the iPad sim and comparing on screen:
 
 - **Live sketch dimensions** while drawing (`LiveDimensionKit` +
@@ -2243,17 +2243,17 @@ on the iPad sim and comparing on screen:
 - **Named snap chip** (`SnapChipOverlay`) + typed snapping
   (`SnapEngine.SnapKind`): Endpoint/Midpoint/Center, ranked; rectangles gained
   edge-midpoint and centre snaps.
-- **Selection accent orange → Shapr3D blue** (with the user's sign-off), kept
+- **Selection accent orange → the reference app blue** (with the user's sign-off), kept
   distinct from the under-defined blue.
 
-Remaining Shapr-vs-ours gaps noted but NOT yet done: the sketch grid is drawn
-on the world ground plane only (Shapr3D re-orients it to the active sketch
+Remaining parity gaps noted but NOT yet done: the sketch grid is drawn
+on the world ground plane only (the reference app re-orients it to the active sketch
 plane); mid-draw numeric entry into the live dimension; rectangle dimensions
 pinning to the drag-facing sides.
 
 ### Spec §1–§12 gap sweep (2026-07-22) — suite 658 green
 
-Every ❌ in `SHAPR3D_PARITY_SPEC.md` through §12 was re-audited and closed
+Every ❌ in `PARITY_SPEC.md` through §12 was re-audited and closed
 except §7.5 (SpaceMouse/Wacom — needs a vendor SDK and physical hardware, so
 it cannot be built or tested here). Each landed as a tested backend with the
 UI wiring called out as missing in its spec entry:

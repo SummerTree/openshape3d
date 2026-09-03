@@ -288,15 +288,15 @@ bursts of exec traffic — an empty /v1/health after a pause means relaunch
 the app, not an app crash; the real crash reports this session are the
 OS3D_FUZZ sweep's deliberate hostile-input kills.)
 
-## 4b. The Shapr3D tutorial-model thread (paused, 2026-08-31)
+## 4b. The reference tutorial-model thread (paused, 2026-08-31)
 
 Goal as posed: import the tutorial models and rebuild them through the app's
 own UI, as a real workout for the modeling stack. Where it got to:
 
-- **`.shapr` is decoded.** ZIP -> SQLite. Bodies are Parasolid XT and stay
+- **The reference app's native archive is decoded.** ZIP -> SQLite. Bodies are Parasolid XT and stay
   unreadable (OCCT cannot read Parasolid, no open converter exists), but
   sketches are plain JSON and `HistoryTreeNodes` type 2 is the feature graph.
-  `scripts/shapr_extract.py` dumps a model to a recipe; its docstring holds the
+  `scripts/model_extract.py` dumps a model to a recipe; its docstring holds the
   format notes and the Google Drive ids for all eight models (PR #25).
 - **`scripts/rebuild_wheel.py`** rebuilds "4 motorcycle wheel" through
   `/v1/exec` and is a manual regression for that endpoint — it documents the

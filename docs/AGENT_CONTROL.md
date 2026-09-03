@@ -411,7 +411,7 @@ interactive tool). What is still missing:
 - **`offsetFace`** over exec, and **loft** (multi-profile sections) — no
   tutorial recipe needs either yet.
 - **Align**, which has no `FeatureKind` at all.
-- **Importing a body.** Several of the Shapr3D tutorial models lean on
+- **Importing a body.** Several of the reference tutorial models lean on
   `MaterializeImportedBodies`, and those bodies are Parasolid, which OCCT cannot
   read at any price.
 

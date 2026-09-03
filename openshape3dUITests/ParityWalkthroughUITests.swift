@@ -4,7 +4,7 @@
 //
 //  Visual parity walkthrough: drives every major flow and captures named
 //  screenshots (kept in the result bundle) for review against
-//  docs/SHAPR3D_PARITY_SPEC.md. Assertions are deliberately light — the
+//  docs/PARITY_SPEC.md. Assertions are deliberately light — the
 //  screenshots are the deliverable; flow tests elsewhere assert behavior.
 //
 

@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Rebuild the Shapr3D "4 motorcycle wheel" through POST /v1/exec.
+"""Rebuild the reference tutorial's "4 motorcycle wheel" through POST /v1/exec.
 
 A worked example of the exec endpoint, and a manual regression for it: this is
 the model that found all three of the bugs the endpoint shipped with. Geometry
 comes from that tutorial model's own recipe, extracted with
-`scripts/shapr_extract.py` and converted from metres to mm.
+`scripts/model_extract.py` and converted from metres to mm.
 
 Run it against a live DEBUG app (see .claude/skills/drive-openshape3d/):
 
@@ -38,7 +38,7 @@ spokes), the Mirror, and the closing union are all replicated —
 
 The recipe's cutter extrude carries a -5 deg taper (its -87.2665 slot is
 radians). Since 2026-09-02 the app drafts extrudes (`taperDegrees`, positive
-CONTRACTS the section along the extrude; Shapr3D's negative draft narrows
+CONTRACTS the section along the extrude; the reference app's negative draft narrows
 the same way), so both cutters are conical now: radius r at the sketch
 plane, r - |x|·tan5° either side (a symmetric draft is widest at the plane).
 The cutters span ±100 (not ±400: the 12.7 bolt cutter would collapse past

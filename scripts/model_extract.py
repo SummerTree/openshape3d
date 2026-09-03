@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Extract a readable parametric recipe from a Shapr3D .shapr file.
+"""Extract a readable parametric recipe from a third-party CAD app's native
+(.shapr) archive.
 
 WHAT A .shapr ACTUALLY IS: a ZIP holding one SQLite database named `workspace`.
 
@@ -29,9 +30,9 @@ raw double that happens to be 6.2831853 (radians), while a distance arrives in
 metres — so `mm` and `inch` below are only meaningful for slots that really are
 lengths. Read them as candidates, not as labelled fields.
 
-Usage:  python3 scripts/shapr_extract.py "Some Model.shapr" > recipe.json
+Usage:  python3 scripts/model_extract.py "Some Model.shapr" > recipe.json
 
-The eight models from the Shapr3D "Introducing Shapr3D basics" tutorial are
+The eight models from that app's introductory tutorial series are
 hosted on Google Drive (NOT as Zendesk attachments — the article's attachments
 are only preview PNGs). Fetch one with:
 

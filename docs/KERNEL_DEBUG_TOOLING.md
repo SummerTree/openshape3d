@@ -2,7 +2,7 @@
 
 Written 2026-08-31, out of the FreeCAD-mining pass that produced playbook rows
 D1–D3. The trigger was a pattern: every attempt to rebuild a non-trivial model
-(the Shapr3D tutorial models, NEXT §4b) surfaces a kernel bug, and each bug
+(the reference tutorial models, NEXT §4b) surfaces a kernel bug, and each bug
 then cost a hand-built reproduction. This doc is (1) the debugging loop the
 new tooling enables, (2) what each piece is, (3) the FreeCAD findings worth
 keeping that did NOT become code.

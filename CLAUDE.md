@@ -1,6 +1,6 @@
 # openshape3d
 
-Open-source iOS Shapr3D-parity CAD app: SwiftUI + custom Metal renderer +
+Open-source iOS direct-modeling CAD app: SwiftUI + custom Metal renderer +
 Euclid mesh-CSG kernel + parametric feature graph (topological naming).
 
 **Start here: `docs/STATUS_AND_NEXT_STEPS.md`** — current phase status, the
@@ -9,7 +9,7 @@ UI-test helpers), and the gotchas list (SwiftData-in-XCTest crash, a11y
 container collapse, bottom-overlay stacking, nonisolated defaults, …).
 Update it at the end of each mission.
 
-Spec/design companions: `docs/SHAPR3D_PARITY_SPEC.md`,
+Spec/design companions: `docs/PARITY_SPEC.md`,
 `docs/IMPLEMENTATION_PLAN.md`, `docs/PHASE_D_DESIGN.md`.
 Modeling-core roadmap (sketch + solid parity, ordered with acceptance
 criteria): `docs/MODELING_PARITY_GOALS.md`. Kernel strategy:

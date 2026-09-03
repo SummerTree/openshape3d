@@ -52,7 +52,7 @@ draft falls back to the polygon path only then.
 
 Real cast and moulded parts have DRAFT: the walls of an extruded feature
 taper by a few degrees so the part releases from the mould. Every catalogue
-and tutorial part that hit this gap named it explicitly — the Shapr3D
+and tutorial part that hit this gap named it explicitly — the reference
 Motorcycle-cover's two 10° tapers, the wheel-cutter's −5°, casting features
 generally — and each was rebuilt "extruded straight, taper unexpressed",
 leaving downstream volumes approximate by design. A straight prism is the

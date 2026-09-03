@@ -1,6 +1,6 @@
 # Modeling Parity Goals — Sketch + Solid
 
-**Purpose.** A single ordered plan for reaching Shapr3D parity on the *modeling
+**Purpose.** A single ordered plan for reaching the reference app parity on the *modeling
 core*: sketching, constraints, and solid feature operations. This is the "what
 we're building next and when we can call it done" doc.
 
@@ -8,7 +8,7 @@ we're building next and when we can call it done" doc.
 
 | Doc | Role |
 |---|---|
-| `SHAPR3D_PARITY_SPEC.md` | The **feature-by-feature audit**: every Shapr3D behaviour, its status, and its feasibility marker. The source of truth for *what a feature must do*. |
+| `PARITY_SPEC.md` | The **feature-by-feature audit**: every the reference app behaviour, its status, and its feasibility marker. The source of truth for *what a feature must do*. |
 | `IMPLEMENTATION_PLAN.md` | Phase sequencing for the whole app (incl. platform/services). |
 | `OCCT_BREP_PORT_DESIGN.md` | How the B-rep kernel is being introduced. |
 | **This doc** | Ordered **goals with acceptance criteria** for the modeling core only. |
@@ -62,15 +62,13 @@ filleted or shelled cylinder reverts to a faceted mesh body. Until the
 modification ops are ported, exactness doesn't survive a real modeling session.
 This is why G1–G3 come first.
 
-### Reality check — driven against Shapr3D's own tutorials and manual (2026-08-26)
+### Reality check — driven against the reference app's own tutorials and manual (2026-08-26)
 
-The "Introducing Shapr3D basics" motorcycle-cover series (parts 2–4:
-[Creating complex shapes](https://support.shapr3d.com/hc/en-us/articles/13079104356380),
-[Create basic 3D geometry](https://support.shapr3d.com/hc/en-us/articles/13079130132508),
-[Modify features with Design History](https://support.shapr3d.com/hc/en-us/articles/13079145254172))
-was driven step-by-step against the app on the iPad simulator. It is a good
-parity yardstick because it is the *first* thing a new Shapr3D user does, so
-anything missing there is a wall, not a nicety.
+The reference app's introductory motorcycle-cover tutorial series (parts 2–4:
+"Creating complex shapes", "Create basic 3D geometry", "Modify features with
+Design History") was driven step-by-step against our app on the iPad simulator.
+It is a good parity yardstick because it is the *first* thing a new user of
+that app does, so anything missing there is a wall, not a nicety.
 
 **Held up:** dimension-on-select with typed values driving the solver
 (with one hole until 2026-09-03: a Rect-tool rectangle offered no
@@ -85,13 +83,12 @@ a drag handle; sketch Text with font + height; named/isometric views; and the
 History panel's rename / suppress / delete / roll-back / inline parameter edit.
 
 A second pass (same day) covered the two earlier hands-on entries —
-[Grid and sketch settings](https://support.shapr3d.com/hc/en-us/articles/13079113458332)
-and [Introduction to 2D sketch tools and settings](https://support.shapr3d.com/hc/en-us/articles/13079114694684).
+"Grid and sketch settings" and "Introduction to 2D sketch tools and settings".
 More held up there: a fresh sketch **auto-arms Line** exactly as the video
 shows; marquee **window vs crossing by drag direction** is implemented; the
 Shift+letter constraint hotkeys were already wired; auto-constrain has
 per-inference toggles and an angle tolerance. (The two remaining series
-entries — "Introducing Shapr3D Basics" and "Get started: A Shapr3D Overview" —
+entries — its "Basics" and "Get started" overview articles —
 are narration only, with no steps to reproduce.)
 
 **Walls hit** — these became G7:
@@ -217,7 +214,7 @@ The remaining gaps in the sketch half, ordered by how often they block real work
    primitive; needs solver integration for tangency.
 2. ~~**Offset Edge in sketch mode** *(§1.9)*~~ — **done 2026-08-27** as G7.1.
 3. **Sketch pattern (linear/circular) + the pattern constraint** *(§1.11, §2.5)*.
-4. **Line/Arc pen mode** *(§1.2)* — drag-to-arc continuation, a core Shapr3D
+4. **Line/Arc pen mode** *(§1.2)* — drag-to-arc continuation, a core the reference app
    input idiom.
 5. **Helix** *(§1.17)* — pairs with sweep for threads.
 6. Snapping/guides and notable-point polish *(§2.6, §2.7)*.
@@ -244,7 +241,7 @@ re-exported to the same single cylindrical surface (Simulator, not a device).
 
 ### G7 — Close the starter-tutorial walls *(spec §1.9, §4.1, §8.4, §10.1, §17)*
 
-The gaps that stop a new user completing the Shapr3D getting-started series
+The gaps that stop a new user completing the reference app getting-started series
 (see the walkthrough in §2). All of them are **UI/feature work, not kernel
 work**, so this goal is independent of G1–G4 and can run in parallel.
 
@@ -293,7 +290,7 @@ work**, so this goal is independent of G1–G4 and can run in parallel.
    individually `.draggable` with a single-UUID payload; the tutorial's key
    move is selecting a sketch *and* its extrude and dragging both above the
    shell in one gesture.
-4. **The Settings sheet is far thinner than Shapr3D's** *(§17)* — ours is
+4. **The Settings sheet is far thinner than the reference app's** *(§17)* — ours is
    Units / Theme / Toolbar Side / Anti-Aliasing. "Grid and sketch settings" and
    "Introduction to 2D sketch tools" spend roughly three minutes in settings we
    do not have:
@@ -302,30 +299,30 @@ work**, so this goal is independent of G1–G4 and can run in parallel.
      switchable.
    - **grid position** (XY / XZ / ZX) and **grid-locked-size while zooming**.
    - **circular annotations**: radius-always vs radius-and-diameter. This is
-     the *named source* of the Ø-vs-R divergence below — Shapr3D's default
+     the *named source* of the Ø-vs-R divergence below — the reference app's default
      reserves diameter for full circles and radius for arcs.
    - **fractional inches** and **degree format** (fractional / decimal).
    - orthographic↔perspective as a **slider**, where we have a binary toggle.
 5. **Grid does not re-orient to the active sketch plane** — it stays on the
-   world ground plane. Shapr3D moves the grid onto the sketch plane on entry
+   world ground plane. The reference app moves the grid onto the sketch plane on entry
    and back on exit. Already noted in `STATUS_AND_NEXT_STEPS.md`; recorded here
    because the tutorial makes it a first-five-minutes observation.
 
 **Lower-priority divergences found in the same pass** (record, don't schedule):
-a selected full circle reports **Radius** where Shapr3D reports **Ø** — and we
+a selected full circle reports **Radius** where the reference app reports **Ø** — and we
 already draw Ø in the live sketch overlay, so we are inconsistent with
 ourselves (see item 4 for the setting that governs it); sketch Text is a modal
 sheet rather than live-on-canvas with the move/rotate/reference-point pad;
 Shell thickness has a field but no drag handle, unlike the blend arrow; Items
-and History are mirrored relative to Shapr3D (it puts Items left / History
+and History are mirrored relative to the reference app (it puts Items left / History
 right, and our Toolbar Side setting only moves the palette); renaming a design
-is gallery-only, where Shapr3D renames from the editor's upper-left title.
+is gallery-only, where the reference app renames from the editor's upper-left title.
 
-**Audited against the official manual (2026-08-26).** The 343-page Shapr3D
+**Audited against the official manual (2026-08-26).** The 343-page the reference app
 manual PDF (pages 77–259 are sketching + modeling) was read tool-by-tool
 against this repo. Two things worth recording:
 
-1. **`SHAPR3D_PARITY_SPEC.md` is accurate and complete in its coverage.** Every
+1. **`PARITY_SPEC.md` is accurate and complete in its coverage.** Every
    tool in the manual's Sketch / Constraints / Insert / Construct / Transform /
    Tools menus maps onto an existing spec section — there are no unaudited
    features — and the statuses spot-checked (§1.4 spline, §1.9 offset edge,
@@ -338,10 +335,10 @@ against this repo. Two things worth recording:
    shape of work from G1–G7 and produced two new goals, G8 and G9.
 
 **One claim to re-check rather than act on.** The "Grid and sketch settings"
-video says Shapr3D squares the view to the sketch plane on entry, whereas
+video says the reference app squares the view to the sketch plane on entry, whereas
 `STATUS_AND_NEXT_STEPS.md` records our "draw from the current camera" behaviour
 as a *parity improvement*. The videos are two years old; confirm against
-current Shapr3D before treating either reading as settled.
+current the reference app before treating either reading as settled.
 
 **Acceptance**
 - The "Create basic 3D geometry" tutorial can be followed end-to-end in the app
@@ -355,7 +352,7 @@ current Shapr3D before treating either reading as settled.
 ### G8 — Every feature's operands and options editable in History *(spec §10.1)*
 
 **The structural modeling gap, and the one the manual makes impossible to
-miss.** Every Shapr3D tool's History card exposes its full parameter set,
+miss.** Every the reference app tool's History card exposes its full parameter set,
 including its *references*: Extrude shows Profile / Sides / Extent / Draft
 Angle / Start / Result + Target; Union shows Target / Tool / Type / Keep
 Target Bodies / Keep Tool Bodies; Sweep shows Profile / Path / Profile
@@ -460,7 +457,7 @@ our app. Ordered roughly by how often the manual reaches for them.
 |---|---|
 | Extrude *(§4.1)* | **Extent**: To Object, Through All (+Flip); **Start**: Offset (start/end), From Plane; Draft Angle (G7.2); explicit boolean Target picker |
 | Chamfer/Fillet *(§4.3)* | Chamfer 2-distance; Fillet **Chordal**; **Corner** Rolling Ball vs Setback; **Continuity** G1/G2; profile slider + magnitude (−1…1); Overflow (Auto/Cliff/Smooth/Notch); Include Tangent Edges toggle; Y-shaped blend |
-| Booleans *(§4.6–4.8)* | **Keep Target Bodies / Keep Tool Bodies** (Shapr3D's All / Modified / Removed / None); switching Type after the fact |
+| Booleans *(§4.6–4.8)* | **Keep Target Bodies / Keep Tool Bodies** (the reference app's All / Modified / Removed / None); switching Type after the fact |
 | Offset Face *(§4.2)* | **Distance Type**: Radius/Diameter, **Total** (with opposite-face pick), Offset; automatic tangent-face inclusion |
 | Shell *(§4.4)* | ~~Direction outward~~ **landed 2026-09-02** as a signed thickness (negative = outward; exec + History field; the Shell bar still enters inward only) |
 | Sweep *(§4.11)* | Profile Position (Auto / path intersection / closest point / closest endpoint); Orientation (normal-to-path vs parallel); Twist; Scale; Corner type (mitre/round) |

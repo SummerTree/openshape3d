@@ -1,6 +1,6 @@
 # openshape3d
 
-An open-source, Shapr3D-inspired direct-modeling CAD app for iPad and iPhone,
+An open-source direct-modeling CAD app for iPad and iPhone,
 built with SwiftUI, a **custom Metal renderer**, and a dual geometry kernel:
 [OpenCASCADE](https://github.com/Open-Cascade-SAS/OCCT) (OCCT) for exact B-rep
 solids, with the MIT-licensed
@@ -48,7 +48,7 @@ rebuild the framework from OCCT source instead, see `scripts/build_occt_ios.sh`.
   any planar body face to sketch on it, or pull an **offset construction
   plane** off a face (drag the arrow or type the distance; persisted).
   Re-entering the same plane continues the same sketch item, and the camera
-  animates head-on — Shapr3D's rules.
+  animates head-on.
 - **Sketch tools** — Line (with chain continuation and close-the-loop),
   Rectangle, Circle, **Arc** (drag the chord, then drag the arc to adjust the
   bulge), **Ellipse**, and **Polygon** (side count in the numeric bar), with
@@ -81,7 +81,7 @@ rebuild the framework from OCCT source instead, see `scripts/build_occt_ios.sh`.
   any sketch; the Project tool flattens a tapped body's feature edges onto
   the active sketch plane as editable, unlinked line entities (the CNC
   flat-layout workflow).
-- **Sketch → Extrude, the Shapr3D way** — tap a fill for numeric extrude or
+- **Sketch → Extrude** — tap a fill for numeric extrude or
   pull it directly with a live preview; nested profiles become holes;
   additional fills join a multi-profile extrude. **Boolean badge**
   (Auto | New Body | Union | Subtract | Intersect), **Symmetric** sides
@@ -107,7 +107,7 @@ rebuild the framework from OCCT source instead, see `scripts/build_occt_ios.sh`.
 - **Face push/pull with automatic booleans** — tap a body to select the
   planar face under your finger (double-tap selects the whole body). Drag
   the face to extrude it: pulling away adds material (union), pushing into
-  the body cuts (subtract) — exactly Shapr3D's automatic boolean rules.
+  the body cuts (subtract) — the automatic boolean rule.
 - **Booleans** — explicit union, subtract, and intersect between bodies
   (computed off the main thread, cancellable).
 - **Transform** — move gizmo with XYZ arrows, plane tiles, and **rotation
@@ -121,7 +121,7 @@ rebuild the framework from OCCT source instead, see `scripts/build_occt_ios.sh`.
   own title (Move/Scale/Rotate/Translate/Align).
 - **Views** — orientation cube in the corner (tap a face or corner to snap
   the view), Views menu with the six standard views + isometric, and an
-  **orthographic** projection toggle. Shapr3D-style navigation (one finger
+  **orthographic** projection toggle. Direct-touch navigation (one finger
   orbits, two fingers pan, pinch zooms — camera never locks up, even
   mid-tool).
 - **Section View** — pick a world or construction plane; the model clips
@@ -130,7 +130,7 @@ rebuild the framework from OCCT source instead, see `scripts/build_occt_ios.sh`.
 - **Display modes** — Shaded, Shaded (No Edges), Wireframe (hidden lines
   stay hidden via a depth prepass), and X-Ray, plus a Show Hidden Edges
   pass; bodies stay selectable in every mode.
-- **Select mode** — marquee selection with Shapr3D's window/crossing
+- **Select mode** — marquee selection with the standard window/crossing
   semantics (left→right solid = fully inside, right→left dashed = touched),
   Bodies/Sketches filter chips, a multi-selection info bar, and one-command
   Delete. **Select Through**: long-press lists every body under the point
@@ -193,12 +193,13 @@ feature edges come from a 20° dihedral-angle threshold.
 
 ## Why these choices?
 
-Shapr3D itself pairs a licensed Siemens Parasolid kernel with a proprietary
-Metal renderer. Parasolid isn't an option for an open-source app, so —
-like Shapr3D's own v1, which shipped on the open-source OpenCascade kernel —
-openshape3d started on an open mesh library (Euclid) behind a kernel facade
-(`KernelOps`) that a stronger kernel could replace later. That replacement is
-now underway: **OCCT**.
+Commercial direct-modeling CAD apps generally pair a licensed proprietary
+kernel — Siemens Parasolid, say — with a renderer written in-house. A licensed
+kernel isn't an option for an open-source app, so openshape3d started on an open
+mesh library (Euclid) behind a kernel facade (`KernelOps`) that a stronger
+kernel could replace later. That replacement is now underway: **OCCT**, the
+same open-source B-rep kernel several commercial CAD products shipped their
+early versions on.
 
 ## Geometry kernels: OCCT + Euclid
 
@@ -317,9 +318,12 @@ round-trip, transform baking); XCUITests drive the real flows
 
 See `docs/MODELING_PARITY_GOALS.md` for the ordered sketch + solid modeling
 roadmap (fillet, shell, splines, STEP — with acceptance criteria),
-`docs/SHAPR3D_PARITY_SPEC.md` for the feature-by-feature status audit, and
+`docs/PARITY_SPEC.md` for the feature-by-feature status audit, and
 `docs/IMPLEMENTATION_PLAN.md` for phase sequencing.
 
 ## License
 
-MIT. Not affiliated with or endorsed by Shapr3D.
+MIT. openshape3d is an independent project: it is not affiliated with,
+endorsed by, or derived from any other CAD application. Product names mentioned
+anywhere in this repository are trademarks of their respective owners and are
+used only for factual comparison.

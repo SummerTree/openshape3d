@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Rebuild the Shapr3D "Motorcycle cover" through POST /v1/exec.
+"""Rebuild the reference tutorial's "Motorcycle cover" through POST /v1/exec.
 
 THE model NEXT §4b recorded as unreachable: its recipe needs Fillet and
 Shell, which take topological refs, not numbers. The /v1/edges + /v1/faces
@@ -7,7 +7,7 @@ discovery endpoints and the identity-addressed exec ops (topo-naming step
 4b) closed that gap — this script is their manual regression, the way
 rebuild_wheel.py is for the original exec surface.
 
-Recipe (scripts/shapr_extract.py on the tutorial .shapr, metres → mm;
+Recipe (scripts/model_extract.py on the tutorial archive, metres → mm;
 recipe z-up maps to the app's y-up):
 
   Extrusion 01  blank   teardrop (2 tangent lines + 2 arcs) on ground, 12 up
@@ -32,7 +32,7 @@ recipe z-up maps to the app's y-up):
 Skipped: Import 01 (Parasolid bodies, permanently out of reach) and
 Extrusion 04 (the spline-profile engraving — splines DO become profiles
 since 2026-09-01, but the recipe's control points were never extracted
-into this script; the .shapr is not on this machine).
+into this script; the source archive is not on this machine).
 
 Run against a live DEBUG app (see .claude/skills/drive-openshape3d/);
 port from OS3D_PORT (default 8787 — this repo's newer machines may need
