@@ -39,9 +39,9 @@ struct HistoryPanelView: View {
                         onZoom: { viewModel.zoomToFeature(row.id) },
                         onDelete: { viewModel.deleteFeature(row.id) },
                         onRollbackHere: { viewModel.rollbackToFeature(row.id) },
-                        onEditEdges: viewModel.isBlendFeature(row.id)
-                            ? { viewModel.beginBlendEdit(row.id) }
-                            : nil,
+                        onEditReferences: viewModel.referenceEditLabel(row.id).map { label in
+                            (label: label, action: { viewModel.beginReferenceEdit(row.id) })
+                        },
                         onEditScalar: { viewModel.editFeatureScalar(row.id, key: $0, value: $1) },
                         onSetOptionToggle: { viewModel.setFeatureOption(row.id, key: $0, toggle: $1) },
                         onSetOptionChoice: { viewModel.setFeatureOption(row.id, key: $0, choice: $1) },
@@ -170,8 +170,9 @@ private struct HistoryRowView: View {
     let onZoom: () -> Void
     let onDelete: () -> Void
     let onRollbackHere: () -> Void
-    /// Non-nil for chamfer / fillet: offers "Edit Edges".
-    let onEditEdges: (() -> Void)?
+    /// Non-nil when the kind re-picks references: "Edit Edges" (chamfer /
+    /// fillet) or "Edit Faces" (shell / delete face) with the action.
+    let onEditReferences: (label: String, action: () -> Void)?
     let onEditScalar: (EditorViewModel.FeatureScalarKey, Double) -> Void
     let onSetOptionToggle: (EditorViewModel.FeatureOptionKey, Bool) -> Void
     let onSetOptionChoice: (EditorViewModel.FeatureOptionKey, String) -> Void
@@ -435,13 +436,15 @@ private struct HistoryRowView: View {
                 Label("Roll Back to Here", systemImage: "arrow.uturn.backward")
             }
             .accessibilityIdentifier("RollbackHere-\(row.name)")
-            if let onEditEdges {
+            if let onEditReferences {
                 Button {
-                    onEditEdges()
+                    onEditReferences.action()
                 } label: {
-                    Label("Edit Edges", systemImage: "scribble")
+                    Label(onEditReferences.label, systemImage: "scribble")
                 }
-                .accessibilityIdentifier("EditEdges-\(row.name)")
+                // "EditEdges-…" / "EditFaces-…" — the blend UI tests address the first.
+                .accessibilityIdentifier(
+                    "\(onEditReferences.label.replacingOccurrences(of: " ", with: ""))-\(row.name)")
             }
             Button(role: .destructive) {
                 onDelete()

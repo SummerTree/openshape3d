@@ -2956,6 +2956,29 @@ final class EditorViewModel {
         return true
     }
 
+    /// The History row's reference re-pick, when the kind has one: blends
+    /// re-pick edges, shell and delete-face re-pick faces (G8 reference
+    /// rows). The label is the context-menu item.
+    func referenceEditLabel(_ id: FeatureID) -> String? {
+        switch session.document.features.node(id)?.kind {
+        case .fillet, .chamfer: return "Edit Edges"
+        case .shell, .deleteFace: return "Edit Faces"
+        default: return nil
+        }
+    }
+
+    /// Re-enter the pick mode that edits a feature's references, seeded with
+    /// what it has; false when the kind has none or its input cannot replay.
+    @discardableResult
+    func beginReferenceEdit(_ id: FeatureID) -> Bool {
+        switch session.document.features.node(id)?.kind {
+        case .fillet, .chamfer: return beginBlendEdit(id)
+        case .shell: return beginShellEdit(id)
+        case .deleteFace: return beginDeleteFaceEdit(id)
+        default: return false
+        }
+    }
+
     /// Whether a History row offers "Edit Edges".
     func isBlendFeature(_ id: FeatureID) -> Bool {
         switch session.document.features.node(id)?.kind {
@@ -3315,6 +3338,18 @@ final class EditorViewModel {
     /// Planar faces (body-LOCAL space) the user has toggled OPEN. Empty is
     /// valid: Shapr3D's whole-body Shell yields an enclosed hollow.
     var shellSelectedFaces: [PlanarFace] = []
+    /// Editing an existing shell node (History "Edit Faces"): the node, its
+    /// consumed-body ref, and the replayed INPUT body the pick and preview
+    /// run against — the document's copy is already hollow.
+    private(set) var shellEditingFeature: FeatureID?
+    private var shellEditBodyRef: BodyRef?
+    private var shellEditSource: Body?
+    /// The body the shell pick previews from: the replayed input while
+    /// editing, else the live document body.
+    private var shellSourceBody: Body? {
+        if let source = shellEditSource { return source }
+        return shellBodyID.flatMap { session.document.body(with: $0) }
+    }
     /// Wall thickness in mm.
     var shellThickness: Double = 2 {
         didSet { if shellThickness != oldValue { updateShellPreview() } }
@@ -3337,6 +3372,37 @@ final class EditorViewModel {
         shellPreview = nil
         mode = .pickingShellFaces
         updateShellPreview()
+    }
+
+    /// Re-enter face picking for an existing shell, seeded with the open faces
+    /// and thickness it already has — the History row's "Edit Faces", the
+    /// same additive edit mode as `beginBlendEdit`. Faces resolve against the
+    /// body the feature CONSUMED (`DocumentSession.inputBody`), never the
+    /// hollow result. False when the node is not a shell or its input cannot
+    /// be replayed.
+    @discardableResult
+    func beginShellEdit(_ id: FeatureID) -> Bool {
+        guard let node = session.document.features.node(id),
+              case let .shell(bodyRef, openFaces, thickness) = node.kind
+        else { return false }
+        guard let source = session.inputBody(for: id, bodyID: bodyRef.bodyID) else {
+            errorMessage = "Couldn't rebuild the shape this shell started from."
+            return false
+        }
+        cancelTransientPicks()
+        cancelTool()
+        // Unresolvable faces are dropped, not fatal: re-picking is the repair.
+        let naming = SignatureNaming()
+        shellSelectedFaces = openFaces.compactMap { naming.resolve($0, in: source, table: nil)?.planar }
+        shellEditingFeature = id
+        shellEditBodyRef = bodyRef
+        shellEditSource = source
+        shellBodyID = bodyRef.bodyID
+        shellThickness = thickness.value
+        shellPreview = nil
+        mode = .pickingShellFaces
+        updateShellPreview()
+        return true
     }
 
     /// 2 mm, clamped to a quarter of the body's smallest extent so the default
@@ -3370,6 +3436,9 @@ final class EditorViewModel {
         shellSelectedFaces = []
         shellBodyID = nil
         shellPreview = nil
+        shellEditingFeature = nil
+        shellEditBodyRef = nil
+        shellEditSource = nil
         if case .pickingShellFaces = mode { mode = .idle }
     }
 
@@ -3377,7 +3446,12 @@ final class EditorViewModel {
     /// open/closed. Switching bodies restarts the pick on the new body.
     private func handleShellFaceTap(ray: Ray) {
         guard let hit = HitTester.pickBody(ray: ray, in: scene) else { return }
-        guard let body = session.document.body(with: hit.bodyID) else { return }
+        // Editing an existing shell: faces come from the CONSUMED body (the
+        // document's copy is already hollow), and the edit stays on its body.
+        let editing = shellEditingFeature != nil
+        if editing && hit.bodyID != shellBodyID { return }
+        guard let body = editing ? shellEditSource : session.document.body(with: hit.bodyID)
+        else { return }
         if shellBodyID != hit.bodyID {
             shellBodyID = hit.bodyID
             shellSelectedFaces = []
@@ -3454,8 +3528,8 @@ final class EditorViewModel {
 
     private func updateShellPreview() {
         guard case .pickingShellFaces = mode,
-              let bodyID = shellBodyID,
-              let source = session.document.body(with: bodyID),
+              shellBodyID != nil,
+              let source = shellSourceBody,
               shellThickness > 1e-6
         else {
             shellPreview = nil
@@ -3484,6 +3558,27 @@ final class EditorViewModel {
               let source = session.document.body(with: bodyID),
               shellThickness > 1e-6
         else { return }
+
+        // Editing an existing node: change the node and let the rebuild
+        // produce the geometry (as `commitBlend` does while editing). The
+        // live-preview path below would REPLACE the body and append a second
+        // shell node on top of the first.
+        if let featureID = shellEditingFeature, let bodyRef = shellEditBodyRef,
+           let input = shellEditSource {
+            let faceRefs = shellSelectedFaces.map {
+                Self.shellFaceRef(face: $0, bodyRef: bodyRef, creator: bodyRef.producer,
+                                  elementName: mintElementName(body: input, triangle: $0.triangles.first))
+            }
+            let after = FeatureKind.shell(
+                body: bodyRef, openFaces: faceRefs, thickness: Expr(value: shellThickness))
+            prepareForHistoryChange()
+            resetShellState()
+            session.editFeature(featureID, to: after)
+            session.save()
+            mode = .selected(bodyID)
+            selection = [bodyID]
+            return
+        }
 
         // Reuse the live preview when current (it carries the OCCT brep for
         // analytic bodies — C4); else compute fresh.
@@ -3534,6 +3629,15 @@ final class EditorViewModel {
     var deleteFaceBodyID: BodyID?
     /// Faces toggled for removal, in pick order.
     var deleteFaceTargets: [DeleteFaceKit.Target] = []
+    /// Editing an existing delete-face node (History "Edit Faces"), as for
+    /// shell: the node, its consumed-body ref, and the replayed input body.
+    private(set) var deleteFaceEditingFeature: FeatureID?
+    private var deleteFaceEditBodyRef: BodyRef?
+    private var deleteFaceEditSource: Body?
+    private var deleteFaceSourceBody: Body? {
+        if let source = deleteFaceEditSource { return source }
+        return deleteFaceBodyID.flatMap { session.document.body(with: $0) }
+    }
     /// Live healed result, rendered in place of the source (same swap as the
     /// shell preview). Nil when the neighbours cannot close — Apply disables,
     /// which is the honest answer: §4.16 says some deletions leave a sheet
@@ -3549,6 +3653,37 @@ final class EditorViewModel {
         deleteFaceBodyID = selection.count == 1 ? selection.first : nil
         deleteFacePreview = nil
         mode = .pickingDeleteFaces
+    }
+
+    /// Re-enter face picking for an existing delete-face node, seeded with
+    /// the faces it removes — "Edit Faces" on its History row. Faces resolve
+    /// against the consumed body (the document's copy no longer has them).
+    @discardableResult
+    func beginDeleteFaceEdit(_ id: FeatureID) -> Bool {
+        guard let node = session.document.features.node(id),
+              case let .deleteFace(bodyRef, faces) = node.kind
+        else { return false }
+        guard let source = session.inputBody(for: id, bodyID: bodyRef.bodyID) else {
+            errorMessage = "Couldn't rebuild the shape this delete started from."
+            return false
+        }
+        cancelTransientPicks()
+        cancelTool()
+        let naming = SignatureNaming()
+        deleteFaceTargets = faces.compactMap { ref in
+            guard let resolved = naming.resolve(ref, in: source, table: nil),
+                  let seed = resolved.planar?.triangles.first ?? resolved.cylinder?.triangles.first
+            else { return nil }
+            return DeleteFaceKit.target(in: source.render, seedTriangle: seed)
+        }
+        deleteFaceEditingFeature = id
+        deleteFaceEditBodyRef = bodyRef
+        deleteFaceEditSource = source
+        deleteFaceBodyID = bodyRef.bodyID
+        deleteFacePreview = nil
+        mode = .pickingDeleteFaces
+        updateDeleteFacePreview()
+        return true
     }
 
     /// User-facing Cancel: drop the pick and restore the body selection.
@@ -3570,6 +3705,9 @@ final class EditorViewModel {
         deleteFaceTargets = []
         deleteFaceBodyID = nil
         deleteFacePreview = nil
+        deleteFaceEditingFeature = nil
+        deleteFaceEditBodyRef = nil
+        deleteFaceEditSource = nil
         if case .pickingDeleteFaces = mode { mode = .idle }
     }
 
@@ -3577,7 +3715,12 @@ final class EditorViewModel {
     /// Switching bodies restarts the pick on the new one.
     private func handleDeleteFaceTap(ray: Ray) {
         guard let hit = HitTester.pickBody(ray: ray, in: scene) else { return }
-        guard let body = session.document.body(with: hit.bodyID) else { return }
+        // Editing an existing delete: faces come from the CONSUMED body, and
+        // the edit stays on its body (same rule as the shell and blend edits).
+        let editing = deleteFaceEditingFeature != nil
+        if editing && hit.bodyID != deleteFaceBodyID { return }
+        guard let body = editing ? deleteFaceEditSource : session.document.body(with: hit.bodyID)
+        else { return }
         if deleteFaceBodyID != hit.bodyID {
             deleteFaceBodyID = hit.bodyID
             deleteFaceTargets = []
@@ -3634,8 +3777,8 @@ final class EditorViewModel {
 
     private func updateDeleteFacePreview() {
         guard case .pickingDeleteFaces = mode,
-              let bodyID = deleteFaceBodyID,
-              let source = session.document.body(with: bodyID)
+              deleteFaceBodyID != nil,
+              let source = deleteFaceSourceBody
         else {
             deleteFacePreview = nil
             return
@@ -3663,6 +3806,24 @@ final class EditorViewModel {
               let source = session.document.body(with: bodyID),
               !deleteFaceTargets.isEmpty
         else { return }
+
+        // Editing an existing node: rewrite its faces and let the rebuild
+        // heal — never a second node on top of the first.
+        if let featureID = deleteFaceEditingFeature, let bodyRef = deleteFaceEditBodyRef,
+           let input = deleteFaceEditSource {
+            let faceRefs = deleteFaceTargets.map {
+                FaceRef(body: bodyRef, creator: bodyRef.producer,
+                        role: .derived(index: 0), signature: $0.signature,
+                        elementName: mintElementName(body: input, triangle: $0.triangles.first))
+            }
+            prepareForHistoryChange()
+            resetDeleteFaceState()
+            session.editFeature(featureID, to: .deleteFace(body: bodyRef, faces: faceRefs))
+            session.save()
+            mode = .selected(bodyID)
+            selection = [bodyID]
+            return
+        }
 
         // Reuse the live preview when current — it already carries the healed
         // brep, and recomputing risks the two disagreeing.

@@ -389,7 +389,18 @@ one undo step each (`HistoryOptionEditTests`). Verified live: the Type menu
 turned a union into a subtract (volume dropped by the peg's 1,000 mm³), the
 Symmetric checkbox rebuilt the draft both ways; the switches had to become
 Button-backed checkboxes because the row's select tap beat a `.switch`
-(STATUS gotcha 27), and `HistoryPanelUITests` now flips one. Still open in G8: the
+(STATUS gotcha 27), and `HistoryPanelUITests` now flips one. **Reference
+rows, first slice (same evening):** the context menu's *Edit Edges* on a
+blend generalised to *Edit Faces* on shell and delete-face rows
+(`referenceEditLabel` / `beginReferenceEdit` → `beginShellEdit`,
+`beginDeleteFaceEdit`): the pick re-enters seeded with the faces the node
+has, resolved by `SignatureNaming` against the body the feature CONSUMED
+(`DocumentSession.inputBody` replays it — the document's copy is already
+hollow / healed), the preview re-shells that input, taps on other bodies are
+ignored while editing, and Apply rewrites the node in place through
+`session.editFeature` (one undo step, never a second node).
+`HistoryFaceEditTests` drives a feature-owned box through shell → Edit
+Faces → second face → commit (cavity 6×6×8 → 8×8×6) → undo. Still open in G8: the
 reference rows (re-pick profile / body / faces / edges), the boolean
 INTENT of extrude / revolve / sweep / loft (changing new-body → subtract
 needs a target pick, so it belongs with the reference rows), and the

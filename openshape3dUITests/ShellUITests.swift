@@ -92,6 +92,28 @@ final class ShellUITests: XCTestCase {
         NSLog("OS3D_BUG shell errorBadges=\(errors.count)")
         XCTAssertEqual(errors.count, 0, "the shell must evaluate cleanly")
         XCTAssertTrue(app.buttons["Undo"].isEnabled)
+
+        // G8 reference rows: the Shell row's context menu offers Edit Faces,
+        // which re-enters the face pick SEEDED with the open face (Apply is
+        // already enabled), and Apply edits the node in place — still one
+        // Shell row afterwards, not a second shell stacked on the first.
+        let shellRows = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "identifier BEGINSWITH 'HistoryRow-Shell'"))
+        shellRows.firstMatch.press(forDuration: 1.0)
+        let editFaces = app.buttons.matching(
+            NSPredicate(format: "identifier BEGINSWITH 'EditFaces-'")).firstMatch
+        XCTAssertTrue(editFaces.waitForExistence(timeout: 5), "a shell row must offer Edit Faces")
+        editFaces.tap(); sleep(2)
+        XCTAssertTrue(apply.waitForExistence(timeout: 5), "Edit Faces must re-enter face picking")
+        XCTAssertTrue(apply.isEnabled, "the shell's open face should already be selected")
+        shot("05-edit-faces")
+        apply.tap(); sleep(2)
+        if !shellRows.firstMatch.exists {
+            app.buttons["HistoryButton"].firstMatch.tap(); sleep(1)
+        }
+        XCTAssertTrue(shellRows.firstMatch.waitForExistence(timeout: 3))
+        XCTAssertEqual(shellRows.count, 1, "the edit rewrote the shell, it did not add one")
+        XCTAssertEqual(errors.count, 0, "the edited shell still evaluates cleanly")
     }
 
     func testClosedHollowFromSelectedBody() throws {
