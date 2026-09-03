@@ -190,3 +190,25 @@ def p2_4():
         extrude(Sketch(top(18)).circle(c, 5.5), c, -12, cut=[body])
         extrude(Sketch(top(0)).circle(c, 3), c, 6, cut=[body])
     return body
+
+
+@problem("2.18", 139372, features=("Extrude Boss", "Extrude Cut", "Sketch: Slot"))
+def p2_18():
+    # Arm: plate 20 thick — a Ø65 hub at the origin, a 30-wide tab out to
+    # x = −55, an arm tangent to the hub ending 35 wide at x = 100 with R5
+    # corners; a 15-wide slot whose round end is centred 32 from the arm's
+    # end (read to the centre: to the apex the part is 1.5 % heavy); a Ø65
+    # boss 20 more on top and a Ø45 hole through all 40.
+    import math
+    r, E = 32.5, (100.0, 17.5)
+    d = math.hypot(*E)
+    ang = math.degrees(math.atan2(E[1], E[0])) + math.degrees(math.acos(r / d))
+    tu = (r * math.cos(math.radians(ang)), r * math.sin(math.radians(ang)))
+    tl = (tu[0], -tu[1])
+    body = extrude(Sketch(top(0)).circle((0, 0), r), (0, 0), 20)
+    extrude(Sketch(top(0)).rounded_poly([tl, (100, -17.5), (100, 17.5), tu], [0, 5, 5, 0]), (60, 0), 20, union=[body])
+    extrude(Sketch(top(0)).rect(-55, -15, 0, 15), (-40, 0), 20, union=[body])
+    extrude(Sketch(top(20)).slot((68, 0), (110, 0), 7.5), (90, 0), -20, cut=[body])
+    extrude(Sketch(top(20)).circle((0, 0), r), (0, 20), 20, union=[body])
+    extrude(Sketch(top(40)).circle((0, 0), 22.5), (0, 0), -40, cut=[body])
+    return body

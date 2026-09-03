@@ -140,3 +140,23 @@ def p6_1():
     sphere = Sketch(front(0)).arc((0, 30.5), 7.5, -90, 90).line((0, 38), (0, 23))
     revolve(sphere, (3, 30.5), *axis, union=[base])
     return base
+
+
+@problem("6.17", 7587, features=("Revolve", "Extrude Cut", "Plane at an angle"))
+def p6_17():
+    # Peg: cone Ø17 at the base tapering 6° per side up to a Ø16 ball whose
+    # centre sits 54 up (read to the centre: to the ball's top the part is
+    # 4.7 % light); a slot 3 wide, 6 deep at 45° across the ball. Cone
+    # 5893 + ball 2145 − overlap 226 − slot 204 = 7608.
+    from kit import plane_at
+    t = math.tan(math.radians(6))
+    axis = ((0, 0), (0, 1))
+    cone = (Sketch(front(0)).line((0, 0), (8.5, 0)).line((8.5, 0), (8.5 - 54 * t, 54))
+            .line((8.5 - 54 * t, 54), (0, 54)).line((0, 54), (0, 0)))
+    body = revolve(cone, (3, 20), *axis)
+    ball = Sketch(front(0)).arc((0, 54), 8, -90, 90).line((0, 62), (0, 46))
+    revolve(ball, (3, 54), *axis, union=[body])
+    d = (math.cos(math.radians(45)), math.sin(math.radians(45)), 0)
+    plane = plane_at((0, 54, 0), d, (0, 0, 1))          # u along the slot's depth, v across the ball
+    extrude(Sketch(plane).rect(2, -12, 20, 12), (10, 0), 1.5, symmetric=True, cut=[body])
+    return body

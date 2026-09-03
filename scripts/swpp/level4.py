@@ -170,3 +170,24 @@ def p4_10():
         for v in (-9.5, 9.5):
             extrude(Sketch(top(10)).circle((x, v), 4), (x, v), 6, cut=[body])
     return body
+
+
+@problem("4.8", 258631, features=("Extrude Boss", "Extrude Cut"))
+def p4_8():
+    # Base 190 × 50 × 12 with 25 × 20 corner chamfers on the far edge and
+    # 2 × Ø15 at 155 apart, 18 in from the near edge; two uprights 18 thick,
+    # 55 apart, 50 deep, with R40 tops about Ø16 holes 58 above the base's
+    # bottom (top at 98); an 8 rib between them 28 above the base, centred
+    # on the base holes' line. 103 759 + 142 520 + 12 320 = 258 599.
+    import math
+    base = Sketch(top(0)).poly([(-95, -20), (-70, 0), (70, 0), (95, -20), (95, -50), (-95, -50)])
+    base.circle((-77.5, -32), 7.5).circle((77.5, -32), 7.5)
+    body = extrude(base, (0, -25), 12)
+    ys = 58 + math.sqrt(40 ** 2 - 25 ** 2)          # where the R40 top meets the sides
+    a0 = math.degrees(math.atan2(ys - 58, 25))
+    for x0 in (27.5, -45.5):
+        up = (Sketch(right(x0)).line((0, 6), (0, ys)).arc((-25, 58), 40, a0, 180 - a0)
+              .line((-50, ys), (-50, 6)).line((-50, 6), (0, 6)).circle((-25, 58), 8))
+        extrude(up, (-25, 30), 18, union=[body])
+    extrude(Sketch(top(12)).rect(-27.5, -36, 27.5, -28), (0, -32), 28, union=[body])
+    return body
