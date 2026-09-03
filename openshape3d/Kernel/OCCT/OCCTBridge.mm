@@ -1128,9 +1128,10 @@ static void OS3DFillSweepHistory(OCCTShapeHistory *history,
 // recognition, leaving that wall to signatures.
 static void OS3DFillLoftHistory(OCCTShapeHistory *history,
                                 BRepOffsetAPI_ThruSections &mk,
-                                const TopoDS_Wire &firstPlacedWire,
+                                const std::vector<TopoDS_Wire> &placedWires,
+                                bool ruled,
                                 const TopoDS_Shape &finalShape) {
-    if (history == nil || finalShape.IsNull()) return;
+    if (history == nil || finalShape.IsNull() || placedWires.empty()) return;
     TopTools_IndexedMapOfShape finalFaces;
     TopExp::MapShapes(finalShape, TopAbs_FACE, finalFaces);
     std::set<std::array<int32_t, 5>> rowSet;
@@ -1151,13 +1152,21 @@ static void OS3DFillLoftHistory(OCCTShapeHistory *history,
     };
     try { emit(mk.FirstShape(), 0, 0, 1, 1); } catch (...) {}
     try { emit(mk.LastShape(), 0, 0, 2, 1); } catch (...) {}
-    int32_t subIndex = 1;
-    for (TopExp_Explorer edges(firstPlacedWire, TopAbs_EDGE); edges.More();
-         edges.Next(), ++subIndex) {
-        try {
-            emit(mk.GeneratedFace(edges.Current()), 0, 1, subIndex, 2);
-        } catch (...) {
-            // "No face for this edge" — never an error.
+    // A smooth loft has ONE lateral face per first-section edge. A RULED loft
+    // has one band per consecutive pair of sections, generated from the
+    // earlier section's edges — so query every section but the last, with
+    // the same edge ordinal, and both bands of a symmetric draft carry the
+    // profile edge's name.
+    const size_t wires = ruled ? placedWires.size() - 1 : 1;
+    for (size_t w = 0; w < wires; ++w) {
+        int32_t subIndex = 1;
+        for (TopExp_Explorer edges(placedWires[w], TopAbs_EDGE); edges.More();
+             edges.Next(), ++subIndex) {
+            try {
+                emit(mk.GeneratedFace(edges.Current()), 0, 1, subIndex, 2);
+            } catch (...) {
+                // "No face for this edge" — never an error.
+            }
         }
     }
     std::vector<int32_t> packed;
@@ -1243,10 +1252,22 @@ static void OS3DFillLoftHistory(OCCTShapeHistory *history,
                                     outerSegments:(NSArray<NSData *> *)outerSegments
                                            bases:(NSArray<OCCTPlaneBasis *> *)bases
                                           history:(nullable OCCTShapeHistory *)history {
+    return [self loftedShapeWithOuterLoops:outerLoops outerConics:outerConics
+                             outerSegments:outerSegments bases:bases
+                                     ruled:NO history:history];
+}
+
++ (nullable OCCTShape *)loftedShapeWithOuterLoops:(NSArray<NSData *> *)outerLoops
+                                      outerConics:(NSArray<NSData *> *)outerConics
+                                    outerSegments:(NSArray<NSData *> *)outerSegments
+                                           bases:(NSArray<OCCTPlaneBasis *> *)bases
+                                            ruled:(BOOL)ruled
+                                          history:(nullable OCCTShapeHistory *)history {
     if (outerLoops.count < 2 || bases.count != outerLoops.count) return nil;
     try {
-        BRepOffsetAPI_ThruSections mk(Standard_True /* solid */, Standard_False /* ruled */);
-        TopoDS_Wire firstPlacedWire;
+        BRepOffsetAPI_ThruSections mk(Standard_True /* solid */,
+                                      ruled ? Standard_True : Standard_False);
+        std::vector<TopoDS_Wire> placedWires;
         for (NSUInteger i = 0; i < outerLoops.count; ++i) {
             NSData *conic = (i < outerConics.count && outerConics[i].length > 0)
                 ? outerConics[i] : nil;
@@ -1265,14 +1286,14 @@ static void OS3DFillLoftHistory(OCCTShapeHistory *history,
             const TopoDS_Shape placed = BRepBuilderAPI_Transform(
                 wire, OS3DBasisTransform(bases[i]), Standard_True).Shape();
             const TopoDS_Wire placedWire = TopoDS::Wire(placed);
-            if (i == 0) firstPlacedWire = placedWire;
+            placedWires.push_back(placedWire);
             mk.AddWire(placedWire);
         }
         mk.Build();
         if (!mk.IsDone()) return nil;
         const TopoDS_Shape solid = mk.Shape();
         if (solid.IsNull()) return nil;
-        OS3DFillLoftHistory(history, mk, firstPlacedWire, solid);
+        OS3DFillLoftHistory(history, mk, placedWires, ruled, solid);
         OCCTShape *out = [OCCTShape new];
         out->_shape = solid;
         return out;

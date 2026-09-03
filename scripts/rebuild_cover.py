@@ -12,19 +12,27 @@ recipe z-up maps to the app's y-up):
 
   Extrusion 01  blank   teardrop (2 tangent lines + 2 arcs) on ground, 12 up
   Extrusion 02  boss    a RING band (outer + inner teardrop, i.e. a profile
-                        with a HOLE) at y=12, 1.4 tall, JOIN. The recipe's
-                        10° taper is unsupported — extruded straight, so all
-                        downstream volumes are approximate by design.
+                        with a HOLE) at y=12, 1.4 tall, JOIN, DRAFTED 10°
+                        (recipe taper; since 2026-09-02 `taperDegrees` — the
+                        band contracts upward for mould release: the outer
+                        wall leans in, the hole widens, both by tan10°·t).
+                        Expected volume is the Steiner integral of the band:
+                        (A_out−A_in)·h − (P_out+P_in)·tan10°·h²/2.
   Fillet 01     1.8     the recipe names Parasolid edges we cannot read; the
                         tutorial rounds the blank's top rim. The rim is one
                         TANGENT CHAIN, so we pick a single convex rim edge
                         from /v1/edges and the kernel propagates the loop.
   Shell 01      1.3     opening the bottom face (largest −y planar).
   Extrusion 03  nub     circle r4 at (60,0) on the DOWN-facing base plane,
-                        0.75 along −y, JOIN (recipe −10° taper ignored).
+                        0.75 along −y, JOIN, DRAFTED 10° (the recipe's −10°
+                        reads as "contract away from the plane" too — its
+                        sign follows the sketch normal, the nub extrudes
+                        against it): a cone frustum r4 → r4−0.75·tan10°.
 
-Skipped, permanently out of reach: Import 01 (Parasolid bodies) and
-Extrusion 04 (spline-profile engraving — splines never become profiles).
+Skipped: Import 01 (Parasolid bodies, permanently out of reach) and
+Extrusion 04 (the spline-profile engraving — splines DO become profiles
+since 2026-09-01, but the recipe's control points were never extracted
+into this script; the .shapr is not on this machine).
 
 Run against a live DEBUG app (see .claude/skills/drive-openshape3d/);
 port from OS3D_PORT (default 8787 — this repo's newer machines may need
@@ -78,6 +86,12 @@ def health():
     assert h["invalid"] == 0, f"invalid geometry: {json.dumps(h)[:400]}"
     print(f"     health: invalid={h['invalid']}")
 
+def teardrop_perimeter(r0, x1, r1):
+    """Perimeter of the same convex hull: two tangents + the two cap arcs."""
+    t = math.asin((r1 - r0) / x1)
+    seg = math.sqrt(x1 * x1 - (r1 - r0) ** 2)
+    return 2 * seg + (math.pi - 2 * t) * r0 + (math.pi + 2 * t) * r1
+
 def teardrop_area(r0, x1, r1):
     """Exact area of the convex hull of circles r0@(0,0) and r1@(x1,0)
     (two tangent lines + two arcs) — the cover's every outline."""
@@ -127,11 +141,20 @@ X({"op": "sketch.addEntities", "args": {"sketchID": sk2, "entities": [
     arc(0, 0, -1.25, 4.841229, -1.25, -4.841229),
     arc(40, 0, 36.25, -14.523688, 36.25, 14.523688),
 ]}})
-expected = blank_area * 12 + boss_area * 1.4
+# Drafted band (Steiner): the outer teardrop offsets inward by δ(t) and the
+# hole outward by δ(t), δ = t·tan10°, so the band area at height t is
+# (A_out − A_in) − (P_out + P_in)·δ(t) (the πδ² terms cancel).
+TAPER = 10.0
+tan_t = math.tan(math.radians(TAPER))
+band_perim = teardrop_perimeter(**BOSS_OUT) + teardrop_perimeter(**BOSS_IN)
+boss_drafted = boss_area * 1.4 - band_perim * tan_t * 1.4 ** 2 / 2
+expected = blank_area * 12 + boss_drafted
+print(f"analytic: drafted band {boss_drafted:.2f} mm3 (straight would be {boss_area * 1.4:.2f})")
 res = report(X({"op": "feature.extrude", "args": {
     "sketchID": sk2, "seedPoint": [55.85, 0], "distance": 1.4,
+    "taperDegrees": TAPER,
     "boolean": "union", "booleanTargets": [body]}}),
-    "Extrusion 02 (boss join)", expect_mm3=expected)
+    "Extrusion 02 (boss join, drafted 10°)", expect_mm3=expected, tol=0.005)
 health()
 
 # ---- 3. Fillet 01: one rim edge, tangent chain does the rest -------------
@@ -174,9 +197,18 @@ def nub(cx, label, strict):
     X({"op": "sketch.addEntities", "args": {"sketchID": sk, "entities": [
         {"kind": "circle", "center": [cx, 0], "radius": 4},
     ]}})
-    return report(X({"op": "feature.extrude", "args": {
+    before = call("/v1/state")["bodies"][0]["volumeMM3"]
+    res = report(X({"op": "feature.extrude", "args": {
         "sketchID": sk, "seedPoint": [cx, 0], "distance": 0.75,
+        "taperDegrees": TAPER,
         "boolean": "union", "booleanTargets": [body]}}), label, strict=strict)
+    if res.get("ok") and not res.get("failed"):
+        r2 = 4 - 0.75 * tan_t
+        frustum = math.pi * 0.75 / 3 * (16 + 4 * r2 + r2 * r2)
+        after = call("/v1/state")["bodies"][0]["volumeMM3"]
+        print(f"     nub added {after - before:,.2f} mm3 vs frustum {frustum:,.2f} "
+              f"(a tangent/overlapping join adds slightly less)")
+    return res
 
 res = nub(60.0, "Extrusion 03 (nub, recipe-exact tangent)", strict=False)
 if res.get("failed") or not res.get("ok"):
@@ -194,5 +226,5 @@ print("\nFINAL:", json.dumps({
     "features": final["featureCount"],
     "evalErrors": final.get("evalErrors"),
 }, indent=1))
-print("\nMotorcycle cover: main sequence rebuilt (taper + engraving + import "
+print("\nMotorcycle cover: main sequence rebuilt with both drafts (engraving + import "
       "excluded — see the docstring).")

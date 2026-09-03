@@ -355,6 +355,16 @@ plane sections, exact face areas, holed-sweep naming, CSG-free render meshes):
   except: a loft's sections, a revolve's axis, the creators' boolean
   intent (new body → subtract needs a target pick), and the radial
   push/pull's cylindrical face; then G9's per-tool variants sit on top.
+- **Exact-copy review of the rebuilt parts (2026-09-02, late):** wheel,
+  cover, door lock, GN 115, helicoil, cam, FreeCAD angle, TraceParts nut
+  and flange, BEG 55 lineup. App-side blockers the scripts recorded were
+  all capabilities that have since landed: the wheel's conical cutters and
+  the cover's two 10° drafts are on their recipes now (and exposed gotcha
+  29 on the way). Left, and NOT app errors: the cover's engraving spline
+  and the frame's face-offset / align / shell operands need values only
+  the `.shapr` recipes hold (not on this machine); the BEG 55 volume
+  deviations (cover −9.5 %, plate +6.3 %) are modelling depth against a
+  tessellated capture with no drawing behind it.
 - ~~Scale as a node~~ — landed 2026-09-02 (below): the composition carries a
   uniform scale (`Transform3D.composed(onto:)`, `delta(from:to:)`), the
   B-rep placement already did (`gp_Trsf::SetValues` admits it), the volume
@@ -1240,6 +1250,22 @@ first differing frame is the one you want.
     away — when their snapshot is exactly what must come back).
     `HistoryBooleanRepairReplayTests` pins subtract → delete the tool's
     node (8,000 again) → re-pick (8,000 − the new overlap only).
+
+29. **A three-section OCCT loft is SMOOTH unless you say `ruled` — and a
+    symmetric draft is three sections.** Found by putting the recipe's −5°
+    taper back on the wheel's cutters (2026-09-02): the conical holes
+    removed 5.5 % more than the dish integral said. A one-way draft was the
+    exact frustum, but the symmetric one (offset, base, offset) came out
+    6.5 % over: `BRepOffsetAPI_ThruSections(solid, ruled = false)` fits a
+    B-spline surface THROUGH the middle section, so the walls bulge. The
+    render loft was always piecewise (ring quads), which is why
+    `testSymmetricDraftIsTwoFrustumsBackToBack` never noticed — it measured
+    the mesh; it measures the B-rep now too. `loftSolid(sections:ruled:)`
+    passes `ruled: symmetric` from the draft eval (user lofts stay smooth),
+    and the ruled history names EVERY band's walls from its section's
+    edges, not just the first's. After the fix: the probe's symmetric
+    frustums to 0.0 %, the wheel's two conical hole sets to 0.04 %, the
+    cover's drafted boss band to the Steiner integral to 0.00 %.
 
 ---
 

@@ -270,6 +270,18 @@ typedef NS_ENUM(NSInteger, OCCTOpCode) {
                                            bases:(NSArray<OCCTPlaneBasis *> *)bases
                                           history:(nullable OCCTShapeHistory *)history;
 
+/// `ruled`: straight bands between consecutive sections (a three-section
+/// symmetric draft is then exactly two frustums back to back) instead of
+/// ThruSections' smooth surface through all of them, which bulges past the
+/// middle section — 6.5 % of volume on a 5° symmetric draft (2026-09-02).
+/// The history then names the walls of EVERY band from its section's edges.
++ (nullable OCCTShape *)loftedShapeWithOuterLoops:(NSArray<NSData *> *)outerLoops
+                                      outerConics:(NSArray<NSData *> *)outerConics
+                                    outerSegments:(NSArray<NSData *> *)outerSegments
+                                           bases:(NSArray<OCCTPlaneBasis *> *)bases
+                                            ruled:(BOOL)ruled
+                                          history:(nullable OCCTShapeHistory *)history;
+
 /// Sweep a profile along a polyline spine.
 ///
 /// `spine` is 3 doubles per point in WORLD space. The profile is built on its

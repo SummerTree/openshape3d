@@ -2240,9 +2240,12 @@ nonisolated extension FeatureGraph {
         var names: [Int: ElementName] = [:]
         if OCCTKernel.useOCCTAsSourceOfTruth {
             let history = OCCTShapeHistory()
+            // RULED: a symmetric draft's three sections must be two frustums
+            // back to back; ThruSections' smooth surface bulges through the
+            // middle section (found against the wheel's conical cutters).
             guard var solid = OCCTKernel.loftSolid(
                 sections: stack.map { (pick(outerS, $0.offset), $0.plane) },
-                history: history) else {
+                ruled: symmetric, history: history) else {
                 state.errors[node.id] = .kernelFailure("draft-extrude loft failed")
                 return
             }
@@ -2258,7 +2261,7 @@ nonisolated extension FeatureGraph {
                 let boreHistory = OCCTShapeHistory()
                 guard let bore = OCCTKernel.loftSolid(
                         sections: stack.map { (pick(hs, $0.offset), $0.plane) },
-                        history: boreHistory) else {
+                        ruled: symmetric, history: boreHistory) else {
                     state.errors[node.id] = .kernelFailure("draft-extrude hole loft failed")
                     return
                 }

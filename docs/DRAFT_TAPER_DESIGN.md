@@ -22,6 +22,10 @@ from the B-rep to 1e-4 (`testADraftedSlotIsExactWithConicalEnds`).
 A joint that is neither tangent nor line–line (an arc meeting a line at an
 angle) is refused by `SegmentOffset` (nil) and falls back to the polygon
 path — still valid geometry, just tessellated there.
+**Symmetric drafts are RULED lofts (2026-09-02):** the three-section stack
+(offset, base, offset) went through `ThruSections` smooth and bulged 6.5 %
+past the middle section; `loftSolid(sections:ruled:)` makes the two
+frustums exact and names both bands' walls (STATUS gotcha 29).
 **Composed hole-wall naming LANDED (2026-09-02):** the holed draft no
 longer relabels by geometry after its subtractions. The outer loft is named
 from its profile, each bore loft is lofted WITH a history and named from

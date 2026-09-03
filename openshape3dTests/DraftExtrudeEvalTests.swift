@@ -84,6 +84,12 @@ final class DraftExtrudeEvalTests: XCTestCase {
         let vol = MeasureKit.bodyVolume(body.render, scale: 1)
         XCTAssertEqual(vol, want, accuracy: max(1, want * 0.005),
                        "symmetric draft \(vol) vs two frustums \(want)")
+        // The B-REP too: the render loft was always piecewise, but the
+        // kernel's three-section loft used to be a smooth surface bulging
+        // 6.5 % past the middle section. It is ruled now.
+        let brepVolume = OCCTKernel.volume(try XCTUnwrap(body.brep))
+        XCTAssertEqual(brepVolume, want, accuracy: max(1, want * 0.005),
+                       "B-rep symmetric draft \(brepVolume) vs two frustums \(want)")
     }
 
     /// Slice 3: a CIRCLE drafts to an exact cone frustum — ONE conical wall,

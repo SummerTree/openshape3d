@@ -348,7 +348,10 @@ nonisolated enum OCCTKernel {
     /// Loft through ordered sections. Holes are dropped: OCCT's ThruSections
     /// takes ONE wire per section, so a section with inner loops cannot be
     /// expressed here — callers must fall back to the mesh for those.
+    /// `ruled`: straight bands between consecutive sections — what a
+    /// symmetric draft needs (two frustums), never what a user loft wants.
     static func loftSolid(sections: [(profile: Profile, plane: SketchPlane)],
+                          ruled: Bool = false,
                           history: OCCTShapeHistory? = nil) -> BRepHandle? {
         guard sections.count >= 2 else { return nil }
         var loops: [Data] = [], conics: [Data] = [], segments: [Data] = []
@@ -362,7 +365,8 @@ nonisolated enum OCCTKernel {
         }
         return OCCTBridge.loftedShape(
             withOuterLoops: loops, outerConics: conics,
-            outerSegments: segments, bases: bases, history: history).map(BRepHandle.init)
+            outerSegments: segments, bases: bases, ruled: ruled,
+            history: history).map(BRepHandle.init)
     }
 
     /// Sweep a profile along a world-space polyline spine — or, when `helix`
