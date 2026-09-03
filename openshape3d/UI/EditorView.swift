@@ -1229,6 +1229,17 @@ struct EditorView: View {
                         .controlSize(.small)
                         .keyboardShortcut(.cancelAction)
                     }
+                } else if case .pickingFeatureProfile = viewModel.mode {
+                    statusPill(
+                        icon: "pencil.and.outline",
+                        text: viewModel.featureProfilePickPrompt ?? "Tap the profile"
+                    ) {
+                        Button("Cancel") {
+                            viewModel.cancelFeatureProfilePick()
+                        }
+                        .controlSize(.small)
+                        .keyboardShortcut(.cancelAction)
+                    }
                 } else if case .pickingRevolveAxis = viewModel.mode {
                     statusPill(
                         icon: "arrow.triangle.2.circlepath",

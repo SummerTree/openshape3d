@@ -2621,6 +2621,7 @@ final class EditorViewModel {
         cancelBooleanPicking()
         cancelFeatureBodyPick()
         cancelFeatureFacePick()
+        cancelFeatureProfilePick()
         cancelSectionPlanePick()
         cancelImagePlanePick()
         resetBlendState()
@@ -2968,6 +2969,7 @@ final class EditorViewModel {
         case .boolean: return "Edit Tool"
         case .mirror, .pattern, .transform: return "Edit Body"
         case .pushPull, .moveFace, .scaleFace, .rotateFace: return "Edit Face"
+        case .extrude, .draftExtrude, .revolve, .sweep: return "Edit Profile"
         default: return nil
         }
     }
@@ -2983,6 +2985,7 @@ final class EditorViewModel {
         case .boolean: return beginBooleanEdit(id)
         case .mirror, .pattern, .transform: return beginFeatureBodyEdit(id)
         case .pushPull, .moveFace, .scaleFace, .rotateFace: return beginFeatureFaceEdit(id)
+        case .extrude, .draftExtrude, .revolve, .sweep: return beginFeatureProfileEdit(id)
         default: return false
         }
     }
@@ -4992,6 +4995,8 @@ final class EditorViewModel {
             handleFeatureBodyTap(featureID: featureID, ray: ray)
         case .pickingFeatureFace(let featureID):
             handleFeatureFaceTap(featureID: featureID, ray: ray)
+        case .pickingFeatureProfile(let featureID):
+            handleFeatureProfileTap(featureID: featureID, ray: ray)
         case .pickingSplitCutter(let target):
             handleSplitCutterTap(target: target, ray: ray)
         case .patterning:
@@ -5590,6 +5595,83 @@ final class EditorViewModel {
         if case .pickingFeatureFace = mode { mode = .idle }
     }
 
+    // MARK: - Profile re-pick (History "Edit Profile" on extrude / draft / revolve / sweep)
+
+    /// Re-enter a profile pick for an existing extrude / draft extrude /
+    /// revolve / sweep node: the next tapped sketch fill becomes its profile.
+    /// False for other kinds (a loft's sections are several — not yet).
+    @discardableResult
+    func beginFeatureProfileEdit(_ id: FeatureID) -> Bool {
+        guard let node = session.document.features.node(id) else { return false }
+        switch node.kind {
+        case .extrude, .draftExtrude, .revolve, .sweep: break
+        default: return false
+        }
+        cancelTransientPicks()
+        cancelTool()
+        selection = Set(node.outputBodyIDs.filter { session.document.body(with: $0) != nil })
+        mode = .pickingFeatureProfile(id)
+        return true
+    }
+
+    func cancelFeatureProfilePick() {
+        if case .pickingFeatureProfile = mode { mode = .idle }
+    }
+
+    /// The status pill's prompt while a profile is being re-picked.
+    var featureProfilePickPrompt: String? {
+        guard case let .pickingFeatureProfile(id) = mode,
+              let node = session.document.features.node(id) else { return nil }
+        return "Tap the profile for \(node.name)"
+    }
+
+    /// The same sketch region: same sketch, same loop entities, same holes —
+    /// the seed point and entity order are incidental to how it was tapped.
+    private static func sameProfile(_ a: ProfileRef, _ b: ProfileRef) -> Bool {
+        a.sketchID == b.sketchID
+            && Set(a.entityIDs) == Set(b.entityIDs)
+            && Set(a.holeEntityIDs.map { Set($0) }) == Set(b.holeEntityIDs.map { Set($0) })
+    }
+
+    private func handleFeatureProfileTap(featureID: FeatureID, ray: Ray) {
+        guard let node = session.document.features.node(featureID) else { cancelFeatureProfilePick(); return }
+        // Hidden sketches count too: the sketch an extrude consumed is usually
+        // hidden, and the whole point is to point the node at a profile again.
+        guard let hit = profileHit(ray: ray, includeHidden: true) else { return }
+        let ref = profileRef(profile: hit.profile, holes: hit.holes, sketchID: hit.sketchID)
+        let plane = PlaneRef(source: .sketch(hit.sketchID))
+        let after: FeatureKind
+        switch node.kind {
+        case let .extrude(profile, _, distance, symmetric, boolean, _):
+            guard !Self.sameProfile(profile, ref) else { cancelFeatureProfilePick(); return }
+            // Extra profiles belonged to the old sketch region; the re-pick is one profile.
+            after = .extrude(profile: ref, plane: plane, distance: distance,
+                             symmetric: symmetric, boolean: boolean, extraProfiles: [])
+        case let .draftExtrude(profile, _, distance, taperAngle, symmetric, boolean):
+            guard !Self.sameProfile(profile, ref) else { cancelFeatureProfilePick(); return }
+            after = .draftExtrude(profile: ref, plane: plane, distance: distance,
+                                  taperAngle: taperAngle, symmetric: symmetric, boolean: boolean)
+        case let .revolve(profile, _, axis, angle, boolean):
+            guard !Self.sameProfile(profile, ref) else { cancelFeatureProfilePick(); return }
+            after = .revolve(profile: ref, plane: plane, axis: axis, angle: angle, boolean: boolean)
+        case let .sweep(profile, _, spine, boolean, helix):
+            guard !Self.sameProfile(profile, ref) else { cancelFeatureProfilePick(); return }
+            after = .sweep(profile: ref, plane: plane, spine: spine, boolean: boolean, helix: helix)
+        default:
+            cancelFeatureProfilePick()
+            return
+        }
+        cancelFeatureProfilePick()
+        prepareForHistoryChange()
+        session.editFeature(featureID, to: after)
+        session.save()
+        let produced = node.outputBodyIDs.filter { session.document.body(with: $0) != nil }
+        if let first = produced.first {
+            selection = Set(produced)
+            mode = .selected(first)
+        }
+    }
+
     /// The status pill's prompt while a face operand is being re-picked.
     var featureFacePickPrompt: String? {
         guard case let .pickingFeatureFace(id) = mode,
@@ -5928,10 +6010,10 @@ final class EditorViewModel {
     /// The profile (with holes) under the ray, across all sketches, with the
     /// world-space hit distance (rays are unit-direction).
     private func profileHit(
-        ray: Ray
+        ray: Ray, includeHidden: Bool = false
     ) -> (profile: Profile, holes: [Profile], plane: SketchPlane, sketchID: SketchID, distance: Float)? {
         var best: (profile: Profile, holes: [Profile], plane: SketchPlane, sketchID: SketchID, distance: Float)?
-        for sketch in session.document.sketches where !sketch.isHidden {
+        for sketch in session.document.sketches where includeHidden || !sketch.isHidden {
             let plane = sketch.plane
             let planePoint = SIMD3<Float>(Float(plane.origin.x), Float(plane.origin.y), Float(plane.origin.z))
             let n = plane.normal

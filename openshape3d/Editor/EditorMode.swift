@@ -84,6 +84,10 @@ enum EditorMode: Equatable {
     /// on the node's body — resolved on the body the feature CONSUMED —
     /// becomes its face.
     case pickingFeatureFace(FeatureID)
+    /// Re-picking the PROFILE of an existing extrude / draft extrude /
+    /// revolve / sweep node (History "Edit Profile"): the next tapped sketch
+    /// fill becomes its profile (and its sketch the plane).
+    case pickingFeatureProfile(FeatureID)
     /// Pattern bar active (linear/circular); parameters live in
     /// `EditorViewModel.patternState`, instances preview as ghosts.
     case patterning

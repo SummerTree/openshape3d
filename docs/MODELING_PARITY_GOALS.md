@@ -427,7 +427,15 @@ push), the planar `FaceRef` is minted with the tools' own signature and box
 role, the node keeps its distance / delta / factor / angle; a radial
 push/pull (cylindrical face) refuses for now. `HistoryFaceOperandEditTests`
 moves a push from a box's top to its +x side and watches the bounds swap.
-Still open in G8: the
+**Edit Profile** on extrude / draft extrude / revolve / sweep rows completed
+the operand set (`pickingFeatureProfile`, `beginFeatureProfileEdit`): the
+tap resolves a sketch fill through the same `profileHit` the tools use —
+hidden sketches included, since a consumed sketch usually is — mints the
+`ProfileRef` + sketch `PlaneRef` the extrude commit mints, and rewrites the
+node with its distance / angle / options kept (extra profiles dropped: the
+re-pick is one region; the same region again just ends the pick).
+`HistoryProfileEditTests` points an extrude from one rectangle at another
+and watches its bounds move. Still open in G8: the
 reference rows (re-pick profile / body / faces / edges), the boolean
 INTENT of extrude / revolve / sweep / loft (changing new-body → subtract
 needs a target pick, so it belongs with the reference rows), and the
