@@ -459,6 +459,7 @@ our app. Ordered roughly by how often the manual reaches for them.
 | Chamfer/Fillet *(§4.3)* | Chamfer 2-distance; Fillet **Chordal**; **Corner** Rolling Ball vs Setback; **Continuity** G1/G2; profile slider + magnitude (−1…1); Overflow (Auto/Cliff/Smooth/Notch); Include Tangent Edges toggle; Y-shaped blend |
 | Booleans *(§4.6–4.8)* | **Keep Target Bodies / Keep Tool Bodies** (Shapr3D's All / Modified / Removed / None); switching Type after the fact |
 | Offset Face *(§4.2)* | **Distance Type**: Radius/Diameter, **Total** (with opposite-face pick), Offset; automatic tangent-face inclusion |
+| Shell *(§4.4)* | ~~Direction outward~~ **landed 2026-09-02** as a signed thickness (negative = outward; exec + History field; the Shell bar still enters inward only) |
 | Sweep *(§4.11)* | Profile Position (Auto / path intersection / closest point / closest endpoint); Orientation (normal-to-path vs parallel); Twist; Scale; Corner type (mitre/round) |
 | Loft *(§4.5)* | **Guide curves**; **connection points** (vertex mapping / de-twisting); Periodic Loft; start/end tangent continuity + magnitude |
 | Split Body *(§4.9)* | Multiple cutters at once; sketch profiles, body faces/edges, images, and a body's own face as cutters; Keep Originals |

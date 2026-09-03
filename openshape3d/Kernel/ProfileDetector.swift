@@ -107,6 +107,24 @@ nonisolated struct Profile: Identifiable {
         if !segmentEntityIDs.isEmpty, wireEdgeCount == segmentEntityIDs.count {
             return lookup(segmentEntityIDs)
         }
+        // The kernel splits an OPEN spline where its straight end spans meet
+        // the curve (a crease may not sit inside one face — offsets refuse
+        // it): three edges for four or more points, two for three. The wire
+        // then has more edges than segments; expand the entity list the same
+        // way so every piece still names its spline.
+        if !segmentEntityIDs.isEmpty, segmentEntityIDs.count == segments.count {
+            var expanded: [UUID] = []
+            for (segment, entity) in zip(segments, segmentEntityIDs) {
+                var pieces = 1
+                if let points = segment.controlPoints, !segment.closed {
+                    pieces = points.count >= 4 ? 3 : (points.count == 3 ? 2 : 1)
+                }
+                expanded.append(contentsOf: repeatElement(entity, count: pieces))
+            }
+            if expanded.count != segmentEntityIDs.count, wireEdgeCount == expanded.count {
+                return lookup(expanded)
+            }
+        }
         if wireEdgeCount == loop.count, edgeEntityIDs.count == loop.count {
             return lookup(edgeEntityIDs)
         }

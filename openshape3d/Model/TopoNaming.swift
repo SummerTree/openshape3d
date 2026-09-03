@@ -218,6 +218,14 @@ nonisolated struct SignatureNaming: TopoNaming {
 
         var best: (score: Double, index: Int, face: EnumeratedFace)?
         var runnerUpScore: Double?
+        // The role boost's table lookup is O(1) when the table's rows align
+        // with `enumerate` (they do, for a table of this render); a
+        // misaligned table falls back to a scan, but only within the same
+        // budget `propagate` keeps. Without the cap this loop was
+        // O(faces × entries): a revolved spline bottle (tens of thousands of
+        // facet faces) sat in here for minutes resolving a shell's one open
+        // face (2026-09-02).
+        let scanAllowed = faces.count * (table?.entries.count ?? 0) <= Self.propagateBudget
         for (index, face) in faces.enumerated() {
             // The ref knows what KIND of surface it referenced, and until now
             // nothing read it (review R4-N4): a cylindrical ref could bind a
@@ -241,7 +249,9 @@ nonisolated struct SignatureNaming: TopoNaming {
             // term itself — not on the composite score — keeps the legitimate
             // "moved and resized but same orientation" case resolving.
             if Self.normalAlignment(face.signature, ref.signature) > 0,
-               let table, let role = roleFromTable(for: face, table: table, bboxDiag: diag),
+               let table,
+               let role = roleFromTable(for: face, at: index, table: table,
+                                        bboxDiag: diag, scanAllowed: scanAllowed),
                role == ref.role {
                 s += Self.roleBoost
             }
@@ -315,10 +325,17 @@ nonisolated struct SignatureNaming: TopoNaming {
         }
     }
 
-    /// The role the `table` would assign to `face` (its closest entry by signature).
+    /// The role the `table` assigns to `face`: its own row when the table
+    /// aligns with the enumeration (verified by triangle set — O(1)), else
+    /// the closest entry by signature, and only while that scan is affordable.
     private func roleFromTable(
-        for face: EnumeratedFace, table: FaceTable, bboxDiag diag: Double
+        for face: EnumeratedFace, at index: Int, table: FaceTable,
+        bboxDiag diag: Double, scanAllowed: Bool
     ) -> FaceRole? {
+        if index < table.entries.count, table.entries[index].triangles == face.triangles {
+            return table.entries[index].role
+        }
+        guard scanAllowed else { return nil }
         var best: (score: Double, role: FaceRole)?
         for entry in table.entries {
             let s = score(face.signature, against: entry.signature, bboxDiag: diag)

@@ -189,9 +189,13 @@ final class SplineProfileEvalTests: XCTestCase {
         let body = try XCTUnwrap(result.bodies.first { $0.id == bodyID })
         let brep = try XCTUnwrap(body.brep)
 
+        // An open spline's straight END spans are split off as line edges
+        // (the crease where they meet the curve may not sit inside one
+        // face), so they extrude to PLANES: 2 caps + 3 line walls + 2 end
+        // spans, and one curved spline wall between them.
         let counts = OCCTKernel.faceTypeCounts(brep)
-        XCTAssertEqual(counts.planar, 5, "2 caps + 3 straight walls: \(counts)")
-        XCTAssertEqual(counts.other, 1, "one spline wall: \(counts)")
+        XCTAssertEqual(counts.planar, 7, "2 caps + 3 straight walls + 2 straight spline ends: \(counts)")
+        XCTAssertEqual(counts.other, 1, "one curved spline wall: \(counts)")
 
         // Traversed spline left→right along the top, then down, left, up (CW):
         // ½∮(x dy − y dx) = spline Gauss term + ½ Σ cross over the three lines.
@@ -205,7 +209,8 @@ final class SplineProfileEvalTests: XCTestCase {
         XCTAssertEqual(vol, want, accuracy: want * 1e-6, "B-rep \(vol) vs Green's \(want)")
 
         let names = try XCTUnwrap(result.kernelNames[bodyID])
-        XCTAssertEqual(wallCount(names, entity: spline), 1)
+        XCTAssertEqual(wallCount(names, entity: spline), 3,
+                       "three walls carry the spline's identity: its two straight ends (occurrence 0 and 2) and the curve")
         for line in [right, bottom, left] { XCTAssertEqual(wallCount(names, entity: line), 1) }
     }
 

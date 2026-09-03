@@ -1501,8 +1501,9 @@ nonisolated extension FeatureGraph {
         into state: inout EvalState,
         next nextRevision: () -> UInt64
     ) {
-        guard thickness > 1e-6 else {
-            state.errors[node.id] = .kernelFailure("shell thickness must be positive")
+        // Signed: positive hollows inward, negative grows the wall outward.
+        guard abs(thickness) > 1e-6 else {
+            state.errors[node.id] = .kernelFailure("shell thickness must be non-zero")
             return
         }
         guard let body = state.bodies[bodyRef.bodyID] else {

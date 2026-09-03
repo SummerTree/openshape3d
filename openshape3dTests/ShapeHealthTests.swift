@@ -102,6 +102,29 @@ final class ShapeHealthTests: XCTestCase {
 
     // MARK: - Kernel-side face info (the identity source for assigned renders)
 
+    /// A REVOLVED solid's caps carry a mirrored face location, so the plane
+    /// axis flipped by the orientation flag pointed the base cap INTO the
+    /// body — a FaceRef minted from it never resolved. The oriented normal
+    /// (`BRepGProp_Face`, the one the volume integral uses) is outward.
+    func testFaceInfoOfARevolvedCylinderHasOutwardCaps() throws {
+        let plane = SketchPlane(origin: .zero, xAxis: SIMD3(1, 0, 0), yAxis: SIMD3(0, 1, 0))
+        let ids = [UUID(), UUID(), UUID(), UUID()]
+        let rect = Profile(loop: [SIMD2(0, 0), SIMD2(10, 0), SIMD2(10, 20), SIMD2(0, 20)],
+                           kind: .polygonal, sourceEntityIDs: Set(ids), edgeEntityIDs: ids)
+        let cylinder = try XCTUnwrap(OCCTKernel.revolveSolid(
+            outer: rect, holes: [], plane: plane,
+            axisOrigin: .zero, axisDirection: SIMD3(0, 1, 0), angleRadians: 2 * .pi))
+        let caps = OCCTKernel.faceInfo(cylinder).filter { $0.signature?.kind == .planar }
+        XCTAssertEqual(caps.count, 2)
+        for cap in caps {
+            // Outward: away from the body's centre at y = 10.
+            let outward = cap.centroid.y > 10 ? 1.0 : -1.0
+            XCTAssertEqual(cap.normal.y, outward, accuracy: 1e-9,
+                           "cap at y=\(cap.centroid.y) reports \(cap.normal)")
+            XCTAssertEqual(cap.area, .pi * 100, accuracy: 1e-6)
+        }
+    }
+
     func testFaceInfoDescribesABoxWithOutwardNormals() throws {
         let box = try box(10)
         let infos = OCCTKernel.faceInfo(box)

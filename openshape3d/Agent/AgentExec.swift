@@ -400,9 +400,9 @@ nonisolated enum AgentExec {
         do {
             let body = BodyID(raw: try uuid(a, "bodyID"))
             let thickness = try double(a, "thickness")
-            guard thickness > 0 else {
+            guard thickness != 0, thickness.isFinite else {
                 return .failure(.init(code: "bad_thickness",
-                                      message: "args.thickness must be > 0 mm."))
+                                      message: "args.thickness must be a non-zero wall in mm: positive hollows inward, negative grows outward."))
             }
             // Empty (or absent) openFaces = a fully-enclosed hollow.
             let openFaces = try edgeIndices(a, "openFaces", allowEmpty: true)

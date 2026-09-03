@@ -21,6 +21,7 @@
 #include <string>
 
 #include <BRepTools.hxx>
+#include <BRepGProp_Face.hxx>
 #include <BRep_Builder.hxx>
 #include <BRepFilletAPI_MakeFillet.hxx>
 #include <BRepAlgoAPI_Defeaturing.hxx>
@@ -93,6 +94,8 @@
 #include <gp_Elips.hxx>
 #include <GC_MakeArcOfCircle.hxx>
 #include <Geom_BSplineCurve.hxx>
+#include <GeomConvert.hxx>
+#include <TColGeom_HArray1OfBSplineCurve.hxx>
 #include <Geom_Plane.hxx>
 #include <TColgp_Array1OfPnt.hxx>
 #include <TColStd_Array1OfReal.hxx>
@@ -642,11 +645,23 @@ static bool OS3DSplineEdge(const double *xy, NSUInteger count, bool closed,
         poles.SetValue(base + 3, gp_Pnt(b2.X(), b2.Y(), z));
         poles.SetValue(base + 4, gp_Pnt(p2.X(), p2.Y(), z));   // == next span's first pole
     }
+    // Knots at the CENTRIPETAL parameters the tangents were derived with, so
+    // consecutive Béziers meet with EQUAL derivatives — parametric C1 — and
+    // each joint's multiplicity can drop from 3 to 2 without moving the
+    // curve. Uniform knots left OCCT reading the chain as C0 from its knot
+    // structure alone, and BRepOffset refuses C0 (BRepOffset_C0Geometry):
+    // a revolved spline could not be shelled at any wall (2026-09-02).
     TColStd_Array1OfReal knots(1, (Standard_Integer)(spans + 1));
     TColStd_Array1OfInteger mults(1, (Standard_Integer)(spans + 1));
-    for (long k = 0; k <= spans; ++k) {
-        knots.SetValue((Standard_Integer)k + 1, (Standard_Real)k);
-        mults.SetValue((Standard_Integer)k + 1, (k == 0 || k == spans) ? 4 : 3);
+    knots.SetValue(1, 0.0);
+    mults.SetValue(1, 4);
+    double t = 0.0;
+    for (long s = 0; s < spans; ++s) {
+        double h = std::sqrt(P(s).Distance(P(s + 1)));
+        if (!(h > 1e-9)) h = 1e-6;
+        t += h;
+        knots.SetValue((Standard_Integer)s + 2, t);
+        mults.SetValue((Standard_Integer)s + 2, (s == spans - 1) ? 4 : 3);
     }
     Handle(Geom_BSplineCurve) curve;
     try {
@@ -655,6 +670,15 @@ static bool OS3DSplineEdge(const double *xy, NSUInteger count, bool closed,
         return false;
     }
     if (curve.IsNull()) return false;
+    // Lower every interior joint to C1 where the two Béziers agree (they do
+    // by construction, except beside a straight end span or a degenerate
+    // one); a joint that refuses stays C0 rather than being reshaped — the
+    // wire builder then splits the edge there.
+    for (Standard_Integer k = curve->NbKnots() - 1; k >= 2; --k) {
+        if (curve->Multiplicity(k) > 2) {
+            try { curve->RemoveKnot(k, 2, 1.0e-7); } catch (...) {}
+        }
+    }
     BRepBuilderAPI_MakeEdge me(curve);
     if (!me.IsDone()) return false;
     outEdge = me.Edge();
@@ -702,7 +726,47 @@ static TopoDS_Wire SegWire(NSData *segs, double z) {
             const bool closed = kind > 2.5;
             TopoDS_Edge edge;
             if (!OS3DSplineEdge(p + i + 2, count, closed, z, edge)) return TopoDS_Wire();
-            mw.Add(edge);
+            // A joint the spline could not make C1 (an open spline's straight
+            // end span meeting the curve at a corner) becomes an EDGE
+            // boundary: a face may not carry a crease inside it — offsets
+            // refuse, tangent chains stop there anyway.
+            Standard_Real f = 0, l = 0;
+            Handle(Geom_Curve) c3d = BRep_Tool::Curve(edge, f, l);
+            Handle(Geom_BSplineCurve) bs = Handle(Geom_BSplineCurve)::DownCast(c3d);
+            bool split = false;
+            if (!bs.IsNull()) {
+                Handle(TColGeom_HArray1OfBSplineCurve) pieces;
+                try {
+                    GeomConvert::C0BSplineToArrayOfC1BSplineCurve(bs, pieces, 1.0e-7);
+                } catch (...) { pieces.Nullify(); }
+                if (!pieces.IsNull() && pieces->Length() > 1) {
+                    for (Standard_Integer k = pieces->Lower(); k <= pieces->Upper(); ++k) {
+                        const Handle(Geom_BSplineCurve) &piece = pieces->Value(k);
+                        // A straight piece (an open spline's end span) is a
+                        // LINE edge: it extrudes to a plane and revolves to a
+                        // cone, and reads as such downstream.
+                        bool straight = true;
+                        const gp_Pnt a = piece->StartPoint(), b = piece->EndPoint();
+                        const double len = a.Distance(b);
+                        if (len > 1e-9) {
+                            const gp_Dir d(gp_Vec(a, b));
+                            for (Standard_Integer q = piece->Poles().Lower(); q <= piece->Poles().Upper() && straight; ++q) {
+                                const gp_Vec ap(a, piece->Pole(q));
+                                if (ap.CrossMagnitude(gp_Vec(d)) > 1e-7 * std::max(1.0, len)) straight = false;
+                            }
+                        } else {
+                            straight = false;
+                        }
+                        BRepBuilderAPI_MakeEdge me = straight ? BRepBuilderAPI_MakeEdge(a, b)
+                                                              : BRepBuilderAPI_MakeEdge(piece);
+                        if (!me.IsDone()) return TopoDS_Wire();
+                        mw.Add(me.Edge());
+                        ++records;
+                    }
+                    split = true;
+                }
+            }
+            if (!split) mw.Add(edge);
             if (closed) closedSpline = true;
             i += 2 + 2 * count;
         }
@@ -1934,7 +1998,14 @@ static std::set<Standard_Integer> OS3DNearestFaces(
     Handle(Geom_Curve) curve = BRep_Tool::Curve(edge, first, last);
     Handle(Geom_BSplineCurve) bspline = Handle(Geom_BSplineCurve)::DownCast(curve);
     if (bspline.IsNull()) return nil;
-    const TColgp_Array1OfPnt &poles = bspline->Poles();
+    // The edge's curve keeps C1 joints (multiplicity 2); the Swift
+    // conversion is the Bézier chain. Same curve — raise the joints back to
+    // full multiplicity on a copy and the poles ARE the Bézier control points.
+    Handle(Geom_BSplineCurve) bezier = Handle(Geom_BSplineCurve)::DownCast(bspline->Copy());
+    for (Standard_Integer k = 2; k < bezier->NbKnots(); ++k) {
+        try { bezier->IncreaseMultiplicity(k, bezier->Degree()); } catch (...) {}
+    }
+    const TColgp_Array1OfPnt &poles = bezier->Poles();
     NSMutableData *out = [NSMutableData dataWithCapacity:poles.Length() * 2 * sizeof(double)];
     for (Standard_Integer i = poles.Lower(); i <= poles.Upper(); ++i) {
         double v[2] = { poles.Value(i).X(), poles.Value(i).Y() };
@@ -2427,11 +2498,25 @@ static double OS3DSpanExactArea(const TopoDS_Face &face) {
             gp_Dir normal(0.0, 0.0, 1.0);
             if (surf.GetType() == GeomAbs_Plane) {
                 kind = 0.0;
-                normal = surf.Plane().Axis().Direction();
-                // The geometric axis ignores which side the material is on;
-                // the face ORIENTATION says. An outward normal is what the
-                // signature conventions store.
-                if (face.Orientation() == TopAbs_REVERSED) normal.Reverse();
+                // The OUTWARD normal from the face's own parametrisation with
+                // its orientation applied — the normal the volume integral
+                // uses. The plane axis flipped by the orientation flag is NOT
+                // enough: a face whose location mirrors (a MakeRevol cap)
+                // has an axis that already points the other way, and the
+                // flag alone reported a revolve's base cap pointing INTO the
+                // body, so a FaceRef minted from it never resolved
+                // (2026-09-02, the Coke-bottle shell).
+                Standard_Real u0 = 0, u1 = 0, v0 = 0, v1 = 0;
+                BRepTools::UVBounds(face, u0, u1, v0, v1);
+                BRepGProp_Face oriented(face);
+                gp_Pnt at; gp_Vec nv;
+                oriented.Normal((u0 + u1) / 2, (v0 + v1) / 2, at, nv);
+                if (nv.Magnitude() > 1e-12) {
+                    normal = gp_Dir(nv);
+                } else {
+                    normal = surf.Plane().Axis().Direction();
+                    if (face.Orientation() == TopAbs_REVERSED) normal.Reverse();
+                }
                 extra = normal.X() * centroid.X() + normal.Y() * centroid.Y()
                       + normal.Z() * centroid.Z();
             } else if (surf.GetType() == GeomAbs_Cylinder) {
@@ -2802,6 +2887,12 @@ static double OS3DVolume(const TopoDS_Shape &shape) {
         // Faces to open: those with a sample within tolerance of a picked point.
         // Empty selection => fully-enclosed hollow.
         TopTools_ListOfShape openFaces;
+        // Signed: positive hollows INWARD (the wall lies inside the original
+        // surface), negative grows OUTWARD (the original surface becomes the
+        // cavity) — the tutorial move for a profile whose grooves are tighter
+        // than any inward wall (2026-09-02, the Coke bottle).
+        const bool outward = thickness < 0;
+        const double offset = outward ? fabs(thickness) : -fabs(thickness);
         if (count > 0) {
             // Nearest-wins (see OS3DNearestFaces): the old rule opened every
             // face within tolerance, which on a thin plate meant picking the
@@ -2832,7 +2923,7 @@ static double OS3DVolume(const TopoDS_Shape &shape) {
             // closed solid outright — it never worked; the mesh fallback was
             // silently covering for it until eval stopped degrading.)
             BRepOffsetAPI_MakeOffsetShape off;
-            off.PerformByJoin(input, -fabs(thickness), 1.0e-3);
+            off.PerformByJoin(input, offset, 1.0e-3);
             if (!off.IsDone() || off.Shape().IsNull()) {
                 OS3DSetStatus(status, OCCTOpCodeKernelRefused,
                               @"the wall thickness is out of range for this shape");
@@ -2845,7 +2936,9 @@ static double OS3DVolume(const TopoDS_Shape &shape) {
                               @"the wall thickness is out of range for this shape");
                 return nil;
             }
-            BRepAlgoAPI_Cut cut(input, inner);
+            // Inward: the original minus its shrunken copy. Outward: the
+            // grown copy minus the original.
+            BRepAlgoAPI_Cut cut(outward ? inner : input, outward ? input : inner);
             if (!cut.IsDone() || cut.HasErrors()) {
                 OS3DSetStatus(status, OCCTOpCodeKernelRefused,
                               @"hollowing failed on this shape");
@@ -2854,16 +2947,42 @@ static double OS3DVolume(const TopoDS_Shape &shape) {
             built = cut.Shape();
         } else {
             BRepOffsetAPI_MakeThickSolid mk;
-            mk.MakeThickSolidByJoin(input, openFaces, -fabs(thickness), 1.0e-3);
-            if (!mk.IsDone()) {
+            mk.MakeThickSolidByJoin(input, openFaces, offset, 1.0e-3);
+            // Arc joins are OCCT's default and the robust choice on analytic
+            // walls; a B-spline wall (a revolved traced profile) can fail
+            // them and still offset with INTERSECTION joins. Try those
+            // before refusing.
+            BRepOffsetAPI_MakeThickSolid mkIntersection;
+            BRepOffsetAPI_MakeThickSolid *made = mk.IsDone() ? &mk : nullptr;
+            if (made == nullptr) {
+                try {
+                    mkIntersection.MakeThickSolidByJoin(
+                        input, openFaces, offset, 1.0e-3, BRepOffset_Skin,
+                        Standard_True, Standard_False, GeomAbs_Intersection);
+                    if (mkIntersection.IsDone()) made = &mkIntersection;
+                } catch (...) {
+                    made = nullptr;
+                }
+            }
+            if (made == nullptr) {
+                // Say WHY: BRepOffset's own error code, so a refusal on a
+                // curved wall can be told apart from a wall eating the body.
+                static const char *const kOffsetErrors[] = {
+                    "NoError", "UnknownError", "BadNormalsOnGeometry",
+                    "C0Geometry", "NullOffset", "NotConnectedShell",
+                    "CannotTrimEdges", "CannotFuseVertices", "CannotExtentEdge",
+                    "UserBreak", "MixedConnectivity"};
+                int code = -1;
+                try { code = (int)mk.MakeOffset().Error(); } catch (...) {}
+                const char *name = (code >= 0 && code < 11) ? kOffsetErrors[code] : "?";
                 OS3DSetStatus(status, OCCTOpCodeKernelRefused,
-                              @"the wall thickness is out of range for this shape");
+                              [NSString stringWithFormat:@"the wall thickness is out of range for this shape (OCCT offset: %s)", name]);
                 return nil;
             }
-            built = mk.Shape();
-            // Harvest before mk dies with this scope.
+            built = made->Shape();
+            // Harvest before the maker dies with this scope.
             if (history != nil) {
-                OS3DCollectMakerHistory(mk, {input}, histEdges);
+                OS3DCollectMakerHistory(*made, {input}, histEdges);
             }
         }
 
@@ -2876,15 +2995,21 @@ static double OS3DVolume(const TopoDS_Shape &shape) {
                           @"the shelled solid failed validity checking");
             return nil;
         }
-        // A shell REMOVES material by definition. A "hollow" whose volume
-        // didn't shrink is the sealed-body failure mode wearing a valid
-        // topology — refuse it (docs/FREECAD_PLAYBOOK.md B2).
+        // A shell moves material by definition: INWARD removes it, OUTWARD
+        // adds it. A "hollow" whose volume went nowhere — or the wrong way —
+        // is the sealed-body failure mode wearing a valid topology; refuse
+        // it (docs/FREECAD_PLAYBOOK.md B2).
         const double before = OS3DVolume(input);
         const double after = OS3DVolume(valid);
-        if (before > 0 && after >= before * (1.0 - 1e-9)) {
-            OS3DSetStatus(status, OCCTOpCodeInvalidResult,
-                          @"the shell removed no material");
-            return nil;
+        if (before > 0) {
+            const bool unchanged = fabs(after - before) <= before * 1e-9;
+            const bool wrongWay = outward ? (after <= before) : (after >= before);
+            if (unchanged || wrongWay) {
+                OS3DSetStatus(status, OCCTOpCodeInvalidResult,
+                              outward ? @"the shell added no material"
+                                      : @"the shell removed no material");
+                return nil;
+            }
         }
 
         OS3DSetStatus(status, OCCTOpCodeOK, nil);

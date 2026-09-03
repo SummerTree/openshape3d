@@ -364,7 +364,12 @@ plane sections, exact face areas, holed-sweep naming, CSG-free render meshes):
   and the frame's face-offset / align / shell operands need values only
   the `.shapr` recipes hold (not on this machine); the BEG 55 volume
   deviations (cover −9.5 %, plate +6.3 %) are modelling depth against a
-  tessellated capture with no drawing behind it.
+  tessellated capture with no drawing behind it. The Tufts CAD-modeling
+  tutorial's Coca-Cola bottle (`scripts/rebuild_coke_bottle.py`: the
+  traced profile read from the tutorial's own sketch screenshot, 230 tall,
+  base r28; revolve to 0.05 % of Pappus, 1.5 mm shell with the mouth open,
+  two lip fillets) took gotchas 30–33 to get through — a resolver hang, a
+  cap normal, C0 splines and the outward shell — all real app errors.
 - ~~Scale as a node~~ — landed 2026-09-02 (below): the composition carries a
   uniform scale (`Transform3D.composed(onto:)`, `delta(from:to:)`), the
   B-rep placement already did (`gp_Trsf::SetValues` admits it), the volume
@@ -407,7 +412,7 @@ plane sections, exact face areas, holed-sweep naming, CSG-free render meshes):
   re-uploading all buffers per tick, measurement caching; S3 untouched.
   Gotcha 26 below.
 
-**Current test baseline (2026-09-02, evening): 1245 unit tests in ~21s** — the
+**Current test baseline (2026-09-02, evening): 1248 unit tests in ~21s** — the
 day added the exact helix spine, the BEG 55 lineup's bounds/mirror fixes,
 transform-as-a-feature, consumed-edge drafts on both offset paths, plane
 sections (`SectionKit`, `KernelSectionTests`), the exact face areas, and the
@@ -1266,6 +1271,50 @@ first differing frame is the one you want.
     edges, not just the first's. After the fix: the probe's symmetric
     frustums to 0.0 %, the wheel's two conical hole sets to 0.04 %, the
     cover's drafted boss band to the Steiner integral to 0.00 %.
+
+30. **`SignatureNaming.resolve` rescanned the whole face table per
+    candidate.** Found shelling a revolved spline bottle (2026-09-02): the
+    open-face lookup sat in `roleFromTable` for minutes — the revolved
+    B-spline wall enumerates into tens of thousands of facet faces, and
+    the role boost scanned every table entry for every candidate. The
+    table's rows align with `enumerate`, so the role is an index lookup
+    now; the scan survives only under `propagateBudget`
+    (`SignatureNamingScaleTests`, a 20k-facet lathe resolves in < 3 s).
+    The symptom to recognise: `/v1/health` alive, `/v1/state` dead, and
+    `sample` shows `SignatureNaming.score` — not the kernel.
+
+31. **A revolved cap's face-info normal pointed INTO the body.** The
+    plane axis flipped by the orientation flag is wrong for a face whose
+    location mirrors (MakeRevol's caps); a `FaceRef` minted from
+    `/v1/faces` then carried an inward normal and never resolved ("shell
+    open face did not resolve"). `faceInfoOfShape:` uses the oriented
+    `BRepGProp_Face` normal — the one the volume integral uses. A box was
+    always right, which is why nothing noticed
+    (`testFaceInfoOfARevolvedCylinderHasOutwardCaps`).
+
+32. **A sketch spline reached the kernel as a C0 B-spline, and OCCT will
+    not offset C0.** The Bézier chain had uniform knots at full
+    multiplicity; the geometry is tangent-continuous but the knot
+    structure says C0, and `BRepOffset` refused every wall with
+    `C0Geometry` — no revolved or extruded spline body could be shelled,
+    smooth vase included. `OS3DSplineEdge` now spaces the knots by the
+    centripetal parameters the tangents were derived with (parametric
+    C1) and lowers each joint's multiplicity; a joint that stays C0 (an
+    OPEN spline's straight end spans meet the curve at a corner) becomes
+    an EDGE boundary in `SegWire` (a straight piece is a line edge — it
+    extrudes to a plane), and `Profile.boundaryIdentity` expands the
+    entity list the same way so every piece still names its spline
+    (occurrence 0/1/2). The bridge's offset refusal now names OCCT's
+    error code, which is how this was found.
+
+33. **Shell thickness is SIGNED now: negative grows the wall outward.**
+    The tutorial's own escape for a profile whose grooves are tighter
+    than any inward wall. The bridge offsets by the sign, retries the
+    Intersection join when the Arc join fails, and validates that the
+    material moved the right way; OCCT's outward offset ROUNDS the outer
+    edges and corners (arc joins), which the analytic in
+    `testNegativeThicknessShellsOutward` accounts for. Exec accepts a
+    non-zero thickness; the History field takes a negative value.
 
 ---
 

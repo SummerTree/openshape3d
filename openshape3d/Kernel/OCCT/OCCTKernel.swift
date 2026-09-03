@@ -818,11 +818,13 @@ nonisolated enum OCCTKernel {
     /// the pick" from "thickness out of range" from "result didn't validate"
     /// (including a shell that removed no material — the silent sealed-body
     /// case).
+    /// `thickness` is SIGNED: positive hollows inward, negative grows the
+    /// wall outward (the original surface becomes the cavity).
     static func shellResult(_ handle: BRepHandle, openingAt points: [SIMD3<Double>],
                             thickness: Double, tolerance: Double)
         -> Result<BRepHandle, OCCTOpError> {
-        guard thickness > 0 else {
-            return .failure(.kernelRefused("thickness must be positive"))
+        guard abs(thickness) > 0 else {
+            return .failure(.kernelRefused("thickness must be non-zero"))
         }
         let status = OCCTOpStatus()
         guard let shape = OCCTBridge.shelledShape(

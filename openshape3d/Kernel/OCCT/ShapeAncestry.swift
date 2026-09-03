@@ -173,8 +173,8 @@ nonisolated extension OCCTKernel {
         _ handle: BRepHandle, openingAt points: [SIMD3<Double>],
         thickness: Double, tolerance: Double
     ) -> Result<(handle: BRepHandle, ancestry: ShapeAncestry), OCCTOpError> {
-        guard thickness > 0 else {
-            return .failure(.kernelRefused("thickness must be positive"))
+        guard abs(thickness) > 0 else {  // signed: negative grows outward
+            return .failure(.kernelRefused("thickness must be non-zero"))
         }
         let status = OCCTOpStatus()
         let history = OCCTShapeHistory()

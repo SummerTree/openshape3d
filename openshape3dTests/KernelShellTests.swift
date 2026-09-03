@@ -143,3 +143,27 @@ extension KernelShellTests {
         XCTAssertEqual(volume(open), 24000 - 36.0 * 26 * 18, accuracy: 25)
     }
 }
+
+extension KernelShellTests {
+    /// A NEGATIVE thickness grows the wall outward — the original surface
+    /// becomes the cavity. Open top on a 10-cube, 2 mm out: the walls and
+    /// floor thicken outward (14 × 14 × 12 outer minus the 10-cube). Closed:
+    /// a 14-cube minus the 10-cube.
+    func testNegativeThicknessShellsOutward() throws {
+        let cube = try XCTUnwrap(OCCTKernel.primitiveShape(
+            .box(width: 10, depth: 10, height: 10), placement: .identity))
+        // OCCT's arc joins ROUND the offset's edges and corners (quarter
+        // cylinders of radius 2 along the edges, eighth-spheres at the
+        // corners), so the outer solid is the rounded offset, not a bigger box.
+        let edge = Double.pi * 4 / 4 * 10, corner = 4.0 / 3 * Double.pi * 8 / 8
+        let openTop = try XCTUnwrap(OCCTKernel.shell(
+            cube, openingAt: [SIMD3(0, 10, 0)], thickness: -2, tolerance: 0.5))
+        let openOuter = 1000 + 5 * 100 * 2 + 8 * edge + 4 * corner   // top face and its edges stay
+        XCTAssertEqual(OCCTKernel.volume(openTop), openOuter - 1000, accuracy: 0.5)
+        let closed = try XCTUnwrap(OCCTKernel.shell(
+            cube, openingAt: [], thickness: -2, tolerance: 0.5))
+        let closedOuter = 1000 + 6 * 100 * 2 + 12 * edge + 8 * corner
+        XCTAssertEqual(OCCTKernel.volume(closed), closedOuter - 1000, accuracy: 0.5)
+        XCTAssertNil(OCCTKernel.shell(cube, openingAt: [], thickness: 0, tolerance: 0.5))
+    }
+}
