@@ -63,6 +63,23 @@ design), `FREECAD_PLAYBOOK.md` (the FreeCAD-derived hardening ledger),
   cylinder 19634.95, both `/v1/check` clean. Rebuilt sheet volumes from
   the runner were never affected (bridge path); touch-built ones (2.13's
   8009.08) were exact only because they had no round edges.
+  Fourth pass (2026-09-03, later): 65 sheets attempted, 57 pass, and 54
+  more read and set aside with a reason each (`scripts/swpp/deferred.json`,
+  a table in the doc and the report page). Levels 3, 5 and 16 are the
+  ones to know about: **every Level 5 sheet built (5.1, 5.2, 5.9, 5.13,
+  5.14, 5.16) needed a plane at an angle**, which the runner gives the
+  bridge as an explicit basis (`plane_at`) — the UI still has no
+  angled-plane tool, so this is a capability the app has and the palette
+  does not expose; Level 3's sketch patterns are laid out by the recipe
+  as one polygon (rack teeth, heat-sink fins, gear lobes) and pass to the
+  mm³; Level 16's equation sheets print several volumes, so
+  `run_problem` now scores every configuration of a sheet in one row
+  (`meta["configs"]`, 9 configurations across 16.2–16.5 all within
+  0.01 %). Runner additions: `_lobed_outline`/`_lobes_concave` (tangent
+  arc outlines), `_fillet_path` (sweep spines with R bends as chords),
+  lettered sheet ids sort. Reading, not the app, is what stops the
+  count: the deferred sheets are drawings whose callouts don't fix the
+  geometry or whose printed volume no reading matches.
 
 - **Two TraceParts composite robots rebuilt THROUGH THE UI (2026-09-03;
   suite 1250/1250).** ROKAE CMR-ST600-CR12-C (chassis 950 × 630 × 768 from

@@ -92,6 +92,9 @@ def main():
             got = f"{r['got']:,} {unit}" if "got" in r else "—"
             err = f"{r['errorPct']:+.2f} %" if "errorPct" in r else "—"
             note = notes.get(r["problem"], r.get("note", r.get("message", "")))
+            if r.get("configs"):
+                note = (note + " " if note else "") + "Configurations: " + "; ".join(
+                    f"{c['label']} {c['got']:,} vs {c['expected']:,} ({c['errorPct']:+.2f} %)" for c in r["configs"])
             mode = " (by touch)" if r.get("mode") == "touch" else ""
             print(f"| {r['problem']}{mode} | {feats} | {r['expected']:,} {unit} | {got} | {err} | {r['status']} | {note} |")
         print()

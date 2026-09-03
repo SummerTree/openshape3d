@@ -23,16 +23,20 @@ for n in range(1, 19):
         pass
 
 
+def _key(pid):
+    a, b = pid.split(".")
+    return (int(a), int("".join(ch for ch in b if ch.isdigit())), b)
+
+
 def main():
     args = sys.argv[1:] or ["all"]
     selected = []
     for a in args:
         if a == "all":
-            selected += sorted(PROBLEMS, key=lambda s: tuple(int(x) for x in s.split(".")))
+            selected += sorted(PROBLEMS, key=_key)
         elif a.startswith("level:"):
             lv = int(a.split(":")[1])
-            selected += sorted((p for p in PROBLEMS if int(p.split(".")[0]) == lv),
-                               key=lambda s: tuple(int(x) for x in s.split(".")))
+            selected += sorted((p for p in PROBLEMS if int(p.split(".")[0]) == lv), key=_key)
         else:
             selected.append(a)
     fresh = os.environ.get("OS3D_KEEP_DOC") != "1"

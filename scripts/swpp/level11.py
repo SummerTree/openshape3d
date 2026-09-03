@@ -57,3 +57,46 @@ def p11_1():
     assert len(tools) == 11, f"expected 11 hole cutters, found {len(tools)}"
     subtract(plate, tools)
     return plate
+
+
+@problem("11.2", 29430, features=("Extrude Boss", "Hole (stacked cylinders)", "Pattern (as recipe)"))
+def p11_2():
+    # Plate 60 × 60 × 10; nine Ø8 through holes on a 3 × 3 grid rotated 45°
+    # with 15 spacing about the centre; four M5 SHCS counterbores at the
+    # corners (7 in): Ø5.5 through, Ø10 × 5 counterbore — the only size
+    # pair that lands the 29430 (Ø9.5 × 5.4 is 0.3 % light).
+    body = extrude(Sketch(top(0)).rect(0, 0, 60, 60), (30, 30), 10)
+    s = 15 / math.sqrt(2)
+    sk = Sketch(top(10))
+    for i in (-1, 0, 1):
+        for j in (-1, 0, 1):
+            sk.circle((30 + (i + j) * s, 30 + (i - j) * s), 4)
+    for i in (-1, 0, 1):
+        for j in (-1, 0, 1):
+            c = (30 + (i + j) * s, 30 + (i - j) * s)
+            extrude(Sketch(top(10)).circle(c, 4), c, -10, cut=[body])
+    for c in ((7, 7), (53, 7), (7, 53), (53, 53)):
+        extrude(Sketch(top(10)).circle(c, 2.75), c, -10, cut=[body])
+        extrude(Sketch(top(10)).circle(c, 5), c, -5, cut=[body])
+    return body
+
+
+@problem("11.3", 4.98, unit="in", features=("Extrude Boss", "Extrude Cut", "Hole (stacked cylinders)", "Pattern (as recipe)"))
+def p11_3():
+    # Disc Ø3.75 × 0.5625 with a Ø1.0 through hole ringed by a Ø1.25 × 0.125
+    # recess (read as a recess: as a boss the part is 2.3 % heavy, and the
+    # difference is exactly twice the ring); five 3/8 SHCS counterbores
+    # (Ø0.4063 through, Ø0.5625 × 0.375) on R1.3125 from 270°, five 5/16-18
+    # tapped holes (tap drill Ø0.257 through) between them.
+    IN = 25.4
+    disc = extrude(Sketch(top(0)).circle((0, 0), 1.875 * IN).circle((0, 0), 0.5 * IN), (1.2 * IN, 0), 0.5625 * IN)
+    extrude(Sketch(top(0)).circle((0, 0), 0.625 * IN), (0, 0), 0.125 * IN, cut=[disc])
+    for k in range(5):
+        a = math.radians(270 + 72 * k)
+        c = (1.3125 * IN * math.cos(a), 1.3125 * IN * math.sin(a))
+        extrude(Sketch(top(0.5625 * IN)).circle(c, 0.4063 / 2 * IN), c, -0.5625 * IN, cut=[disc])
+        extrude(Sketch(top(0.5625 * IN)).circle(c, 0.5625 / 2 * IN), c, -0.375 * IN, cut=[disc])
+        b = math.radians(270 + 36 + 72 * k)
+        t = (1.3125 * IN * math.cos(b), 1.3125 * IN * math.sin(b))
+        extrude(Sketch(top(0.5625 * IN)).circle(t, 0.257 / 2 * IN), t, -0.5625 * IN, cut=[disc])
+    return disc

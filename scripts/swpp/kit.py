@@ -443,20 +443,43 @@ def run_problem(pid, meta, build, fresh=True):
            "features": meta.get("features", []), "ts": time.strftime("%Y-%m-%d %H:%M")}
     try:
         out = build()
-        ids = out if isinstance(out, list) else [out]
-        got_mm3 = sum(vol(b) for b in ids)
-        got = got_mm3 / IN3 if row["unit"] == "in" else got_mm3
-        err = (got - meta["volume"]) / meta["volume"]
-        healthy = all(check(b) for b in ids)
-        st = state()
-        row.update({"got": round(got, 3), "errorPct": round(err * 100, 3), "healthy": healthy,
-                    "features_recorded": st["featureCount"], "evalErrors": st.get("evalErrors") or [],
-                    "status": "pass" if abs(err) <= 0.005 and healthy and not st.get("evalErrors") else "fail"})
+        if "configs" in meta:
+            # A sheet with several printed volumes (Level 16 equations /
+            # configurations): build() returns one body-id list per config,
+            # in the order of meta["configs"] = [(label, volume), …]; every
+            # config must score, the first one heads the row.
+            configs, worst, healthy = [], 0.0, True
+            for (label, expected), ids in zip(meta["configs"], out):
+                got_mm3 = sum(vol(b) for b in ids)
+                got = got_mm3 / IN3 if row["unit"] == "in" else got_mm3
+                err = (got - expected) / expected
+                healthy = healthy and all(check(b) for b in ids)
+                configs.append({"label": label, "expected": expected, "got": round(got, 3),
+                                "errorPct": round(err * 100, 3)})
+                if abs(err) > abs(worst):
+                    worst = err
+            st = state()
+            row.update({"got": configs[0]["got"], "expected": configs[0]["expected"],
+                        "errorPct": round(worst * 100, 3), "healthy": healthy, "configs": configs,
+                        "features_recorded": st["featureCount"], "evalErrors": st.get("evalErrors") or [],
+                        "status": "pass" if abs(worst) <= 0.005 and healthy and not st.get("evalErrors") else "fail"})
+        else:
+            ids = out if isinstance(out, list) else [out]
+            got_mm3 = sum(vol(b) for b in ids)
+            got = got_mm3 / IN3 if row["unit"] == "in" else got_mm3
+            err = (got - meta["volume"]) / meta["volume"]
+            healthy = all(check(b) for b in ids)
+            st = state()
+            row.update({"got": round(got, 3), "errorPct": round(err * 100, 3), "healthy": healthy,
+                        "features_recorded": st["featureCount"], "evalErrors": st.get("evalErrors") or [],
+                        "status": "pass" if abs(err) <= 0.005 and healthy and not st.get("evalErrors") else "fail"})
     except Exception as e:  # noqa: BLE001 - the ledger wants the message
         row.update({"status": "error", "message": str(e)[:500]})
     row["seconds"] = round(time.time() - t0, 1)
     ledger(row)
     flag = {"pass": "PASS", "fail": "FAIL", "error": "ERROR"}[row["status"]]
-    extra = f"{row.get('got')} vs {meta['volume']} ({row.get('errorPct')}%)" if "got" in row else row.get("message")
+    extra = f"{row.get('got')} vs {row.get('expected')} ({row.get('errorPct')}%)" if "got" in row else row.get("message")
+    if "configs" in row:
+        extra += " | " + ", ".join(f"{c['label']} {c['got']}/{c['expected']} ({c['errorPct']:+.2f}%)" for c in row["configs"])
     print(f"[{flag}] {pid}: {extra}  [{row['seconds']} s]")
     return row
