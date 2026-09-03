@@ -2963,6 +2963,7 @@ final class EditorViewModel {
         switch session.document.features.node(id)?.kind {
         case .fillet, .chamfer: return "Edit Edges"
         case .shell, .deleteFace: return "Edit Faces"
+        case .boolean: return "Edit Tool"
         default: return nil
         }
     }
@@ -2975,6 +2976,7 @@ final class EditorViewModel {
         case .fillet, .chamfer: return beginBlendEdit(id)
         case .shell: return beginShellEdit(id)
         case .deleteFace: return beginDeleteFaceEdit(id)
+        case .boolean: return beginBooleanEdit(id)
         default: return false
         }
     }
@@ -5476,7 +5478,32 @@ final class EditorViewModel {
         mode = .pickingBooleanTool(kind, target: target)
     }
 
+    /// Editing an existing boolean node (History "Edit Tool"): the tool pick
+    /// is re-entered on the node's own target, and the next tapped body
+    /// becomes the node's tool — the rebuild does the CSG, no live compute.
+    private(set) var booleanEditingFeature: FeatureID?
+
+    /// Re-enter the tool pick for an existing boolean, on its target. False
+    /// when the node is not a boolean or its target body is gone.
+    @discardableResult
+    func beginBooleanEdit(_ id: FeatureID) -> Bool {
+        guard let node = session.document.features.node(id),
+              case let .boolean(kind, target, _) = node.kind
+        else { return false }
+        guard session.document.body(with: target.bodyID) != nil else {
+            errorMessage = "The target body of this \(kind.rawValue) is gone — re-pick is not possible."
+            return false
+        }
+        cancelTransientPicks()
+        cancelTool()
+        booleanEditingFeature = id
+        selection = [target.bodyID]
+        mode = .pickingBooleanTool(kind, target: target.bodyID)
+        return true
+    }
+
     func cancelBooleanPicking() {
+        booleanEditingFeature = nil
         if case .pickingBooleanTool = mode {
             mode = .idle
         }
@@ -5486,6 +5513,32 @@ final class EditorViewModel {
         guard let hit = HitTester.pickBody(ray: ray, in: scene),
               hit.bodyID != targetID
         else { return }
+        if let featureID = booleanEditingFeature {
+            // Rewrite the node's tool and let the rebuild do the CSG. The tool
+            // must be feature-produced (else the node could not replay) and
+            // created BEFORE the boolean (replay order), like a fresh boolean.
+            guard let node = session.document.features.node(featureID),
+                  case let .boolean(nodeKind, target, _) = node.kind
+            else { cancelBooleanPicking(); return }
+            guard let owner = featureNode(owning: hit.bodyID) else {
+                errorMessage = "Only a body created by a feature can be the tool — this one is an import or copy."
+                return
+            }
+            if let ownerIndex = session.document.features.index(of: owner.id),
+               let selfIndex = session.document.features.index(of: featureID),
+               ownerIndex >= selfIndex {
+                errorMessage = "Pick a body created before this \(nodeKind.rawValue) in the history."
+                return
+            }
+            let tools = [BodyRef(producer: owner.id, bodyID: hit.bodyID)]
+            booleanEditingFeature = nil
+            prepareForHistoryChange()
+            session.editFeature(featureID, to: .boolean(kind: nodeKind, target: target, tools: tools))
+            session.save()
+            selection = [targetID]
+            mode = .selected(targetID)
+            return
+        }
         runBoolean(kind, targetID: targetID, toolID: hit.bodyID)
     }
 

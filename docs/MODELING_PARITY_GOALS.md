@@ -400,7 +400,15 @@ hollow / healed), the preview re-shells that input, taps on other bodies are
 ignored while editing, and Apply rewrites the node in place through
 `session.editFeature` (one undo step, never a second node).
 `HistoryFaceEditTests` drives a feature-owned box through shell → Edit
-Faces → second face → commit (cavity 6×6×8 → 8×8×6) → undo. Still open in G8: the
+Faces → second face → commit (cavity 6×6×8 → 8×8×6) → undo. **Edit Tool** on a
+boolean row followed (`beginBooleanEdit`): the tool pick re-enters on the
+node's own target, the next tapped body becomes the tool (refused if it is
+not feature-produced or was created AFTER the boolean — replay order), and
+the rebuild does the CSG; `HistoryBooleanEditTests` re-picks a union's tool
+from a far box to an overlapping one (1000 → 1500 mm³) and undoes it. Note
+for tests: a rebuild drops document-level transforms by design, so a
+primitive node must carry its PLACEMENT to replay anywhere but the origin.
+Still open in G8: the
 reference rows (re-pick profile / body / faces / edges), the boolean
 INTENT of extrude / revolve / sweep / loft (changing new-body → subtract
 needs a target pick, so it belongs with the reference rows), and the
