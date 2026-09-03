@@ -192,6 +192,47 @@ class Sketch:
         r = across_flats / 2 / math.cos(math.pi / sides)
         return self.polygon(c, r, sides, rotation_deg)
 
+    def rounded_poly(self, pts, r):
+        """Closed polygon with every corner rounded by a sketch fillet of
+        radius r (arcs tangent to both edges). Works for convex and concave
+        corners; pass r as a per-corner list to vary it (0 = sharp)."""
+        n = len(pts)
+        radii = list(r) if isinstance(r, (list, tuple)) else [r] * n
+        tangents = []
+        for i in range(n):
+            p0, p1, p2 = pts[i - 1], pts[i], pts[(i + 1) % n]
+            ri = radii[i]
+            if ri <= 0:
+                tangents.append((p1, p1, None, None, None))
+                continue
+            a = (p0[0] - p1[0], p0[1] - p1[1]); b = (p2[0] - p1[0], p2[1] - p1[1])
+            la, lb = math.hypot(*a), math.hypot(*b)
+            a = (a[0] / la, a[1] / la); b = (b[0] / lb, b[1] / lb)
+            cos_t = max(-1.0, min(1.0, a[0] * b[0] + a[1] * b[1]))
+            theta = math.acos(cos_t)                     # interior angle at the corner
+            d = ri / math.tan(theta / 2)                 # tangent distance along each edge
+            ta = (p1[0] + a[0] * d, p1[1] + a[1] * d)
+            tb = (p1[0] + b[0] * d, p1[1] + b[1] * d)
+            bis = (a[0] + b[0], a[1] + b[1]); lbis = math.hypot(*bis)
+            bis = (bis[0] / lbis, bis[1] / lbis)
+            c = (p1[0] + bis[0] * ri / math.sin(theta / 2), p1[1] + bis[1] * ri / math.sin(theta / 2))
+            tangents.append((ta, tb, c, ri, (a, b)))
+        for i in range(n):
+            ta, tb, c, ri, _ = tangents[i]
+            nxt = tangents[(i + 1) % n][0]
+            if c is not None:
+                a0 = math.degrees(math.atan2(ta[1] - c[1], ta[0] - c[0]))
+                a1 = math.degrees(math.atan2(tb[1] - c[1], tb[0] - c[0]))
+                # sweep the short way from ta to tb
+                sweep = (a1 - a0) % 360
+                if sweep > 180:
+                    self.arc(c, ri, a1, a0 + 360 if a0 < a1 else a0)
+                else:
+                    self.arc(c, ri, a0, a0 + sweep)
+            if abs(tb[0] - nxt[0]) > 1e-9 or abs(tb[1] - nxt[1]) > 1e-9:
+                self.line(tb, nxt)
+        return self
+
     def hull2(self, c1, r1, c2, r2):
         """Convex hull of two circles (a lever arm): two tangent lines and
         the two outer arcs. Works for unequal radii."""

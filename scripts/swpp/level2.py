@@ -35,6 +35,72 @@ def p2_7():
     return body
 
 
+def _offset_polygon(pts, d):
+    """Offset a CCW polygon inward by d (line-line intersections)."""
+    import math
+    n = len(pts)
+    lines = []
+    for i in range(n):
+        p, q = pts[i], pts[(i + 1) % n]
+        ex, ey = q[0] - p[0], q[1] - p[1]
+        L = math.hypot(ex, ey)
+        nx, ny = -ey / L, ex / L                    # inward normal for CCW
+        lines.append(((p[0] + nx * d, p[1] + ny * d), (ex / L, ey / L)))
+    out = []
+    for i in range(n):
+        (p1, d1), (p2, d2) = lines[i - 1], lines[i]
+        # solve p1 + t d1 = p2 + s d2
+        det = d1[0] * (-d2[1]) - d1[1] * (-d2[0])
+        rx, ry = p2[0] - p1[0], p2[1] - p1[1]
+        t = (rx * (-d2[1]) - ry * (-d2[0])) / det
+        out.append((p1[0] + t * d1[0], p1[1] + t * d1[1]))
+    return out
+
+
+@problem("2.8", 118440, features=("Extrude Boss", "Sketch: Offset", "Sketch: Trim"))
+def p2_8():
+    # Triangular frame 12 thick: outer (0,0)-(150,0)-(150,20)-(30,250)-(0,250),
+    # a 15-wide wall (inner outline offset 15), inner corners rounded R6.
+    outer = [(0, 0), (150, 0), (150, 20), (30, 250), (0, 250)]
+    inner5 = _offset_polygon(outer, 15)
+    # The offset of the 20-tall right edge is a 1.3 mm sliver that no R6
+    # can round; drop it and let the bottom and hypotenuse offsets meet.
+    (x1, y1), (x2, y2) = inner5[2], inner5[3]
+    t = (15 - y1) / (y2 - y1)
+    xc = x1 + t * (x2 - x1)
+    inner = [inner5[0], (xc, 15), inner5[3], inner5[4]]
+    # The inner top edge is only 5.9 long: two R6 rounds cannot both fit on
+    # it (their tangent points would cross), so the top-left stays sharp.
+    sk = Sketch(front(0)).poly(outer).rounded_poly(inner, [6, 6, 6, 0])
+    return extrude(sk, (5, 5), 12)
+
+
+@problem("2.11", 1387, features=("Extrude Boss", "Sketch: Trim", "Sketch: Convert", "Sketch: Mirror/Dynamic Mirror"))
+def p2_11():
+    # Ø25 disc with flats at x = ±10, 3 thick, Ø8 hole; 3-wide rails 2 tall
+    # along both flats (the middle is a channel). One rail is mirrored.
+    import math
+    from kit import mirror, union, bodies
+    y10 = math.sqrt(12.5 ** 2 - 100)
+    a10 = math.degrees(math.atan2(y10, 10))
+    base = (Sketch(top(0)).line((10, -y10), (10, y10)).arc((0, 0), 12.5, a10, 180 - a10)
+            .line((-10, y10), (-10, -y10)).arc((0, 0), 12.5, 180 + a10, 360 - a10)
+            .circle((0, 0), 4))
+    body = extrude(base, (0, 8), 3)
+    y7 = math.sqrt(12.5 ** 2 - 49)
+    a7 = math.degrees(math.atan2(y7, 7))
+    rail = (Sketch(top(3)).line((7, -y7), (7, y7)).arc((0, 0), 12.5, a10, a7)
+            .line((10, y10), (10, -y10)).arc((0, 0), 12.5, -a7, -a10))
+    extrude(rail, (8.5, 0), 2, union=[body])
+    # the other rail by Transform › Mirror of a fresh rail body, then union
+    rail2 = extrude(Sketch(top(3)).line((7, -y7), (7, y7)).arc((0, 0), 12.5, a10, a7)
+                    .line((10, y10), (10, -y10)).arc((0, 0), 12.5, -a7, -a10), (8.5, 0), 2, new_body=True)
+    mirror(rail2, (0, 0, 0), (1, 0, 0), keep=False)
+    others = [b["id"] for b in bodies() if b["id"] != body]
+    union(body, others)
+    return body
+
+
 @problem("2.17", 16206, features=("Extrude Boss", "Sketch: Slot"))
 def p2_17():
     # 5-thick plate: 75 wide, 33 tall at the sides, top edge at 55 with the

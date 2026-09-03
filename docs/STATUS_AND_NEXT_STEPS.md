@@ -1424,6 +1424,17 @@ first differing frame is the one you want.
     boolean that OCCT refuses leaves the target's volume EXACTLY as it
     was, so a union check must demand growth, not a ratio.
 
+39. **The profile detector needs loop junctions to coincide to better
+    than ~1e-5 mm, and a self-crossing loop is refused outright.** Both
+    surfaced building practice-problem frames from computed arcs: an arc
+    whose end angle was off by 0.0001° left a 1e-5 mm gap and the extrude
+    reported "profile unresolved"; two R6 sketch fillets on a 5.9 mm edge
+    (tangent points crossing) did the same. Touch-drawn sketches snap
+    exactly, so the UI never sees the first case; agent callers computing
+    arcs must derive endpoints from the same numbers the lines use. The
+    refusal of an impossible fillet pair is correct behaviour, just
+    silent — the message could name the crossing entities.
+
 ---
 
 ## 4. Next missions (prioritized)

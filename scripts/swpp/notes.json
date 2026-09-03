@@ -8,6 +8,8 @@
   "7.49": "Six slot cutters made with Transform › Pattern (circular) from one extruded cutter, then one Combine › Subtract with all six tools.",
   "11.1": "No hole wizard in the app: each counterbore is two stacked cylinders (ANSI #8 / #10 SHCS sizes) unioned into a cutter, patterned 3 × 3 and 1 × 2 with Transform › Pattern (linear), then subtracted; the sheet rounds to 12.7.",
   "2.7": "The 86 on the sheet runs from the left end to the origin, not the overall length; the slot is the kit's stadium (two arcs + two tangent lines).",
+  "2.8": "Outer triangle with a 15 offset inner outline; the inner top edge is 5.9 long so two R6 rounds cannot both fit (their tangent points cross and the loop self-intersects — the app refuses such a loop, correctly). Built with three rounds; the sheet's number needs ~96 mm² more material than the offset gives. Interpretation.",
+  "2.11": "Ø25 disc with flats, Ø8 hole, two 3-wide rails 2 tall along the flats (the middle is the channel); one rail mirrored with Transform › Mirror (replace) and unioned.",
   "4.44": "Stem 11 thick with R15 bottom and two Ø13 holes, 64 × 35 × 48 head with 11-wide prongs and a Ø24 half-round across them, R10 at the 11-long junction edges; the sheet's 90,831 is ~2,000 mm³ more than this reading (the R10 fills would have to span the full 48 depth). Interpretation.",
   "4.65": "Half-round channel along the top and half-round notch across the bottom, both Ø25, two Ø10 through holes.",
   "4.25": "Symmetric tangent sides from (±13, 64) to the R9 top; −0.55 % just outside the tolerance, ~6 mm² of head outline short, so the side tangents probably start slightly higher. Interpretation.",
