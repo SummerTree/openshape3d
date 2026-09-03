@@ -35,6 +35,20 @@ def p2_7():
     return body
 
 
+@problem("2.17", 16206, features=("Extrude Boss", "Sketch: Slot"))
+def p2_17():
+    # 5-thick plate: 75 wide, 33 tall at the sides, top edge at 55 with the
+    # left corner cut 35° from vertical and the right 50°; Ø12 hole at
+    # (18, 33), Ø10 at (59.5, 33), an R4 slot centred at x = 37.5 between
+    # y = 10 and 33.
+    import math
+    xl = 22 * math.tan(math.radians(35))
+    xr = 75 - 22 * math.tan(math.radians(50))
+    sk = (Sketch(front(0)).poly([(0, 0), (75, 0), (75, 33), (xr, 55), (xl, 55), (0, 33)])
+          .circle((18, 33), 6).circle((59.5, 33), 5).slot((37.5, 10), (37.5, 33), 4))
+    return extrude(sk, (10, 10), 5)
+
+
 @problem("2.15", 26512, features=("Extrude Boss", "Sketch: Polygon"))
 def p2_15():
     # Hex 21 AF × 61, a Ø14 × 6 neck, then a 6-thick hex head of the same size.

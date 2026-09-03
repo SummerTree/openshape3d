@@ -15,6 +15,30 @@ struct NumericInputBar: View {
     @State private var values: [Double] = []
     @FocusState private var focusedField: Int?
 
+    /// The extrude bar's Distance field holds TEXT, not a formatted number:
+    /// it takes the evaluator's arithmetic like every other numeric field
+    /// (the arrow pill, the dimension field, the History rows), and the
+    /// Extrude button applies whatever is typed before committing — a
+    /// formatted field only flushed on Return, so a tap on Extrude used to
+    /// commit the stale value silently (gotcha 37).
+    @State private var extrudeDistanceText: String = ""
+    @FocusState private var extrudeDistanceFocused: Bool
+
+    private func extrudeDistanceDisplay(_ mm: Double?) -> String {
+        let shown = AppSettings.shared.unit.display(fromMM: mm ?? 0)
+        if abs(shown - shown.rounded()) < 1e-6 { return String(Int(shown.rounded())) }
+        return String(format: "%g", (shown * 100).rounded() / 100)
+    }
+
+    /// Parse the field (arithmetic allowed) into the tool's distance.
+    /// Returns false when the text is not a number, leaving the tool alone.
+    @discardableResult
+    private func applyExtrudeDistanceText() -> Bool {
+        guard let typed = ExpressionEvaluator.evaluate(extrudeDistanceText) else { return false }
+        viewModel.setExtrudeDistance(AppSettings.shared.unit.mm(fromDisplay: typed))
+        return true
+    }
+
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
 
     /// A couple of bars carry controls too wide to share one row at iPhone
@@ -537,18 +561,27 @@ struct NumericInputBar: View {
                     .font(.caption)
                     .foregroundStyle(.barLabel)
                     .fixedSize()
-                TextField(
-                    "Distance",
-                    value: AppSettings.shared.unit.binding(Binding(
-                        get: { viewModel.toolContext?.distance ?? 0 },
-                        set: { viewModel.setExtrudeDistance($0) }
-                    )),
-                    format: .number.precision(.fractionLength(0...2))
-                )
+                TextField("Distance", text: $extrudeDistanceText)
                 .keyboardType(.numbersAndPunctuation)
+                .autocorrectionDisabled()
                 .textFieldStyle(.roundedBorder)
                 .frame(width: 90)
-                .onSubmit { viewModel.commitTool() }
+                .focused($extrudeDistanceFocused)
+                .onAppear { extrudeDistanceText = extrudeDistanceDisplay(context.distance) }
+                // A drag on the arrow moves the distance under the field;
+                // mirror it unless the person is mid-edit.
+                .onChange(of: viewModel.toolContext?.distance) { _, new in
+                    if !extrudeDistanceFocused {
+                        extrudeDistanceText = extrudeDistanceDisplay(new)
+                    }
+                }
+                .onSubmit {
+                    if applyExtrudeDistanceText() {
+                        viewModel.commitTool()
+                    } else {
+                        viewModel.errorMessage = "Couldn't read \"\(extrudeDistanceText)\" as a distance."
+                    }
+                }
             }
 
             // Symmetric sides: distance is per-side, total depth 2×.
@@ -587,6 +620,14 @@ struct NumericInputBar: View {
                 viewModel.cancelTool()
             }
             Button("Extrude") {
+                // Whatever is in the field is what the person means, even
+                // without a Return first.
+                if extrudeDistanceFocused || extrudeDistanceText != extrudeDistanceDisplay(context.distance) {
+                    guard applyExtrudeDistanceText() else {
+                        viewModel.errorMessage = "Couldn't read \"\(extrudeDistanceText)\" as a distance."
+                        return
+                    }
+                }
                 viewModel.commitTool()
             }
             .buttonStyle(.borderedProminent)

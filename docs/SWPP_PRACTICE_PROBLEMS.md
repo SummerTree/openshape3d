@@ -44,12 +44,12 @@ output plus the reading of it. The published page carries the same table.*
 7. Assemblies, configurations, collision/interference (Levels 9, 15, 17)
    are outside a single-part modeller.
 
-# SOLIDWORKS practice problems in openshape3d — 25/29 attempted pass (365 in the database)
+# SOLIDWORKS practice problems in openshape3d — 26/30 attempted pass (365 in the database)
 
 | Level | Title | Problems | Attempted | Pass | Fail | Error |
 |---|---|---|---|---|---|---|
 | 1 | Basic Sketch & Extrusion | 20 | 14 | 12 | 2 | 0 |
-| 2 | Sketch Tools & End Conditions | 20 | 4 | 4 | 0 | 0 |
+| 2 | Sketch Tools & End Conditions | 20 | 5 | 5 | 0 | 0 |
 | 3 | Global Variables & Sketch Patterns | 8 | 0 | 0 | 0 | 0 |
 | 4 | Extrude Cut & Fillet/Chamfer | 70 | 3 | 2 | 1 | 0 |
 | 5 | Reference Geometry | 15 | 0 | 0 | 0 | 0 |
@@ -94,6 +94,7 @@ output plus the reading of it. The published page carries the same table.*
 | 2.13 (by touch) | Extrude Boss, Sketch: Polygon | 8,009 mm³ | 8,009.076 mm³ | +0.00 % | pass | Built entirely by touch on the simulator (Polygon tool, radius label 17/2/cos(30), Extrude 32); the info bar read 8009.08 mm³. |
 | 2.14 | Extrude Boss, Sketch: Polygon | 23,839 mm³ | 23,838.66 mm³ | -0.00 % | pass |  |
 | 2.15 | Extrude Boss, Sketch: Polygon | 26,512 mm³ | 26,512.081 mm³ | +0.00 % | pass |  |
+| 2.17 | Extrude Boss, Sketch: Slot | 16,206 mm³ | 16,206.214 mm³ | +0.00 % | pass |  |
 
 ## Level 4: Extrude Cut & Fillet/Chamfer
 

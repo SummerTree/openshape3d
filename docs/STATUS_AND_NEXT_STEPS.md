@@ -1397,15 +1397,17 @@ first differing frame is the one you want.
     matched nothing. Both endpoints now apply the body's placement
     (normals through its rotation).
 
-37. **The extrude bar's Distance field is a formatted numeric field: it
-    takes no arithmetic, and a tap on the Extrude button commits whatever
-    value the model already holds, not the text still in the field.** Type
-    the number and press Return (the field's `onSubmit` is what commits);
-    "0*0+630" + Extrude yielded a silent zero-distance no-op with no
-    error. The dimension field, the arrow pill and the History rows all
-    evaluate expressions — the bar is the odd one out. Also: with
-    Symmetric on, Distance is PER SIDE (630 gave a 1,260 mm body; the
-    History row's "630/2" fixed it).
+37. **The extrude bar's Distance field WAS a formatted numeric field: it
+    took no arithmetic, and a tap on the Extrude button committed whatever
+    value the model already held, not the text still in the field**
+    ("0*0+630" + Extrude yielded a silent zero-distance no-op with no
+    error). Fixed 2026-09-03: the field is text, evaluates through
+    `ExpressionEvaluator` like the arrow pill, the dimension field and
+    the History rows, mirrors an arrow drag while unfocused, and the
+    Extrude button applies the pending text first (or refuses with
+    "Couldn't read … as a distance" rather than committing stale state).
+    Still true: with Symmetric on, Distance is PER SIDE (630 gave a
+    1,260 mm body; the History row's "630/2" fixed it).
 
 38. **Zoom to Fit frames bodies only (`worldBounds` iterates bodies), so a
     950 mm sketch on an empty document stays off-screen; Look at Sketch
