@@ -370,6 +370,20 @@ pattern count / spacing / angle) and no reference pickers or option controls
 at all. So a feature's geometry is parametric while its inputs are frozen at
 creation time.
 
+**Progress 2026-09-02 — the scalar slice.** Every scalar a feature has is now
+an inline, labelled, unit-tagged field in its History row: extrude and
+push/pull distance, draft extrude distance AND draft angle, revolve angle,
+chamfer setback, fillet radius, shell thickness, face-scale factor,
+face-rotate angle (shown in degrees, stored in the kernel's radians), plus
+the pattern count/spacing/angle that were already there. The row model
+carries `[FeatureScalar]` (`EditorViewModel.scalars(of:)`), the panel renders
+one field per scalar, and `editFeatureScalar(_:key:value:)` rewrites the
+node's `Expr` through `session.editFeature` (one undo step, rebuild
+downstream). Before this the panel showed a bare "mm" field for five kinds
+and nothing for the other four. Still open in G8: the reference rows
+(re-pick profile / body / faces / edges), the option controls (symmetric,
+boolean intent, keep-original), and the stale-reference repair flow.
+
 **Acceptance**
 - Every `FeatureKind` case renders its full parameter set in its History row.
 - Reference rows re-enter the matching pick mode, and committing re-resolves

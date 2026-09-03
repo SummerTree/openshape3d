@@ -333,6 +333,12 @@ plane sections, exact face areas, holed-sweep naming, CSG-free render meshes):
 
 - **Off-main eval, S1b slices 1–3** (`OFF_MAIN_EVAL_DESIGN.md`) — the
   true async contract; attended work, its own design pass.
+- **G8 — every feature parameter editable in History**
+  (`MODELING_PARITY_GOALS.md` §G8, the next roadmap item after the round-1
+  list): the SCALAR slice landed 2026-09-02 (late) — every kind's scalars as
+  labelled unit fields in the row (`FeatureScalar`, `editFeatureScalar`,
+  `HistoryScalarEditTests`); the reference pickers, option toggles and the
+  stale-ref repair flow remain, then G9's per-tool variants sit on top.
 - ~~Scale as a node~~ — landed 2026-09-02 (below): the composition carries a
   uniform scale (`Transform3D.composed(onto:)`, `delta(from:to:)`), the
   B-rep placement already did (`gp_Trsf::SetValues` admits it), the volume
@@ -375,7 +381,7 @@ plane sections, exact face areas, holed-sweep naming, CSG-free render meshes):
   re-uploading all buffers per tick, measurement caching; S3 untouched.
   Gotcha 26 below.
 
-**Current test baseline (2026-09-02, evening): 1228 unit tests in ~21s** — the
+**Current test baseline (2026-09-02, evening): 1231 unit tests in ~21s** — the
 day added the exact helix spine, the BEG 55 lineup's bounds/mirror fixes,
 transform-as-a-feature, consumed-edge drafts on both offset paths, plane
 sections (`SectionKit`, `KernelSectionTests`), the exact face areas, and the

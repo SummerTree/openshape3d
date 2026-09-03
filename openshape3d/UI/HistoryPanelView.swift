@@ -31,7 +31,6 @@ struct HistoryPanelView: View {
                     HistoryRowView(
                         icon: iconName(for: row.id),
                         row: row,
-                        distance: distanceValue(for: row.id),
                         onSelect: { viewModel.selectFeature(row.id) },
                         onRename: { viewModel.renameFeature(row.id, to: $0) },
                         onToggleSuppressed: {
@@ -43,7 +42,7 @@ struct HistoryPanelView: View {
                         onEditEdges: viewModel.isBlendFeature(row.id)
                             ? { viewModel.beginBlendEdit(row.id) }
                             : nil,
-                        onEditDistance: { viewModel.editFeatureDistance(row.id, $0) },
+                        onEditScalar: { viewModel.editFeatureScalar(row.id, key: $0, value: $1) },
                         onEditPatternCount: { viewModel.editPatternCount(row.id, $0) },
                         onEditPatternSpacing: { viewModel.editPatternSpacing(row.id, $0) },
                         onEditPatternAngle: { viewModel.editPatternAngle(row.id, $0) }
@@ -153,30 +152,16 @@ struct HistoryPanelView: View {
         }
     }
 
-    /// The editable primary distance for extrude / push-pull nodes; `nil`
-    /// (no inline field) for every other kind.
-    private func distanceValue(for id: FeatureID) -> Double? {
-        guard let node = viewModel.session.document.features.node(id) else { return nil }
-        switch node.kind {
-        case let .extrude(_, _, distance, _, _, _): return distance.value
-        case let .pushPull(_, distance, _): return distance.value
-        case let .chamfer(_, _, setback): return setback.value
-        case let .fillet(_, _, radius): return radius.value
-        case let .shell(_, _, thickness): return thickness.value
-        default: return nil
-        }
-    }
 }
 
 /// One history row: a type icon, an editable name with the kind label beneath,
-/// an optional inline distance field (extrude / push-pull), a suppress toggle;
-/// tap selects, an error badge surfaces the last eval error, and a context menu
+/// an inline labelled field per editable scalar (`row.scalars`: distance,
+/// angle, radius, setback, thickness, factor, draft), a suppress toggle; tap
+/// selects, an error badge surfaces the last eval error, and a context menu
 /// offers Zoom to / Delete.
 private struct HistoryRowView: View {
     let icon: String
     let row: EditorViewModel.FeatureRow
-    /// Non-nil for extrude / push-pull: shows the inline distance editor.
-    let distance: Double?
     let onSelect: () -> Void
     let onRename: (String) -> Void
     let onToggleSuppressed: () -> Void
@@ -185,13 +170,13 @@ private struct HistoryRowView: View {
     let onRollbackHere: () -> Void
     /// Non-nil for chamfer / fillet: offers "Edit Edges".
     let onEditEdges: (() -> Void)?
-    let onEditDistance: (Double) -> Void
+    let onEditScalar: (EditorViewModel.FeatureScalarKey, Double) -> Void
     let onEditPatternCount: (Int) -> Void
     let onEditPatternSpacing: (Double) -> Void
     let onEditPatternAngle: (Double) -> Void
 
     @State private var draft = ""
-    @State private var distanceText = ""
+    @State private var scalarTexts: [EditorViewModel.FeatureScalarKey: String] = [:]
     @State private var countText = ""
     @State private var spacingText = ""
     @State private var angleText = ""
@@ -258,32 +243,46 @@ private struct HistoryRowView: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
 
-            if distance != nil {
-                HStack(spacing: 4) {
-                    TextField("", text: $distanceText)
-                        .textFieldStyle(.plain)
-                        .keyboardType(.numbersAndPunctuation)
-                        .autocorrectionDisabled()
-                        .submitLabel(.done)
-                        .frame(width: 74)
-                        .onSubmit(commitDistance)
-                        .accessibilityIdentifier("HistoryDistanceField")
-                    Text("mm")
-                        .font(.caption2)
-                        .foregroundStyle(.barLabel)
-                    Button(action: commitDistance) {
-                        Image(systemName: "checkmark.circle.fill")
-                            .font(.system(size: 14))
+            if !row.scalars.isEmpty {
+                VStack(alignment: .leading, spacing: 4) {
+                    ForEach(row.scalars) { scalar in
+                        // The primary field keeps the identifier the History
+                        // UI tests address; secondary scalars are keyed.
+                        let primary = scalar.key == .primary
+                        HStack(spacing: 4) {
+                            Text(scalar.label)
+                                .font(.caption2)
+                                .foregroundStyle(.barLabel)
+                            TextField("", text: scalarBinding(scalar.key))
+                                .textFieldStyle(.plain)
+                                .keyboardType(.numbersAndPunctuation)
+                                .autocorrectionDisabled()
+                                .submitLabel(.done)
+                                .frame(width: 64)
+                                .onSubmit { commitScalar(scalar.key) }
+                                .accessibilityIdentifier(
+                                    primary ? "HistoryDistanceField"
+                                            : "HistoryScalarField-\(scalar.key.rawValue)-\(row.name)")
+                            Text(scalar.unit)
+                                .font(.caption2)
+                                .foregroundStyle(.barLabel)
+                            Button { commitScalar(scalar.key) } label: {
+                                Image(systemName: "checkmark.circle.fill")
+                                    .font(.system(size: 14))
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityIdentifier(
+                                primary ? "HistoryDistanceCommit-\(row.name)"
+                                        : "HistoryScalarCommit-\(scalar.key.rawValue)-\(row.name)")
+                        }
                     }
-                    .buttonStyle(.plain)
-                    .accessibilityIdentifier("HistoryDistanceCommit-\(row.name)")
                 }
                 .font(.caption.weight(.semibold))
                 .padding(.horizontal, 6)
                 .padding(.vertical, 3)
                 .background(.quaternary, in: RoundedRectangle(cornerRadius: 6))
                 .padding(.leading, 32)
-                // Editing a rolled-back node is a silent no-op; block the field.
+                // Editing a rolled-back node is a silent no-op; block the fields.
                 .disabled(row.isRolledBack)
             }
 
@@ -410,13 +409,11 @@ private struct HistoryRowView: View {
         .accessibilityIdentifier("HistoryRow-\(row.name)")
         .onAppear {
             draft = row.name
-            distanceText = distance.map(Self.fmt) ?? ""
+            seedScalarText()
             seedPatternText()
         }
         .onChange(of: row.name) { _, updated in draft = updated }
-        .onChange(of: distance) { _, updated in
-            distanceText = updated.map(Self.fmt) ?? ""
-        }
+        .onChange(of: row.scalars) { _, _ in seedScalarText() }
         .onChange(of: row.patternCount) { _, updated in
             countText = updated.map { String($0) } ?? ""
         }
@@ -434,10 +431,23 @@ private struct HistoryRowView: View {
         angleText = row.patternAngleDegrees.map(Self.fmt) ?? ""
     }
 
-    private func commitDistance() {
+    private func seedScalarText() {
+        var texts: [EditorViewModel.FeatureScalarKey: String] = [:]
+        for scalar in row.scalars { texts[scalar.key] = Self.fmt(scalar.value) }
+        scalarTexts = texts
+    }
+
+    private func scalarBinding(_ key: EditorViewModel.FeatureScalarKey) -> Binding<String> {
+        Binding(
+            get: { scalarTexts[key] ?? "" },
+            set: { scalarTexts[key] = $0 }
+        )
+    }
+
+    private func commitScalar(_ key: EditorViewModel.FeatureScalarKey) {
         // Accept plain numbers and simple arithmetic ("25.4/2").
-        guard let value = ExpressionEvaluator.evaluate(distanceText) else { return }
-        onEditDistance(value)
+        guard let value = ExpressionEvaluator.evaluate(scalarTexts[key] ?? "") else { return }
+        onEditScalar(key, value)
     }
 
     private func commitCount() {

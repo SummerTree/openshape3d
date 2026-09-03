@@ -11003,6 +11003,10 @@ final class EditorViewModel {
         /// spacing for linear, angle for circular). `angleDegrees` re-exposes
         /// `spec.totalAngle` (radians) in the panel's degree units.
         var patternSpec: PatternSpec?
+        /// The node's editable scalar parameters in display order — distance,
+        /// angle, radius, thickness, factor, draft — empty for kinds with none
+        /// (G8: every scalar a feature has is editable in its History row).
+        var scalars: [FeatureScalar] = []
 
         /// True when this row edits a linear/circular pattern.
         var isPattern: Bool { patternSpec != nil }
@@ -11018,6 +11022,57 @@ final class EditorViewModel {
         /// (spacing field applies); nil for non-pattern rows.
         var patternIsCircular: Bool? {
             patternSpec.map { $0.kind == .circular }
+        }
+    }
+
+    /// One editable scalar of a feature, as the History row shows it.
+    struct FeatureScalar: Identifiable, Equatable, Sendable {
+        let key: FeatureScalarKey
+        let label: String
+        /// "mm", "°" or "×" — display only; the stored `Expr` is unit-free.
+        let unit: String
+        let value: Double
+        var id: FeatureScalarKey { key }
+    }
+
+    /// Which scalar of a node an edit addresses. `primary` is the one
+    /// `kind(_:replacingExpr:)` replaces (distance / angle / radius /
+    /// setback / thickness / factor); `taperAngle` is the draft extrude's
+    /// second scalar.
+    enum FeatureScalarKey: String, Hashable, Sendable {
+        case primary
+        case taperAngle
+        /// Face rotate: shown in degrees, stored in radians (the kernel's unit).
+        case rotateAngle
+    }
+
+    /// The editable scalars of a feature kind, in display order.
+    static func scalars(of kind: FeatureKind) -> [FeatureScalar] {
+        switch kind {
+        case let .extrude(_, _, distance, _, _, _):
+            return [FeatureScalar(key: .primary, label: "Distance", unit: "mm", value: distance.value)]
+        case let .pushPull(_, distance, _):
+            return [FeatureScalar(key: .primary, label: "Distance", unit: "mm", value: distance.value)]
+        case let .draftExtrude(_, _, distance, taperAngle, _, _):
+            return [
+                FeatureScalar(key: .primary, label: "Distance", unit: "mm", value: distance.value),
+                FeatureScalar(key: .taperAngle, label: "Draft", unit: "°", value: taperAngle.value),
+            ]
+        case let .revolve(_, _, _, angle, _):
+            return [FeatureScalar(key: .primary, label: "Angle", unit: "°", value: angle.value)]
+        case let .chamfer(_, _, setback):
+            return [FeatureScalar(key: .primary, label: "Setback", unit: "mm", value: setback.value)]
+        case let .fillet(_, _, radius):
+            return [FeatureScalar(key: .primary, label: "Radius", unit: "mm", value: radius.value)]
+        case let .shell(_, _, thickness):
+            return [FeatureScalar(key: .primary, label: "Thickness", unit: "mm", value: thickness.value)]
+        case let .scaleFace(_, factor):
+            return [FeatureScalar(key: .primary, label: "Factor", unit: "×", value: factor.value)]
+        case let .rotateFace(_, angle, _):
+            return [FeatureScalar(key: .rotateAngle, label: "Angle", unit: "°",
+                                  value: angle.value * 180 / Double.pi)]
+        default:
+            return []
         }
     }
 
@@ -11180,7 +11235,8 @@ final class EditorViewModel {
                 hasError: error != nil,
                 errorText: error.map(Self.errorText),
                 isRolledBack: index >= cut,
-                patternSpec: patternSpec
+                patternSpec: patternSpec,
+                scalars: Self.scalars(of: node.kind)
             )
         }
     }
@@ -11296,6 +11352,35 @@ final class EditorViewModel {
         session.save()
     }
 
+    /// Edit one of a feature's scalars by key (History row fields). The
+    /// primary scalar is `editFeatureDistance`; the draft extrude's taper
+    /// angle (degrees) is the one kind with a second scalar.
+    func editFeatureScalar(_ id: FeatureID, key: FeatureScalarKey, value: Double) {
+        switch key {
+        case .primary:
+            editFeatureDistance(id, value)
+        case .taperAngle:
+            guard let node = session.document.features.node(id),
+                  case let .draftExtrude(profile, plane, distance, taperAngle, symmetric, boolean) = node.kind,
+                  taperAngle.value != value
+            else { return }
+            prepareForHistoryChange()
+            session.editFeature(id, to: .draftExtrude(
+                profile: profile, plane: plane, distance: distance,
+                taperAngle: Expr(value: value), symmetric: symmetric, boolean: boolean))
+            session.save()
+        case .rotateAngle:
+            guard let node = session.document.features.node(id),
+                  case let .rotateFace(face, angle, axis) = node.kind
+            else { return }
+            let radians = value * Double.pi / 180
+            guard abs(radians - angle.value) > 1e-12 else { return }
+            prepareForHistoryChange()
+            session.editFeature(id, to: .rotateFace(face: face, angle: Expr(value: radians), axis: axis))
+            session.save()
+        }
+    }
+
     /// The same feature kind with its primary scalar replaced, or nil if it has
     /// none (primitive/boolean/etc. aren't distance-editable in the panel).
     private static func kind(_ kind: FeatureKind, replacingScalar value: Double) -> FeatureKind? {
@@ -11323,6 +11408,15 @@ final class EditorViewModel {
             return .fillet(body: body, edges: edges, radius: expr)
         case let .shell(body, openFaces, _):
             return .shell(body: body, openFaces: openFaces, thickness: expr)
+        case let .draftExtrude(profile, plane, _, taperAngle, symmetric, boolean):
+            return .draftExtrude(
+                profile: profile, plane: plane, distance: expr,
+                taperAngle: taperAngle, symmetric: symmetric, boolean: boolean)
+        case let .scaleFace(face, _):
+            return .scaleFace(face: face, factor: expr)
+        // `.rotateFace` is deliberately absent: its Expr is radians while every
+        // caller here speaks the user's units — `editFeatureScalar(.rotateAngle)`
+        // converts from degrees.
         default:
             return nil
         }
