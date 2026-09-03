@@ -408,7 +408,12 @@ the rebuild does the CSG; `HistoryBooleanEditTests` re-picks a union's tool
 from a far box to an overlapping one (1000 → 1500 mm³) and undoes it. Note
 for tests: a rebuild drops document-level transforms by design, so a
 primitive node must carry its PLACEMENT to replay anywhere but the origin.
-Still open in G8: the
+**The repair flow** for those kinds is the same action surfaced where the
+failure is: a row with an error badge shows its reference edit as an inline
+orange button under the error text (`HistoryRepair-<name>`), so a blend,
+shell, delete-face or boolean whose reference went stale is fixed by tapping
+Edit Edges / Edit Faces / Edit Tool right there — the loop §18's error badge
+specifies. Still open in G8: the
 reference rows (re-pick profile / body / faces / edges), the boolean
 INTENT of extrude / revolve / sweep / loft (changing new-body → subtract
 needs a target pick, so it belongs with the reference rows), and the

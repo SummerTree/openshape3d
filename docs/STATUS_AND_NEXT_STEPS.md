@@ -343,7 +343,9 @@ plane sections, exact face areas, holed-sweep naming, CSG-free render meshes):
   slice — "Edit Faces" on shell and delete-face rows, the blend rows'
   "Edit Edges" pattern generalised (`beginReferenceEdit`,
   `HistoryFaceEditTests`), and "Edit Tool" on boolean rows
-  (`beginBooleanEdit`, `HistoryBooleanEditTests`). Left: re-pick for the
+  (`beginBooleanEdit`, `HistoryBooleanEditTests`), and the repair flow for
+  all four: an errored row shows its re-pick inline under the error
+  (`HistoryRepair-<name>`). Left: re-pick for the
   creators' profiles / planes / axes and the bodies of mirror / pattern /
   transform (and with them the boolean intent of the creators), the face
   of push-pull / move / scale / rotate face, and the stale-ref repair flow;

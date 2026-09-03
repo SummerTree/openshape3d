@@ -246,6 +246,22 @@ private struct HistoryRowView: View {
                     .font(.caption2)
                     .foregroundStyle(.orange)
                     .fixedSize(horizontal: false, vertical: true)
+                // The repair, right where the failure is reported (spec §18):
+                // a stale reference is fixed by re-picking it, so the row's
+                // reference edit doubles as the error's action.
+                if let onEditReferences {
+                    Button {
+                        onEditReferences.action()
+                    } label: {
+                        Label(onEditReferences.label, systemImage: "wrench.and.screwdriver")
+                            .font(.caption2.weight(.semibold))
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.mini)
+                    .tint(.orange)
+                    .padding(.leading, 32)
+                    .accessibilityIdentifier("HistoryRepair-\(row.name)")
+                }
             }
 
             if !row.scalars.isEmpty {
