@@ -295,14 +295,15 @@ private struct HistoryRowView: View {
                     ForEach(row.options) { option in
                         switch option.value {
                         case let .toggle(isOn):
+                            // A Button-backed checkbox, not `.switch`: the
+                            // row's whole-area tap gesture (select) beats a
+                            // UISwitch, but Buttons win — as the eye/trash do.
                             Toggle(option.label, isOn: Binding(
                                 get: { isOn },
                                 set: { onSetOptionToggle(option.key, $0) }))
-                            .toggleStyle(.switch)
-                            .controlSize(.mini)
-                            .font(.caption2)
-                            .foregroundStyle(.barLabel)
+                            .toggleStyle(HistoryCheckboxToggleStyle())
                             .accessibilityIdentifier("HistoryOption-\(option.key.rawValue)-\(row.name)")
+                            .accessibilityValue(isOn ? "on" : "off")
                         case let .choice(selected, choices):
                             HStack(spacing: 4) {
                                 Text(option.label)
@@ -315,6 +316,7 @@ private struct HistoryRowView: View {
                                 }
                                 .pickerStyle(.menu)
                                 .labelsHidden()
+                                .fixedSize() // one line: "Subtract", never "Sub-/tract"
                                 .accessibilityIdentifier("HistoryOption-\(option.key.rawValue)-\(row.name)")
                             }
                         }
@@ -510,5 +512,28 @@ private struct HistoryRowView: View {
 
     private static func fmt(_ v: Double) -> String {
         String(format: "%g", (v * 1000).rounded() / 1000)
+    }
+}
+
+/// A checkbox drawn as a plain Button: the History row selects on a
+/// whole-area tap gesture, which swallows a `.switch` toggle's touch but not
+/// a Button's.
+private struct HistoryCheckboxToggleStyle: ToggleStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        Button {
+            configuration.isOn.toggle()
+        } label: {
+            HStack(spacing: 6) {
+                configuration.label
+                    .font(.caption2)
+                    .foregroundStyle(.barLabel)
+                Spacer(minLength: 4)
+                Image(systemName: configuration.isOn ? "checkmark.square.fill" : "square")
+                    .font(.system(size: 15))
+                    .foregroundStyle(configuration.isOn ? Color.accentColor : Color.barLabel)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
     }
 }

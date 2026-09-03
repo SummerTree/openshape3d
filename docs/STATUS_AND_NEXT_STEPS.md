@@ -1201,6 +1201,17 @@ first differing frame is the one you want.
     prototypes yourself (`dposv_` & co., `int` by reference) and let the
     Swift `import Accelerate` link the framework.
 
+27. **A `.switch` Toggle inside a row that selects on a whole-area
+    `onTapGesture` never fires — the row wins the touch and SELECTS the
+    feature instead.** Found live on the History rows' first option
+    switches (2026-09-02): the tap put the body into selection mode with
+    the gizmo up. `Button`s in the same row (eye, trash, the field commit
+    ticks) and a `.menu` Picker DO win, so options render through a
+    Button-backed checkbox `ToggleStyle` (`HistoryCheckboxToggleStyle`),
+    with `accessibilityValue` "on"/"off" so the UI test can read the state
+    the row re-derives from the document. Same rule for anything else that
+    goes into a tappable row: make it a Button, or it is a selection tap.
+
 ---
 
 ## 4. Next missions (prioritized)

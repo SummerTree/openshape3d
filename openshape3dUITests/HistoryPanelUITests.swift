@@ -57,5 +57,18 @@ final class HistoryPanelUITests: XCTestCase {
         XCTAssertTrue(panel.waitForExistence(timeout: 4), "History panel opens")
         XCTAssertTrue(app.textFields["HistoryDistanceField"].waitForExistence(timeout: 3),
                       "the recorded Extrude step shows its inline distance editor")
+
+        // G8 options: the row's Symmetric checkbox flips the node and the row
+        // is re-derived from the document — so a flipped value proves the
+        // edit-and-rebuild round trip, not just a local toggle.
+        let symmetric = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "identifier BEGINSWITH 'HistoryOption-symmetric-'")).firstMatch
+        XCTAssertTrue(symmetric.waitForExistence(timeout: 3), "the extrude row offers Symmetric")
+        XCTAssertEqual(symmetric.value as? String, "off")
+        symmetric.tap()
+        let flipped = NSPredicate(format: "value == 'on'")
+        expectation(for: flipped, evaluatedWith: symmetric)
+        waitForExpectations(timeout: 5)
+        XCTAssertEqual(symmetric.value as? String, "on", "the document's extrude is symmetric now")
     }
 }

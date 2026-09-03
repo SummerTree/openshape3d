@@ -385,7 +385,11 @@ evening:** `[FeatureOption]` on the row (`options(of:)`) — extrude and draft
 extrude *Symmetric*, mirror *Keep original* as switches, a boolean node's
 *Type* (Union / Subtract / Intersect) as a menu — through
 `setFeatureOption(_:key:toggle:)` / `(_:key:choice:)`, operands untouched,
-one undo step each (`HistoryOptionEditTests`). Still open in G8: the
+one undo step each (`HistoryOptionEditTests`). Verified live: the Type menu
+turned a union into a subtract (volume dropped by the peg's 1,000 mm³), the
+Symmetric checkbox rebuilt the draft both ways; the switches had to become
+Button-backed checkboxes because the row's select tap beat a `.switch`
+(STATUS gotcha 27), and `HistoryPanelUITests` now flips one. Still open in G8: the
 reference rows (re-pick profile / body / faces / edges), the boolean
 INTENT of extrude / revolve / sweep / loft (changing new-body → subtract
 needs a target pick, so it belongs with the reference rows), and the
