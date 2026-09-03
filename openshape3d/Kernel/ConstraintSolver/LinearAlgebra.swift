@@ -2,17 +2,24 @@
 //  LinearAlgebra.swift
 //  openshape3d
 //
-//  Small dense linear-algebra helpers for the 2D constraint solver. Pure
-//  Swift, Double math, no external dependencies (deliberately not Accelerate
-//  LAPACK — the matrices here are tiny and the LAPACK ABI shifts between SDKs).
+//  Dense linear-algebra helpers for the 2D constraint solver. The kernels
+//  run on Accelerate's LAPACK through the C shim `OS3DLinearAlgebra` (new
+//  interface, stable ABI); the pure-Swift routines below them are the
+//  FALLBACKS, kept because they are simple and because LAPACK can refuse
+//  (a non-convergent SVD, a non-finite input). "Tiny matrices, pure Swift"
+//  was the original stance; a 150-line welded sketch has 600 free
+//  variables, and its Cholesky and Jacobi SVD in nested Swift loops cost
+//  0.9 s per drag tick in Debug (`DragSolveProbe`, 2026-09-02).
 //
-//  Two primitives the Levenberg–Marquardt core needs:
+//  Three primitives the Levenberg–Marquardt core and the DOF analysis need:
 //    • Cholesky solve of the damped normal equations (always SPD, so this
 //      never hits the non-positive-definite branch in practice).
-//    • Singular values of the Jacobian via one-sided Jacobi SVD, used only to
-//      estimate numeric rank → remaining degrees of freedom.
+//    • Singular values of the Jacobian, used only to estimate numeric rank
+//      → remaining degrees of freedom.
+//    • Symmetric eigen-decomposition of JᵀJ (the null-space analysis).
 //
 
+import Accelerate // links the framework the C shim calls into
 import Foundation
 
 nonisolated enum LinearAlgebra {
@@ -22,8 +29,25 @@ nonisolated enum LinearAlgebra {
     /// Solves `A x = b` for a symmetric positive-definite `A` (row-major,
     /// `n`×`n`) via Cholesky factorisation. Returns `nil` if `A` is not
     /// positive-definite (a non-positive pivot appears), which the caller
-    /// treats as a failed LM step. Only the lower triangle of `A` is read.
+    /// treats as a failed LM step.
     static func solveSPD(_ A: [Double], _ b: [Double], n: Int) -> [Double]? {
+        if n == 0 { return [] }
+        guard A.count == n * n, b.count == n, A.allSatisfy(\.isFinite), b.allSatisfy(\.isFinite)
+        else { return nil }
+        var x = b
+        let ok = A.withUnsafeBufferPointer { a in
+            x.withUnsafeMutableBufferPointer { xb in
+                os3d_solve_spd(a.baseAddress!, Int32(n), xb.baseAddress!)
+            }
+        }
+        guard ok else { return nil }
+        for v in x where !v.isFinite { return nil }
+        return x
+    }
+
+    /// The pure-Swift Cholesky `solveSPD` used to be; kept as the reference
+    /// the LAPACK path is tested against.
+    static func solveSPDReference(_ A: [Double], _ b: [Double], n: Int) -> [Double]? {
         if n == 0 { return [] }
         var L = [Double](repeating: 0, count: n * n)
         for i in 0..<n {
@@ -77,12 +101,94 @@ nonisolated enum LinearAlgebra {
 
     // MARK: - Singular values (one-sided Jacobi SVD)
 
-    /// Singular values of an `m`×`n` matrix (row-major) via one-sided Jacobi
-    /// rotation of its columns. Robust for the small, possibly rank-deficient
-    /// Jacobians the solver produces; returns values sorted descending. The
-    /// count returned is `n` (one per column); rank-deficient directions come
-    /// back as ~0 singular values.
+    /// Singular values of an `m`×`n` matrix (row-major), sorted descending.
+    /// The count returned is `n` (one per column); rank-deficient directions
+    /// come back as ~0 singular values (LAPACK reports min(m, n) values; the
+    /// rest are zero by definition and padded here). Falls back to the
+    /// one-sided Jacobi SVD when LAPACK does not converge.
     static func singularValues(_ A: [Double], m: Int, n: Int) -> [Double] {
+        if m == 0 || n == 0 { return [] }
+        if A.count == m * n, A.allSatisfy(\.isFinite) {
+            var s = [Double](repeating: 0, count: min(m, n))
+            let ok = A.withUnsafeBufferPointer { a in
+                s.withUnsafeMutableBufferPointer { sb in
+                    os3d_singular_values(a.baseAddress!, Int32(m), Int32(n), sb.baseAddress!)
+                }
+            }
+            if ok { return s + [Double](repeating: 0, count: n - s.count) }
+        }
+        return singularValuesReference(A, m: m, n: n)
+    }
+
+    /// Eigen-decomposition of a symmetric `n`×`n` matrix (row-major):
+    /// eigenvalues ASCENDING and `vectors[k]` the unit eigenvector of
+    /// `values[k]`. Falls back to cyclic Jacobi when LAPACK fails.
+    static func symmetricEigen(_ A: [Double], n: Int) -> (values: [Double], vectors: [[Double]]) {
+        if n == 0 { return ([], []) }
+        if A.count == n * n, A.allSatisfy(\.isFinite) {
+            var w = [Double](repeating: 0, count: n)
+            var v = [Double](repeating: 0, count: n * n)
+            let ok = A.withUnsafeBufferPointer { a in
+                w.withUnsafeMutableBufferPointer { wb in
+                    v.withUnsafeMutableBufferPointer { vb in
+                        os3d_symmetric_eigen(a.baseAddress!, Int32(n), wb.baseAddress!, vb.baseAddress!)
+                    }
+                }
+            }
+            if ok {
+                return (w, (0..<n).map { k in Array(v[(k * n)..<((k + 1) * n)]) })
+            }
+        }
+        return symmetricEigenReference(A, n: n)
+    }
+
+    /// Cyclic Jacobi eigen-decomposition (the pre-LAPACK routine, now the
+    /// fallback and the test reference). Same contract as `symmetricEigen`.
+    static func symmetricEigenReference(_ input: [Double], n: Int) -> (values: [Double], vectors: [[Double]]) {
+        guard n > 0 else { return ([], []) }
+        var A = input
+        var V = [Double](repeating: 0, count: n * n)
+        for i in 0..<n { V[i * n + i] = 1 }
+        for _ in 0..<60 {
+            var off = 0.0
+            for p in 0..<n { for q in (p + 1)..<n { off += A[p * n + q] * A[p * n + q] } }
+            if off < 1e-30 { break }
+            for p in 0..<(n - 1) {
+                for q in (p + 1)..<n {
+                    let apq = A[p * n + q]
+                    if abs(apq) < 1e-300 { continue }
+                    let tau = (A[q * n + q] - A[p * n + p]) / (2 * apq)
+                    let sgn = tau >= 0 ? 1.0 : -1.0
+                    let t = sgn / (abs(tau) + (tau * tau + 1).squareRoot())
+                    let c = 1 / (t * t + 1).squareRoot()
+                    let s = t * c
+                    for i in 0..<n {
+                        let aip = A[i * n + p], aiq = A[i * n + q]
+                        A[i * n + p] = c * aip - s * aiq
+                        A[i * n + q] = s * aip + c * aiq
+                    }
+                    for j in 0..<n {
+                        let apj = A[p * n + j], aqj = A[q * n + j]
+                        A[p * n + j] = c * apj - s * aqj
+                        A[q * n + j] = s * apj + c * aqj
+                    }
+                    for i in 0..<n {
+                        let vip = V[i * n + p], viq = V[i * n + q]
+                        V[i * n + p] = c * vip - s * viq
+                        V[i * n + q] = s * vip + c * viq
+                    }
+                }
+            }
+        }
+        let order = (0..<n).sorted { A[$0 * n + $0] < A[$1 * n + $1] }
+        let values = order.map { A[$0 * n + $0] }
+        let vectors = order.map { k in (0..<n).map { j in V[j * n + k] } }
+        return (values, vectors)
+    }
+
+    /// One-sided Jacobi SVD (the pre-LAPACK routine, now the fallback and
+    /// the test reference). Same contract as `singularValues`.
+    static func singularValuesReference(_ A: [Double], m: Int, n: Int) -> [Double] {
         if m == 0 || n == 0 { return [] }
 
         // Store columns contiguously: cols[c * m + r].

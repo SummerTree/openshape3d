@@ -357,12 +357,25 @@ plane sections, exact face areas, holed-sweep naming, CSG-free render meshes):
   scene reads the previous report until the new one bumps
   `sketchDefinitionEpoch`. `SketchDefinitionCacheTests` pins one solve per
   sketch value, coalescing, colours/DOF, and a <0.2 s scene build with the
-  150-line sketch open (was 1.5 s). Still open in S2: the renderer's
-  per-frame `makeBuffer` for sketch-line/fill batches (orbit frames), preview
-  bodies re-uploading all buffers per tick, measurement caching; S3
-  untouched. Gotcha 26 below.
+  150-line sketch open (was 1.5 s). The DRAG tick was the same story
+  (`solveOutcome` = the LM solve + the analysis, 1,700 ms at 150 lines):
+  the solver's dense kernels — the Cholesky per LM attempt, the Jacobi SVD
+  for DOF after every solve, the Jacobi eigen for the null space — now run
+  on Accelerate's LAPACK through a C shim (`OS3DLinearAlgebra.c`, Fortran
+  ABI prototypes declared locally because clang modules ignore a file-local
+  `ACCELERATE_NEW_LAPACK`), the analysis Jacobian uses the constraints'
+  `variableIndices` instead of re-evaluating every constraint per variable,
+  and a drag remembers its structural DOF after the first tick
+  (`knownDOF`). 150 lines: tick 1,700 → 70 ms, bare solve 930 → 18 ms;
+  50 lines: 81 → 9 ms (`LinearAlgebraTests`, `DragTickDOFTests`; the pure
+  Swift routines stay as `*Reference` fallbacks). What is left in a tick is
+  the LM iteration count itself — a sparse solver is the next step if a
+  sketch ever needs it. Still open in S2: the renderer's per-frame
+  `makeBuffer` for sketch-line/fill batches (orbit frames), preview bodies
+  re-uploading all buffers per tick, measurement caching; S3 untouched.
+  Gotcha 26 below.
 
-**Current test baseline (2026-09-02, evening): 1220 unit tests in ~21s** — the
+**Current test baseline (2026-09-02, evening): 1228 unit tests in ~21s** — the
 day added the exact helix spine, the BEG 55 lineup's bounds/mirror fixes,
 transform-as-a-feature, consumed-edge drafts on both offset paths, plane
 sections (`SectionKit`, `KernelSectionTests`), the exact face areas, and the
@@ -1169,7 +1182,15 @@ first differing frame is the one you want.
     `await vm.settleSketchDefinition()`. The same rule holds for anything
     else superlinear the scene might grow: measure with a 150-entity
     sketch before it ships (`SketchDefinitionCacheTests` keeps the 0.2 s
-    bound).
+    bound). Two corollaries from the same evening: (a) "tiny matrices,
+    pure Swift" stopped being true — the solver's Cholesky/SVD/eigen are
+    LAPACK now (`OS3DLinearAlgebra.c`), 16–50× on a 600-variable system;
+    (b) `#include <Accelerate/Accelerate.h>` in a .c file with a local
+    `#define ACCELERATE_NEW_LAPACK` does NOT select the new interface —
+    clang modules build the framework header once, without your macro
+    (the error is `__LAPACK_int` undeclared). Declare the Fortran-ABI
+    prototypes yourself (`dposv_` & co., `int` by reference) and let the
+    Swift `import Accelerate` link the framework.
 
 ---
 

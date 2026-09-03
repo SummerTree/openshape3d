@@ -61,10 +61,15 @@ nonisolated enum SketchSolverBridge {
     /// geometry follows. Returns new entities (same IDs), the sketch's
     /// STRUCTURAL degrees of freedom (0 = fully defined), and the state a
     /// caller needs to gate writeback.
+    /// `knownDOF`: a drag's structural DOF does not change from tick to tick
+    /// (only geometry moves), so a caller that already has it passes it
+    /// back and the null-space analysis — a 600×600 eigen-solve for a
+    /// 150-line sketch, most of a tick's cost — is skipped.
     static func solveOutcome(
         _ sketch: Sketch,
         movingEntity: UUID?,
-        dragTarget: SIMD2<Double>?
+        dragTarget: SIMD2<Double>?,
+        knownDOF: Int? = nil
     ) -> Outcome {
         let sys = buildSystem(from: sketch, movingEntity: movingEntity, dragTarget: dragTarget)
         guard !sys.initial.isEmpty else {
@@ -78,14 +83,14 @@ nonisolated enum SketchSolverBridge {
             constraints: sys.solveConstraints
         )
         let solved = result.variables
-        let analysis = nullSpaceAnalysis(sys, at: solved)
+        let dof = knownDOF ?? nullSpaceAnalysis(sys, at: solved).dof
         let newEntities = writeBack(sketch.entities, sys: sys, vars: solved)
         // Structural residuals evaluated AT the solution (no second solve).
         var sumSquares = 0.0
         for constraint in sys.structural {
             for r in constraint.residuals(solved) { sumSquares += r * r }
         }
-        return Outcome(entities: newEntities, dof: analysis.dof,
+        return Outcome(entities: newEntities, dof: dof,
                        converged: result.converged,
                        structuralResidual: sumSquares.squareRoot())
     }
@@ -690,12 +695,6 @@ nonisolated enum SketchSolverBridge {
 
     // MARK: - Null-space analysis (DOF + per-variable determinacy)
 
-    private static func stacked(_ cons: [any ConstraintResidual], _ x: [Double]) -> [Double] {
-        var out: [Double] = []
-        for c in cons { out.append(contentsOf: c.residuals(x)) }
-        return out
-    }
-
     /// Analyse the structural constraint Jacobian at `x`: returns the estimated
     /// degrees of freedom (nullity) and, per global variable, whether it is
     /// determined (fixed vars and vars with no null-space component are `true`).
@@ -710,35 +709,79 @@ nonisolated enum SketchSolverBridge {
         guard nf > 0 else { return (0, determined) }
 
         let cons = sys.structural
-        let m = stacked(cons, x).count
+        // Residual layout, and which constraints read each variable — the
+        // solver's sparsity pattern. The Jacobian used to re-evaluate EVERY
+        // constraint twice per free variable (O(nf·m) residual calls, the
+        // bulk of a 150-line sketch's analysis once the eigen-solve moved to
+        // LAPACK); a variable only perturbs the residuals that read it.
+        var offsets: [Int] = []
+        offsets.reserveCapacity(cons.count)
+        var m = 0
+        for c in cons {
+            offsets.append(m)
+            m += max(0, c.residualCount)
+        }
         guard m > 0 else {
             for g in free { determined[g] = false }
             return (nf, determined)
         }
-
-        // Numeric Jacobian (central differences) over free variables.
-        let h = 1e-6
-        var J = [[Double]](repeating: [Double](repeating: 0, count: nf), count: m)
-        for (col, g) in free.enumerated() {
-            var xp = x; xp[g] += h
-            var xm = x; xm[g] -= h
-            let rp = stacked(cons, xp)
-            let rm = stacked(cons, xm)
-            for i in 0..<m { J[i][col] = (rp[i] - rm[i]) / (2 * h) }
-        }
-
-        // Normal matrix M = JᵀJ (nf × nf, symmetric).
-        var M = [[Double]](repeating: [Double](repeating: 0, count: nf), count: nf)
-        for a in 0..<nf {
-            for b in a..<nf {
-                var s = 0.0
-                for i in 0..<m { s += J[i][a] * J[i][b] }
-                M[a][b] = s
-                M[b][a] = s
+        var columnOf = [Int](repeating: -1, count: nGlobal) // global var → free column
+        for (col, g) in free.enumerated() { columnOf[g] = col }
+        var affects = [[Int]](repeating: [], count: nGlobal)
+        for (ci, c) in cons.enumerated() {
+            for vi in c.variableIndices where vi >= 0 && vi < nGlobal {
+                if !affects[vi].contains(ci) { affects[vi].append(ci) }
             }
         }
 
-        let (values, vectors) = jacobiEigen(M, n: nf)
+        // Numeric Jacobian (central differences), row-major m × nf.
+        let h = 1e-6
+        var J = [Double](repeating: 0, count: m * nf)
+        var xw = x
+        for (col, g) in free.enumerated() {
+            let saved = xw[g]
+            for ci in affects[g] {
+                let c = cons[ci]
+                xw[g] = saved + h
+                let rp = c.residuals(xw)
+                xw[g] = saved - h
+                let rm = c.residuals(xw)
+                xw[g] = saved
+                let off = offsets[ci]
+                let count = Swift.min(c.residualCount, rp.count, rm.count)
+                for t in 0..<count {
+                    J[(off + t) * nf + col] = (rp[t] - rm[t]) / (2 * h)
+                }
+            }
+        }
+
+        // Normal matrix M = JᵀJ (nf × nf, symmetric, row-major flat),
+        // accumulated per constraint block: its rows × its free columns.
+        var M = [Double](repeating: 0, count: nf * nf)
+        for (ci, c) in cons.enumerated() {
+            var cols: [Int] = []
+            for vi in c.variableIndices where vi >= 0 && vi < nGlobal {
+                let col = columnOf[vi]
+                if col >= 0, !cols.contains(col) { cols.append(col) }
+            }
+            cols.sort()
+            let off = offsets[ci]
+            for t in 0..<Swift.max(0, c.residualCount) {
+                let row = (off + t) * nf
+                for a in cols {
+                    let ja = J[row + a]
+                    if ja == 0 { continue }
+                    for b in cols where b >= a {
+                        M[a * nf + b] += ja * J[row + b]
+                    }
+                }
+            }
+        }
+        for a in 0..<nf {
+            for b in (a + 1)..<nf { M[b * nf + a] = M[a * nf + b] }
+        }
+
+        let (values, vectors) = LinearAlgebra.symmetricEigen(M, n: nf)
         let lambdaMax = values.max() ?? 0
         let tol = Swift.max(lambdaMax * 1e-9, 1e-12)
 
@@ -754,55 +797,6 @@ nonisolated enum SketchSolverBridge {
         return (dof, determined)
     }
 
-    /// Cyclic Jacobi eigen-decomposition of a symmetric matrix. Returns
-    /// eigenvalues and eigenvectors (`vectors[k]` is eigenvector `k`). Adequate
-    /// for the small dense systems a single sketch produces.
-    private static func jacobiEigen(
-        _ input: [[Double]],
-        n: Int
-    ) -> (values: [Double], vectors: [[Double]]) {
-        guard n > 0 else { return ([], []) }
-        var A = input
-        var V = [[Double]](repeating: [Double](repeating: 0, count: n), count: n)
-        for i in 0..<n { V[i][i] = 1 }
-
-        for _ in 0..<60 {
-            var off = 0.0
-            for p in 0..<n { for q in (p + 1)..<n { off += A[p][q] * A[p][q] } }
-            if off < 1e-30 { break }
-            for p in 0..<(n - 1) {
-                for q in (p + 1)..<n {
-                    let apq = A[p][q]
-                    if abs(apq) < 1e-300 { continue }
-                    let tau = (A[q][q] - A[p][p]) / (2 * apq)
-                    let sgn = tau >= 0 ? 1.0 : -1.0
-                    let t = sgn / (abs(tau) + (tau * tau + 1).squareRoot())
-                    let c = 1 / (t * t + 1).squareRoot()
-                    let s = t * c
-                    // A <- Aᵀ...  two-sided rotation A' = GᵀAG (G acts on p,q).
-                    for i in 0..<n {
-                        let aip = A[i][p], aiq = A[i][q]
-                        A[i][p] = c * aip - s * aiq
-                        A[i][q] = s * aip + c * aiq
-                    }
-                    for j in 0..<n {
-                        let apj = A[p][j], aqj = A[q][j]
-                        A[p][j] = c * apj - s * aqj
-                        A[q][j] = s * apj + c * aqj
-                    }
-                    for i in 0..<n {
-                        let vip = V[i][p], viq = V[i][q]
-                        V[i][p] = c * vip - s * viq
-                        V[i][q] = s * vip + c * viq
-                    }
-                }
-            }
-        }
-
-        let values = (0..<n).map { A[$0][$0] }
-        let vectors = (0..<n).map { k in (0..<n).map { j in V[j][k] } }
-        return (values, vectors)
-    }
 }
 
 // MARK: - Per-point solve state (A2)

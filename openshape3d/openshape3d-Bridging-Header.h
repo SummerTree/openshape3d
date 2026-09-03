@@ -9,3 +9,4 @@
 
 #import "Shaders/ShaderTypes.h"     // simd uniform structs shared with Metal
 #import "Kernel/OCCT/OCCTBridge.h"   // OCCT B-rep kernel facade (Obj-C++)
+#import "Kernel/ConstraintSolver/OS3DLinearAlgebra.h" // LAPACK kernels for the sketch solver (C)

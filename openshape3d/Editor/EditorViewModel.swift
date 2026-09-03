@@ -7106,6 +7106,10 @@ final class EditorViewModel {
         /// as the command's undo `before`.
         var baseline: [SketchEntity]
         var pushed = false
+        /// Structural DOF from the first solved tick; the constraint system
+        /// does not change while dragging, so later ticks pass it back and
+        /// skip the null-space analysis (most of a large sketch's tick).
+        var structuralDOF: Int?
     }
     private var sketchEntityDrag: SketchEntityDrag?
 
@@ -7895,7 +7899,8 @@ final class EditorViewModel {
         var baselineSketch = sketch
         baselineSketch.entities = drag.baseline
         let outcome = SketchSolverBridge.solveOutcome(
-            baselineSketch, movingEntity: drag.before.id, dragTarget: target
+            baselineSketch, movingEntity: drag.before.id, dragTarget: target,
+            knownDOF: drag.structuralDOF
         )
         // Conflicting constraint system: the solver's output is a best-fit
         // COMPROMISE that satisfies nothing, and amending it into the
@@ -7917,6 +7922,10 @@ final class EditorViewModel {
         sketchSolveConflict = false
         if !sketchConflictAttribution.isEmpty { sketchConflictAttribution = .init() }
         let (solved, dof) = (outcome.entities, outcome.dof)
+        if drag.structuralDOF == nil {
+            drag.structuralDOF = dof
+            sketchEntityDrag = drag // remembered even when the sketch is rigid
+        }
 
         // Rigid sketch: refuse to move (no-op / spring back to baseline).
         guard dof > 0 else { return }
