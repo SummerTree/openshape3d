@@ -201,6 +201,20 @@ def p1_19():
     return extrude(gusset, (30, 8), 5, union=[base])
 
 
+@problem("1.18", 295296)
+def p1_18():
+    # Two 155 × 32 × 20 rails 100 apart (outside), 20 × 32 × 10 blocks on
+    # their far ends, and a 100 × 100 × 10 plate with a Ø45 hole bridging
+    # them 8 in from the near end — the only reading that returns the
+    # sheet's 295,296 exactly (the plate spans the full 100, not 84).
+    rails = extrude(Sketch(top(0)).rect(0, -32, 155, 0), (80, -16), 20)
+    extrude(Sketch(top(0)).rect(0, -100, 155, -68), (80, -84), 20, union=[rails])
+    for v0 in (-32, -100):
+        extrude(Sketch(top(20)).rect(135, v0, 155, v0 + 32), (145, v0 + 16), 10, union=[rails])
+    plate = Sketch(top(20)).rect(8, -100, 108, 0).circle((58, -50), 22.5)
+    return extrude(plate, (20, -20), 10, union=[rails])
+
+
 @problem("1.20", 177882)
 def p1_20():
     # Ø110 × 10 disc with a Ø32 hole; four identical 12 × 20 bars tangent

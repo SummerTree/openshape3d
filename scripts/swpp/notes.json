@@ -4,6 +4,10 @@
   "1.19": "Chamfer + Ø8 holes + gusset as drawn gives 26,194; the sheet's 26,719 is the same part without the two holes (26,697). Sheet/drawing mismatch.",
   "4.41": "Tube + slot-shaped lugs + R2 edge fillets as drawn; app 110,002 vs my own analytic 110,036 — the sheet's 107,609 implies a narrower neck the drawing does not show.",
   "6.15": "5-thick sheet bowl with R25 outer / R20 inner bends and a horizontal rim; the sheet's number needs ~7 % more material (probably Ø75 measured on the inside or the rim cut normal to the wall). Interpretation, not an app error.",
+  "1.18": "The top view's 8 mm insets contradict the printed volume; the plate spanning the full 100 (not 84) returns 295,296 exactly, so that is what was built.",
+  "7.49": "Six slot cutters made with Transform › Pattern (circular) from one extruded cutter, then one Combine › Subtract with all six tools.",
+  "11.1": "No hole wizard in the app: each counterbore is two stacked cylinders (ANSI #8 / #10 SHCS sizes) unioned into a cutter, patterned 3 × 3 and 1 × 2 with Transform › Pattern (linear), then subtracted; the sheet rounds to 12.7.",
+  "2.7": "The 86 on the sheet runs from the left end to the origin, not the overall length; the slot is the kit's stadium (two arcs + two tangent lines).",
   "2.13": "Built entirely by touch on the simulator (Polygon tool, radius label 17/2/cos(30), Extrude 32); the info bar read 8009.08 mm³.",
   "8.6": "Closed-loop sweep: the Ø10 profile ran round a 24+32+2-point sampled spine; −0.15 % is the polyline sampling of the two arcs.",
   "8.1": "Sweep along a polyline with a 24-segment R4 bend; the sheet's 75 × 25 are outside dimensions with the bend's outer radius 6."

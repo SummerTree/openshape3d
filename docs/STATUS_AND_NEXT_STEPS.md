@@ -12,6 +12,28 @@ design), `FREECAD_PLAYBOOK.md` (the FreeCAD-derived hardening ledger),
 
 ## Mission log — 2026-09-01 (landed, all committed, 1115/1115 green)
 
+- **SOLIDWORKS practice-problem database, first pass (2026-09-03).** The
+  365-sheet database (18 levels, each sheet printing the part's volume)
+  gets a runner: `scripts/swpp/kit.py` drives the app through the agent
+  bridge with palette-equivalent operations, in a fresh document per
+  problem, and scores the body volume against the sheet to 0.5 %;
+  `levelN.py` hold the recipes read off the sheets, `results.jsonl` the
+  ledger, `report.py` the summary (`docs/SWPP_PRACTICE_PROBLEMS.md`).
+  First pass: 29 sheets across levels 1, 2, 4, 6, 7, 8 and 11, 25 pass,
+  4 fail — every fail a two-reading drawing whose printed volume picks
+  the reading the drawing does not show, none a kernel fault; 0 feature
+  errors over ~180 recorded features (extrude/cut/union, arcs,
+  ellipses, polygons, slots, fillets, chamfers, revolve, open and closed
+  sweeps, mirror, linear/circular patterns, multi-tool subtract). One
+  sheet (2.13) built entirely by touch, info bar 8009.08 vs 8009. The
+  campaign's capability gaps against the database, for the roadmap:
+  extrude end conditions (up to surface / next / through all — Level 2
+  and every rib), feature patterns (patterns act on bodies), hole
+  wizard, angled reference planes, sketch patterns and global variables,
+  draft of existing faces, loft profile normals. Sheets are fetched to
+  the scratchpad from the database's `/api/headless/problems` index
+  (some are zips; the server throttles after ~150 downloads).
+
 - **Two TraceParts composite robots rebuilt THROUGH THE UI (2026-09-03;
   suite 1250/1250).** ROKAE CMR-ST600-CR12-C (chassis 950 × 630 × 768 from
   its TraceParts spec table, CR12 arm at the 1,434 mm datasheet reach) and

@@ -13,6 +13,21 @@ def problem(pid, volume, unit="mm", features=("Extrude Boss", "Mirror Pattern"))
     return deco
 
 
+@problem("7.49", 10822, features=("Extrude Boss", "Sketch: Polygon", "Extrude Cut", "Axis", "Circular Pattern"))
+def p7_49():
+    # Hex 19 AF × 37 with six 4 × 4 radial slots from the corners at the
+    # top, patterned about the axis. One slot cutter is a new body, the
+    # Transform › Pattern (circular, 6) makes the rest, Combine › Subtract.
+    hexp = extrude(Sketch(top(0)).polygon_flats((0, 0), 19, 6), (0, 0), 37)
+    cutter = extrude(Sketch(top(33)).rect(2.5, -2, 12, 2), (7, 0), 4, new_body=True)
+    pattern(cutter, "circular", 6, axis=(0, 1, 0), center=(0, 0, 0))
+    tools = [b["id"] for b in bodies() if b["id"] != hexp]
+    assert len(tools) == 6, f"expected 6 cutters after the pattern, found {len(tools)}"
+    from kit import subtract
+    subtract(hexp, tools)
+    return hexp
+
+
 @problem("7.21", 20044, features=("Extrude Boss", "Extrude Cut", "Mirror Pattern"))
 def p7_21():
     # Vise jaw 74 × 36 × 8 with two Ø5 holes at (13, 11) and (61, 11), a 90°
