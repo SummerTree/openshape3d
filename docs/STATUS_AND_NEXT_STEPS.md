@@ -1,16 +1,17 @@
 # Status & Next Steps — Handoff Notes
 
-Last updated: 2026-09-02 (loft-union app death fixed + BEG 55 lineup + exact
-helix sweep — see the mission log just below). This is the living
-handoff document: what is DONE, how the newest subsystems work, the dev
-workflow, and the prioritized next missions.
+Last updated: 2026-09-03 (SOLIDWORKS practice-problem campaign — extrude end
+conditions, B-rep touch commits, draft of an existing face; see the mission
+log just below, and **§4c for the campaign's state and how to resume it**).
+This is the living handoff document: what is DONE, how the newest subsystems
+work, the dev workflow, and the prioritized next missions.
 Companions: `IMPLEMENTATION_PLAN.md` (original phase plan),
 `PARITY_SPEC.md` (feature spec), `PHASE_D_DESIGN.md` (feature-graph
 design), `FREECAD_PLAYBOOK.md` (the FreeCAD-derived hardening ledger),
 `TOPO_NAMING_HISTORY_DESIGN.md` (element-naming design, now complete), and
 `AGENT_CONTROL.md` (the `/v1/exec` scripting surface).
 
-## Mission log — 2026-09-01 (landed, all committed, 1115/1115 green)
+## Mission log — 2026-09-03 (landed, all committed and pushed, 1263/1263 green)
 
 - **SOLIDWORKS practice-problem database, first pass (2026-09-03).** The
   365-sheet database (18 levels, each sheet printing the part's volume)
@@ -533,7 +534,10 @@ plane sections, exact face areas, holed-sweep naming, CSG-free render meshes):
   re-uploading all buffers per tick, measurement caching; S3 untouched.
   Gotcha 26 below.
 
-**Current test baseline (2026-09-03): 1250 unit tests in ~27s** — the rect
+**Current test baseline (2026-09-03, evening): 1263 unit tests in ~24s** —
+`ExtrudeEndKitTests` (6, Through All / Up To Next) and `DraftFaceTests` (6,
+draft of an existing face) on top of the previous line:
+**(2026-09-03): 1250 unit tests in ~27s** — the rect
 width/height dimension solve and the fillet-keeps-placement regression on
 top of the previous line: **(2026-09-02, evening): 1248 unit tests in ~21s** — the
 day added the exact helix spine, the BEG 55 lineup's bounds/mirror fixes,
@@ -2155,6 +2159,78 @@ shell and delete-face all run on the brep in both `FeatureGraph` and
 B-rep source, analytic holes, extrude-into-target boolean — see mission 2.
 STEP is no longer a build-flag question either: the bridge is compiled in and
 just needs UI (mission 1).
+
+### 4c. SOLIDWORKS practice-problem campaign — IN PROGRESS (2026-09-03)
+
+The 365-sheet practice database at solidworks.com/solution/education/
+practice-problems, every sheet printing the finished part's volume, used as
+an outside-in parity harness: read the drawing, build it, score the body's
+volume against the printed number to 0.5 %.
+
+**Where it stands.** 68 sheets attempted, 60 pass, 8 fail (every fail a
+drawing that admits two readings whose printed volume picks the one not
+drawn — none a kernel fault). A further 78 sheets were read and set aside
+with a written reason each, in `scripts/swpp/deferred.json`.
+
+| Level | Title | Sheets | Attempted | Pass |
+|---|---|---|---|---|
+| 1 | Basic Sketch & Extrusion | 20 | 14 | 12 |
+| 2 | Sketch Tools & End Conditions | 20 | 9 | 8 |
+| 3 | Global Variables & Sketch Patterns | 8 | 6 | 6 |
+| 4 | Extrude Cut & Fillet/Chamfer | 70 | 10 | 7 |
+| 5 | Reference Geometry | 15 | 6 | 6 |
+| 6 | Revolve Boss/Cut | 20 | 7 | 5 |
+| 7 | Feature Patterning | 48 | 6 | 6 |
+| 8 | Sweep Boss/Cut | 14 | 3 | 3 |
+| 11 | Hole Wizard | 12 | 3 | 3 |
+| 16 | Global Variables, Equations, Link Values | 7 | 4 | 4 |
+
+**How to run it.** `scripts/swpp/` is self-contained. `kit.py` drives the
+live app over the agent bridge with palette-equivalent operations in a fresh
+document per problem; `levelN.py` hold the recipes read off the sheets;
+`run.py 6.1 level:5 all` runs them; `results.jsonl` is the ledger (latest row
+per problem wins); `report.py` regenerates the table in
+`docs/SWPP_PRACTICE_PROBLEMS.md`. A sheet printing several volumes (Level 16
+equations/configurations) registers `meta["configs"] = [(label, volume), …]`
+and its build returns one body-id list per configuration; all of them score
+in one ledger row.
+
+**The sheet PDFs are NOT in the repo.** They were fetched to a scratchpad
+from the database's `/api/headless/problems` index (some entries are zips;
+the server throttles after roughly 150 downloads). Re-fetch them before the
+next pass — a recipe can be re-run without its sheet, but a NEW sheet cannot
+be read without one.
+
+**What to do next, in order.**
+
+1. **Level 4 is the biggest untouched pool** — 70 sheets, 10 attempted. It
+   needs no capability the app lacks (extrude, cut, fillet, chamfer), so it
+   is the cheapest way to raise coverage.
+2. **Level 7** (48 sheets, 6 attempted) likewise: patterns of bodies plus a
+   subtract stand in for feature patterns.
+3. **Capability gaps still open**, ranked by how many sheets they block:
+   feature patterns (a patterned cut is three steps here, not one); no hole
+   wizard (counterbores are stacked cylinders with typed standard sizes);
+   angled reference planes exist over the bridge but the palette has no tool
+   for them, so a Level 5 sheet cannot be built by touch; sketch patterns and
+   named global variables (the recipe lays a pattern out as one polygon
+   instead); loft normal-to-profile; assemblies/configurations/interference
+   (Levels 9, 15, 17) are outside a single-part modeller.
+4. **Draft returns a mesh-only body** (see the draft entry in the mission
+   log). A `BRepOffsetAPI_DraftAngle` path would let a drafted casting be
+   filleted analytically and exported; Level 13 wants it.
+5. Some sheets need a **provided START part** (14.4, 14.8, 16.7) that the
+   sheet set does not include. They stay deferred unless those parts surface.
+
+**Reading, not the app, is what stops the count.** The deferred list is the
+honest record of that: drawings whose callouts do not fix the geometry, or
+whose printed volume no reading reproduces. Before writing a recipe, check a
+hand-computed volume against the sheet — a plausible-looking solid that is
+2 % out is almost always a misread drawing, and chasing it in the kernel
+wastes the pass.
+
+Report page (regenerate with the scratchpad's `make_swpp_report.py`):
+https://claude.ai/code/artifact/3633bcd3-4ab6-498f-b940-35894880b105
 
 ### 5. Deferred backlog (from Phase D)
 - Transform-as-a-feature — **design blocker documented** in
