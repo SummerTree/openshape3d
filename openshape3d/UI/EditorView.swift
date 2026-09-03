@@ -1207,6 +1207,17 @@ struct EditorView: View {
                         .controlSize(.small)
                         .keyboardShortcut(.cancelAction)
                     }
+                } else if case .pickingFeatureBody = viewModel.mode {
+                    statusPill(
+                        icon: "cube",
+                        text: viewModel.featureBodyPickPrompt ?? "Tap the body"
+                    ) {
+                        Button("Cancel") {
+                            viewModel.cancelFeatureBodyPick()
+                        }
+                        .controlSize(.small)
+                        .keyboardShortcut(.cancelAction)
+                    }
                 } else if case .pickingRevolveAxis = viewModel.mode {
                     statusPill(
                         icon: "arrow.triangle.2.circlepath",

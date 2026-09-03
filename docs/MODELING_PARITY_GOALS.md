@@ -413,7 +413,14 @@ failure is: a row with an error badge shows its reference edit as an inline
 orange button under the error text (`HistoryRepair-<name>`), so a blend,
 shell, delete-face or boolean whose reference went stale is fixed by tapping
 Edit Edges / Edit Faces / Edit Tool right there — the loop §18's error badge
-specifies. Still open in G8: the
+specifies. **Edit Body** on mirror / pattern / transform rows followed
+(`EditorMode.pickingFeatureBody`, `beginFeatureBodyEdit`): a generic body
+pick with its own status pill ("Tap the body for Mirror"), the same
+feature-produced / created-before rules as a boolean's tool, the node's
+operand rewritten with its options and delta untouched
+(`HistoryBodyEditTests`: a mirror re-sourced from A to B replays across the
+plane at B; a transform re-targeted; a late body refused; cancel inert).
+Still open in G8: the
 reference rows (re-pick profile / body / faces / edges), the boolean
 INTENT of extrude / revolve / sweep / loft (changing new-body → subtract
 needs a target pick, so it belongs with the reference rows), and the

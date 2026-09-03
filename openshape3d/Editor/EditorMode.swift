@@ -75,6 +75,10 @@ enum EditorMode: Equatable {
     /// Split armed: waiting for a cutter tap — a world/construction plane
     /// tile, or a sketch profile fill (through-extruded cutter).
     case pickingSplitCutter(target: BodyID)
+    /// Re-picking the BODY operand of an existing mirror / pattern /
+    /// transform node (History "Edit Body"): the next tapped body becomes
+    /// the node's operand and the rebuild replays it.
+    case pickingFeatureBody(FeatureID)
     /// Pattern bar active (linear/circular); parameters live in
     /// `EditorViewModel.patternState`, instances preview as ghosts.
     case patterning

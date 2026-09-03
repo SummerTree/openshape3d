@@ -135,15 +135,17 @@ final class HistoryFaceEditTests: XCTestCase {
         let fillet = FeatureNode(name: "F", kind: .fillet(body: body, edges: [], radius: Expr(value: 1)), outputBodyIDs: [])
         let delete = FeatureNode(name: "D", kind: .deleteFace(body: body, faces: []), outputBodyIDs: [])
         let mirror = FeatureNode(name: "M", kind: .mirror(body: body, plane: PlaneRef(source: .ground), keepOriginal: true), outputBodyIDs: [])
-        for node in [fillet, delete, mirror] { vm.session.perform(AppendFeatureCommand(node: node)) }
+        let box = FeatureNode(name: "Box", kind: .primitive(spec: .box(width: 1, depth: 1, height: 1), placement: .identity), outputBodyIDs: [])
+        for node in [fillet, delete, mirror, box] { vm.session.perform(AppendFeatureCommand(node: node)) }
         XCTAssertEqual(vm.referenceEditLabel(fillet.id), "Edit Edges")
         XCTAssertEqual(vm.referenceEditLabel(delete.id), "Edit Faces")
-        XCTAssertNil(vm.referenceEditLabel(mirror.id))
+        XCTAssertEqual(vm.referenceEditLabel(mirror.id), "Edit Body")
+        XCTAssertNil(vm.referenceEditLabel(box.id), "a primitive has no reference to re-pick")
         // Dangling body refs: the input cannot be replayed, so the edit refuses
         // with a message instead of arming a pick on nothing.
         XCTAssertFalse(vm.beginReferenceEdit(delete.id))
         XCTAssertNotNil(vm.errorMessage)
         XCTAssertEqual(vm.mode, .idle)
-        XCTAssertFalse(vm.beginReferenceEdit(mirror.id))
+        XCTAssertFalse(vm.beginReferenceEdit(box.id))
     }
 }

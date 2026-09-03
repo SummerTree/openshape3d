@@ -2619,6 +2619,7 @@ final class EditorViewModel {
         cancelPattern()
         cancelSplitCutterPick()
         cancelBooleanPicking()
+        cancelFeatureBodyPick()
         cancelSectionPlanePick()
         cancelImagePlanePick()
         resetBlendState()
@@ -2964,6 +2965,7 @@ final class EditorViewModel {
         case .fillet, .chamfer: return "Edit Edges"
         case .shell, .deleteFace: return "Edit Faces"
         case .boolean: return "Edit Tool"
+        case .mirror, .pattern, .transform: return "Edit Body"
         default: return nil
         }
     }
@@ -2977,6 +2979,7 @@ final class EditorViewModel {
         case .shell: return beginShellEdit(id)
         case .deleteFace: return beginDeleteFaceEdit(id)
         case .boolean: return beginBooleanEdit(id)
+        case .mirror, .pattern, .transform: return beginFeatureBodyEdit(id)
         default: return false
         }
     }
@@ -4982,6 +4985,8 @@ final class EditorViewModel {
             pickLoftProfile(ray: ray)
         case .pickingBooleanTool(let kind, let targetID):
             handleBooleanToolTap(kind: kind, targetID: targetID, ray: ray)
+        case .pickingFeatureBody(let featureID):
+            handleFeatureBodyTap(featureID: featureID, ray: ray)
         case .pickingSplitCutter(let target):
             handleSplitCutterTap(target: target, ray: ray)
         case .patterning:
@@ -5506,6 +5511,79 @@ final class EditorViewModel {
         booleanEditingFeature = nil
         if case .pickingBooleanTool = mode {
             mode = .idle
+        }
+    }
+
+    // MARK: - Body operand re-pick (History "Edit Body" on mirror / pattern / transform)
+
+    /// Re-enter a body pick for an existing mirror / pattern / transform node:
+    /// the next tapped body becomes its operand. False for any other kind.
+    @discardableResult
+    func beginFeatureBodyEdit(_ id: FeatureID) -> Bool {
+        guard let node = session.document.features.node(id) else { return false }
+        let current: BodyRef
+        switch node.kind {
+        case let .mirror(body, _, _): current = body
+        case let .pattern(body, _): current = body
+        case let .transform(body, _): current = body
+        default: return false
+        }
+        cancelTransientPicks()
+        cancelTool()
+        selection = session.document.body(with: current.bodyID) != nil ? [current.bodyID] : []
+        mode = .pickingFeatureBody(id)
+        return true
+    }
+
+    func cancelFeatureBodyPick() {
+        if case .pickingFeatureBody = mode { mode = .idle }
+    }
+
+    /// The status pill's prompt while a body operand is being re-picked.
+    var featureBodyPickPrompt: String? {
+        guard case let .pickingFeatureBody(id) = mode,
+              let node = session.document.features.node(id) else { return nil }
+        return "Tap the body for \(node.name)"
+    }
+
+    private func handleFeatureBodyTap(featureID: FeatureID, ray: Ray) {
+        guard let hit = HitTester.pickBody(ray: ray, in: scene) else { return }
+        guard let node = session.document.features.node(featureID) else { cancelFeatureBodyPick(); return }
+        // Same rules as a boolean's tool: feature-produced, and produced
+        // BEFORE this node so the replay can find it.
+        guard let owner = featureNode(owning: hit.bodyID) else {
+            errorMessage = "Only a body created by a feature can be re-picked here — this one is an import or copy."
+            return
+        }
+        if let ownerIndex = session.document.features.index(of: owner.id),
+           let selfIndex = session.document.features.index(of: featureID),
+           ownerIndex >= selfIndex {
+            errorMessage = "Pick a body created before this \(node.name.lowercased()) in the history."
+            return
+        }
+        let ref = BodyRef(producer: owner.id, bodyID: hit.bodyID)
+        let after: FeatureKind
+        switch node.kind {
+        case let .mirror(body, plane, keepOriginal):
+            guard body != ref else { cancelFeatureBodyPick(); return }
+            after = .mirror(body: ref, plane: plane, keepOriginal: keepOriginal)
+        case let .pattern(body, spec):
+            guard body != ref else { cancelFeatureBodyPick(); return }
+            after = .pattern(body: ref, spec: spec)
+        case let .transform(body, delta):
+            guard body != ref else { cancelFeatureBodyPick(); return }
+            after = .transform(body: ref, delta: delta)
+        default:
+            cancelFeatureBodyPick()
+            return
+        }
+        mode = .idle
+        prepareForHistoryChange()
+        session.editFeature(featureID, to: after)
+        session.save()
+        if session.document.body(with: hit.bodyID) != nil {
+            selection = [hit.bodyID]
+            mode = .selected(hit.bodyID)
         }
     }
 
