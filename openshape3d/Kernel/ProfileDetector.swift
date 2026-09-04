@@ -141,6 +141,33 @@ nonisolated struct Profile: Identifiable {
         return loop.reduce(SIMD2<Double>.zero, +) / Double(loop.count)
     }
 
+    /// A point guaranteed to lie INSIDE the region, for seeding a later
+    /// re-detection. The vertex average (`centroid`) is not one: on a ring,
+    /// a C or an L it falls in the hole or outside the arm — building a
+    /// counterbore whose annulus a rectangular cut had bitten into (practice
+    /// problem 4.38, 2026-09-04), the recorded seed landed in the through
+    /// hole, replay resolved the wrong region and the cut fell back to a
+    /// mesh of half the body. Nudging an edge midpoint toward the interior
+    /// (the loop is CCW, so the interior is on the left) always finds one.
+    var interiorPoint: SIMD2<Double> {
+        let c = centroid
+        if contains(c) { return c }
+        guard loop.count >= 3 else { return c }
+        var lo = loop[0], hi = loop[0]
+        for p in loop { lo = simd_min(lo, p); hi = simd_max(hi, p) }
+        let step = max(simd_length(hi - lo) * 1e-3, 1e-6)
+        for i in 0..<loop.count {
+            let a = loop[i], b = loop[(i + 1) % loop.count]
+            let d = b - a
+            let len = simd_length(d)
+            guard len > 1e-12 else { continue }
+            let leftNormal = SIMD2(-d.y, d.x) / len
+            let candidate = (a + b) / 2 + leftNormal * step
+            if contains(candidate) { return candidate }
+        }
+        return c
+    }
+
     func contains(_ p: SIMD2<Double>) -> Bool {
         // Ray casting.
         var inside = false

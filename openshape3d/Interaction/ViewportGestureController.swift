@@ -49,6 +49,9 @@ final class ViewportGestureController: NSObject {
     private weak var orbitRecognizer: UIPanGestureRecognizer?
     /// Set in shouldReceive: the one-finger drag is being driven by the Pencil.
     private var orbitTouchIsPencil = false
+    /// Where the one-finger touch actually LANDED, captured in shouldReceive
+    /// before the pan recognizer has moved its threshold. See `handleOrbit`.
+    private var orbitTouchDown: CGPoint?
 
     func attach(to view: MTKView, renderer: Renderer) {
         self.view = view
@@ -137,8 +140,30 @@ final class ViewportGestureController: NSObject {
         switch gesture.state {
         case .began:
             beginInteractive()
-            lastPanLocation = location
-            dragClaimed = delegate?.gestureDragBegan(at: location, isPencil: orbitTouchIsPencil) ?? false
+            // A pan recognizer begins only after the finger has travelled its
+            // ~10 pt threshold, and `location` is where the finger is THEN —
+            // so every sketch stroke used to anchor up to 10 pt (0.7 mm at a
+            // part-sized zoom, several mm zoomed out) away from the point the
+            // user actually touched: a circle's centre, a rectangle's first
+            // corner, a line's start all drifted in the direction of the drag.
+            // `translation` is the movement since touch-down, so subtracting
+            // it recovers the touch-down point exactly. The first `.changed`
+            // then carries the finger from there to wherever it is now.
+            // `translation` should recover that point, but on the simulator's
+            // injected touches it read zero at `.began` (the circle still
+            // landed 1 mm downstream), so the touch-down captured by
+            // `shouldReceive` is the primary source and the subtraction the
+            // fallback.
+            let translation = gesture.translation(in: view)
+            let start = orbitTouchDown
+                ?? CGPoint(x: location.x - translation.x, y: location.y - translation.y)
+            orbitTouchDown = nil
+            lastPanLocation = start
+            dragClaimed = delegate?.gestureDragBegan(at: start, isPencil: orbitTouchIsPencil) ?? false
+            if dragClaimed, start != location {
+                delegate?.gestureDragChanged(at: location)
+                redraw()
+            }
         case .changed:
             if dragClaimed {
                 delegate?.gestureDragChanged(at: location)
@@ -253,6 +278,7 @@ extension ViewportGestureController: UIGestureRecognizerDelegate {
     ) -> Bool {
         if gestureRecognizer === orbitRecognizer {
             orbitTouchIsPencil = touch.type == .pencil
+            if let view { orbitTouchDown = touch.location(in: view) }
         }
         return true
     }

@@ -136,9 +136,23 @@ struct ViewportScene {
     /// Cheap planar blob shadows under body AABBs (visualization v1).
     var groundShadow: Bool = false
 
-    /// World-space AABB of all bodies, for fit-view. Nil when empty.
+    /// World-space AABB of everything drawn — bodies AND sketches — for
+    /// fit-view. Nil when empty.
+    ///
+    /// Sketches count: a sketch on an empty document used to leave Zoom to
+    /// Fit with nothing to frame, so it fell back to the DEFAULT camera — the
+    /// drawing you were looking at head-on snapped to an isometric view with
+    /// the 950 mm sketch off-screen (gotcha 38). The sketch overlay batches
+    /// are already in world space, so folding them in costs one pass.
     var worldBounds: (min: SIMD3<Float>, max: SIMD3<Float>)? {
         var result: (min: SIMD3<Float>, max: SIMD3<Float>)?
+        func fold(_ world: SIMD3<Float>) {
+            if let current = result {
+                result = (simd_min(current.min, world), simd_max(current.max, world))
+            } else {
+                result = (world, world)
+            }
+        }
         for body in bodies {
             let aabb = body.renderMesh.localAABB
             // Transform the 8 corners; cheap and correct for TRS.
@@ -149,13 +163,14 @@ struct ViewportScene {
                     (i & 4) == 0 ? aabb.min.z : aabb.max.z
                 )
                 let world4 = body.modelMatrix * SIMD4(corner, 1)
-                let world = SIMD3(world4.x, world4.y, world4.z)
-                if let current = result {
-                    result = (simd_min(current.min, world), simd_max(current.max, world))
-                } else {
-                    result = (world, world)
-                }
+                fold(SIMD3(world4.x, world4.y, world4.z))
             }
+        }
+        for batch in sketchLines {
+            for point in batch.segments { fold(point) }
+        }
+        for batch in profileFills {
+            for point in batch.triangles { fold(point) }
         }
         return result
     }

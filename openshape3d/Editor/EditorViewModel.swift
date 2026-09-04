@@ -6865,13 +6865,24 @@ final class EditorViewModel {
         // "Touch" requires REAL overlap volume — a body merely flush against
         // the tool (shared wall) intersects into zero-volume slivers and must
         // stay untouched, or extrudes would grab adjacent bodies.
+        //
+        // An EXPLICIT Union is the exception: a boss sketched on a face and
+        // extruded away from it touches the body only along that face — zero
+        // overlap volume — and "Union" is the user saying "join it anyway".
+        // Found building SOLIDWORKS practice problem 1.1 by touch (2026-09-04):
+        // the stepped tower extruded off the base's face with Result = Union
+        // came back as a SECOND body. The flush contact leaves zero-volume
+        // sliver polygons in the intersection (the very signal Auto had to
+        // stop trusting), so an explicit union accepts contact as touching.
         var touched: [(target: Body, worldTarget: Euclid.Mesh, pushesIn: Bool)] = []
         for target in booleanCandidates(for: context) {
             let worldTarget = target.euclidMesh().transformed(by: target.transform.euclid)
             let pushesIn = sample.map { worldTarget.intersects($0) } ?? false
+            let overlap = worldTarget.intersection(mergeTool)
             let touches = pushesIn
                 || context.sourceBody == target.id
-                || KernelOps.volume(of: worldTarget.intersection(mergeTool)) > 1e-4
+                || KernelOps.volume(of: overlap) > 1e-4
+                || (context.booleanOverride == .union && !overlap.polygons.isEmpty)
             if touches {
                 touched.append((target, worldTarget, pushesIn))
             }
@@ -8622,6 +8633,9 @@ final class EditorViewModel {
     private var chainAnchor: SIMD2<Double>?
     /// First point of the chain — a stroke closing onto it ends the chain.
     private var chainStart: SIMD2<Double>?
+    /// The chain's first segment, so `chainStart` can be re-read from the
+    /// SOLVED sketch (see `refreshChainAnchors`).
+    private var chainStartEntityID: UUID?
     /// True while the user is building a polyline by TAPS (tap-to-place
     /// vertices, close on the start). A drag-drawn line still sets `chainAnchor`
     /// for drag-continuation, but leaves this false so a follow-up tap selects
@@ -8640,6 +8654,7 @@ final class EditorViewModel {
     private func clearChain() {
         chainAnchor = nil
         chainStart = nil
+        chainStartEntityID = nil
         tapChainActive = false
         _ = clearLinePreviewIfNeeded()
     }
@@ -9346,8 +9361,32 @@ final class EditorViewModel {
         if closing {
             clearChain()
         } else {
-            chainStart = chainStart ?? anchor
+            if chainStart == nil {
+                chainStart = anchor
+                chainStartEntityID = entity.id
+            }
             chainAnchor = end
+            refreshChainAnchors(lastEntityID: entity.id)
+        }
+    }
+
+    /// Re-read the chain's anchor and start from the sketch AFTER the commit
+    /// solved the inferred constraints. An inferred equal-length (3 % of an
+    /// existing line — a 98 next to a 96 qualifies) is a real constraint the
+    /// solver then satisfies by MOVING the new segment's end, but the chain
+    /// kept the pre-solve point: the next tap started from where the finger
+    /// had been rather than where the segment now ends, and the closing tap
+    /// compared against a start the solver had since shifted. Found drawing
+    /// SOLIDWORKS practice problem 4.38's L-profile by touch (2026-09-04): six
+    /// taps left an open loop with a 2 mm step at one corner and no region to
+    /// extrude. Anchoring on the committed geometry keeps a tap-chain
+    /// continuous through whatever the solver decides.
+    private func refreshChainAnchors(lastEntityID: UUID) {
+        guard let entities = activeSketch?.entities else { return }
+        for entity in entities {
+            guard case let .line(id, a, b) = entity else { continue }
+            if id == lastEntityID { chainAnchor = b }
+            if id == chainStartEntityID { chainStart = a }
         }
     }
 
@@ -11442,7 +11481,10 @@ final class EditorViewModel {
             sketchID: sketchID,
             entityIDs: Array(profile.sourceEntityIDs),
             holeEntityIDs: holes.map { Array($0.sourceEntityIDs) },
-            seedPoint: profile.centroid
+            // A point INSIDE the region, not the vertex average: the seed is
+            // what tells apart two regions bounded by the same entities
+            // (`resolveProfile`), and a ring's or a C's centroid is not in it.
+            seedPoint: profile.interiorPoint
         )
     }
 

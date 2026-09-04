@@ -413,7 +413,12 @@ def relaunch_fresh():
     subprocess.run(["xcrun", "simctl", "terminate", SIM, BUNDLE], env=env,
                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     time.sleep(1.0)
-    env2 = dict(env, SIMCTL_CHILD_OS3D_AGENT="1", SIMCTL_CHILD_OS3D_AGENT_PORT="8899",
+    # The relaunched app must listen where this kit talks (OS3D_PORT), not a
+    # fixed 8899 — several simulators run the campaign side by side, each on
+    # its own port, and a relaunch onto another worker's port fails to bind
+    # and comes up bridge-less (found 2026-09-04).
+    env2 = dict(env, SIMCTL_CHILD_OS3D_AGENT="1",
+                SIMCTL_CHILD_OS3D_AGENT_PORT=os.environ.get("OS3D_PORT", "8899"),
                 SIMCTL_CHILD_OS3D_FRESH="1")
     subprocess.run(["xcrun", "simctl", "launch", SIM, BUNDLE], env=env2,
                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)

@@ -138,4 +138,29 @@ final class PushPullKernelTests: XCTestCase {
         XCTAssertGreaterThan(KernelOps.volume(of: body.intersection(overlapping)), 1e-4,
                              "real overlap must count as touching")
     }
+
+    /// …but an EXPLICIT Union must still join a flush neighbour: a boss
+    /// extruded off a face touches the body only along that face. The
+    /// zero-volume intersection of two flush prisms is not EMPTY — it is the
+    /// sliver polygons Auto learned to ignore — and that is the contact
+    /// signal `commitToolResult` uses for a chosen Union. A body with a real
+    /// gap leaves no polygons at all, so it stays separate (spec §4.1).
+    func testFlushPrismsStillMakeContactForAnExplicitUnion() {
+        let ground = SketchPlane.ground
+        func rect(_ x0: Double, _ x1: Double) -> Profile {
+            Profile(loop: [SIMD2(x0, 0), SIMD2(x1, 0), SIMD2(x1, 10), SIMD2(x0, 10)],
+                    kind: .polygonal, sourceEntityIDs: [])
+        }
+        let body = KernelOps.extrude(
+            profile: rect(0, 10), holes: [], in: ground, distance: 10, symmetric: false)
+        let flush = KernelOps.extrude(
+            profile: rect(10, 20), holes: [], in: ground, distance: 10, symmetric: false)
+        let apart = KernelOps.extrude(
+            profile: rect(10.5, 20), holes: [], in: ground, distance: 10, symmetric: false)
+
+        XCTAssertFalse(body.intersection(flush).polygons.isEmpty,
+                       "flush contact leaves sliver polygons — the union's touch signal")
+        XCTAssertTrue(body.intersection(apart).polygons.isEmpty,
+                      "a real gap leaves nothing, so the boss stays its own body")
+    }
 }

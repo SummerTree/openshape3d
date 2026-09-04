@@ -79,6 +79,14 @@ nonisolated enum AgentRoute: Sendable, Equatable {
     /// Kernel face discovery — the shell/fillet counterpart of /v1/state's
     /// body list, one level deeper.
     case faces(bodyID: String)
+    /// Every sketch in the document with its plane and entities in sketch
+    /// (u, v) millimetres — the numeric truth behind a drawn profile, so a
+    /// sketch built by touch can be checked without reading pixels.
+    case sketches
+    /// World points → viewport points (pt, the coordinate space a touch
+    /// lands in), so a driver can aim a tap at a known edge midpoint or face
+    /// centre instead of measuring screenshots.
+    case project(points: [SIMD3<Double>])
     /// A plane cut through one body, as closed loops in the plane's frame —
     /// the drawing view, for checking a rebuild section-for-section.
     case section(bodyID: String, origin: SIMD3<Double>, normal: SIMD3<Double>,
@@ -90,7 +98,7 @@ nonisolated enum AgentRoute: Sendable, Equatable {
     var needsEditor: Bool {
         switch self {
         case .state, .runCommand, .exec, .screenshot, .check, .capture,
-             .edges, .faces, .section:
+             .edges, .faces, .sketches, .project, .section:
             return true
         case .health, .commands, .reply: return false
         }
@@ -140,6 +148,19 @@ nonisolated enum AgentRouter {
             }
             return request.path == "/v1/edges"
                 ? .edges(bodyID: body) : .faces(bodyID: body)
+
+        case "/v1/sketches":
+            if let bad = get(request) { return bad }
+            return .sketches
+
+        case "/v1/project":
+            if let bad = get(request) { return bad }
+            let points = (request.query["points"] ?? "").split(separator: ";").compactMap { vector3(String($0)) }
+            guard !points.isEmpty else {
+                return .reply(status: 400, error: "missing_points",
+                              message: "/v1/project needs ?points=x,y,z;x,y,z… (world mm).")
+            }
+            return .project(points: points)
 
         case "/v1/section":
             if let bad = get(request) { return bad }
