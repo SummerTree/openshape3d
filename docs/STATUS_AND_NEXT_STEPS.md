@@ -31,6 +31,34 @@ design), `FREECAD_PLAYBOOK.md` (the FreeCAD-derived hardening ledger),
   edges selected", fillet applied, then two ground-plane moves — both
   rebuilds clean, volume steady at 2000.13 mm³, `/v1/check` 0 invalid.
 
+- **Face drags ran at ~3 fps on blended bodies; fixed (2026-09-04).** The
+  second bug from the drag session, found by asking which gesture was slow:
+  a FACE drag, not a body drag. `EditorViewModel.updateMove` previewed each
+  frame by deforming through Euclid — `KernelOps.moveFace` rebuilds every
+  `Euclid.Polygon`, `makeWatertight()` welds the result, `translated(by:)`
+  copies it again, then `Body(euclidMesh:)` converts back to render buffers
+  and re-extracts the edge set. Measured per frame on an r8xh10 cylinder with
+  both rims filleted (13,268 polygons): classify 19.5 ms + rebuild 152.7 +
+  watertight 83.7 + translate 84.3 + renderMesh 15.6 + edges 12.8 = ~370 ms,
+  about 3 fps. (A plain box is 0.28 ms, which is why this only bit on curved
+  or blended geometry.) The first attempt — caching the vertex
+  classification — was wrong: it only removed the 19.5 ms, and the
+  measurement said so. The preview only has to LOOK right, so it now
+  translates the picked vertices of the source's render buffers and reuses
+  the cached edge set: **363 ms -> 0.039 ms, 9,206x**, verified live by
+  shearing a cylinder (cap area held at 201.01 mm², volume 2010.62 ->
+  2010.09). The COMMIT still runs the real Euclid deform, so the geometry
+  that lands in the document is unchanged. Face scale got the same treatment;
+  face ROTATE still deforms per frame, but its cost is subdivision (n² per
+  deformed triangle under a 40k budget), a different fix.
+  `FaceMovePerfTests` guards the frame budget and pins the render-buffer
+  classifier against the Euclid one. Noticed in passing, NOT yet fixed: on a
+  tangent-filleted body the mesh-side face picker merges every kernel face
+  into one selectable "curved face" (an r8 cylinder filleted on both rims
+  reports 860.60 mm², the whole surface, where OCCT has 5 faces including two
+  153.94 mm² flat caps), so the flat cap cannot be picked for push/pull or
+  face transform at all.
+
 - **Build-warning sweep: 125 -> 10 (2026-09-04).** A clean Catalyst build
   (the config the drag crash was reported from) carried 125 warnings. Four
   fixes cleared 115 of them. (1) 55 were `-Wdocumentation` inside the

@@ -201,6 +201,29 @@ nonisolated struct Body: Identifiable, Sendable {
         self.euclid = nil
     }
 
+    /// Preview-only: render buffers plus an edge set the caller already has.
+    /// A live face drag deforms the same vertex set every frame, so its edge
+    /// overlay does not change either — re-extracting it per frame cost 13 ms
+    /// on a 13k-polygon body, most of a 60 fps budget spent rediscovering an
+    /// answer the drag already knew. The commit builds the body properly.
+    init(
+        id: BodyID,
+        name: String,
+        transform: Transform3D,
+        render: RenderMesh,
+        edges: FeatureEdgeSet,
+        revision: UInt64
+    ) {
+        self.id = id
+        self.name = name
+        self.transform = transform
+        self.primitive = nil
+        self.render = render
+        self.edges = edges
+        self.meshRevision = revision
+        self.euclid = nil
+    }
+
     /// The CSG-ready mesh, rebuilding from triangle buffers if needed.
     func euclidMesh() -> Euclid.Mesh {
         euclid ?? EuclidBridge.euclidMesh(from: render)

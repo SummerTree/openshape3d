@@ -975,25 +975,107 @@ nonisolated extension KernelOps {
     /// This is a topology-preserving vertex edit: it works for prismatic solids
     /// where the moved face's boundary vertices are shared with the adjacent
     /// walls (the common case). It does not add or remove faces.
-    static func moveFace(
+    /// Which mesh vertices a face deform moves, resolved ONCE.
+    ///
+    /// The test — on the face's plane, inside its outline, outside its holes —
+    /// depends only on the mesh and the face, never on how far the face is
+    /// being dragged. A live drag holds both fixed for its whole duration, so
+    /// recomputing the partition every frame was pure re-derivation: measured
+    /// at 231 ms/frame on a filleted cylinder (13k polygons, ~4 fps) against
+    /// 0.28 ms on a box. Build one of these at touch-down and hand it to the
+    /// per-frame call instead.
+    nonisolated struct FaceVertexMask {
+        /// Kept so a mask handed a mesh it does not describe can rebuild
+        /// itself rather than silently deform the wrong vertices.
+        let face: FaceTopology.PlanarFace
+        /// The face's centroid in world space — scale deforms about it.
+        fileprivate let center: Vector
+        /// Per polygon, per vertex: is this vertex part of the face?
+        fileprivate let flags: [[Bool]]
+
+        /// Does the deform move this polygon's vertex? (Test-facing: lets the
+        /// render-buffer classifier be checked against this one.)
+        func moves(polygon: Int, vertex: Int) -> Bool {
+            guard polygon < flags.count, vertex < flags[polygon].count else { return false }
+            return flags[polygon][vertex]
+        }
+
+        fileprivate func describes(_ mesh: Euclid.Mesh) -> Bool {
+            guard flags.count == mesh.polygons.count else { return false }
+            for (i, polygon) in mesh.polygons.enumerated()
+            where flags[i].count != polygon.vertices.count {
+                return false
+            }
+            return true
+        }
+    }
+
+    /// Classify `mesh`'s vertices against `face`. A vertex belongs to the face
+    /// if it sits on the face's plane and its projection lies within the
+    /// outline (and outside every hole). The boundary is inclusive — the
+    /// face's own corner vertices lie exactly on the outline, and so do the
+    /// top rim vertices of the adjoining walls, so all copies of a shared
+    /// corner move together and the mesh stays welded.
+    static func faceVertexMask(
         mesh: Euclid.Mesh,
-        face: FaceTopology.PlanarFace,
-        delta: SIMD3<Double>
-    ) -> Euclid.Mesh {
-        guard simd_length(delta) > 1e-9 else { return mesh }
+        face: FaceTopology.PlanarFace
+    ) -> FaceVertexMask {
+        let onFace = faceContainment(face)
+        return FaceVertexMask(
+            face: face,
+            center: faceCentroid(face),
+            flags: mesh.polygons.map { polygon in
+                polygon.vertices.map { v in
+                    onFace(SIMD3(v.position.x, v.position.y, v.position.z))
+                }
+            })
+    }
+
+    /// The same classification over RENDER buffers: which vertex indices of
+    /// `positions` (world space) belong to `face`.
+    ///
+    /// This is what a live drag PREVIEW wants. Deforming through Euclid means
+    /// rebuilding every `Euclid.Polygon` (153 ms on a 13k-polygon body),
+    /// welding it watertight (84 ms) and copying it again to re-pivot (84 ms)
+    /// — none of which a preview needs, since the commit re-runs the real
+    /// deform anyway. Translating the picked vertices of a flat position
+    /// array instead costs 0.5 ms, so the drag stays interactive on blended
+    /// geometry.
+    static func faceVertexIndices(
+        in positions: [SIMD3<Float>],
+        face: FaceTopology.PlanarFace
+    ) -> [Int] {
+        let onFace = faceContainment(face)
+        return positions.indices.filter { i in
+            let p = positions[i]
+            return onFace(SIMD3(Double(p.x), Double(p.y), Double(p.z)))
+        }
+    }
+
+    /// The face's centroid in world space — scale/rotate deform about it.
+    static func faceCentroid(_ face: FaceTopology.PlanarFace) -> Vector {
+        let plane = SketchPlane(
+            origin: face.origin, xAxis: face.basisX, yAxis: face.basisY
+        )
+        var c2 = SIMD2<Double>.zero
+        for p in face.outline { c2 += p }
+        c2 /= Double(max(face.outline.count, 1))
+        let cw = plane.toWorld(c2)
+        return Vector(cw.x, cw.y, cw.z)
+    }
+
+    /// "Does this world point belong to the face?" — on the face's plane,
+    /// inside its outline, outside its holes. One definition, shared by the
+    /// Euclid and render-buffer classifiers so a preview can never disagree
+    /// with the commit about which vertices move.
+    private static func faceContainment(
+        _ face: FaceTopology.PlanarFace
+    ) -> (SIMD3<Double>) -> Bool {
         let plane = SketchPlane(
             origin: face.origin, xAxis: face.basisX, yAxis: face.basisY
         )
         let normal = simd_normalize(plane.normal)
-        let d = Vector(delta.x, delta.y, delta.z)
-
-        // A vertex belongs to the face if it sits on the face's plane and its
-        // projection lies within the outline (and outside every hole). The
-        // boundary is inclusive — the face's own corner vertices lie exactly on
-        // the outline, and so do the top rim vertices of the adjoining walls, so
-        // all copies of a shared corner move together and the mesh stays welded.
-        func onFace(_ position: Vector) -> Bool {
-            let w = SIMD3<Double>(position.x, position.y, position.z)
+        return { w in
             guard abs(simd_dot(w - face.origin, normal)) <= Self.moveFacePlaneTolerance
             else { return false }
             let local = plane.toLocal(w)
@@ -1003,14 +1085,44 @@ nonisolated extension KernelOps {
             }
             return true
         }
+    }
+
+    static func moveFace(
+        mesh: Euclid.Mesh,
+        face: FaceTopology.PlanarFace,
+        delta: SIMD3<Double>
+    ) -> Euclid.Mesh {
+        applyMove(mesh: mesh, mask: faceVertexMask(mesh: mesh, face: face), delta: delta)
+    }
+
+    /// `moveFace` with the classification already done — the per-frame call in
+    /// a face drag. A mask from a different mesh is rebuilt rather than
+    /// misapplied, so this is never less correct than the `face:` overload.
+    static func moveFace(
+        mesh: Euclid.Mesh,
+        mask: FaceVertexMask,
+        delta: SIMD3<Double>
+    ) -> Euclid.Mesh {
+        applyMove(mesh: mesh,
+                  mask: mask.describes(mesh)
+                      ? mask : faceVertexMask(mesh: mesh, face: mask.face),
+                  delta: delta)
+    }
+
+    private static func applyMove(
+        mesh: Euclid.Mesh,
+        mask: FaceVertexMask,
+        delta: SIMD3<Double>
+    ) -> Euclid.Mesh {
+        guard simd_length(delta) > 1e-9 else { return mesh }
+        let d = Vector(delta.x, delta.y, delta.z)
 
         var polygons = [Euclid.Polygon]()
         polygons.reserveCapacity(mesh.polygons.count)
-        for polygon in mesh.polygons {
-            let vertices = polygon.vertices.map { vertex -> Euclid.Vertex in
-                onFace(vertex.position)
-                    ? Euclid.Vertex(vertex.position + d, vertex.normal)
-                    : vertex
+        for (i, polygon) in mesh.polygons.enumerated() {
+            let flags = mask.flags[i]
+            let vertices = polygon.vertices.enumerated().map { j, vertex -> Euclid.Vertex in
+                flags[j] ? Euclid.Vertex(vertex.position + d, vertex.normal) : vertex
             }
             // A lateral move keeps each face planar (rigid translate of its
             // moved vertices); still guard degenerate polygons defensively.
@@ -1034,36 +1146,36 @@ nonisolated extension KernelOps {
         face: FaceTopology.PlanarFace,
         factor: Double
     ) -> Euclid.Mesh {
+        applyScale(mesh: mesh, mask: faceVertexMask(mesh: mesh, face: face), factor: factor)
+    }
+
+    /// `scaleFace` with the classification already done — the per-frame call in
+    /// a face-scale drag. See `FaceVertexMask`.
+    static func scaleFace(
+        mesh: Euclid.Mesh,
+        mask: FaceVertexMask,
+        factor: Double
+    ) -> Euclid.Mesh {
+        applyScale(mesh: mesh,
+                   mask: mask.describes(mesh)
+                       ? mask : faceVertexMask(mesh: mesh, face: mask.face),
+                   factor: factor)
+    }
+
+    private static func applyScale(
+        mesh: Euclid.Mesh,
+        mask: FaceVertexMask,
+        factor: Double
+    ) -> Euclid.Mesh {
         guard factor > 1e-6, abs(factor - 1) > 1e-9 else { return mesh }
-        let plane = SketchPlane(
-            origin: face.origin, xAxis: face.basisX, yAxis: face.basisY
-        )
-        let normal = simd_normalize(plane.normal)
-
-        // Scale about the face's centroid (average of its outline), in world.
-        var c2 = SIMD2<Double>.zero
-        for p in face.outline { c2 += p }
-        c2 /= Double(max(face.outline.count, 1))
-        let cw = plane.toWorld(c2)
-        let center = Vector(cw.x, cw.y, cw.z)
-
-        func onFace(_ position: Vector) -> Bool {
-            let w = SIMD3<Double>(position.x, position.y, position.z)
-            guard abs(simd_dot(w - face.origin, normal)) <= Self.moveFacePlaneTolerance
-            else { return false }
-            let local = plane.toLocal(w)
-            guard Self.pointInLoopInclusive(local, face.outline) else { return false }
-            for hole in face.holes where Self.pointStrictlyInLoop(local, hole) {
-                return false
-            }
-            return true
-        }
+        let center = mask.center
 
         var polygons = [Euclid.Polygon]()
         polygons.reserveCapacity(mesh.polygons.count)
-        for polygon in mesh.polygons {
-            let vertices = polygon.vertices.map { vertex -> Euclid.Vertex in
-                guard onFace(vertex.position) else { return vertex }
+        for (i, polygon) in mesh.polygons.enumerated() {
+            let flags = mask.flags[i]
+            let vertices = polygon.vertices.enumerated().map { j, vertex -> Euclid.Vertex in
+                guard flags[j] else { return vertex }
                 let scaled = center + (vertex.position - center) * factor
                 return Euclid.Vertex(scaled, vertex.normal)
             }

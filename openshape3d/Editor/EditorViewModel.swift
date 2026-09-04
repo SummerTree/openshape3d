@@ -1224,6 +1224,19 @@ final class EditorViewModel {
         let pivot: SIMD3<Double>
         let worldMesh: Euclid.Mesh
         let worldFace: FaceTopology.PlanarFace
+        /// Which vertices the drag moves — `worldMesh` and `worldFace` are
+        /// fixed for the whole gesture, so this is resolved once here instead
+        /// of on every frame (see `KernelOps.FaceVertexMask`). Used by the
+        /// COMMIT, which still deforms through Euclid.
+        let faceMask: KernelOps.FaceVertexMask
+        /// Preview buffers: the source render mesh already shifted into the
+        /// body's local space (world minus pivot), the indices of the vertices
+        /// the drag translates, and the edge overlay to reuse. A preview frame
+        /// is then a copy of `positions` with `delta` added at those indices —
+        /// see `KernelOps.faceVertexIndices`.
+        let previewRender: RenderMesh
+        let previewMovedVertices: [Int]
+        let previewEdges: FeatureEdgeSet
     }
     private var faceMoveSession: FaceMoveSession?
     /// The world delta the face-move drag last applied (drives the commit).
@@ -1350,14 +1363,33 @@ final class EditorViewModel {
         else { return false }
         let local = source.euclidMesh()
         faceMoveLastDelta = .zero
+        let worldMesh = local.transformed(by: source.transform.euclid)
+        let worldFace = selectedFaceWorld(context)
+        let pivot = source.transform.translation
+        // Preview buffers, resolved once for the whole gesture. Classification
+        // runs on WORLD positions (the face lives in world space); the stored
+        // positions are the same vertices shifted into body-local space, so
+        // the indices line up.
+        let worldRender = EuclidBridge.renderMesh(from: worldMesh)
+        let movedVertices = KernelOps.faceVertexIndices(
+            in: worldRender.positions, face: worldFace)
+        let pivotF = SIMD3<Float>(Float(pivot.x), Float(pivot.y), Float(pivot.z))
+        let previewRender = RenderMesh(
+            positions: worldRender.positions.map { $0 - pivotF },
+            normals: worldRender.normals,
+            indices: worldRender.indices)
         faceMoveSession = FaceMoveSession(
             bodyID: bodyID,
             source: source,
             context: context,
             sourceLocalMesh: local,
-            pivot: source.transform.translation,
-            worldMesh: local.transformed(by: source.transform.euclid),
-            worldFace: selectedFaceWorld(context)
+            pivot: pivot,
+            worldMesh: worldMesh,
+            worldFace: worldFace,
+            faceMask: KernelOps.faceVertexMask(mesh: worldMesh, face: worldFace),
+            previewRender: previewRender,
+            previewMovedVertices: movedVertices,
+            previewEdges: FeatureEdgeExtractor.edges(from: previewRender)
         )
         return true
     }
@@ -1458,7 +1490,7 @@ final class EditorViewModel {
     /// session, fall into the "negligible drag" branch, and revert the shear).
     private func faceMovedLocalMesh(_ s: FaceMoveSession, worldDelta: SIMD3<Float>) -> Euclid.Mesh? {
         let delta = SIMD3<Double>(Double(worldDelta.x), Double(worldDelta.y), Double(worldDelta.z))
-        let movedWorld = KernelOps.moveFace(mesh: s.worldMesh, face: s.worldFace, delta: delta)
+        let movedWorld = KernelOps.moveFace(mesh: s.worldMesh, mask: s.faceMask, delta: delta)
         guard !movedWorld.polygons.isEmpty else { return nil }
         return movedWorld.translated(by: Vector(-s.pivot.x, -s.pivot.y, -s.pivot.z))
     }
@@ -1475,6 +1507,14 @@ final class EditorViewModel {
         let pivot: SIMD3<Double>
         let worldMesh: Euclid.Mesh
         let worldFace: FaceTopology.PlanarFace
+        /// Resolved once for the gesture — same reason as `FaceMoveSession`.
+        let faceMask: KernelOps.FaceVertexMask
+        /// Preview buffers, as in `FaceMoveSession`; `previewCenter` is the
+        /// face centroid in the same (pivot-shifted) space as the positions.
+        let previewRender: RenderMesh
+        let previewMovedVertices: [Int]
+        let previewEdges: FeatureEdgeSet
+        let previewCenter: SIMD3<Float>
     }
     private var faceScaleSession: FaceScaleSession?
     private var faceScaleLastFactor: Double = 1
@@ -1491,14 +1531,31 @@ final class EditorViewModel {
         else { return false }
         let local = source.euclidMesh()
         faceScaleLastFactor = 1
+        let worldMesh = local.transformed(by: source.transform.euclid)
+        let worldFace = selectedFaceWorld(context)
+        let pivot = source.transform.translation
+        let worldRender = EuclidBridge.renderMesh(from: worldMesh)
+        let movedVertices = KernelOps.faceVertexIndices(
+            in: worldRender.positions, face: worldFace)
+        let pivotF = SIMD3<Float>(Float(pivot.x), Float(pivot.y), Float(pivot.z))
+        let previewRender = RenderMesh(
+            positions: worldRender.positions.map { $0 - pivotF },
+            normals: worldRender.normals,
+            indices: worldRender.indices)
+        let centre = KernelOps.faceCentroid(worldFace)
         faceScaleSession = FaceScaleSession(
             bodyID: bodyID,
             source: source,
             context: context,
             sourceLocalMesh: local,
-            pivot: source.transform.translation,
-            worldMesh: local.transformed(by: source.transform.euclid),
-            worldFace: selectedFaceWorld(context)
+            pivot: pivot,
+            worldMesh: worldMesh,
+            worldFace: worldFace,
+            faceMask: KernelOps.faceVertexMask(mesh: worldMesh, face: worldFace),
+            previewRender: previewRender,
+            previewMovedVertices: movedVertices,
+            previewEdges: FeatureEdgeExtractor.edges(from: previewRender),
+            previewCenter: SIMD3<Float>(Float(centre.x), Float(centre.y), Float(centre.z)) - pivotF
         )
         return true
     }
@@ -1507,7 +1564,7 @@ final class EditorViewModel {
     /// re-centred). Session passed explicitly so the commit can recompute after
     /// clearing `faceScaleSession`.
     private func faceScaledLocalMesh(_ s: FaceScaleSession, factor: Double) -> Euclid.Mesh? {
-        let scaledWorld = KernelOps.scaleFace(mesh: s.worldMesh, face: s.worldFace, factor: factor)
+        let scaledWorld = KernelOps.scaleFace(mesh: s.worldMesh, mask: s.faceMask, factor: factor)
         guard !scaledWorld.polygons.isEmpty else { return nil }
         return scaledWorld.translated(by: Vector(-s.pivot.x, -s.pivot.y, -s.pivot.z))
     }
@@ -1516,17 +1573,25 @@ final class EditorViewModel {
     func updateFaceScale(factor: Double) {
         guard let s = faceScaleSession else { return }
         faceScaleLastFactor = factor
-        guard let scaled = faceScaledLocalMesh(s, factor: factor) else { return }
+        // Render-buffer preview, exactly as in `updateMove` — see the note
+        // there for why a face drag must not deform through Euclid per frame.
+        var positions = s.previewRender.positions
+        let f = Float(factor)
+        let c = s.previewCenter
+        for i in s.previewMovedVertices { positions[i] = c + (positions[i] - c) * f }
         faceScalePreviewRevision &+= 1
         let revision = (UInt64(1) << 59) | faceScalePreviewRevision
         var transform = Transform3D.identity
         transform.translation = s.pivot
+        let render = RenderMesh(positions: positions,
+                                normals: s.previewRender.normals,
+                                indices: s.previewRender.indices)
         session.preview { document in
             guard let index = document.bodyIndex(of: s.bodyID) else { return }
             document.bodies[index] = Body(
                 id: s.bodyID, name: document.bodies[index].name,
-                transform: transform, primitive: nil,
-                euclidMesh: scaled, revision: revision)
+                transform: transform, render: render,
+                edges: s.previewEdges, revision: revision)
         }
     }
 
@@ -1844,19 +1909,33 @@ final class EditorViewModel {
         // transient revisions from colliding with real ones (like blend/shell).
         if let s = faceMoveSession {
             faceMoveLastDelta = delta
-            guard let moved = faceMovedLocalMesh(s, worldDelta: delta) else { return }
+            // The preview only has to LOOK right, so it translates the picked
+            // vertices of the source's render buffers — 0.5 ms — instead of
+            // deforming through Euclid, which rebuilds every polygon, welds the
+            // result watertight and copies it again to re-pivot: ~370 ms/frame
+            // on a body with a fillet on it (≈3 fps, the reported jank). The
+            // commit below still runs the real Euclid deform, so the geometry
+            // that lands in the document is unchanged. Vertex NORMALS are
+            // carried over untouched, which is exactly what `KernelOps.moveFace`
+            // does with them, so the shading matches too.
+            var positions = s.previewRender.positions
+            let d = SIMD3<Float>(delta)
+            for i in s.previewMovedVertices { positions[i] += d }
             faceMovePreviewRevision &+= 1
             let revision = (UInt64(1) << 60) | faceMovePreviewRevision
             var transform = Transform3D.identity
             transform.translation = s.pivot
+            let render = RenderMesh(positions: positions,
+                                    normals: s.previewRender.normals,
+                                    indices: s.previewRender.indices)
             session.preview { document in
                 guard let index = document.bodyIndex(of: s.bodyID) else { return }
                 document.bodies[index] = Body(
                     id: s.bodyID,
                     name: document.bodies[index].name,
                     transform: transform,
-                    primitive: nil,
-                    euclidMesh: moved,
+                    render: render,
+                    edges: s.previewEdges,
                     revision: revision
                 )
             }
