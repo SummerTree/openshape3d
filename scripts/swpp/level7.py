@@ -658,8 +658,8 @@ def p7_43():
     extrude(wall2, (106, -30), 130, union=[plate])
     extrude(Sketch(top(0)).circle((0, 0), 31), (28, 0), 65, union=[plate])
     revolve(Sketch(front(0)).poly([(31, 0), (36, 0), (31, 5)]), (32.5, 1), (0, 0), (0, 1), union=[plate])
-    extrude(Sketch(top(-1)).circle((0, 0), 25), (0, 0), 70, cut=[plate])
-    ear = Sketch(front(37)).line((-112.5, 0), (-152.5, 0)).arc(C1, 20, 90, nd).line(T1, T2).arc(C2, 13, nd, 180) \
+    extrude(Sketch(top(-11)).circle((0, 0), 25), (0, 0), 80, cut=[plate])
+    ear = Sketch(front(37)).line((-112.5, 0), (-152.5, 0)).arc(C1, 20, 90, nd).line(T1, T2).arc(C2, 13, 180, nd) \
         .line((-112.5, -67), (-112.5, 0)).circle(C1, 8)
     ear = extrude(ear, (-135, -30), 15, new_body=True)
     mirror(ear, (0, 0, 0), (1, 0, 0), keep=True)

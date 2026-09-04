@@ -24,7 +24,7 @@ design), `FREECAD_PLAYBOOK.md` (the FreeCAD-derived hardening ledger),
   every stage checked against a closed form over the bridge. In parallel
   three runner workers on their own simulators (ports 8901–8903) read and
   built the untouched sheets through the palette-equivalent bridge ops:
-  the ledger went from 68 attempted / 60 pass to **114 attempted / 102
+  the ledger went from 68 attempted / 60 pass to **115 attempted / 102
   pass** (Level 4: 10 → 32 attempted, Level 7: 6 → 23, plus 1.13, 1.15,
   10.8A, 14.1/14.3, 15.1's three configurations), with 130 sheets deferred
   for a written reason each. **Seven app errors found by the touch pass,
@@ -2323,7 +2323,7 @@ practice-problems, every sheet printing the finished part's volume, used as
 an outside-in parity harness: read the drawing, build it, score the body's
 volume against the printed number to 0.5 %.
 
-**Where it stands (2026-09-04, evening).** 114 sheets attempted, 102 pass, 12 fail (every fail a drawing that admits two readings whose printed volume picks the one not drawn, or a blend the kernel refuses — see the 4.57 note; none a wrong volume from a correct feature). A further 130 sheets were read and set aside with a written reason each, in `scripts/swpp/deferred.json`. Three sheets (1.1, 2.13, 4.38) were built entirely BY TOUCH on the simulator and score exactly like their bridge recipes; `docs/TOUCH_DRIVING_PLAYBOOK.md` is how.
+**Where it stands (2026-09-04, evening).** 115 sheets attempted, 102 pass, 13 fail (every fail a drawing that admits two readings whose printed volume picks the one not drawn, or a blend the kernel refuses — see the 4.57 note; none a wrong volume from a correct feature). A further 130 sheets were read and set aside with a written reason each, in `scripts/swpp/deferred.json`. Three sheets (1.1, 2.13, 4.38) were built entirely BY TOUCH on the simulator and score exactly like their bridge recipes; `docs/TOUCH_DRIVING_PLAYBOOK.md` is how.
 
 | Level | Title | Sheets | Attempted | Pass |
 |---|---|---|---|---|
@@ -2333,7 +2333,7 @@ volume against the printed number to 0.5 %.
 | 4 | Extrude Cut & Fillet/Chamfer | 70 | 32 | 28 |
 | 5 | Reference Geometry | 15 | 6 | 6 |
 | 6 | Revolve Boss/Cut | 20 | 7 | 5 |
-| 7 | Feature Patterning | 48 | 23 | 21 |
+| 7 | Feature Patterning | 48 | 24 | 21 |
 | 8 | Sweep Boss/Cut | 14 | 3 | 3 |
 | 10 | CSWA Exam Level | 19 | 1 | 1 |
 | 11 | Hole Wizard | 12 | 3 | 3 |

@@ -12,7 +12,7 @@ page carries the same table.*
 ## Reading
 
 - Every attempted sheet that reads unambiguously passes within 0.5 %
-  (most within 0.01 %). Across 114 attempted sheets no correct feature
+  (most within 0.01 %). Across 115 attempted sheets no correct feature
   produced a wrong volume: extrude, cut, union, arcs, ellipses, polygons,
   slots, fillets, chamfers, revolve, open and closed sweeps, mirror,
   linear and circular body patterns, multi-tool subtracts, ribs as
@@ -71,7 +71,7 @@ page carries the same table.*
   relaunched every simulator's app onto one port. Two bridge endpoints
   for driving landed with them: `GET /v1/sketches` and `GET /v1/project`.
 
-# SOLIDWORKS practice problems in openshape3d — 102/114 attempted pass (365 in the database)
+# SOLIDWORKS practice problems in openshape3d — 102/115 attempted pass (365 in the database)
 
 | Level | Title | Problems | Attempted | Pass | Fail | Error |
 |---|---|---|---|---|---|---|
@@ -81,7 +81,7 @@ page carries the same table.*
 | 4 | Extrude Cut & Fillet/Chamfer | 70 | 32 | 28 | 4 | 0 |
 | 5 | Reference Geometry | 15 | 6 | 6 | 0 | 0 |
 | 6 | Revolve Boss/Cut | 20 | 7 | 5 | 2 | 0 |
-| 7 | Feature Patterning | 48 | 23 | 21 | 2 | 0 |
+| 7 | Feature Patterning | 48 | 24 | 21 | 3 | 0 |
 | 8 | Sweep Boss/Cut | 14 | 3 | 3 | 0 | 0 |
 | 9 | Assemblies and Mates | 16 | 0 | 0 | 0 | 0 |
 | 10 | CSWA Exam Level | 19 | 1 | 1 | 0 | 0 |
@@ -225,6 +225,7 @@ page carries the same table.*
 | 7.36 | Extrude Boss, Extrude Cut, Fillets and Chamfers, Mirror Pattern | 82,315 mm³ | 82,622.298 mm³ | +0.37 % | pass |  |
 | 7.38 | Extrude Boss, Extrude Cut, Fillets and Chamfers, Linear Pattern | 3,043,291 mm³ | 3,037,947.651 mm³ | -0.18 % | pass |  |
 | 7.39 | Extrude Boss, Extrude Cut, Fillets and Chamfers, Mirror Pattern | 79,684 mm³ | 79,493.474 mm³ | -0.24 % | pass |  |
+| 7.43 | Extrude Boss, Extrude Cut, Fillets and Chamfers, Reference Geometry: Planes, Mirror Pattern | 749,997 mm³ | 739,027.71 mm³ | -1.46 % | fail |  |
 | 7.48 | Extrude Cut, Revolve, Sketch: Slot, Circular Pattern | 6,277 mm³ | 6,276.574 mm³ | -0.01 % | pass | Slot cutter patterned circularly: the pattern's total angle is the first→last sweep, so two instances 90° apart take 90, not 180. |
 | 7.49 | Extrude Boss, Sketch: Polygon, Extrude Cut, Axis, Circular Pattern | 10,822 mm³ | 10,822.719 mm³ | +0.01 % | pass | Six slot cutters made with Transform › Pattern (circular) from one extruded cutter, then one Combine › Subtract with all six tools. |
 
