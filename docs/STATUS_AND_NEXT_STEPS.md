@@ -1,6 +1,6 @@
 # Status & Next Steps — Handoff Notes
 
-Last updated: 2026-09-04 (SOLIDWORKS practice problems through the UI — see the newest mission log entry; before that: 2026-09-03 SOLIDWORKS practice-problem campaign — extrude end
+Last updated: 2026-09-04 (textured mesh import glTF/USDZ/OBJ + exact OCCT face draft — see the newest mission log entry; before that: SOLIDWORKS practice problems through the UI; 2026-09-03 SOLIDWORKS practice-problem campaign — extrude end
 conditions, B-rep touch commits, draft of an existing face; see the mission
 log just below, and **§4c for the campaign's state and how to resume it**).
 This is the living handoff document: what is DONE, how the newest subsystems
@@ -10,6 +10,56 @@ Companions: `IMPLEMENTATION_PLAN.md` (original phase plan),
 design), `FREECAD_PLAYBOOK.md` (the FreeCAD-derived hardening ledger),
 `TOPO_NAMING_HISTORY_DESIGN.md` (element-naming design, now complete), and
 `AGENT_CONTROL.md` (the `/v1/exec` scripting surface).
+
+## Mission log — 2026-09-04, third session (textured mesh import; exact face draft; 1291/1291 unit tests green)
+
+- **Import OBJ (+MTL/textures), glTF/GLB and USDZ (2026-09-04).** New
+  `Kernel/MeshImportKit.swift`: a self-written glTF 2.0 reader (GLB + JSON,
+  data: URIs and sibling buffers, node TRS/matrix baked into world space,
+  normals computed when a file ships none, PBR base colour + base colour
+  texture, KHR specular-glossiness diffuse as fallback), an OBJ reader that
+  keeps `vt`, honours `usemtl`/`mtllib` and pulls `map_Kd` images from the
+  files that travelled with it, Model I/O for USD (`metersPerUnit` read
+  from text layers, USD's cm default otherwise), and a minimal zip reader
+  (stored + deflate via Compression) so a downloaded archive can be dropped
+  in whole — the `.obj` or `.glb` inside is found and its siblings resolved
+  case-insensitively by path, then by bare name. Units: glTF is metres so
+  ×1000; USD per `metersPerUnit`; OBJ 1:1. Every part becomes a mesh body
+  (pivot at its AABB centre, placement kept in the transform, like STL) in
+  ONE undo step (`EditorViewModel.importMesh`). Import menu: "OBJ / glTF /
+  USDZ…" (`ImportMesh`); bridge: `POST /v1/exec {"op":"document.import",
+  "args":{"path":…}}` reads the file straight off the host, since the
+  simulator shares the Mac's file system.
+- **Textures render.** `RenderMesh.texcoords` (MeshBlob v2; v1 blobs still
+  decode), `BodyMaterialSpec.baseColorTexture` (raw PNG/JPEG bytes,
+  persisted by the synthesized Codable), `BodyMaterial.textureData` on the
+  drawable, `BodyTextureCache` (MTKTextureLoader, mipmapped, keyed by body
+  + mesh revision), `litTextured`/`litTexturedBlended` pipelines and
+  `vertex_/fragment_litTextured` in `Shaders.metal` — the texel multiplies
+  the base colour and then takes the exact lighting/selection/section path
+  `fragment_lit` does, so a textured body highlights and clips like any
+  other. UV origins: glTF's is top-left (Metal's too); OBJ and USD `st` are
+  bottom-left, so those importers flip v. Verified live: a 40 mm checker
+  cube imported from a GLB and from a zipped OBJ+MTL+PNG both render the
+  8×8 checker on every face (64 000 mm³, 12 triangles, `textured: 1`).
+- **Exact face draft on the B-rep path.** `evalDraftFace` now tries OCCT
+  first (`OCCTKernel.draftResult` → `BRepOffsetAPI_DraftAngle`, planar AND
+  cylindrical faces, healed + adopted); the mesh shear stays as the
+  fallback for non-analytic bodies, and a curved face without a brep gets a
+  clear error instead of a silent no-op. Positive angle narrows the body
+  away from the neutral plane — `DraftFaceBRepTests` pins the removed
+  wedge to ½h²·tanθ·d within 1e-3 and checks the hinge edge stays put.
+  This is what the Level 12/13 casting sheets were deferred on.
+- **Tests:** `MeshImportTests` (12: GLB round trip through `GLBExporter`,
+  default m→mm, hand-built textured GLB with node transform, .gltf with a
+  data: URI, zipped OBJ+MTL+PNG with a deflated entry, OBJ without MTL, zip
+  without a model refused, usda + usdz through Model I/O, `metersPerUnit`
+  parsing, MeshBlob v2). Full unit suite 1291/1291 on os3d-unit.
+- **Not done in this session:** the Sketchfab "Mechanical CAD Model
+  Showcase" download the goal named needs a Sketchfab login, which the
+  agent must not perform; the importer was verified on generated fixtures
+  instead. Once the zip is on disk, `document.import` (or the Import menu)
+  is the whole test.
 
 ## Mission log — 2026-09-04, second session (UI-driven practice-problem pass; 1279/1279 unit tests green)
 
@@ -1691,6 +1741,15 @@ first differing frame is the one you want.
     a face sketch's plane origin is the face centroid; a hidden (consumed)
     sketch cannot be tapped for Extrude until the Items panel shows it. All
     three cost screenshots — `docs/TOUCH_DRIVING_PLAYBOOK.md` has the moves.
+51. **`USDZExporter.usdz` returns nil on the simulator** (Model I/O has no
+    USD writer there), so a USDZ round-trip test is impossible; test USD
+    IMPORT with a hand-written `.usda` layer (it reads `.usda`, `.usdc` and
+    `.usdz` fine, and even a stored zip of a usda passes as usdz).
+52. **UV origins differ per format**: glTF (0,0) is the image's top-left,
+    same as Metal; OBJ `vt` and USD `st` are bottom-left. Forgetting the
+    flip renders the texture upside-down with no other symptom.
+53. **`/v1/exec` arguments go under `"args"`** — `{"op":…, "path":…}` is
+    answered with `missing_path`, which reads like a parser bug.
 
 
 ---
