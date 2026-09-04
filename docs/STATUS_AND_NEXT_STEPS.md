@@ -11,6 +11,26 @@ design), `FREECAD_PLAYBOOK.md` (the FreeCAD-derived hardening ledger),
 `TOPO_NAMING_HISTORY_DESIGN.md` (element-naming design, now complete), and
 `AGENT_CONTROL.md` (the `/v1/exec` scripting surface).
 
+## Mission log — 2026-09-04 (landed, 1264/1264 green)
+
+- **Dragging a filleted body killed the app, found and fixed (2026-09-04).**
+  Reported from a live Catalyst session: a drag on a plane trapped the
+  process with `Duplicate values for key: '3'`
+  (`Dictionary(uniqueKeysWithValues:)`) in `FeatureGraph.evalEdgeBlend`, on
+  the rebuild `endMove()` kicks off. The blend node held **158 EdgeRefs over
+  2 kernel edges**: the picker selects MESH SEGMENTS, one tap on a
+  tessellated rim takes the whole tangent chain, and every segment mints the
+  SAME `EdgeName` — so the resolved indices repeat and `edgeParents`, keyed
+  by edge index, trapped on the second copy. The kernel had always deduped
+  (`std::set` in `OS3DBlendByIndices`); only the Swift naming step assumed
+  one ref per edge. Fix: dedupe the resolved indices, preserving pick order,
+  and drive both the kernel call and the name composition from that.
+  `ElementNamingTests.testRepeatedRefsForOneCreaseBlendItOnce` pins it (one
+  crease → exactly ONE chamfer face); reverting just the dedupe reproduces
+  the same fatal error. Re-verified live: r8×10 cylinder, one rim tap = "158
+  edges selected", fillet applied, then two ground-plane moves — both
+  rebuilds clean, volume steady at 2000.13 mm³, `/v1/check` 0 invalid.
+
 ## Mission log — 2026-09-03 (landed, all committed and pushed, 1263/1263 green)
 
 - **SOLIDWORKS practice-problem database, first pass (2026-09-03).** The
