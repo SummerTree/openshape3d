@@ -334,7 +334,7 @@ nonisolated enum OCCTKernel {
                              angleRadians: Double,
                              history: OCCTShapeHistory? = nil) -> BRepHandle? {
         let p = packedProfile(outer, holes: holes)
-        var axis = [axisOrigin.x, axisOrigin.y, axisOrigin.z,
+        let axis = [axisOrigin.x, axisOrigin.y, axisOrigin.z,
                     axisDirection.x, axisDirection.y, axisDirection.z]
         let axisData = axis.withUnsafeBytes { Data($0) }
         return OCCTBridge.revolvedShape(

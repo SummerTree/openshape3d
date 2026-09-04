@@ -8716,7 +8716,8 @@ final class EditorViewModel {
         let solver = definitionSolver
         Task.detached(priority: .userInitiated) { [weak self] in
             let report = solver(sketch)
-            await MainActor.run { self?.definitionSolveDidFinish(sketch, report) }
+            guard let self else { return }
+            await MainActor.run { self.definitionSolveDidFinish(sketch, report) }
         }
     }
 

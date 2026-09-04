@@ -230,7 +230,7 @@ nonisolated enum AgentExec {
             }
             var entities: [SketchEntity] = []
             for (i, item) in raw.enumerated() {
-                switch try entity(item, index: i) {
+                switch entity(item, index: i) {
                 case .success(let e): entities.append(e)
                 case .failure(let f): return .failure(f)
                 }

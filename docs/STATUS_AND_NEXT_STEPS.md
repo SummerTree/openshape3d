@@ -50,10 +50,15 @@ design), `FREECAD_PLAYBOOK.md` (the FreeCAD-derived hardening ledger),
   written on the main actor and read from Euclid's CSG worker threads
   (`KernelOps.boolean` passed the getter in un-`@Sendable`). It is now an
   `OSAllocatedUnfairLock` and the closure is `@Sendable`, so the conformance
-  is checked rather than asserted. The 10 that remain: 3 ld search-path
-  (an Xcode Metal-toolchain cryptex path), 1 vendored `sprintf` deprecation,
-  1 AppIntents note, 2 `var`->`let`, 1 no-op `try`, 1 `[weak self]` capture
-  Swift 6 will reject, and an AppIcon set with 20 unassigned children.
+  is checked rather than asserted. A follow-up pass took the last five of
+  ours: two `var`->`let`, a no-op `try` on the non-throwing
+  `AgentExec.entity`, the `[weak self]` capture Swift 6 rejects (strongify
+  BEFORE the actor hop), and the AppIcon set's 20 "unassigned children" —
+  which turned out to be a full watchOS icon family, entries AND pngs, in a
+  project whose `SUPPORTED_PLATFORMS` is `iphoneos iphonesimulator macosx`
+  with no watch target anywhere. **125 -> 5, and all five left are outside
+  our sources**: 3 ld search-path lines (an Xcode Metal-toolchain cryptex
+  path), the vendored OCCT `sprintf` deprecation, and an AppIntents note.
 
 ## Mission log — 2026-09-03 (landed, all committed and pushed, 1263/1263 green)
 

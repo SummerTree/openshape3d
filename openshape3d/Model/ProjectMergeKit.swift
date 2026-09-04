@@ -42,7 +42,7 @@ nonisolated enum ProjectMergeKit {
         _ guest: DesignDocument, into host: DesignDocument,
         translation: SIMD3<Double> = .zero
     ) -> Insertion {
-        var map = IDMap(guest)
+        let map = IDMap(guest)
         var merged = host
 
         // Sketches, planes, images, symbols: identity re-minted, geometry kept.
