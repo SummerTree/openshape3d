@@ -198,7 +198,11 @@ final class BlendUITests: XCTestCase {
         shot("drag-armed")
 
         // Drag the arrow toward the body interior (the way it points) to grow.
-        dragPullArrow(app, to: p(0.60, 0.55), duration: 0.3)
+        // A short drag: strokes now start at the touch-down (2026-09-04), so
+        // this travels ~10 pt farther than it used to, and the old target
+        // scrubbed the chamfer past what the 6 mm seed box can take (the
+        // preview went invalid and Apply correctly disabled).
+        dragPullArrow(app, to: p(0.56, 0.52), duration: 0.3)
         sleep(1)
         let after = (field.value as? String) ?? ""
         NSLog("OS3D_BUG blendDrag before=\(before) after=\(after)")

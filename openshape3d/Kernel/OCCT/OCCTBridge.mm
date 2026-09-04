@@ -33,6 +33,7 @@
 #include <STEPControl_Reader.hxx>
 #include <IFSelect_ReturnStatus.hxx>
 #include <BRepOffsetAPI_MakeThickSolid.hxx>
+#include <BRepOffsetAPI_DraftAngle.hxx>
 #include <BRepOffsetAPI_MakeOffsetShape.hxx>
 #include <TopTools_IndexedDataMapOfShapeListOfShape.hxx>
 #include <BRepAdaptor_Curve.hxx>
@@ -2847,6 +2848,92 @@ static double OS3DVolume(const TopoDS_Shape &shape) {
         return props.Mass();
     } catch (...) {
         return 0.0;
+    }
+}
+
+
++ (nullable OCCTShape *)draftedShape:(OCCTShape *)shape
+                       atWorldPoints:(NSData *)worldPoints
+                        angleRadians:(double)angleRadians
+                          directionX:(double)dx directionY:(double)dy directionZ:(double)dz
+                      neutralOriginX:(double)ox neutralOriginY:(double)oy neutralOriginZ:(double)oz
+                      neutralNormalX:(double)nx neutralNormalY:(double)ny neutralNormalZ:(double)nz
+                           tolerance:(double)tolerance
+                              status:(nullable OCCTOpStatus *)status {
+    OS3DSetStatus(status, OCCTOpCodeKernelRefused, @"no input");
+    if (shape == nil || fabs(angleRadians) < 1e-9) return nil;
+    const NSUInteger count = worldPoints.length / (3 * sizeof(double));
+    if (count == 0) return nil;
+    const double *pts = (const double *)worldPoints.bytes;
+
+    try {
+        if (!OS3DFiniteBounds(shape->_shape)) {
+            OS3DSetStatus(status, OCCTOpCodeKernelRefused,
+                          @"the body has empty or non-finite geometry");
+            return nil;
+        }
+        int inputSolids = 0;
+        TopoDS_Shape input = OS3DExtractSingleSolid(shape->_shape, inputSolids);
+        if (input.IsNull()) input = shape->_shape;
+
+        TopTools_IndexedMapOfShape faceMap;
+        TopExp::MapShapes(input, TopAbs_FACE, faceMap);
+        const std::set<Standard_Integer> chosen =
+            OS3DNearestFaces(faceMap, pts, count, tolerance);
+        if (chosen.empty()) {
+            OS3DSetStatus(status, OCCTOpCodeNoTargetMatched,
+                          @"no face within tolerance of the pick");
+            return nil;
+        }
+
+        const gp_Dir pull(dx, dy, dz);
+        const gp_Pln neutral(gp_Pnt(ox, oy, oz), gp_Dir(nx, ny, nz));
+        BRepOffsetAPI_DraftAngle mk(input);
+        for (Standard_Integer i : chosen) {
+            const TopoDS_Face face = TopoDS::Face(faceMap(i));
+            // Sign checked against the mesh path (DraftFaceBRepTests): OCCT's
+            // positive angle already NARROWS the section along the pull
+            // direction, matching the app's convention.
+            mk.Add(face, pull, angleRadians, neutral, Standard_True);
+            if (!mk.AddDone()) {
+                OS3DSetStatus(status, OCCTOpCodeKernelRefused,
+                              [NSString stringWithFormat:
+                               @"draft: face %d cannot take this draft (it may be "
+                               @"parallel to the neutral plane, or the angle too large)",
+                               (int)i]);
+                return nil;
+            }
+        }
+        mk.Build();
+        if (!mk.IsDone() || mk.Shape().IsNull()) {
+            OS3DSetStatus(status, OCCTOpCodeKernelRefused,
+                          @"draft: the kernel could not rebuild the drafted faces");
+            return nil;
+        }
+        const TopoDS_Shape valid = OS3DHealAndValidate(mk.Shape());
+        if (valid.IsNull()) {
+            OS3DSetStatus(status, OCCTOpCodeInvalidResult,
+                          @"draft: the drafted solid failed validity checking");
+            return nil;
+        }
+        int outSolids = 0;
+        const TopoDS_Shape single = OS3DExtractSingleSolid(valid, outSolids);
+        if (single.IsNull()) {
+            OS3DSetStatus(status, OCCTOpCodeMultiSolid,
+                          @"draft: the result is not a single solid");
+            return nil;
+        }
+        OS3DSetStatus(status, OCCTOpCodeOK, nil);
+        OCCTShape *out = [OCCTShape new];
+        out->_shape = single;
+        return out;
+    } catch (Standard_Failure &e) {
+        OS3DSetStatus(status, OCCTOpCodeKernelRefused,
+                      [NSString stringWithFormat:@"%s", e.GetMessageString()]);
+        return nil;
+    } catch (...) {
+        OS3DSetStatus(status, OCCTOpCodeKernelRefused, @"kernel exception");
+        return nil;
     }
 }
 

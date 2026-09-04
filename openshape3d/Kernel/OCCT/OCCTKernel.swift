@@ -841,6 +841,40 @@ nonisolated enum OCCTKernel {
         return .success(BRepHandle(shape))
     }
 
+    /// Exact face draft (`BRepOffsetAPI_DraftAngle`): the faces nearest the
+    /// picked points tilt by `degrees` about their intersection with the
+    /// neutral plane, pulled along `neutralNormal`. Positive narrows the
+    /// body away from the neutral plane — the mesh path's sign
+    /// (`KernelOps.draftFace`), so a node evaluates the same either way.
+    static func draftResult(_ handle: BRepHandle, facesAt points: [SIMD3<Double>],
+                            degrees: Double, neutralOrigin: SIMD3<Double>,
+                            neutralNormal: SIMD3<Double>, tolerance: Double)
+        -> Result<BRepHandle, OCCTOpError> {
+        guard !points.isEmpty, abs(degrees) > 1e-9, simd_length(neutralNormal) > 1e-9 else {
+            return .failure(.kernelRefused("nothing to draft"))
+        }
+        let n = simd_normalize(neutralNormal)
+        let status = OCCTOpStatus()
+        guard let shape = OCCTBridge.draftedShape(
+            handle.shape, atWorldPoints: pack(points),
+            angleRadians: degrees * .pi / 180,
+            directionX: n.x, directionY: n.y, directionZ: n.z,
+            neutralOriginX: neutralOrigin.x, neutralOriginY: neutralOrigin.y, neutralOriginZ: neutralOrigin.z,
+            neutralNormalX: n.x, neutralNormalY: n.y, neutralNormalZ: n.z,
+            tolerance: tolerance, status: status) else {
+            let error = OCCTOpError(status)
+            KernelCapture.recordFailure(
+                op: "draftFace", inputs: [("shape", handle)],
+                params: ["degrees": degrees, "tolerance": tolerance,
+                         "points": points.map { [$0.x, $0.y, $0.z] },
+                         "neutralOrigin": [neutralOrigin.x, neutralOrigin.y, neutralOrigin.z],
+                         "neutralNormal": [n.x, n.y, n.z]],
+                error: error)
+            return .failure(error)
+        }
+        return .success(BRepHandle(shape))
+    }
+
     static func shell(_ handle: BRepHandle, openingAt points: [SIMD3<Double>],
                       thickness: Double, tolerance: Double) -> BRepHandle? {
         try? shellResult(handle, openingAt: points, thickness: thickness,

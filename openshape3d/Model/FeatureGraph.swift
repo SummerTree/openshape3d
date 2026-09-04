@@ -1324,12 +1324,50 @@ nonisolated extension FeatureGraph {
         }
         let table = state.faceTables[body.id]
         guard let resolved = state.naming.resolve(face, in: body, table: table),
-              let planar = resolved.planar else {
+              resolved.planar != nil || resolved.cylinder != nil else {
             state.errors[node.id] = .brokenRef("draftFace face did not resolve")
             return
         }
         proposeUpgrade(node, ref: face, resolved: resolved, into: &state)
 
+        // B-rep draft first (2026-09-04): `BRepOffsetAPI_DraftAngle` tilts the
+        // real face about its intersection with the neutral plane, so a
+        // drafted casting stays analytic — filletable, shellable, exportable —
+        // where the mesh path below only shears render polygons and left the
+        // body mesh-only (the Level 12/13 practice sheets stopped there). The
+        // picked face is handed to OCCT by a point on it, like the shell's
+        // openings. A brep body whose OCCT draft is refused falls through to
+        // the mesh path rather than erroring: the mesh result is the same
+        // geometry to within the tessellation, unlike a failed blend.
+        if OCCTKernel.useOCCTAsSourceOfTruth, let brep = body.brep,
+           let point = Self.pointOnFace(resolved, mesh: body.render) {
+            let worldPoint = body.transform.applying(to: point)
+            if case let .success(drafted) = OCCTKernel.draftResult(
+                brep, facesAt: [worldPoint], degrees: degrees,
+                neutralOrigin: neutralOrigin, neutralNormal: neutralNormal,
+                tolerance: OCCTKernel.matchTolerance(for: brep)) {
+                var result = Body(
+                    id: body.id, name: body.name, transform: body.transform, primitive: nil,
+                    euclidMesh: body.euclidMesh(), revision: nextRevision())
+                if result.adoptBRep(drafted) {
+                    let newTable: FaceTable
+                    if let table {
+                        newTable = state.naming.propagate(inputs: [table], output: result, op: .pushPull)
+                    } else {
+                        newTable = state.naming.faceTable(for: result, createdBy: node.id, scheme: .generic)
+                    }
+                    state.put(result, table: newTable)
+                    return
+                }
+            }
+        }
+
+        // The mesh shear only knows planar faces; a curved face that the
+        // kernel declined stays an honest error rather than a guess.
+        guard let planar = resolved.planar else {
+            state.errors[node.id] = .kernelFailure("draft: the kernel declined to draft this curved face")
+            return
+        }
         let mesh = KernelOps.draftFace(
             mesh: body.euclidMesh(), face: planar,
             neutralOrigin: neutralOrigin, neutralNormal: neutralNormal, degrees: degrees)
@@ -1347,6 +1385,37 @@ nonisolated extension FeatureGraph {
             newTable = state.naming.faceTable(for: result, createdBy: node.id, scheme: .generic)
         }
         state.put(result, table: newTable)
+    }
+
+    /// A body-local point ON the resolved face, to hand the face to the
+    /// kernel by proximity: a planar face's outline centroid; for a
+    /// cylindrical face the centroid of its facets pushed radially onto the
+    /// true surface (the facet centroid itself sits a hair inside the
+    /// cylinder, and a whole-wall centroid would sit on the axis).
+    private static func pointOnFace(_ resolved: ResolvedFace, mesh: RenderMesh) -> SIMD3<Double>? {
+        if let planar = resolved.planar {
+            let count = Double(max(planar.outline.count, 1))
+            let c = planar.outline.reduce(SIMD2<Double>.zero, +) / count
+            return planar.origin + planar.basisX * c.x + planar.basisY * c.y
+        }
+        guard let cyl = resolved.cylinder, !cyl.triangles.isEmpty else { return nil }
+        var sum = SIMD3<Double>.zero
+        var n = 0.0
+        for t in cyl.triangles where t * 3 + 2 < mesh.indices.count {
+            for k in 0..<3 {
+                let p = mesh.positions[Int(mesh.indices[t * 3 + k])]
+                sum += SIMD3(Double(p.x), Double(p.y), Double(p.z)); n += 1
+            }
+        }
+        guard n > 0 else { return nil }
+        let centroid = sum / n
+        let axis = simd_normalize(cyl.axisDir)
+        let along = simd_dot(centroid - cyl.axisPoint, axis)
+        let onAxis = cyl.axisPoint + axis * along
+        var radial = centroid - onAxis
+        guard simd_length(radial) > 1e-9 else { return nil }
+        radial = simd_normalize(radial) * cyl.radius
+        return onAxis + radial
     }
 
     // MARK: Chamfer / Fillet (edge blends)
