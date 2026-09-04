@@ -1392,11 +1392,19 @@ nonisolated extension FeatureGraph {
                 return edgeNames.first { $0.value == name }?.key
             }
             if indices.count == edgeRefs.count {
+                // MANY refs can name ONE kernel edge: the picker selects mesh
+                // segments, and a tessellated rim is a long chain of them over
+                // a single OCCT edge, so every segment mints the same EdgeName.
+                // Blend each crease once — duplicates are the same edge, the
+                // kernel dedupes them anyway, and `edgeParents` below is keyed
+                // BY INDEX (a repeat used to trap the whole app on rebuild).
+                var seen = Set<Int>()
+                let unique = indices.filter { seen.insert($0).inserted }
                 let blended = isFillet
                     ? OCCTKernel.filletResultWithAncestry(
-                        brep, edgeIndices: indices, radius: amount)
+                        brep, edgeIndices: unique, radius: amount)
                     : OCCTKernel.chamferResultWithAncestry(
-                        brep, edgeIndices: indices, distance: amount)
+                        brep, edgeIndices: unique, distance: amount)
                 switch blended {
                 case let .success((handle, ancestry)):
                     var result = Body(
@@ -1411,7 +1419,7 @@ nonisolated extension FeatureGraph {
                     // inherit, and each blend face is named FOR ITS CREASE —
                     // opFace(parents: the crease's two face names).
                     let edgeParents = Dictionary(uniqueKeysWithValues:
-                        indices.compactMap { index -> (Int, [ElementName])? in
+                        unique.compactMap { index -> (Int, [ElementName])? in
                             edgeNames[index].map { (index, [$0.faceA, $0.faceB]) }
                         })
                     let outNames = ElementNaming.composeNames(

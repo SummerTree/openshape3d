@@ -952,6 +952,40 @@ final class ElementNamingTests: XCTestCase {
                        "the chamfer face is named for its crease: \(names)")
     }
 
+    /// REPEATED refs for ONE kernel edge. The picker selects mesh segments,
+    /// and a tessellated rim is a chain of them over a single OCCT edge, so
+    /// every segment mints the SAME EdgeName and the node legitimately stores
+    /// the crease many times over. Composing the blend's face names keyed by
+    /// edge index used to trap the whole process ("Duplicate values for key")
+    /// on every rebuild of such a node — the app died mid-drag.
+    func testRepeatedRefsForOneCreaseBlendItOnce() throws {
+        let fixture = ModifierFixture()
+        let base = evaluate(fixture.nodes, fixture.sketches)
+        XCTAssertTrue(base.errors.isEmpty, "\(base.errors)")
+        let (chamfer, ridge) = try chamferNode(for: fixture, from: base)
+        guard case let .chamfer(body, edges, setback) = chamfer.kind else {
+            return XCTFail("the fixture builds a chamfer node")
+        }
+        // The same crease, as three picked segments.
+        let repeated = FeatureNode(
+            id: chamfer.id, name: chamfer.name,
+            kind: .chamfer(body: body, edges: edges + edges + edges,
+                           setback: setback),
+            outputBodyIDs: chamfer.outputBodyIDs)
+
+        let result = evaluate(fixture.nodes + [repeated], fixture.sketches)
+        XCTAssertTrue(result.errors.isEmpty, "\(result.errors)")
+        let names = try XCTUnwrap(result.faceTables[fixture.slabID])
+            .entries.compactMap(\.elementName)
+        let creaseFaces = names.filter { name in
+            guard case let .opFace(operation, parents, _) = name.source,
+                  operation == repeated.id else { return false }
+            return parents.contains(ridge.faceA) && parents.contains(ridge.faceB)
+        }
+        XCTAssertEqual(creaseFaces.count, 1,
+                       "one crease, one chamfer face — not one per ref: \(names)")
+    }
+
     /// Names flow THROUGH the blend into later ops: a second cut after the
     /// chamfer still composes — its own hole walls named, the slab's bottom
     /// cap still carrying its original identity two ops later.
