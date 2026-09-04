@@ -1750,6 +1750,17 @@ first differing frame is the one you want.
     flip renders the texture upside-down with no other symptom.
 53. **`/v1/exec` arguments go under `"args"`** — `{"op":…, "path":…}` is
     answered with `missing_path`, which reads like a parser bug.
+54. **XCUITest drags used to be short-changed.** A synthetic
+    `press(thenDragTo:)` moves fast, so the one-finger pan recognizer's
+    `.began` location was well ALONG the stroke, and every UI-test circle,
+    rect and pull-arrow scrub was shorter than the coordinates asked for.
+    Since the touch-down capture (2026-09-04) strokes run their full
+    length: a circle that now reaches the next stroke's start gets RESIZED
+    by it (entity grab tolerance ≈0.5 mm ≈ 45 pt zoomed in — that was
+    `SweepLoftUITests`), and an arrow scrub that used to move 0.5 mm moves
+    the whole 2.3 mm (`BlendUITests`). Measure test drags from the handle
+    with `withOffset`, keep them short, and keep strokes a full grab
+    tolerance apart.
 
 
 ---
