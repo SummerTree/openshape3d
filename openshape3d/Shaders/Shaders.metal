@@ -120,6 +120,80 @@ fragment float4 fragment_lit(
     return float4(color, alpha);
 }
 
+// MARK: - Lit + albedo texture (imported OBJ / glTF / USDZ bodies)
+
+struct LitTexturedOut {
+    float4 position [[position]];
+    float3 worldPosition;
+    float3 worldNormal;
+    float2 uv;
+};
+
+vertex LitTexturedOut vertex_litTextured(
+    uint vid [[vertex_id]],
+    const device float3 *positions [[buffer(BufferIndexPositions)]],
+    const device float3 *normals [[buffer(BufferIndexNormals)]],
+    const device float2 *texcoords [[buffer(BufferIndexTexcoords)]],
+    constant FrameUniforms &frame [[buffer(BufferIndexFrameUniforms)]],
+    constant BodyUniforms &body [[buffer(BufferIndexBodyUniforms)]]
+) {
+    float4 world = body.modelMatrix * float4(positions[vid], 1.0);
+    LitTexturedOut out;
+    out.position = frame.viewProjectionMatrix * world;
+    out.worldPosition = world.xyz;
+    out.worldNormal = normalize((body.modelMatrix * float4(normals[vid], 0.0)).xyz);
+    out.uv = texcoords[vid];
+    return out;
+}
+
+/// The `fragment_lit` model with the albedo read from the texture (times the
+/// material's baseColor factor), so an imported textured part shades like a
+/// native body — same lights, same selection tint, same section clip.
+fragment float4 fragment_litTextured(
+    LitTexturedOut in [[stage_in]],
+    constant FrameUniforms &frame [[buffer(BufferIndexFrameUniforms)]],
+    constant BodyUniforms &body [[buffer(BufferIndexBodyUniforms)]],
+    texture2d<float> tex [[texture(0)]]
+) {
+    if (sectionClipped(in.worldPosition, frame)) {
+        discard_fragment();
+    }
+    constexpr sampler linearSampler(mag_filter::linear, min_filter::linear,
+                                    mip_filter::linear, address::repeat);
+    float4 texel = tex.sample(linearSampler, in.uv);
+    float3 N = normalize(in.worldNormal);
+    float3 V = normalize(frame.cameraPosition.xyz - in.worldPosition);
+    float3 L = normalize(-frame.keyLightDirection.xyz);
+
+    float3 albedo = texel.rgb * body.baseColor.rgb;
+    float alpha = body.baseColor.a * texel.a;
+    if (body.selectionState == SelectionStateSelected) {
+        albedo = mix(albedo, frame.accentColor.rgb, 0.45);
+    } else if (body.selectionState == SelectionStateHovered) {
+        albedo = mix(albedo, frame.accentColor.rgb, 0.18);
+    } else if (body.selectionState == SelectionStatePreview) {
+        albedo = mix(albedo, frame.accentColor.rgb, 0.30);
+        alpha = 0.55;
+    }
+    float ndl = saturate(dot(N, L)) * 0.5 + 0.5;
+    float3 hemi = mix(frame.groundColor.rgb, frame.skyColor.rgb, N.y * 0.5 + 0.5);
+    float3 H = normalize(L + V);
+    float specPower = 48.0;
+    float specStrength = 0.30;
+    if (body.roughness > 0.0) {
+        float r = clamp(body.roughness, 0.05, 1.0);
+        specPower = exp2(mix(9.0, 1.5, r));
+        specStrength = mix(0.85, 0.06, r);
+    }
+    float3 specTint = mix(float3(1.0), albedo, body.metallic);
+    float3 spec = pow(saturate(dot(N, H)), specPower) * specStrength * specTint;
+    float rim = pow(1.0 - saturate(dot(N, V)), 3.0) * 0.12;
+    float3 rimColor = (body.selectionState == SelectionStateSelected)
+        ? frame.accentColor.rgb : float3(1.0);
+    float3 diffuse = albedo * (hemi * 0.45 + ndl * 0.70) * (1.0 - body.metallic * 0.55);
+    return float4(diffuse + spec + rim * rimColor, alpha);
+}
+
 // MARK: - Unlit flat color (gizmo, generic lines)
 
 struct UnlitOut {

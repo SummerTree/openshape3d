@@ -383,6 +383,67 @@ final class EditorViewModel {
         }
     }
 
+    /// Mesh import for glTF/GLB, USDZ and OBJ (+MTL/textures, alone or in a
+    /// zip). Every part becomes its own body — texture coordinates and the
+    /// albedo image ride along on the mesh and material — and all of them
+    /// land as ONE undo step, like STEP.
+    func importMesh(data: Data, fileName: String) {
+        let parts: [ImportedPart]
+        do {
+            parts = try MeshImportKit.parts(from: data, fileName: fileName)
+        } catch MeshImportError.unsupportedFormat(let what) {
+            errorMessage = "Couldn't import “\(fileName)” — \(what.isEmpty ? "unknown" : what) files aren't supported."
+            return
+        } catch MeshImportError.empty {
+            errorMessage = "Couldn't import “\(fileName)” — no triangle meshes found."
+            return
+        } catch {
+            errorMessage = "Couldn't import “\(fileName)” — \(error)."
+            return
+        }
+        let stem = (fileName as NSString).deletingPathExtension
+        let fallback = stem.isEmpty ? "Imported" : stem
+        var document = session.document
+        var bodies: [Body] = []
+        for part in parts where part.mesh.indices.count >= 3 {
+            // Pivot at the part's AABB centre, like STL; the file's placement
+            // survives in the transform.
+            var mesh = part.mesh
+            let aabb = mesh.localAABB
+            let center = (aabb.min + aabb.max) * 0.5
+            for i in mesh.positions.indices { mesh.positions[i] -= center }
+            var transform = Transform3D.identity
+            transform.translation = SIMD3<Double>(center)
+            let base = part.name.trimmingCharacters(in: .whitespaces)
+            var body = Body(
+                id: BodyID(),
+                name: document.uniqueBodyName(base: base.isEmpty || base == "Part" ? fallback : base),
+                transform: transform,
+                primitive: nil,
+                render: mesh,
+                revision: document.nextRevision())
+            body.material = part.material?.clamped
+            document.bodies.append(body)
+            bodies.append(body)
+        }
+        guard !bodies.isEmpty else {
+            errorMessage = "Couldn't import “\(fileName)” — no triangle meshes found."
+            return
+        }
+        cancelTransientPicks()
+        session.perform(CompositeCommand(
+            title: "Import \(fallback)",
+            commands: bodies.map { AddBodyCommand(body: $0, title: "Import \($0.name)") }))
+        selection = Set(bodies.map(\.id))
+        mode = .idle
+        cameraControl?.fitScene()
+        let textured = bodies.filter { $0.material?.baseColorTexture != nil }.count
+        if bodies.count > 1 || textured > 0 {
+            showNotice("Imported \(bodies.count) part\(bodies.count == 1 ? "" : "s")"
+                       + (textured > 0 ? ", \(textured) textured" : "") + ".")
+        }
+    }
+
     func saveThumbnail() {
         if let data = thumbnailProvider?() {
             session.project.thumbnail = data
@@ -515,7 +576,11 @@ final class EditorViewModel {
                             Float($0.baseColor.z), Float($0.baseColor.w)
                         ),
                         metallic: Float($0.metallic),
-                        roughness: Float($0.roughness)
+                        roughness: Float($0.roughness),
+                        // Only a mesh with texcoords can sample it; a
+                        // rebuilt (boolean'd, blended) body drops both.
+                        textureData: body.render.texcoords == nil ? nil : $0.baseColorTexture,
+                        textureRevision: body.meshRevision
                     )
                 }
             ))

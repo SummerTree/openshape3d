@@ -203,7 +203,7 @@ struct EditorView: View {
     /// one in the chain (found 2026-08-29 while wiring STEP: "Image from
     /// Files…" presented, the three above it did not).
     private enum ImportRequest: Equatable {
-        case stl, dxf, step, image
+        case stl, dxf, step, mesh, image
 
         var contentTypes: [UTType] {
             switch self {
@@ -214,6 +214,9 @@ struct EditorView: View {
             // hatch the `.os3d` archive importer already uses.
             case .dxf: [ExportDocument.dxfType, .data]
             case .step: [ExportDocument.stepType, .data]
+            // glTF/GLB, USDZ, OBJ (+MTL/textures) and zips of them. `.data`
+            // again: .glb/.gltf/.obj have no system UTI worth trusting.
+            case .mesh: [ExportDocument.usdzType, .zip, .data]
             case .image: [.png, .jpeg, .image]
             }
         }
@@ -793,6 +796,13 @@ struct EditorView: View {
                 showImporter = true
             }
             .accessibilityIdentifier("ImportSTEP")
+            // Textured meshes: glTF/GLB, USDZ, OBJ with its MTL and images,
+            // or a zip holding any of them. Parts become mesh bodies.
+            Button("OBJ / glTF / USDZ…") {
+                importRequest = .mesh
+                showImporter = true
+            }
+            .accessibilityIdentifier("ImportMesh")
             Divider()
             // Insert Image (plan §B10, spec §6.3): the picked
             // picture waits for a plane tap (ground by default).
@@ -1569,6 +1579,7 @@ struct EditorView: View {
         case .stl: viewModel.importSTL(data: data, fileName: name)
         case .dxf: viewModel.importDXF(data: data, fileName: name)
         case .step: viewModel.importSTEP(data: data, fileName: name)
+        case .mesh: viewModel.importMesh(data: data, fileName: name)
         case .image: viewModel.beginInsertImage(data: data)
         }
     }

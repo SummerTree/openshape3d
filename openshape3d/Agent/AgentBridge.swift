@@ -191,6 +191,26 @@ final class AgentBridge {
 
         switch op {
 
+        case let .importFile(path, fileName):
+            let url = URL(fileURLWithPath: path)
+            guard let data = try? Data(contentsOf: url) else {
+                return .failure(404, "Not Found", error: "unreadable_path",
+                                message: "Could not read \(path).")
+            }
+            let before = Set(session.document.bodies.map(\.id))
+            viewModel.errorMessage = nil
+            viewModel.importMesh(data: data, fileName: fileName ?? url.lastPathComponent)
+            if let message = viewModel.errorMessage {
+                return .failure(422, "Unprocessable Entity", error: "import_failed", message: message)
+            }
+            let added = session.document.bodies.filter { !before.contains($0.id) }
+            return execOK(viewModel, [
+                "bodyIDs": added.map { $0.id.raw.uuidString },
+                "names": added.map(\.name),
+                "textured": added.filter { $0.material?.baseColorTexture != nil }.count,
+                "triangles": added.reduce(0) { $0 + $1.render.indices.count / 3 },
+                "undoSteps": 1])
+
         case let .createSketch(name, plane):
             let sketch = Sketch(name: name, plane: plane)
             session.perform(AddSketchCommand(sketch: sketch, title: "Add \(name)"))

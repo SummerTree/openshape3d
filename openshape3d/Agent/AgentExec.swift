@@ -60,6 +60,10 @@ nonisolated struct LoftSection: Sendable, Equatable {
 
 nonisolated enum AgentExecOp: Sendable, Equatable {
     case createSketch(name: String, plane: SketchPlane)
+    /// Import a mesh file (glb/gltf/usdz/obj/zip) from a path on the host
+    /// — the simulator shares the Mac's file system — exactly as the Import
+    /// menu would. `fileName` overrides the name the parts are labelled with.
+    case importFile(path: String, fileName: String?)
     case addEntities(sketch: SketchID, entities: [SketchEntity], constructionIndices: Set<Int>)
     /// `taperDegrees` ≠ 0 makes this a DRAFT extrude (the profile lofts to an
     /// offset copy, walls sloped by the angle — cast/mould release); 0 is a
@@ -167,6 +171,7 @@ nonisolated enum AgentExec {
 
         switch op {
         case "sketch.create":      return parseCreateSketch(args)
+        case "document.import":    return parseImportFile(args)
         case "sketch.addEntities": return parseAddEntities(args)
         case "feature.extrude":    return parseExtrude(args)
         case "feature.revolve":    return parseRevolve(args)
@@ -193,6 +198,14 @@ nonisolated enum AgentExec {
     }
 
     // MARK: Ops
+
+    private static func parseImportFile(_ a: [String: Any]) -> Result<AgentExecOp, AgentExecError> {
+        guard let path = a["path"] as? String, !path.isEmpty else {
+            return .failure(.init(code: "missing_path",
+                                  message: "\"path\" is required (an absolute file path on the host)."))
+        }
+        return .success(.importFile(path: path, fileName: a["fileName"] as? String))
+    }
 
     private static func parseCreateSketch(_ a: [String: Any]) -> Result<AgentExecOp, AgentExecError> {
         let name = a["name"] as? String ?? "Sketch"

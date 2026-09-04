@@ -21,6 +21,11 @@ nonisolated struct BodyMaterialSpec: Codable, Equatable, Sendable {
     var metallic: Double = 0
     /// 0 keeps the legacy fixed highlight; > 0 widens/softens it.
     var roughness: Double = 0
+    /// Encoded image bytes (PNG/JPEG) multiplied into `baseColor` where the
+    /// body's mesh carries texture coordinates — how an imported OBJ, glTF or
+    /// USDZ keeps its look. Nil for every modelled body. Optional in the
+    /// JSON, so pre-texture material records decode unchanged.
+    var baseColorTexture: Data? = nil
 
     /// The document default — identical to the pre-material body color and
     /// shading, so assigning it changes nothing visually.
@@ -33,7 +38,8 @@ nonisolated struct BodyMaterialSpec: Codable, Equatable, Sendable {
         BodyMaterialSpec(
             baseColor: simd_clamp(baseColor, SIMD4(repeating: 0), SIMD4(repeating: 1)),
             metallic: min(max(metallic, 0), 1),
-            roughness: min(max(roughness, 0), 1)
+            roughness: min(max(roughness, 0), 1),
+            baseColorTexture: baseColorTexture
         )
     }
 }
