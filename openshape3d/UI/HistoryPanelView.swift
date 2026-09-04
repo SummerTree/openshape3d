@@ -530,7 +530,7 @@ private struct HistoryRowView: View {
         onEditPatternAngle(value)
     }
 
-    private static func fmt(_ v: Double) -> String {
+    private nonisolated static func fmt(_ v: Double) -> String {
         String(format: "%g", (v * 1000).rounded() / 1000)
     }
 }

@@ -2120,9 +2120,6 @@ nonisolated extension FeatureGraph {
                 case let .failure(error):
                     state.errors[node.id] = .kernelFailure("sweep hole cut: \(error.message)")
                     return
-                case nil:
-                    state.errors[node.id] = .kernelFailure("sweep hole cut failed")
-                    return
                 }
             }
             brep = solid
@@ -2346,9 +2343,6 @@ nonisolated extension FeatureGraph {
                 case let .failure(error):
                     state.errors[node.id] = .kernelFailure("draft-extrude hole cut: \(error.message)")
                     return
-                case nil:
-                    state.errors[node.id] = .kernelFailure("draft-extrude hole cut failed")
-                    return
                 }
             }
             brep = solid
@@ -2505,7 +2499,7 @@ nonisolated extension FeatureGraph {
 
 /// Mutable replay state: the live bodies (with a stable creation order), their
 /// face tables, accumulated errors, and the sketch/plane inputs + resolvers.
-private struct EvalState {
+private nonisolated struct EvalState {
     let sketches: [Sketch]
     let planes: [ConstructionPlane]
     let naming: TopoNaming
@@ -2655,7 +2649,7 @@ private struct EvalState {
 
 // MARK: - Small mappings
 
-private extension BooleanIntent.Op {
+private nonisolated extension BooleanIntent.Op {
     /// The kernel boolean for this intent, or nil for `.newBody`.
     var kernelKind: BooleanKind? {
         switch self {

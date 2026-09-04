@@ -34,7 +34,7 @@ extension CommandRegistry {
     /// against the catalog: adding a chorded command without routing it shows
     /// up in `unroutedChordedCommands` instead of silently doing nothing when
     /// the user presses the key.
-    static let routableIDs: Set<String> = [
+    nonisolated static let routableIDs: Set<String> = [
         // Sketch tools — the tutorial's C / A / L / R / T / G.
         "sketch.line", "sketch.rectangle", "sketch.circle", "sketch.arc",
         "sketch.ellipse", "sketch.polygon", "sketch.text", "sketch.trim",
@@ -88,7 +88,7 @@ extension CommandRegistry {
     /// does nothing when chosen is the same silent failure as a hotkey that
     /// does nothing, and harder to explain because the user just read the name
     /// off a list. `CommandSearchTests` pins the two sets together.
-    static var launchableCommands: [AppCommand] {
+    nonisolated static var launchableCommands: [AppCommand] {
         all.filter {
             routableIDs.contains($0.id)
                 && $0.id != "app.commandSearch" && $0.id != "app.commandSearchAlt"
@@ -274,7 +274,7 @@ extension EditorViewModel {
 extension CommandRegistry {
     /// `command(id:)` is an instance method; the dispatcher only needs the
     /// catalog, so this avoids threading a registry through just to read it.
-    static func command(inCatalog id: String) -> AppCommand? {
+    nonisolated static func command(inCatalog id: String) -> AppCommand? {
         all.first { $0.id == id }
     }
 }

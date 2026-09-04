@@ -31,6 +31,30 @@ design), `FREECAD_PLAYBOOK.md` (the FreeCAD-derived hardening ledger),
   edges selected", fillet applied, then two ground-plane moves — both
   rebuilds clean, volume steady at 2000.13 mm³, `/v1/check` 0 invalid.
 
+- **Build-warning sweep: 125 -> 10 (2026-09-04).** A clean Catalyst build
+  (the config the drag crash was reported from) carried 125 warnings. Four
+  fixes cleared 115 of them. (1) 55 were `-Wdocumentation` inside the
+  VENDORED OCCT headers (44 from `StepData_ConfParameters.hxx` alone) and
+  none in our own bridge header, so the app target sets
+  `CLANG_WARN_DOCUMENTATION_COMMENTS = NO` — the project-level `YES` still
+  covers every other target. (2) 50 were gotcha 6 again — MainActor default
+  isolation, helpers never marked `nonisolated` — and collapsed to FIVE
+  annotations: `EvalState` (37 call sites on its own), the private `Data`
+  byte-reinterpret extension, `BooleanIntent.Op.kernelKind`,
+  `HistoryPanelView.fmt`, and `CommandRegistry`'s catalog lookups. All are
+  pure values; Swift 6 would have made every one a hard error. (3) Two dead
+  `case nil:` arms on a non-optional `Result` (the sweep and draft-extrude
+  hole cuts) deleted — unreachable since `booleanResultWithAncestry` stopped
+  returning an Optional, and `.failure` already reports better. (4) A REAL
+  race: `CancelToken` was `@unchecked Sendable` around a bare mutable `Bool`,
+  written on the main actor and read from Euclid's CSG worker threads
+  (`KernelOps.boolean` passed the getter in un-`@Sendable`). It is now an
+  `OSAllocatedUnfairLock` and the closure is `@Sendable`, so the conformance
+  is checked rather than asserted. The 10 that remain: 3 ld search-path
+  (an Xcode Metal-toolchain cryptex path), 1 vendored `sprintf` deprecation,
+  1 AppIntents note, 2 `var`->`let`, 1 no-op `try`, 1 `[weak self]` capture
+  Swift 6 will reject, and an AppIcon set with 20 unassigned children.
+
 ## Mission log — 2026-09-03 (landed, all committed and pushed, 1263/1263 green)
 
 - **SOLIDWORKS practice-problem database, first pass (2026-09-03).** The

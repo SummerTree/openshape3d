@@ -310,7 +310,7 @@ nonisolated enum KernelOps {
         _ kind: BooleanKind,
         target: Body,
         tool: Body,
-        isCancelled: @escaping () -> Bool = { false }
+        isCancelled: @escaping @Sendable () -> Bool = { false }
     ) -> Euclid.Mesh {
         let a = target.euclidMesh().transformed(by: target.transform.euclid)
         let b = tool.euclidMesh().transformed(by: tool.transform.euclid)

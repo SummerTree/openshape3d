@@ -1035,7 +1035,7 @@ nonisolated extension Body {
     }
 }
 
-private extension Data {
+private nonisolated extension Data {
     /// Reinterpret the packed bytes as tightly-packed `Float`s.
     func floatArray() -> [Float] {
         withUnsafeBytes { Array($0.bindMemory(to: Float.self)) }

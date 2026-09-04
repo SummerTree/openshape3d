@@ -10,6 +10,7 @@
 import Foundation
 import SwiftData
 import Observation
+import os
 import simd
 import Euclid
 import ImageIO
@@ -5481,8 +5482,17 @@ final class EditorViewModel {
 
     /// True while a CSG operation runs off the main actor.
     var isComputingBoolean = false
-    private nonisolated final class CancelToken: @unchecked Sendable {
-        var isCancelled = false
+    /// Cancellation flag for a detached CSG run. The main actor SETS it while
+    /// Euclid's own worker threads READ it (KernelOps passes the getter in as
+    /// a `@Sendable` closure), so the storage is lock-guarded rather than a
+    /// bare `Bool` behind `@unchecked` — the unsynchronised version was a
+    /// genuine race the compiler had been told to stop reporting.
+    private nonisolated final class CancelToken: Sendable {
+        private let state = OSAllocatedUnfairLock(initialState: false)
+        var isCancelled: Bool {
+            get { state.withLock { $0 } }
+            set { state.withLock { $0 = newValue } }
+        }
     }
     private var booleanCancelToken: CancelToken?
 
