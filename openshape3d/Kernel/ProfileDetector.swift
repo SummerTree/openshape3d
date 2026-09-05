@@ -198,6 +198,8 @@ nonisolated struct Profile: Identifiable {
 nonisolated enum ProfileDetector {
     static let circleSegments = 48
     private static let quantum: Double = 1e-6
+    /// Chain endpoints closer than this are one junction (see `lineLoops`).
+    static let endpointWeldTolerance: Double = 1e-3
 
     static func detectProfiles(in sketch: Sketch) -> [Profile] {
         var profiles: [Profile] = []
@@ -350,6 +352,29 @@ nonisolated enum ProfileDetector {
             }
         }
         guard chains.count >= 2 else { return [] }
+
+        // Weld near-coincident chain ENDPOINTS before they become nodes. The
+        // node key quantises to 1e-6 mm, which is exact-arithmetic territory:
+        // an arc whose angles were derived from a line's rounded endpoint
+        // lands 2e-5 mm away from it, and a perfectly good line/arc/line loop
+        // (practice sheet 7.2's spherical cap) came back "profile unresolved".
+        // Anything within a micron is the same junction; a real gap is orders
+        // of magnitude larger than that.
+        do {
+            var representatives: [SIMD2<Double>] = []
+            func weld(_ p: SIMD2<Double>) -> SIMD2<Double> {
+                for r in representatives where simd_length(r - p) <= endpointWeldTolerance { return r }
+                representatives.append(p)
+                return p
+            }
+            for i in chains.indices {
+                var points = chains[i].points
+                points[0] = weld(points[0])
+                points[points.count - 1] = weld(points[points.count - 1])
+                chains[i] = Chain(entityID: chains[i].entityID, points: points,
+                                  isArc: chains[i].isArc, spline: chains[i].spline)
+            }
+        }
 
         // Planar FACE TRAVERSAL over half-edges.
         //
