@@ -11183,6 +11183,173 @@ final class EditorViewModel {
         cameraControl?.fitTo(bounds: Self.imageBounds(image))
     }
 
+    // MARK: - Items Manager folders (spec §11)
+
+    var itemFolderTree: ItemFolderTree { ItemFolderTree(session.document.itemFolders) }
+
+    /// New folder. With no explicit members it takes the current body
+    /// selection (Shapr3D: "create folder from selection").
+    @discardableResult
+    func createItemFolder(named name: String? = nil, in parent: ItemFolderID? = nil,
+                          containing keys: [DocumentItemKey]? = nil) -> ItemFolderID {
+        let tree = itemFolderTree
+        let members = keys ?? session.document.bodies
+            .filter { selection.contains($0.id) }
+            .map { DocumentItemKey.body($0.id) }
+        let folder = ItemFolder(name: name ?? tree.uniqueName(), parentID: parent, members: members)
+        session.perform(SetItemFoldersCommand(
+            title: "New Folder", before: tree.folders, after: tree.adding(folder)))
+        return folder.id
+    }
+
+    func renameItemFolder(_ id: ItemFolderID, to newName: String) {
+        let tree = itemFolderTree
+        let trimmed = newName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let current = tree.folder(id)?.name, !trimmed.isEmpty, trimmed != current else { return }
+        session.perform(SetItemFoldersCommand(
+            title: "Rename Folder", before: tree.folders, after: tree.renaming(id, to: trimmed)))
+    }
+
+    /// Move items into a folder (`nil` = out of every folder).
+    func moveItems(_ keys: [DocumentItemKey], toFolder destination: ItemFolderID?) {
+        let tree = itemFolderTree
+        let after = tree.moving(keys, to: destination)
+        guard after != tree.folders else { return }
+        let title = destination.flatMap { tree.folder($0)?.name }
+            .map { "Move to \($0)" } ?? "Move out of Folder"
+        session.perform(SetItemFoldersCommand(title: title, before: tree.folders, after: after))
+    }
+
+    func moveItemFolder(_ id: ItemFolderID, into parent: ItemFolderID?) {
+        let tree = itemFolderTree
+        guard tree.canMove(folder: id, into: parent), tree.parent(of: id) != parent else { return }
+        session.perform(SetItemFoldersCommand(
+            title: "Move Folder", before: tree.folders, after: tree.reparenting(id, to: parent)))
+    }
+
+    /// Remove the folder only; what it held moves up a level.
+    func removeItemFolder(_ id: ItemFolderID) {
+        let tree = itemFolderTree
+        guard tree.folder(id) != nil else { return }
+        session.perform(SetItemFoldersCommand(
+            title: "Remove Folder", before: tree.folders, after: tree.removingKeepingContents(id)))
+    }
+
+    /// Delete the folder, its subfolders and every item inside — one undo
+    /// step. Mode/tool cleanup mirrors `deleteItem` for each kind.
+    func deleteItemFolderAndItems(_ id: ItemFolderID) {
+        let tree = itemFolderTree
+        guard tree.folder(id) != nil else { return }
+        let keys = tree.keys(inSubtree: id)
+        var bodyIDs = Set<BodyID>()
+        // Leave any state that points at a doomed item BEFORE snapshotting
+        // the document for the delete commands (finishing a sketch can edit it).
+        for key in keys {
+            switch key {
+            case .body(let bodyID):
+                bodyIDs.insert(bodyID)
+            case .sketch(let sketchID):
+                if toolContext?.sketchID == sketchID { cancelTool() }
+                if case .sketching(let active, _) = mode, active == sketchID { finishSketch() }
+            case .image(let imageID):
+                endImageInteraction()
+                if selectedImageID == imageID { selectedImageID = nil }
+            case .plane, .axis:
+                break
+            }
+        }
+        if !bodyIDs.isEmpty {
+            cancelTransientPicks()
+            if let source = toolContext?.sourceBody, bodyIDs.contains(source) { cancelTool() }
+            selection.subtract(bodyIDs)
+            switch mode {
+            case .editingPrimitive(let selected) where bodyIDs.contains(selected),
+                 .selected(let selected) where bodyIDs.contains(selected),
+                 .faceSelected(let selected) where bodyIDs.contains(selected):
+                mode = .idle
+            case .pickingBooleanTool(_, let target) where bodyIDs.contains(target):
+                mode = .idle
+            case .pickingSplitCutter(let target) where bodyIDs.contains(target):
+                mode = .idle
+            default:
+                break
+            }
+        }
+        let document = session.document
+        var commands: [DocumentCommand] = [SetItemFoldersCommand(
+            title: "Delete Folder", before: tree.folders, after: tree.removingSubtree(id))]
+        for key in keys {
+            switch key {
+            case .body:
+                break
+            case .sketch(let sketchID):
+                if let command = DeleteSketchCommand(id: sketchID, document: document) {
+                    commands.append(command)
+                }
+            case .plane(let planeID):
+                if let command = DeletePlaneCommand(id: planeID, document: document) {
+                    commands.append(command)
+                }
+            case .axis(let axisID):
+                if let command = DeleteAxisCommand(id: axisID, document: document) {
+                    commands.append(command)
+                }
+            case .image(let imageID):
+                if let command = RemoveImageCommand(id: imageID, document: document) {
+                    commands.append(command)
+                }
+            }
+        }
+        let liveBodies = bodyIDs.filter { document.body(with: $0) != nil }
+        if !liveBodies.isEmpty {
+            commands.append(DeleteBodiesCommand(ids: liveBodies, document: document))
+        }
+        session.perform(CompositeCommand(title: "Delete Folder", commands: commands))
+        session.save()
+    }
+
+    /// Whether a scene item is hidden; nil when the item no longer exists.
+    func isItemHidden(_ key: DocumentItemKey) -> Bool? {
+        let document = session.document
+        switch key {
+        case .body(let id): return document.body(with: id)?.isHidden
+        case .sketch(let id): return document.sketches.first { $0.id == id }?.isHidden
+        case .plane(let id): return document.planes.first { $0.id == id }?.isHidden
+        case .axis(let id): return document.axes.first { $0.id == id }?.isHidden
+        case .image(let id): return document.images.first { $0.id == id }?.isHidden
+        }
+    }
+
+    /// A folder reads hidden when every item in its subtree is hidden.
+    func itemFolderIsHidden(_ id: ItemFolderID) -> Bool {
+        let states = itemFolderTree.keys(inSubtree: id).compactMap(isItemHidden)
+        return !states.isEmpty && states.allSatisfy { $0 }
+    }
+
+    /// The folder eye: hide everything inside, or show everything inside,
+    /// as one undo step.
+    func setItemFolderHidden(_ id: ItemFolderID, hidden: Bool) {
+        var commands: [DocumentCommand] = []
+        for key in itemFolderTree.keys(inSubtree: id) {
+            guard let current = isItemHidden(key), current != hidden else { continue }
+            switch key {
+            case .body(let bodyID):
+                commands.append(SetItemVisibilityCommand(item: .body(bodyID), isHidden: hidden))
+            case .sketch(let sketchID):
+                commands.append(SetItemVisibilityCommand(item: .sketch(sketchID), isHidden: hidden))
+            case .plane(let planeID):
+                commands.append(SetItemVisibilityCommand(item: .plane(planeID), isHidden: hidden))
+            case .axis(let axisID):
+                commands.append(SetAxisHiddenCommand(id: axisID, hidden: hidden))
+            case .image(let imageID):
+                commands.append(SetItemVisibilityCommand(imageID: imageID, isHidden: hidden))
+            }
+        }
+        guard !commands.isEmpty else { return }
+        session.perform(CompositeCommand(
+            title: hidden ? "Hide Folder" : "Show Folder", commands: commands))
+    }
+
     // MARK: - Items Manager (spec §11)
 
     /// Body row tap: select the body (primitive rows open dimension editing).

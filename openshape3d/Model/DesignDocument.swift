@@ -18,6 +18,11 @@ nonisolated struct DesignDocument: Sendable {
     var images: [InsertedImage] = []
     var symbols: [Symbol] = []
 
+    /// Items Manager folders (spec §11). Membership lives here, on the
+    /// folders — see `ItemFolders.swift`. Empty for documents that never
+    /// made one; stored as one JSON column (`Project.itemFoldersData`).
+    var itemFolders: [ItemFolder] = []
+
     /// Phase D (Task C1) parametric feature history. Lives on the document so
     /// undoable commands mutate it via `inout document` like every other piece
     /// of model state. Empty for pre-Phase-D projects (they render from their
@@ -38,6 +43,17 @@ nonisolated struct DesignDocument: Sendable {
     mutating func nextRevision() -> UInt64 {
         revisionCounter += 1
         return revisionCounter
+    }
+
+    /// Every scene item a folder may hold, as it exists right now.
+    var itemKeys: Set<DocumentItemKey> {
+        var keys = Set<DocumentItemKey>()
+        for body in bodies { keys.insert(.body(body.id)) }
+        for sketch in sketches { keys.insert(.sketch(sketch.id)) }
+        for plane in planes { keys.insert(.plane(plane.id)) }
+        for axis in axes { keys.insert(.axis(axis.id)) }
+        for image in images { keys.insert(.image(image.id)) }
+        return keys
     }
 
     func body(with id: BodyID) -> Body? {

@@ -72,6 +72,10 @@ final class Project {
     /// store; the gallery lists such a design at the root.
     var folderID: UUID? = nil
 
+    /// Items Manager folders (spec §11) as one JSON blob (`[ItemFolder]`);
+    /// `nil` = none. A defaulted scalar so old stores migrate lightly.
+    var itemFoldersData: Data? = nil
+
     init(name: String) {
         self.name = name
         self.createdAt = Date()

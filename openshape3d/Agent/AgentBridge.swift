@@ -1110,6 +1110,23 @@ final class AgentBridge {
             "commandSearchActive": viewModel.commandSearchActive,
         ]
         if let title = viewModel.session.undoStack.undoTitle { state["undoTitle"] = title }
+        // Items Manager folders (spec §11): the tree as the panel shows it.
+        state["itemFolders"] = document.itemFolders.map { folder -> [String: Any] in
+            [
+                "id": folder.id.raw.uuidString,
+                "name": folder.name,
+                "parent": folder.parentID.map { $0.raw.uuidString } ?? "",
+                "members": folder.members.map { key -> [String: String] in
+                    switch key {
+                    case .body(let id): return ["kind": "body", "id": id.raw.uuidString]
+                    case .sketch(let id): return ["kind": "sketch", "id": id.raw.uuidString]
+                    case .plane(let id): return ["kind": "plane", "id": id.raw.uuidString]
+                    case .axis(let id): return ["kind": "axis", "id": id.raw.uuidString]
+                    case .image(let id): return ["kind": "image", "id": id.raw.uuidString]
+                    }
+                },
+            ]
+        }
         if let error = viewModel.errorMessage { state["error"] = error }
         // Per-feature replay failures — the same signal the History badges
         // render. `error` above is the one-shot interactive alert; this is the

@@ -1748,7 +1748,18 @@ tap-to-select, and Zoom To (camera fit to the item's AABB). Parity target:
 sketches consumed into a body (extrude/revolve/sweep/loft — profile, loft
 sections, sweep spine) auto-hide in the same undo step
 (`consumedSketchHideCommands`); the eye un-hides them, and re-opening a
-hidden sketch for editing still un-hides it. `isHidden` persists. Missing: folders, filter dropdown,
+hidden sketch for editing still un-hides it. `isHidden` persists.
+**Folders** (`ItemFolder`, `ItemFolderTree`): a nested tree at the top of
+the panel holding bodies, sketches, planes, axes and images; "New Folder"
+takes the current body selection (create-from-selection); every row's menu
+has "Move to Folder" (submenu of the whole tree + "New Folder with Item");
+rows drag onto folder rows, or onto a section header to file them back out;
+the folder eye hides/shows everything inside as one undo step; inline
+rename; "New Subfolder"; "Remove Folder" (contents move up a level) vs
+"Delete Folder and Items" (one undo step). Every edit is a
+`SetItemFoldersCommand` (before/after of the small tree). Persisted as one
+JSON column (`Project.itemFoldersData`), carried by `.os3d` archives and
+remapped on duplicate. Missing: filter dropdown,
 multi-select, per-row image opacity percentage (opacity edits live in the
 image bar), Reveal in Items, Show Hidden Items / Invert Visibility menu,
 shared names with History (no history engine).

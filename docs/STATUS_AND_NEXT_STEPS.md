@@ -1,6 +1,6 @@
 # Status & Next Steps — Handoff Notes
 
-Last updated: 2026-09-05 (project folders in the gallery — see the newest mission log entry; before that: textured mesh import glTF/USDZ/OBJ + exact OCCT face draft; before that: SOLIDWORKS practice problems through the UI; 2026-09-03 SOLIDWORKS practice-problem campaign — extrude end
+Last updated: 2026-09-05 (Items Manager folders and project folders in the gallery — see the two newest mission log entries; before that: textured mesh import glTF/USDZ/OBJ + exact OCCT face draft; before that: SOLIDWORKS practice problems through the UI; 2026-09-03 SOLIDWORKS practice-problem campaign — extrude end
 conditions, B-rep touch commits, draft of an existing face; see the mission
 log just below, and **§4c for the campaign's state and how to resume it**).
 This is the living handoff document: what is DONE, how the newest subsystems
@@ -10,6 +10,39 @@ Companions: `IMPLEMENTATION_PLAN.md` (original phase plan),
 design), `FREECAD_PLAYBOOK.md` (the FreeCAD-derived hardening ledger),
 `TOPO_NAMING_HISTORY_DESIGN.md` (element-naming design, now complete), and
 `AGENT_CONTROL.md` (the `/v1/exec` scripting surface).
+
+## Mission log — 2026-09-05, Items Manager folders (spec §11)
+
+- **What landed.** The Items panel has a folder tree above its type
+  sections. `ItemFolder {id, name, parentID, members: [DocumentItemKey]}`
+  lives on `DesignDocument.itemFolders`; membership is on the folder, so no
+  item type's Codable or persistence changed — the tree is one JSON column
+  (`Project.itemFoldersData`), pruned of deleted items on save but NOT in
+  memory (undo of a delete puts the item back in its folder). `.os3d`
+  archives carry it and the duplicate remap rewrites the IDs inside.
+  Panel: "New Folder" button (takes the body selection), row menus "Move to
+  Folder ▸" (+ "New Folder with Item"), drag rows onto folder rows or onto a
+  section header to file them out, folder eye = hide/show the subtree as one
+  `CompositeCommand`, inline rename, "New Subfolder", "Remove Folder"
+  (contents move up) vs "Delete Folder and Items" (folders + delete
+  commands in one composite). Every tree edit is `SetItemFoldersCommand`
+  (whole-array before/after — the tree is tiny, and it keeps undo trivial).
+  `/v1/state` gained `itemFolders`.
+- **Verified by touch** on the iPad simulator: select the seeded body → New
+  Folder → "Folder 1 ▸ Drilled"; folder eye → body hidden, undo title
+  "Hide Folder"; row menu → Move to Folder ▸ Top Level ("Move out of
+  Folder"); relaunch → the folder and membership load back.
+- **Not verified by touch: dragging rows inside the panel.** Five synthetic
+  touch paths (holds of 420–1000 ms, then a move) all opened the row's
+  context menu instead of lifting a drag, for item rows and folder rows
+  alike, even after moving `.draggable` onto the inner content beneath the
+  `.contextMenu` wrapper (the layout the gallery cards use, where a
+  synthetic drag DID move a card). The rows use the same
+  `.draggable`/`.dropDestination` API as the gallery; whether a real finger
+  lifts a drag in the panel's ScrollView is untested. "Move to Folder" is
+  the covered path (UI test + touch).
+- **Tests.** `ItemFolderTreeTests` (9), `ItemsFolderUITests` (create, move
+  via menu, folder eye, rename, Remove Folder, undo). Unit suite 1322 green.
 
 ## Mission log — 2026-09-05, project folders (spec §13.1; Shapr3D 5.492 "Folders are here")
 

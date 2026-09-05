@@ -83,6 +83,8 @@ final class DocumentSession {
         var bodyPrimitive: Set<UUID> = []
         var bodyMaterial: Set<UUID> = []
         var bodyBrep: Set<UUID> = []
+        /// The Items-folder blob failed to decode — leave the column alone.
+        var itemFolders = false
         /// Whole rows that could not be decoded (absent from the document).
         var rowCount: Int {
             bodies.count + sketches.count + planes.count + axes.count
@@ -746,6 +748,15 @@ final class DocumentSession {
                 unreadableRows.symbols.insert(persisted.symbolID)
             }
         }
+        // Items Manager folders (spec §11): one JSON column, absent for
+        // documents that never made a folder.
+        if let data = project.itemFoldersData {
+            if let folders = try? JSONDecoder().decode([ItemFolder].self, from: data) {
+                loaded.itemFolders = folders
+            } else {
+                unreadableRows.itemFolders = true
+            }
+        }
         // Phase D feature graph: replay order is `orderIndex` (SwiftData
         // relationships are unordered). A node whose kind blob won't decode is
         // skipped (decodeFeature -> nil), not fatal. Pre-Phase-D projects have no
@@ -1118,6 +1129,15 @@ final class DocumentSession {
         }
         for persisted in project.variables where !liveVariableIDs.contains(persisted.variableID) {
             modelContext.delete(persisted)
+        }
+
+        // Items Manager folders: members whose item is gone stay in memory
+        // (undo of a delete puts the item back in its folder) but are pruned
+        // on the way to disk. A blob load() couldn't decode is left alone.
+        if !unreadableRows.itemFolders {
+            let folders = ItemFolderTree(document.itemFolders).pruned(to: document.itemKeys)
+            let data = folders.isEmpty ? nil : try? JSONEncoder().encode(folders)
+            if project.itemFoldersData != data { project.itemFoldersData = data }
         }
 
         project.modifiedAt = Date()
