@@ -1394,9 +1394,7 @@ nonisolated extension FeatureGraph {
     /// cylinder, and a whole-wall centroid would sit on the axis).
     private static func pointOnFace(_ resolved: ResolvedFace, mesh: RenderMesh) -> SIMD3<Double>? {
         if let planar = resolved.planar {
-            let count = Double(max(planar.outline.count, 1))
-            let c = planar.outline.reduce(SIMD2<Double>.zero, +) / count
-            return planar.origin + planar.basisX * c.x + planar.basisY * c.y
+            return pointOnPlanarFace(planar, mesh: mesh)
         }
         guard let cyl = resolved.cylinder, !cyl.triangles.isEmpty else { return nil }
         // ONE facet's centroid, pushed out to the true radius — never the
@@ -1419,6 +1417,24 @@ nonisolated extension FeatureGraph {
             return onAxis + simd_normalize(radial) * cyl.radius
         }
         return nil
+    }
+
+    /// A point guaranteed to lie ON a planar face: the centroid of its
+    /// largest facet (well inside, away from edges and tolerance bands). The
+    /// outline centroid is only a fallback for a face with no facets.
+    static func pointOnPlanarFace(_ planar: FaceTopology.PlanarFace, mesh: RenderMesh) -> SIMD3<Double> {
+        var best: (area: Double, centroid: SIMD3<Double>)?
+        for t in planar.triangles where t * 3 + 2 < mesh.indices.count {
+            let a = SIMD3<Double>(mesh.positions[Int(mesh.indices[t * 3])])
+            let b = SIMD3<Double>(mesh.positions[Int(mesh.indices[t * 3 + 1])])
+            let c = SIMD3<Double>(mesh.positions[Int(mesh.indices[t * 3 + 2])])
+            let area = simd_length(simd_cross(b - a, c - a))
+            if best == nil || area > best!.area { best = (area, (a + b + c) / 3) }
+        }
+        if let best { return best.centroid }
+        let count = Double(max(planar.outline.count, 1))
+        let c = planar.outline.reduce(SIMD2<Double>.zero, +) / count
+        return planar.origin + planar.basisX * c.x + planar.basisY * c.y
     }
 
     // MARK: Chamfer / Fillet (edge blends)
@@ -1671,11 +1687,13 @@ nonisolated extension FeatureGraph {
         // ~14.5° and ships thin walls that pass every downstream validity
         // check (review R3-E). The mesh path below stays for brep-less bodies.
         if OCCTKernel.useOCCTAsSourceOfTruth, let brep = body.brep {
-            // A point at the centroid of each open face identifies it to OCCT.
-            let openPoints: [SIMD3<Double>] = openFaces.map { face in
-                let n = Double(max(face.outline.count, 1))
-                let c = face.outline.reduce(SIMD2<Double>.zero, +) / n
-                return face.origin + face.basisX * c.x + face.basisY * c.y
+            // A point ON each open face identifies it to OCCT — a facet's
+            // centroid, not the outline's: an annular or L-shaped face's
+            // outline centroid lies in its hole or outside it, and the shell
+            // of every ring-topped hub was refused with "no face within
+            // tolerance of the pick" (Level 13 practice sheets, 2026-09-04).
+            let openPoints: [SIMD3<Double>] = openFaces.map {
+                Self.pointOnPlanarFace($0, mesh: body.render)
             }
             switch OCCTKernel.shellResultWithAncestry(
                 brep, openingAt: openPoints, thickness: thickness,

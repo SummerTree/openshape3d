@@ -137,3 +137,43 @@ final class FeatureShellEvalTests: XCTestCase {
         XCTAssertNotNil(result.errors[shellFeature])
     }
 }
+
+/// The point a planar face is handed to the kernel by must lie ON the face.
+/// An annulus (a top face with a through hole) has its outline centroid in
+/// the hole, which is why every ring-topped shell used to be refused.
+final class PlanarFacePickPointTests: XCTestCase {
+    func testAnnularFacePickPointLiesOnTheRingAndShellSucceeds() throws {
+        // Ø100 × 20 disc (Y-up), Ø40 through hole.
+        let disc = try XCTUnwrap(OCCTKernel.primitiveShape(.cylinder(radius: 50, height: 20), placement: .identity))
+        let hole = try XCTUnwrap(OCCTKernel.primitiveShape(.cylinder(radius: 20, height: 60), placement: .identity))
+        let ring = try XCTUnwrap(OCCTKernel.boolean(disc, hole, op: OCCTKernel.booleanOp(.subtract)))
+        let raw = OCCTKernel.renderMesh(from: ring)
+        let mesh = RenderMesh(positions: raw.positions, normals: raw.normals, indices: raw.indices)
+        var top: FaceTopology.PlanarFace?
+        var topY = -Double.infinity
+        for t in 0..<mesh.triangleCount {
+            let a = mesh.positions[Int(mesh.indices[t * 3])]
+            let b = mesh.positions[Int(mesh.indices[t * 3 + 1])]
+            let c = mesh.positions[Int(mesh.indices[t * 3 + 2])]
+            let n = simd_cross(b - a, c - a)
+            guard simd_length(n) > 1e-9, simd_normalize(n).y > 0.999 else { continue }
+            if Double(a.y) > topY, let face = FaceTopology.planarFace(in: mesh, seedTriangle: t) {
+                top = face; topY = Double(a.y)
+            }
+        }
+        let face = try XCTUnwrap(top, "the ring has a +Y annular face")
+        XCTAssertFalse(face.holes.isEmpty, "the top face is an annulus")
+        let point = FeatureGraph.pointOnPlanarFace(face, mesh: mesh)
+        XCTAssertEqual(point.y, topY, accuracy: 1e-6, "on the top plane")
+        let radial = hypot(point.x - face.origin.x, point.z - face.origin.z)
+        XCTAssertGreaterThan(radial, 20, "outside the hole")
+        XCTAssertLessThan(radial, 50, "inside the rim")
+
+        // And the kernel accepts it as the shell's opening.
+        let shelled = try OCCTKernel.shellResult(
+            ring, openingAt: [point], thickness: 3,
+            tolerance: OCCTKernel.matchTolerance(for: ring)).get()
+        XCTAssertLessThan(OCCTKernel.volume(shelled), OCCTKernel.volume(ring) * 0.6,
+                          "hollowed through the open ring face")
+    }
+}
