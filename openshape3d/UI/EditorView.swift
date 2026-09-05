@@ -184,6 +184,8 @@ struct EditorView: View {
     @State private var exportDocument: ExportDocument?
     @State private var showItemsPanel = false
     @State private var showBugReport = false
+    @State private var pendingMeshImport: MeshImportProbe?
+    @State private var didHandleDebugImport = false
     @State private var showSettings = false
     /// Measured height of the bottom bar stack, fed by `BottomBarHeightKey`.
     /// The palette and the corner chips inset above it — see `bottomBarInset`.
@@ -1600,10 +1602,14 @@ struct EditorView: View {
         }
         let name = url.lastPathComponent
         switch importRequest {
-        case .stl: viewModel.importSTL(data: data, fileName: name)
+        case .stl, .mesh:
+            // Mesh formats go through the units prompt (Shapr3D parity):
+            // parse now, build only once the user has picked the unit.
+            if let probe = viewModel.probeMesh(data: data, fileName: name) {
+                pendingMeshImport = probe
+            }
         case .dxf: viewModel.importDXF(data: data, fileName: name)
         case .step: viewModel.importSTEP(data: data, fileName: name)
-        case .mesh: viewModel.importMesh(data: data, fileName: name)
         case .image: viewModel.beginInsertImage(data: data)
         }
     }
@@ -1617,6 +1623,27 @@ struct EditorView: View {
                 allowedContentTypes: importRequest.contentTypes
             ) { result in
                 handleImport(result, viewModel: viewModel)
+            }
+            .sheet(item: $pendingMeshImport) { probe in
+                MeshUnitPromptSheet(probe: probe) { unit in
+                    viewModel.importParts(
+                        MeshImportKit.scaled(probe.parts, by: unit.millimetresPerUnit),
+                        fileName: probe.fileName)
+                }
+            }
+            .onAppear {
+                // DEBUG hook for the UI suite: OS3D_DEBUG_IMPORT_MESH=<path>
+                // opens the units prompt for that file as if it had been
+                // picked — the system file picker can't be driven by XCUITest.
+                #if DEBUG
+                guard !didHandleDebugImport else { return }
+                didHandleDebugImport = true
+                if let path = ProcessInfo.processInfo.environment["OS3D_DEBUG_IMPORT_MESH"],
+                   let data = try? Data(contentsOf: URL(fileURLWithPath: path)) {
+                    pendingMeshImport = viewModel.probeMesh(
+                        data: data, fileName: (path as NSString).lastPathComponent)
+                }
+                #endif
             }
             .photosPicker(
                 isPresented: $showPhotoPicker,

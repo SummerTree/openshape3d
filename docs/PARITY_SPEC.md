@@ -1796,7 +1796,12 @@ and welded into a solid mesh body — `STLImporter` → `EuclidBridge` weld path
 everything is a mesh here), DXF (R12/R2000-common subset — LINE, CIRCLE,
 ARC, LW/POLYLINE — landing in a ground-plane sketch as one undo step,
 `DXFKit.importDXF`), and reference images (PNG/JPEG via Photos or
-Files, §6.3). Missing: every other format, unit options UI, import
+Files, §6.3), and textured meshes — glTF/GLB, USDZ, OBJ+MTL, .blend, or a
+zip of them (`MeshImportKit`). **Import Units prompt** (Shapr3D parity):
+every mesh pick (STL included) opens `MeshUnitPromptSheet` showing the
+model's size under mm / cm / m / in / ft with the detected unit
+preselected — declared for glTF/USD/Blender, a size guess for OBJ/STL —
+and builds only on Import. Missing: every other format, import
 preferences, assembly folders.
 **Feasibility:** STL/OBJ/3MF/DXF [mesh-kernel OK]; STEP/IGES
 [needs B-rep kernel] (OpenCASCADE); X_T/X_B, SLDPRT/SLDASM, CATIA/NX/Creo/

@@ -191,7 +191,7 @@ final class AgentBridge {
 
         switch op {
 
-        case let .importFile(path, fileName):
+        case let .importFile(path, fileName, unitScale):
             let url = URL(fileURLWithPath: path)
             guard let data = try? Data(contentsOf: url) else {
                 return .failure(404, "Not Found", error: "unreadable_path",
@@ -203,7 +203,8 @@ final class AgentBridge {
             // directory is readable here, so hand them over.
             let loose = ["obj", "gltf", "blend"].contains(url.pathExtension.lowercased())
             viewModel.importMesh(data: data, fileName: fileName ?? url.lastPathComponent,
-                                 siblings: loose ? MeshImportKit.folderSiblings(of: url) : [:])
+                                 siblings: loose ? MeshImportKit.folderSiblings(of: url) : [:],
+                                 unitScale: unitScale)
             if let message = viewModel.errorMessage {
                 return .failure(422, "Unprocessable Entity", error: "import_failed", message: message)
             }

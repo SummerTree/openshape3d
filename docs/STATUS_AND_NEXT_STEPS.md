@@ -1,6 +1,6 @@
 # Status & Next Steps — Handoff Notes
 
-Last updated: 2026-09-05 (LiDAR scan import fixes, in-app bug reporter, Items Manager folders, project folders in the gallery — see the three newest mission log entries; before that: textured mesh import glTF/USDZ/OBJ + exact OCCT face draft; before that: SOLIDWORKS practice problems through the UI; 2026-09-03 SOLIDWORKS practice-problem campaign — extrude end
+Last updated: 2026-09-05 (Import Units prompt, LiDAR scan import fixes, in-app bug reporter, Items Manager folders, project folders in the gallery — see the three newest mission log entries; before that: textured mesh import glTF/USDZ/OBJ + exact OCCT face draft; before that: SOLIDWORKS practice problems through the UI; 2026-09-03 SOLIDWORKS practice-problem campaign — extrude end
 conditions, B-rep touch commits, draft of an existing face; see the mission
 log just below, and **§4c for the campaign's state and how to resume it**).
 This is the living handoff document: what is DONE, how the newest subsystems
@@ -10,6 +10,34 @@ Companions: `IMPLEMENTATION_PLAN.md` (original phase plan),
 design), `FREECAD_PLAYBOOK.md` (the FreeCAD-derived hardening ledger),
 `TOPO_NAMING_HISTORY_DESIGN.md` (element-naming design, now complete), and
 `AGENT_CONTROL.md` (the `/v1/exec` scripting surface).
+
+## Mission log — 2026-09-05, Import Units prompt (Shapr3D parity)
+
+- **What landed.** Picking a mesh file (OBJ, STL, glTF/GLB, USDZ, .blend,
+  or a zip of them) no longer builds bodies straight away: `MeshUnitPromptSheet`
+  ("Import Units") shows the file, its part/triangle count, and the model's
+  size under Millimetres / Centimetres / Metres / Inches / Feet, with the
+  detected unit preselected and tagged. Import applies the choice. The
+  footer says whether the format records a unit (glTF, USD, Blender) or the
+  detection is a size guess (OBJ, STL).
+- **How.** `MeshImportKit.probe(data:fileName:siblings:)` parses at scale 1
+  and returns a `MeshImportProbe` (parts in file units, `detectedScale`,
+  `unitIsDeclared`, `sizeDescription(for:)`); `MeshImportKit.scaled(_:by:)`
+  applies a unit; `parts(unitScale:)` is now exactly probe + scale, so the
+  bridge and every existing caller behave as before. `MeshImportUnit` holds
+  the five units (`nearest(toScale:)`, `parse`). `EditorViewModel.probeMesh`
+  + `importParts` split the old `importMesh`; the editor's `.stl` and `.mesh`
+  picks both route through the prompt (`pendingMeshImport`). A zip's bodies
+  keep the archive's name. `/v1/exec document.import` takes `units`
+  ("mm"|"cm"|"m"|"in"|"ft") or a numeric `unitScale`; absent → detected.
+- **Testing the prompt without a file picker:** DEBUG env
+  `OS3D_DEBUG_IMPORT_MESH=<path>` opens the prompt for that file on launch
+  (`MeshUnitPromptUITests` writes a 4.7-unit OBJ to its temp dir, picks
+  Centimetres, and reads 47.00 × 47.00 × 47.00 mm off the info bar).
+  Verified by touch with the LiDAR scan zip: Metres detected, sizes
+  previewed per unit, Import → 4746 × 1960 × 2691 mm.
+- **Tests.** `MeshUnitPromptTests` (5), `MeshUnitPromptUITests` (1); the
+  import suites (MeshImport, BlendImport, HeavyMeshGuard) still pass.
 
 ## Mission log — 2026-09-05, LiDAR room-scan import: scale, plane picker, Extrude stall
 
@@ -1354,6 +1382,7 @@ Notes:
 | `OS3D_DEBUG_SEED_PRIMBOOL` | Cylinder primitive − box primitive (mixed analytic boolean) |
 | `OS3D_DEBUG_SEED_IMAGE` | Reference image on the ground plane, left unselected |
 | `OS3D_GIZMO_DEBUG` | Print the gizmo part each drag grabs, its world delta, and the rotation pill's live value |
+| `OS3D_DEBUG_IMPORT_MESH=<path>` | Open the Import Units prompt for that mesh file once the editor appears (the UI suite's stand-in for the file picker). |
 | `OS3D_RESET_STORE` | **Destructive.** Delete the SwiftData store before it opens — the app starts with zero projects. Every UI test sets it (see below); do not put it in a shell profile or a scheme you also model in. |
 | `OS3D_AGENT` / `OS3D_AGENT_PORT` | Loopback control channel for driving the app from Claude (`Agent/`). Health, command catalog, editor state (incl. per-feature `evalErrors`), `POST /v1/command`, `POST /v1/exec`, `GET /v1/check` (geometry health), `POST /v1/capture` (repro snapshot), and a PNG of the viewport. Clients: `.claude/skills/drive-openshape3d/` (Claude Code, via curl) and `scripts/mcp_openshape3d.py` (Claude Desktop). Protocol: **`docs/AGENT_CONTROL.md`**. NOTE: another local service may squat port 8787 (it did on this machine) — the app then binds IPv6 only and curl answers from the wrong server; launch with `OS3D_AGENT_PORT=8899`. |
 | `OS3D_KERNEL_CAPTURE` | Failing kernel ops auto-dump their inputs + params as replayable bundles to `Documents/KernelCaptures` (`=0` disables; default ON in the app, OFF under XCTest). Pull with `scripts/fetch_captures.sh`; promote to `openshape3dTests/Fixtures/Captures`. **`docs/KERNEL_DEBUG_TOOLING.md`** is the workflow. |

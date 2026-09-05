@@ -387,20 +387,35 @@ final class EditorViewModel {
     /// zip). Every part becomes its own body — texture coordinates and the
     /// albedo image ride along on the mesh and material — and all of them
     /// land as ONE undo step, like STEP.
-    func importMesh(data: Data, fileName: String, siblings: [String: Data] = [:]) {
-        let parts: [ImportedPart]
+    /// Parse a mesh file without applying units, for the import prompt.
+    /// Sets `errorMessage` and returns nil when the file can't be read.
+    func probeMesh(data: Data, fileName: String, siblings: [String: Data] = [:]) -> MeshImportProbe? {
         do {
-            parts = try MeshImportKit.parts(from: data, fileName: fileName, siblings: siblings)
+            return try MeshImportKit.probe(data: data, fileName: fileName, siblings: siblings)
         } catch MeshImportError.unsupportedFormat(let what) {
             errorMessage = "Couldn't import “\(fileName)” — \(what.isEmpty ? "unknown" : what) files aren't supported."
-            return
         } catch MeshImportError.empty {
             errorMessage = "Couldn't import “\(fileName)” — no triangle meshes found."
-            return
+        } catch MeshImportError.malformed(let what) {
+            errorMessage = "Couldn't import “\(fileName)” — \(what)."
         } catch {
             errorMessage = "Couldn't import “\(fileName)” — \(error)."
-            return
         }
+        return nil
+    }
+
+    /// Import with the detected unit, or `unitScale` mm per file unit (the
+    /// bridge's `units`). The UI goes through `probeMesh` + the prompt +
+    /// `importParts` instead so the user chooses.
+    func importMesh(data: Data, fileName: String, siblings: [String: Data] = [:],
+                    unitScale: Double? = nil) {
+        guard let probe = probeMesh(data: data, fileName: fileName, siblings: siblings) else { return }
+        importParts(MeshImportKit.scaled(probe.parts, by: unitScale ?? probe.detectedScale),
+                    fileName: fileName)
+    }
+
+    /// Parts (already in millimetres) become mesh bodies, one undo step.
+    func importParts(_ parts: [ImportedPart], fileName: String) {
         let stem = (fileName as NSString).deletingPathExtension
         let fallback = stem.isEmpty ? "Imported" : stem
         var document = session.document

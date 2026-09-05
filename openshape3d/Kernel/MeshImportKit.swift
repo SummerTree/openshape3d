@@ -36,58 +36,213 @@ nonisolated enum MeshImportError: Error, Equatable {
     case empty
 }
 
+/// A length unit a mesh file may have been authored in (Shapr3D's import
+/// prompt offers the same five).
+nonisolated enum MeshImportUnit: String, CaseIterable, Identifiable, Sendable {
+    case millimetres, centimetres, metres, inches, feet
+
+    var id: String { rawValue }
+
+    var millimetresPerUnit: Double {
+        switch self {
+        case .millimetres: return 1
+        case .centimetres: return 10
+        case .metres: return 1000
+        case .inches: return 25.4
+        case .feet: return 304.8
+        }
+    }
+
+    var label: String {
+        switch self {
+        case .millimetres: return "Millimetres"
+        case .centimetres: return "Centimetres"
+        case .metres: return "Metres"
+        case .inches: return "Inches"
+        case .feet: return "Feet"
+        }
+    }
+
+    var abbreviation: String {
+        switch self {
+        case .millimetres: return "mm"
+        case .centimetres: return "cm"
+        case .metres: return "m"
+        case .inches: return "in"
+        case .feet: return "ft"
+        }
+    }
+
+    /// The unit whose scale is closest (in ratio) to `scale` mm per unit.
+    static func nearest(toScale scale: Double) -> MeshImportUnit {
+        guard scale > 0, scale.isFinite else { return .millimetres }
+        return allCases.min { abs(log($0.millimetresPerUnit / scale)) < abs(log($1.millimetresPerUnit / scale)) }!
+    }
+
+    /// "mm", "cm", "m", "in", "ft" and the usual spellings.
+    static func parse(_ text: String) -> MeshImportUnit? {
+        switch text.trimmingCharacters(in: .whitespaces).lowercased() {
+        case "mm", "millimetre", "millimetres", "millimeter", "millimeters": return .millimetres
+        case "cm", "centimetre", "centimetres", "centimeter", "centimeters": return .centimetres
+        case "m", "metre", "metres", "meter", "meters": return .metres
+        case "in", "inch", "inches", "\"": return .inches
+        case "ft", "foot", "feet", "'": return .feet
+        default: return nil
+        }
+    }
+}
+
+/// A parsed mesh file BEFORE units are applied: the parts in the file's own
+/// units, what the format declares (if anything), and the guess a silent
+/// import would make. The import prompt shows the model's size under each
+/// unit from this; `MeshImportKit.scaled` applies the choice.
+nonisolated struct MeshImportProbe: Identifiable, Sendable {
+    let id = UUID()
+    let fileName: String
+    /// "OBJ", "STL", "glTF", "GLB", "USDZ", "Blender" — for the prompt's note.
+    let format: String
+    /// Parts in the FILE's units (unscaled).
+    let parts: [ImportedPart]
+    /// Bounding-box size in file units.
+    let rawExtent: SIMD3<Float>
+    let triangleCount: Int
+    /// Millimetres per file unit a silent import applies: the declared unit
+    /// for glTF/USD/Blender, the size heuristic for OBJ and STL.
+    let detectedScale: Double
+    /// The format records its unit (glTF, USD, Blender); false for OBJ/STL.
+    let unitIsDeclared: Bool
+
+    /// The prompt's preselection: the unit nearest `detectedScale`.
+    var detectedUnit: MeshImportUnit { MeshImportUnit.nearest(toScale: detectedScale) }
+
+    func extentMillimetres(for unit: MeshImportUnit) -> SIMD3<Double> {
+        SIMD3<Double>(rawExtent) * unit.millimetresPerUnit
+    }
+
+    /// "4.75 × 1.96 × 2.69 m" or "47.00 × 47.00 × 47.00 mm": metres once the
+    /// longest side reaches a metre, millimetres otherwise, two decimals.
+    func sizeDescription(for unit: MeshImportUnit) -> String {
+        let mm = extentMillimetres(for: unit)
+        let longest = max(mm.x, mm.y, mm.z)
+        let (divisor, suffix) = longest >= 1000 ? (1000.0, "m") : (1.0, "mm")
+        return String(format: "%.2f × %.2f × %.2f %@",
+                      mm.x / divisor, mm.y / divisor, mm.z / divisor, suffix)
+    }
+
+    /// One sentence for the prompt about how sure the detection is.
+    var unitNote: String {
+        if unitIsDeclared {
+            return "\(format) files record their unit, and the detected choice matches the file. Change it only if you know the exporter got it wrong."
+        }
+        return "\(format) files don't record a unit. The detected choice is a guess from the model's size — pick the unit the file was made in."
+    }
+}
+
 nonisolated enum MeshImportKit {
-    /// Parts from `data` named `fileName`. `siblings` are other files that
-    /// travelled with it (a zip's entries, keyed by their path inside the
-    /// archive), where an OBJ's .mtl and textures or a .gltf's buffers live.
+    /// Parts from `data` named `fileName`, in millimetres. `siblings` are
+    /// other files that travelled with it (a zip's entries, keyed by their
+    /// path inside the archive), where an OBJ's .mtl and textures or a
+    /// .gltf's buffers live. `unitScale` (mm per file unit) overrides the
+    /// detected unit — the import prompt's choice, or the bridge's `units`.
     static func parts(from data: Data, fileName: String,
                       siblings: [String: Data] = [:],
                       unitScale: Double? = nil) throws -> [ImportedPart] {
+        let probe = try probe(data: data, fileName: fileName, siblings: siblings)
+        return scaled(probe.parts, by: unitScale ?? probe.detectedScale)
+    }
+
+    /// Parse without applying units (see `MeshImportProbe`).
+    static func probe(data: Data, fileName: String,
+                      siblings: [String: Data] = [:]) throws -> MeshImportProbe {
         let ext = (fileName as NSString).pathExtension.lowercased()
+        let parts: [ImportedPart]
+        let declaredScale: Double?
+        let format: String
         switch ext {
         case "glb", "gltf":
-            return try GLTFImporter.parts(from: data, isBinary: ext == "glb",
-                                          siblings: siblings, unitScale: unitScale ?? 1000)
+            parts = try GLTFImporter.parts(from: data, isBinary: ext == "glb",
+                                           siblings: siblings, unitScale: 1)
+            declaredScale = 1000   // glTF is metres by specification
+            format = ext == "glb" ? "GLB" : "glTF"
         case "usdz", "usd", "usda", "usdc":
-            return try USDImporter.parts(from: data, fileName: fileName,
-                                         unitScale: unitScale ?? USDImporter.unitScale(of: data, ext: ext))
+            parts = try USDImporter.parts(from: data, fileName: fileName, unitScale: 1)
+            declaredScale = USDImporter.unitScale(of: data, ext: ext)
+            format = ext == "usdz" ? "USDZ" : "USD"
         case "obj":
-            // OBJ has no unit. Most CAD exports are millimetres; Sketchfab
-            // and game-asset exports are metres. A whole model under 2 units
-            // across is not a 2 mm part, it is metres — scale it up.
-            let parts = try OBJTexturedImporter.parts(from: data, siblings: siblings, unitScale: unitScale ?? 1)
-            // No unit in the format. A whole model under 10 units across is
-            // metres (a LiDAR room scan is 3–8 m; a 4.7 m scan came in as a
-            // 4.7 mm object before this was raised from 2). A millimetre
-            // part under 10 mm is rarer than a scan, and still opens — just
-            // 1000× too big, with Scale to hand.
-            if unitScale == nil, let extent = overallExtent(of: parts), extent > 0, extent < 10 {
-                return parts.map { part in
-                    var scaled = part
-                    for i in scaled.mesh.positions.indices { scaled.mesh.positions[i] *= 1000 }
-                    return scaled
-                }
+            parts = try OBJTexturedImporter.parts(from: data, siblings: siblings, unitScale: 1)
+            declaredScale = nil
+            format = "OBJ"
+        case "stl":
+            let mesh: RenderMesh
+            do { mesh = try STLImporter.importSTL(data) } catch {
+                throw MeshImportError.malformed("not a valid STL file")
             }
-            return parts
+            let stem = ((fileName as NSString).lastPathComponent as NSString).deletingPathExtension
+            parts = [ImportedPart(name: stem.isEmpty ? "Part" : stem, mesh: mesh, material: nil)]
+            declaredScale = nil
+            format = "STL"
         case "blend":
-            return try BlendImporter.parts(from: data, siblings: siblings, unitScale: unitScale ?? 1000)
+            parts = try BlendImporter.parts(from: data, siblings: siblings, unitScale: 1)
+            declaredScale = 1000   // Blender scenes are metres at unit scale 1
+            format = "Blender"
         case "zip":
             let entries = try ZipReader.entries(in: data)
             // The archive's payload file, by preference: a self-contained
             // scene first, then the OBJ (its MTL/textures ride as siblings).
-            let order = ["glb", "gltf", "usdz", "obj", "blend"]
+            let order = ["glb", "gltf", "usdz", "obj", "blend", "stl"]
             for wanted in order {
                 if let (path, bytes) = entries.first(where: {
                     ($0.key as NSString).pathExtension.lowercased() == wanted
                         && !($0.key as NSString).lastPathComponent.hasPrefix(".")
                 }) {
-                    return try parts(from: bytes, fileName: path, siblings: entries, unitScale: unitScale)
+                    // Bodies take the ARCHIVE's name, not the payload's
+                    // ("Untitled_Scan…", not "textured_output").
+                    let inner = try probe(data: bytes, fileName: path, siblings: entries)
+                    return MeshImportProbe(
+                        fileName: (fileName as NSString).lastPathComponent, format: inner.format,
+                        parts: inner.parts, rawExtent: inner.rawExtent,
+                        triangleCount: inner.triangleCount, detectedScale: inner.detectedScale,
+                        unitIsDeclared: inner.unitIsDeclared)
                 }
             }
-            throw MeshImportError.unsupportedFormat("zip without a .glb, .gltf, .usdz, .obj or .blend inside")
+            throw MeshImportError.unsupportedFormat("zip without a .glb, .gltf, .usdz, .obj, .blend or .stl inside")
         default:
             throw MeshImportError.unsupportedFormat(ext)
         }
+        let live = parts.filter { $0.mesh.indices.count >= 3 }
+        guard let extent = overallExtentVector(of: live) else { throw MeshImportError.empty }
+        let longest = Double(max(extent.x, extent.y, extent.z))
+        // No unit in OBJ/STL: a whole model under 10 units across is metres
+        // (a LiDAR room scan is 3–8 m; a 4.7 m scan came in as a 4.7 mm
+        // object while this threshold was 2). The prompt lets the user
+        // overrule the guess before anything is built.
+        let detected = declaredScale ?? ((longest > 0 && longest < 10) ? 1000 : 1)
+        return MeshImportProbe(
+            fileName: (fileName as NSString).lastPathComponent, format: format, parts: live,
+            rawExtent: extent, triangleCount: live.reduce(0) { $0 + $1.mesh.triangleCount },
+            detectedScale: detected, unitIsDeclared: declaredScale != nil)
+    }
+
+    /// Every part's positions multiplied by `factor` (mm per file unit).
+    static func scaled(_ parts: [ImportedPart], by factor: Double) -> [ImportedPart] {
+        guard factor != 1 else { return parts }
+        let f = Float(factor)
+        return parts.map { part in
+            var scaled = part
+            for i in scaled.mesh.positions.indices { scaled.mesh.positions[i] *= f }
+            return scaled
+        }
+    }
+
+    /// Bounding-box size of every part combined, in the parts' units.
+    static func overallExtentVector(of parts: [ImportedPart]) -> SIMD3<Float>? {
+        var lo = SIMD3<Float>(repeating: .infinity), hi = SIMD3<Float>(repeating: -.infinity)
+        for part in parts where !part.mesh.positions.isEmpty {
+            let aabb = part.mesh.localAABB
+            lo = simd_min(lo, aabb.min); hi = simd_max(hi, aabb.max)
+        }
+        guard lo.x.isFinite else { return nil }
+        return hi - lo
     }
 
     /// The longest side of every part's combined bounding box.
