@@ -202,6 +202,18 @@ final class AutoConstraintEngineTests: XCTestCase {
         XCTAssertNil(constraint(r, .equalLength))
     }
 
+    /// The 3 % window is capped at the snap tolerance in absolute terms: on a
+    /// part-sized profile a 98 mm segment beside a 96 mm one was inferred
+    /// equal and the solve pulled the whole polyline off its grid. Lengths a
+    /// snap step apart still match.
+    func testEqualLengthIsCappedAtTheSnapToleranceOnLongLines() {
+        let ref = SketchEntity.line(id: UUID(), a: SIMD2(0, 0), b: SIMD2(96, 0))
+        let far = infer(.line, from: SIMD2(0, 10), to: SIMD2(0, 108), existing: [ref])
+        XCTAssertNil(constraint(far, .equalLength), "98 vs 96 is 2 % but 2 mm — placed on purpose")
+        let near = infer(.line, from: SIMD2(0, 10), to: SIMD2(0, 106.2), existing: [ref])
+        XCTAssertNotNil(constraint(near, .equalLength), "0.2 mm is within a snap step")
+    }
+
     func testEqualLengthGateSuppresses() {
         var settings = AutoConstraintSettings()
         settings.equal = false

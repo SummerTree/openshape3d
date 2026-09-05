@@ -1,6 +1,6 @@
 # Status & Next Steps — Handoff Notes
 
-Last updated: 2026-09-03 (SOLIDWORKS practice-problem campaign — extrude end
+Last updated: 2026-09-04 (SOLIDWORKS practice problems through the UI — see the newest mission log entry; before that: 2026-09-03 SOLIDWORKS practice-problem campaign — extrude end
 conditions, B-rep touch commits, draft of an existing face; see the mission
 log just below, and **§4c for the campaign's state and how to resume it**).
 This is the living handoff document: what is DONE, how the newest subsystems
@@ -10,6 +10,49 @@ Companions: `IMPLEMENTATION_PLAN.md` (original phase plan),
 design), `FREECAD_PLAYBOOK.md` (the FreeCAD-derived hardening ledger),
 `TOPO_NAMING_HISTORY_DESIGN.md` (element-naming design, now complete), and
 `AGENT_CONTROL.md` (the `/v1/exec` scripting surface).
+
+## Mission log — 2026-09-04, second session (UI-driven practice-problem pass; 1279/1279 unit tests green)
+
+- **SOLIDWORKS practice problems THROUGH THE UI (2026-09-04).** Goal: complete
+  the practice-problem sheets using the app's own interface and fix what
+  breaks. Two full sheets were built by touch on the iPad Pro simulator with
+  nothing but the palette — **1.1** (72,593.275 vs 72,593: rect + typed
+  dimensions, extrude, a face-sketched Ø12 cut, a tap-to-place stepped
+  tower unioned) and **4.38** (151,817.766, the same −0.30 % reading as the
+  bridge recipe: an L-profile polyline, R23/R9 fillets picked by tapping
+  edges, through hole, counterbore, notch and a cross hole on the leg) —
+  every stage checked against a closed form over the bridge. In parallel
+  three runner workers on their own simulators (ports 8901–8903) read and
+  built the untouched sheets through the palette-equivalent bridge ops:
+  the ledger went from 68 attempted / 60 pass to **115 attempted / 102
+  pass** (Level 4: 10 → 32 attempted, Level 7: 6 → 23, plus 1.13, 1.15,
+  10.8A, 14.1/14.3, 15.1's three configurations), with 130 sheets deferred
+  for a written reason each. **Seven app errors found by the touch pass,
+  all fixed the same day** (gotchas 43–50): (1) every drag stroke anchored
+  at the pan recognizer's `.began` location, ~10 pt past the touch-down
+  (`ViewportGestureController` now captures the touch in `shouldReceive`);
+  (2) Result = Union of a boss flush on a face produced a SECOND body
+  (`commitToolResult` accepts contact for an explicit union); (3) Zoom to
+  Fit ignored sketches and reset to the default camera
+  (`ViewportScene.worldBounds` folds the sketch batches in); (4) a Line
+  tap-chain kept its pre-solve anchor, so an inferred constraint left the
+  polyline open (`refreshChainAnchors`); (5) equal-length inference at 3 %
+  pulled a 96/98 profile off its grid — now capped at the snap tolerance;
+  (6) the fillet/chamfer/shell value fields were formatted numeric fields
+  that could not take an expression and flushed only on Return, so "type
+  23, Apply" blended at 1 mm (`ExpressionValueField`, applied live); (7)
+  the runner relaunched every simulator's app onto port 8899. Bridge gains
+  for driving: `GET /v1/sketches` (every sketch's plane + entities) and
+  `GET /v1/project` (world → viewport points, so taps are aimed from
+  geometry instead of screenshots). Also landed: `Profile.interiorPoint`
+  (a ref's seed is now a point INSIDE the region, and `resolveProfile`
+  lets the seed decide between id matches). Kernel finding from the
+  workers: an R6 fillet running out onto a tangent face (4.57) is refused
+  with "failed validity checking" — the one sheet that failed for a
+  kernel reason. One unexplained one-off: a touch-committed counterbore
+  once came back as a mesh-only body of half the volume with the feature
+  count unchanged; the identical gesture sequence a few minutes later was
+  exact, and the bridge's node is exact — recorded, not reproduced.
 
 ## Mission log — 2026-09-04 (landed, 1264/1264 green)
 
@@ -1624,6 +1667,32 @@ first differing frame is the one you want.
     consumed sketch shares the screen point (the base rect at y=0 stole
     two probes before this was noticed).
 
+43. **A drag's anchor was the pan recognizer's `.began` location, not the
+    touch-down** (fixed 2026-09-04): UIPanGestureRecognizer begins ~10 pt
+    into the movement, so a circle's centre or a rectangle's corner landed a
+    grid step downstream of the finger. `ViewportGestureController` now
+    records the touch in `shouldReceive` and starts the drag there.
+44. **Result = Union with a FLUSH boss made a second body** (fixed): the
+    "touch" test demanded overlap volume even for an explicit union.
+45. **Zoom to Fit framed bodies only** (fixed): with a sketch and no body
+    the camera fell back to the default isometric view.
+46. **Line tap-chains anchored on the pre-solve point** (fixed): an
+    inferred constraint solved right after each segment can move its end;
+    `refreshChainAnchors` re-reads the committed geometry.
+47. **Equal-length inference at 3 % relative** moved a whole polyline off
+    grid (96 vs 98 qualified); now also capped at `SnapEngine.pointTolerance`.
+48. **Blend/shell value fields were formatted numerics** (fixed): no
+    expressions, flushed on Return only, and a centre tap put the caret
+    BEFORE the value. `ExpressionValueField` applies live; still tap the
+    field's right edge so typed text appends.
+49. **`kit.relaunch_fresh` hard-coded port 8899** (fixed): a second
+    simulator's relaunched app failed to bind and came up bridge-less.
+50. Origin plane picker tiles are 2 × 2 mm (`PlanePicking.worldTiles`);
+    a face sketch's plane origin is the face centroid; a hidden (consumed)
+    sketch cannot be tapped for Extrude until the Items panel shows it. All
+    three cost screenshots — `docs/TOUCH_DRIVING_PLAYBOOK.md` has the moves.
+
+
 ---
 
 ## 4. Next missions (prioritized)
@@ -2247,217 +2316,27 @@ B-rep source, analytic holes, extrude-into-target boolean — see mission 2.
 STEP is no longer a build-flag question either: the bridge is compiled in and
 just needs UI (mission 1).
 
-### 4c. SOLIDWORKS practice-problem campaign — IN PROGRESS (2026-09-03)
+### 4c. SOLIDWORKS practice-problem campaign — IN PROGRESS (2026-09-04)
 
 The 365-sheet practice database at solidworks.com/solution/education/
 practice-problems, every sheet printing the finished part's volume, used as
 an outside-in parity harness: read the drawing, build it, score the body's
 volume against the printed number to 0.5 %.
 
-**Where it stands.** 68 sheets attempted, 60 pass, 8 fail (every fail a
-drawing that admits two readings whose printed volume picks the one not
-drawn — none a kernel fault). A further 78 sheets were read and set aside
-with a written reason each, in `scripts/swpp/deferred.json`.
+**Where it stands (2026-09-04, evening).** 115 sheets attempted, 102 pass, 13 fail (every fail a drawing that admits two readings whose printed volume picks the one not drawn, or a blend the kernel refuses — see the 4.57 note; none a wrong volume from a correct feature). A further 130 sheets were read and set aside with a written reason each, in `scripts/swpp/deferred.json`. Three sheets (1.1, 2.13, 4.38) were built entirely BY TOUCH on the simulator and score exactly like their bridge recipes; `docs/TOUCH_DRIVING_PLAYBOOK.md` is how.
 
 | Level | Title | Sheets | Attempted | Pass |
 |---|---|---|---|---|
-| 1 | Basic Sketch & Extrusion | 20 | 14 | 12 |
+| 1 | Basic Sketch & Extrusion | 20 | 16 | 14 |
 | 2 | Sketch Tools & End Conditions | 20 | 9 | 8 |
 | 3 | Global Variables & Sketch Patterns | 8 | 6 | 6 |
-| 4 | Extrude Cut & Fillet/Chamfer | 70 | 10 | 7 |
+| 4 | Extrude Cut & Fillet/Chamfer | 70 | 32 | 28 |
 | 5 | Reference Geometry | 15 | 6 | 6 |
 | 6 | Revolve Boss/Cut | 20 | 7 | 5 |
-| 7 | Feature Patterning | 48 | 6 | 6 |
+| 7 | Feature Patterning | 48 | 24 | 21 |
 | 8 | Sweep Boss/Cut | 14 | 3 | 3 |
+| 10 | CSWA Exam Level | 19 | 1 | 1 |
 | 11 | Hole Wizard | 12 | 3 | 3 |
+| 14 | Rib | 9 | 3 | 2 |
+| 15 | Configurations, Design Tables, Suppress | 16 | 1 | 1 |
 | 16 | Global Variables, Equations, Link Values | 7 | 4 | 4 |
-
-**How to run it.** `scripts/swpp/` is self-contained. `kit.py` drives the
-live app over the agent bridge with palette-equivalent operations in a fresh
-document per problem; `levelN.py` hold the recipes read off the sheets;
-`run.py 6.1 level:5 all` runs them; `results.jsonl` is the ledger (latest row
-per problem wins); `report.py` regenerates the table in
-`docs/SWPP_PRACTICE_PROBLEMS.md`. A sheet printing several volumes (Level 16
-equations/configurations) registers `meta["configs"] = [(label, volume), …]`
-and its build returns one body-id list per configuration; all of them score
-in one ledger row.
-
-**The sheet PDFs are NOT in the repo.** They were fetched to a scratchpad
-from the database's `/api/headless/problems` index (some entries are zips;
-the server throttles after roughly 150 downloads). Re-fetch them before the
-next pass — a recipe can be re-run without its sheet, but a NEW sheet cannot
-be read without one.
-
-**What to do next, in order.**
-
-1. **Level 4 is the biggest untouched pool** — 70 sheets, 10 attempted. It
-   needs no capability the app lacks (extrude, cut, fillet, chamfer), so it
-   is the cheapest way to raise coverage.
-2. **Level 7** (48 sheets, 6 attempted) likewise: patterns of bodies plus a
-   subtract stand in for feature patterns.
-3. **Capability gaps still open**, ranked by how many sheets they block:
-   feature patterns (a patterned cut is three steps here, not one); no hole
-   wizard (counterbores are stacked cylinders with typed standard sizes);
-   angled reference planes exist over the bridge but the palette has no tool
-   for them, so a Level 5 sheet cannot be built by touch; sketch patterns and
-   named global variables (the recipe lays a pattern out as one polygon
-   instead); loft normal-to-profile; assemblies/configurations/interference
-   (Levels 9, 15, 17) are outside a single-part modeller.
-4. **Draft returns a mesh-only body** (see the draft entry in the mission
-   log). A `BRepOffsetAPI_DraftAngle` path would let a drafted casting be
-   filleted analytically and exported; Level 13 wants it.
-5. Some sheets need a **provided START part** (14.4, 14.8, 16.7) that the
-   sheet set does not include. They stay deferred unless those parts surface.
-
-**Reading, not the app, is what stops the count.** The deferred list is the
-honest record of that: drawings whose callouts do not fix the geometry, or
-whose printed volume no reading reproduces. Before writing a recipe, check a
-hand-computed volume against the sheet — a plausible-looking solid that is
-2 % out is almost always a misread drawing, and chasing it in the kernel
-wastes the pass.
-
-Report page (regenerate with the scratchpad's `make_swpp_report.py`):
-https://claude.ai/code/artifact/3633bcd3-4ab6-498f-b940-35894880b105
-
-### 5. Deferred backlog (from Phase D)
-- Transform-as-a-feature — **design blocker documented** in
-  `PHASE_D_DESIGN.md` / memory: eval emits world-space+identity meshes while
-  live tools store localized-mesh+pivot; needs an eval-representation rework
-  (dedicated tranche).
-- Sketch patterns, EdgeRef-based dimensioning, MaterialTagNaming (needs OS3D
-  v2 blob format), linked copies, PrimitiveSpec-dim variables, full unit
-  conversion.
-
----
-
-## 4b. Retrospectives — passes already done (not missions)
-
-These record what a review covered and what it deliberately left. Anything
-still open from them is promoted into §4 above; read these for the reasoning,
-not for a task list.
-
-### Agent exec endpoint + the reference app recipe extraction (2026-08-31)
-
-`POST /v1/exec` (`openshape3d/Agent/AgentExec.swift`), the parameterized half
-`/v1/command` could not provide: one request carries an operation AND its
-numbers. Ops: `sketch.create`, `sketch.addEntities`, and
-`feature.extrude/revolve/pattern/mirror/boolean`. Protocol reference is
-`docs/AGENT_CONTROL.md`.
-
-It goes to `DocumentCommand` + `FeatureKind`, NOT the interactive tool state
-machine, so an exec'd model replays through the same graph as a hand-built one.
-Profiles resolve by SEED POINT via `ProfileDetector` — callers never enumerate
-loop entity ids. Parsing is pure and unit-tested (23 tests); only the main-actor
-hop is in `AgentBridge`, per gotcha 1.
-
-**Three traps this pass hit, all worth remembering:**
-
-1. **`FeatureKind.revolve`'s `Expr` is in DEGREES.** `FeatureGraph` converts to
-   radians once at the OCCT boundary (`angle.value * .pi / 180`). Converting on
-   the way in as well gave a 6.28-DEGREE revolve that rendered as a completely
-   plausible solid. Caught only because a Pappus hand-check disagreed by 60x.
-   Cross-check a new solid's VOLUME against an independent estimate; "it looks
-   right" does not discriminate here.
-2. **A boolean adds no body** — it replaces its target in place. Judging success
-   by "did a new body id appear" reports a working subtract as a no-op.
-3. **`rebuildFrom` bumps `meshRevision` on nodes it did not semantically
-   touch**, so revision-diffing cannot tell you a feature failed either. The
-   reliable signal is `lastEvalErrors[node.id]`.
-
-**the reference app's native archive is readable** — see the file-format memory. ZIP →
-SQLite. Bodies are Parasolid XT (OCCT cannot read it, and no open converter
-exists), but `SketchCurves.Data` is plain JSON and `HistoryTreeNodes` type 2 is
-the feature graph, with type-3 literals decoding as `<uint32 tag><payload>`
-where tag 3 + 8 bytes is a double in METRES. An extractor lives in the session
-scratchpad (the extractor script), not in the repo.
-
-Of the 8 tutorial models, only 4 carry sketches + history (Frame, Block casting,
-Motorcycle cover, 4 motorcycle wheel); Rod clamp / Piston / Piston rod are
-frozen imported solids with no history at all, and Motorcycle ships as a
-Parasolid TEXT `.x_t`. Block casting is unreachable regardless — 7 of its 27
-steps are `MaterializeImportedBodies`.
-
-**Rebuilt from its extracted recipe:** the 4-motorcycle-wheel revolve (34,775,356
-mm3, vs a 36.4M straight-line Pappus estimate — correctly lower because the
-profile's large arc bulges inward), then a 63.5 mm cutter, circular-patterned 5x
-about the axle and subtracted. Still NOT done on that model: the recipe's Mirror
-and second Boolean, and the smaller 12.7 mm bolt-hole circle.
-
-**What exec still cannot do:** fillet, chamfer, shell and the face ops all take
-`EdgeRef`/`FaceRef` — topological signatures, not numbers — so they need a way
-to NAME an edge or face over the wire. That is a design question, not a
-mechanical addition. `Align` has no `FeatureKind` at all.
-
-### the reference app UI parity review (2026-07-23)
-
-A pass over the sketch and solid-modeling UI against the reference app, driving the app
-on the iPad sim and comparing on screen:
-
-- **Live sketch dimensions** while drawing (`LiveDimensionKit` +
-  `SketchLiveDimensionOverlay`): width/height on a rectangle, Ø on a circle
-  (ticked where it meets the curve), length/R for line/arc.
-- **Draw from the current camera** — entering a sketch no longer snaps
-  head-on; it only re-aims from a grazing (>80°) view. Look at Sketch is
-  recomputed on entry so it appears from an angled view.
-- **Orientation-cube face names** (Top/Front/Right…), fading as faces turn away.
-- **Overlay alignment fix** — every projected overlay was ~85pt low (Metal
-  viewport full-bleed vs safe-area-inset SwiftUI overlay); all now
-  `.ignoresSafeArea()` and re-publish the camera on layout/resize.
-- **Named snap chip** (`SnapChipOverlay`) + typed snapping
-  (`SnapEngine.SnapKind`): Endpoint/Midpoint/Center, ranked; rectangles gained
-  edge-midpoint and centre snaps.
-- **Selection accent orange → the reference app blue** (with the user's sign-off), kept
-  distinct from the under-defined blue.
-
-Remaining parity gaps noted but NOT yet done: the sketch grid is drawn
-on the world ground plane only (the reference app re-orients it to the active sketch
-plane); mid-draw numeric entry into the live dimension; rectangle dimensions
-pinning to the drag-facing sides.
-
-### Spec §1–§12 gap sweep (2026-07-22) — suite 658 green
-
-Every ❌ in `PARITY_SPEC.md` through §12 was re-audited and closed
-except §7.5 (SpaceMouse/Wacom — needs a vendor SDK and physical hardware, so
-it cannot be built or tested here). Each landed as a tested backend with the
-UI wiring called out as missing in its spec entry:
-
-| § | What shipped | Where |
-|---|---|---|
-| 1.2 | Automatic line/arc from a pen stroke; wiggle toggles it | `StrokeClassifier` |
-| 2.4 | Re-host a sketch on another plane | `ChangeSketchPlaneCommand` |
-| 2.5 | Live sketch pattern link (edit seed → instances follow) | `SketchPatternLink` |
-| 4.12 | Replace Face: extend/trim onto a parallel plane | `ReplaceFaceKit` |
-| 4.13 | Offset Edge (3D), Single + Chain | `EdgeOffsetKit` |
-| 4.15 | Wrap & Emboss onto a cylinder, no stretch | `WrapKit` |
-| 4.16 | Delete Face + surface healing (OCCT defeaturing) | `FeatureGraph.evalDeleteFace` |
-| 6.5 | Insert Project WITH editable history | `ProjectMergeKit` |
-| 8.4 | Hotkeys + fuzzy Command Search | `CommandRegistry` |
-| 12.1 | OBJ import (round-trips `OBJExporter`) | `OBJImporter` |
-
-Stale statuses corrected in the same pass: §4.14 (ships as §1.13's 3D entry
-point), §6.4 (import exists), §17 (Settings ships).
-
-**Next (promoted to §4 mission 1 — still true a month later, and STEP joined
-the list):** these are backends without UI. The highest-value follow-on is
-wiring them into the palette/gizmo layer — Delete Face and Replace Face are single
-gestures on an existing face selection, and Command Search needs only a
-UIKit key-command bridge plus a launcher sheet.
-
----
-
-## 5. Conventions for the next session
-
-- One tranche = backend (pure, unit-tested) → UI → UI test → full-suite gate →
-  commit. Keep commits per tranche with detailed messages (see `git log`).
-- New geometry ops: `nonisolated` statics on `KernelOps`, end in
-  `.makeWatertight()`, unit-test exact volumes on a cube first.
-- New feature kinds: add the case + eval + arms in `HistoryPanelView.iconName`,
-  `distanceValue`, `EditorViewModel.kindLabel`, `kind(_:replacingExpr:)` —
-  the compiler's exhaustive-switch errors will walk you through them.
-- Update this file at the end of each mission — and when you touch §1 or §4,
-  re-audit them against the CODE, not against what this file last said. Both
-  drifted for a month here: §1 called the B-rep port "not started" while OCCT
-  was running fillet/chamfer/shell/delete-face, and §4's top mission (Shell)
-  had already shipped with three test files. A grep for the type or the test
-  file is a ten-second check that keeps the next session from building
-  something twice.

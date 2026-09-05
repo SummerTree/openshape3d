@@ -117,6 +117,19 @@ final class AgentBridge {
         case let .faces(bodyID):
             return listFaces(bodyID: bodyID, on: viewModel)
 
+        case .sketches:
+            return listSketches(on: viewModel)
+
+        case let .project(points):
+            // Screen points in the viewport's coordinate space (pt, full-bleed
+            // Metal view = the touch space); null where a point is behind the
+            // camera or the camera is not available.
+            let projected: [Any] = points.map { p -> Any in
+                guard let s = viewModel.cameraControl?.worldToScreenPoint(p) else { return NSNull() }
+                return ["x": Double(s.x), "y": Double(s.y)]
+            }
+            return .ok(["points": projected, "count": projected.count])
+
         case let .section(bodyID, origin, normal, xAxisHint, deflection):
             return section(bodyID: bodyID, origin: origin, normal: normal,
                            xAxisHint: xAxisHint, deflection: deflection, on: viewModel)
@@ -648,6 +661,55 @@ final class AgentBridge {
                      + "Edges without a name still blend; ones missing "
                      + "entirely are seams/borders, which never blend.",
         ])
+    }
+
+
+    /// GET /v1/sketches — every sketch with its plane and entities, in
+    /// sketch (u, v) millimetres. Added while building the SOLIDWORKS
+    /// practice sheets by touch (2026-09-04): a polyline that would not close
+    /// could only be diagnosed from pixels until the entities themselves were
+    /// readable.
+    private func listSketches(on viewModel: EditorViewModel) -> AgentResponse {
+        func v2(_ p: SIMD2<Double>) -> [Double] { [p.x, p.y] }
+        func v3(_ p: SIMD3<Double>) -> [Double] { [p.x, p.y, p.z] }
+        let sketches: [[String: Any]] = viewModel.session.document.sketches.map { sketch in
+            let entities: [[String: Any]] = sketch.entities.map { entity in
+                var row: [String: Any] = ["id": entity.id.uuidString,
+                                          "construction": sketch.constructionEntityIDs.contains(entity.id)]
+                switch entity {
+                case let .line(_, a, b):
+                    row["kind"] = "line"; row["a"] = v2(a); row["b"] = v2(b)
+                    row["lengthMM"] = simd_length(b - a)
+                case let .rect(_, lo, hi):
+                    row["kind"] = "rect"; row["min"] = v2(lo); row["max"] = v2(hi)
+                case let .circle(_, c, r):
+                    row["kind"] = "circle"; row["center"] = v2(c); row["radius"] = r
+                case let .arc(_, c, r, a0, a1):
+                    row["kind"] = "arc"; row["center"] = v2(c); row["radius"] = r
+                    row["startAngle"] = a0; row["endAngle"] = a1
+                case let .ellipse(_, c, rx, ry, rot):
+                    row["kind"] = "ellipse"; row["center"] = v2(c)
+                    row["radiusX"] = rx; row["radiusY"] = ry; row["rotation"] = rot
+                case let .polygon(_, c, r, sides, rot):
+                    row["kind"] = "polygon"; row["center"] = v2(c); row["radius"] = r
+                    row["sides"] = sides; row["rotation"] = rot
+                case let .spline(_, points, closed):
+                    row["kind"] = "spline"; row["points"] = points.map(v2); row["closed"] = closed
+                }
+                return row
+            }
+            let constraints: [[String: Any]] = sketch.constraints.map { c in
+                ["kind": "\(c.kind)", "refs": c.refs.map { "\($0)" }]
+            }
+            return ["id": sketch.id.raw.uuidString, "name": sketch.name,
+                    "hidden": sketch.isHidden,
+                    "plane": ["origin": v3(sketch.plane.origin), "xAxis": v3(sketch.plane.xAxis),
+                              "yAxis": v3(sketch.plane.yAxis)],
+                    "entityCount": entities.count, "entities": entities,
+                    "constraints": constraints,
+                    "dimensionCount": sketch.dimensions.count]
+        }
+        return .ok(["sketches": sketches, "count": sketches.count])
     }
 
     private func listFaces(bodyID: String, on viewModel: EditorViewModel) -> AgentResponse {

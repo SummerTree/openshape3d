@@ -253,3 +253,74 @@ def p1_11():
                     .circle((-37.5, 27.5), 7.5).circle((37.5, 27.5), 7.5), (0, 5), 10)
     gusset = Sketch(right(-10)).poly([(-10, 0), (-55, 0), (-55, 15), (-10, 55)])
     return extrude(gusset, (-30, 8), 20, union=[plate])
+
+
+@problem("1.15", 45867)
+def p1_15():
+    # Front-view body 20 deep (z 0..20): 40 wide, 65 tall, a 10 × 14 foot at
+    # the bottom-left, the left flank sloping 30° from vertical between
+    # (10, 35) and the top; a 5-thick lug behind (z −5..0) from x = 10 to
+    # the R7 end round the Ø7 hole at (55, 7); a 5-thick arm in front
+    # (z 20..25) from the flank's top x = 27.32: top edge y = 65 to the R7
+    # end round the Ø6 hole 45 out at y = 58, underside 65° from vertical.
+    import math
+    xs = 10 + 30 * math.tan(math.radians(30))
+    body = extrude(Sketch(front(0)).poly([(0, 0), (40, 0), (40, 65), (xs, 65), (10, 35), (10, 14), (0, 14)]),
+                   (30, 20), 20)
+    lug = (Sketch(front(-5)).line((10, 0), (55, 0)).arc((55, 7), 7, -90, 90).line((55, 14), (10, 14))
+           .line((10, 14), (10, 0)).circle((55, 7), 3.5))
+    extrude(lug, (30, 7), 5, union=[body])
+    cx, cy = xs + 45, 58
+    a = math.radians(25)
+    T = (cx + 7 * math.sin(a), cy - 7 * math.cos(a))
+    yl = T[1] - math.tan(a) * (T[0] - xs)
+    arm = (Sketch(front(20)).line((xs, yl), T).arc((cx, cy), 7, -65, 90).line((cx, 65), (xs, 65))
+           .line((xs, 65), (xs, yl)).circle((cx, cy), 3))
+    extrude(arm, (cx - 10, 60), 5, union=[body])
+    return body
+
+
+@problem("1.13", 9534)
+def p1_13():
+    # Symmetric two-arm wing plate 5 thick: Ø40 hub with a Ø23 hole; the
+    # arms' R5 tip circles are centred on the Ø125 circle at 16° below the
+    # horizontal, the lower edges parallel to those 16° radials (R25
+    # blends into the hub) and the upper edges 4° steeper; each upper
+    # edge blends through a concave R75 into the R3 apex round centred on
+    # the hub circle at (0, 20).
+    import math
+    R, Rt, r3, R75, R25 = 62.5, 5.0, 3.0, 75.0, 25.0
+    a16, a20 = math.radians(16), math.radians(20)
+    C = (R * math.cos(a16), -R * math.sin(a16))
+    d1 = (math.cos(a16), -math.sin(a16)); n1 = (-math.sin(a16), -math.cos(a16))
+    d2 = (math.cos(a20), -math.sin(a20)); n2 = (math.sin(a20), math.cos(a20))
+    LT = (C[0] + Rt * n1[0], C[1] + Rt * n1[1]); UT = (C[0] + Rt * n2[0], C[1] + Rt * n2[1])
+    A = (0, 20)
+    Q = (UT[0] + R75 * n2[0], UT[1] + R75 * n2[1]); w = (Q[0] - A[0], Q[1] - A[1])
+    b = 2 * (w[0] * d2[0] + w[1] * d2[1]); c = w[0] ** 2 + w[1] ** 2 - (R75 + r3) ** 2
+    t = (-b + math.sqrt(b * b - 4 * c)) / 2
+    O75 = (Q[0] + t * d2[0], Q[1] + t * d2[1])
+    TU = (O75[0] - R75 * n2[0], O75[1] - R75 * n2[1])
+    T3 = (A[0] + r3 * (O75[0] - A[0]) / (R75 + r3), A[1] + r3 * (O75[1] - A[1]) / (R75 + r3))
+    Q2 = (LT[0] + R25 * n1[0], LT[1] + R25 * n1[1]); b = 2 * (Q2[0] * d1[0] + Q2[1] * d1[1])
+    c = Q2[0] ** 2 + Q2[1] ** 2 - (20 + R25) ** 2
+    t = (-b + math.sqrt(b * b - 4 * c)) / 2
+    O25 = (Q2[0] + t * d1[0], Q2[1] + t * d1[1])
+    TL = (O25[0] - R25 * n1[0], O25[1] - R25 * n1[1]); TH = (O25[0] * 20 / 45, O25[1] * 20 / 45)
+    ang = lambda cc, p: math.degrees(math.atan2(p[1] - cc[1], p[0] - cc[0]))
+    sk = Sketch(front(0))
+    half = [("arc", (0, 0), 20, -90, ang((0, 0), TH)),
+            ("arc", O25, R25, ang(O25, TL), ang(O25, TH)),
+            ("line", TL, LT),
+            ("arc", C, Rt, ang(C, LT), ang(C, UT) + 360),
+            ("line", UT, TU),
+            ("arc", O75, R75, ang(O75, T3), ang(O75, TU)),
+            ("arc", A, r3, ang(A, T3), 90)]
+    for e in half:
+        if e[0] == "line":
+            sk.line(e[1], e[2]); sk.line((-e[2][0], e[2][1]), (-e[1][0], e[1][1]))
+        else:
+            _, cc, r, a0, a1 = e
+            sk.arc(cc, r, a0, a1); sk.arc((-cc[0], cc[1]), r, 180 - a1, 180 - a0)
+    sk.circle((0, 0), 11.5)
+    return extrude(sk, (0, -16), 5)

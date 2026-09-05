@@ -66,6 +66,14 @@ nonisolated enum AutoConstraintEngine {
     private static let lengthEpsilon: Double = 1e-9
     /// Relative tolerance for `equalLength` inference (3%).
     private static let equalLengthRelativeTolerance: Double = 0.03
+    /// …capped in absolute terms at the point-snap tolerance. Inference adds a
+    /// REAL constraint the solver then satisfies by moving geometry, and 3 %
+    /// of a part-sized line is millimetres: drawing SOLIDWORKS practice
+    /// problem 4.38's L-profile by touch (2026-09-04), a 98 mm segment next
+    /// to a 96 mm one was inferred equal and the solve pulled the whole
+    /// polyline off its grid (96 → 95.667, 150 → 148.167). Two lengths that
+    /// differ by more than a snap step were placed differently on purpose.
+    private static let equalLengthAbsoluteTolerance: Double = SnapEngine.pointTolerance
     /// How far horizontal / vertical guide lines extend past the segment.
     private static let guideMargin: Double = 1.0
 
@@ -248,6 +256,7 @@ nonisolated enum AutoConstraintEngine {
                 guard refLen > lengthEpsilon else { continue }
                 let relError = abs(refLen - length) / refLen
                 if relError <= equalLengthRelativeTolerance,
+                   abs(refLen - length) <= equalLengthAbsoluteTolerance,
                    best == nil || relError < best!.relError {
                     best = (id, relError)
                 }

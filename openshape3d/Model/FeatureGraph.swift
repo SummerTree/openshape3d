@@ -2599,8 +2599,18 @@ private nonisolated struct EvalState {
         let wanted = Set(ref.entityIDs)
         var outer: Profile?
         if !wanted.isEmpty {
-            outer = detected.first { $0.sourceEntityIDs == wanted }
-                ?? detected.first { wanted.isSubset(of: $0.sourceEntityIDs) }
+            // Several regions can be bounded by the SAME entities — a circle
+            // crossed by a rectangle's edge splits into two regions that both
+            // list {circle, rect} — so the recorded seed decides between id
+            // matches before the first match is taken on faith (practice
+            // problem 4.38's counterbore, 2026-09-04: the wrong region replayed
+            // and the touch commit fell back to a broken mesh).
+            let exact = detected.filter { $0.sourceEntityIDs == wanted }
+            let supersets = detected.filter { wanted.isSubset(of: $0.sourceEntityIDs) }
+            if let seed = ref.seedPoint {
+                outer = exact.first { $0.contains(seed) } ?? supersets.first { $0.contains(seed) }
+            }
+            outer = outer ?? exact.first ?? supersets.first
         }
         if outer == nil, let seed = ref.seedPoint {
             // Innermost enclosing region at the seed point.

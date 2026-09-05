@@ -387,9 +387,9 @@ struct EditorView: View {
     /// Chamfer/Fillet bar (Phase E, spec §4.3): shows the pick prompt, the
     /// size field (setback/radius), and Apply/Cancel.
     private func blendBar(_ kind: BlendKind, _ viewModel: EditorViewModel) -> some View {
-        let value = settings.unit.binding(Binding(
+        let value = Binding(
             get: { viewModel.blendValue },
-            set: { viewModel.blendValue = max(0, $0) }))
+            set: { viewModel.blendValue = max(0, $0) })
         return AdaptiveBar(style: .capsule, spacing: 12) {
             Image(systemName: kind == .chamfer ? "square.on.circle" : "circle.circle")
             // When the kernel refused the current size/pick, say WHY — the
@@ -411,13 +411,9 @@ struct EditorView: View {
             }
             Divider().frame(height: 20)
             Text(kind.valueLabel).font(.caption).foregroundStyle(.barLabel).fixedSize()
-            TextField(settings.unit.symbol, value: value,
-                      format: .number.precision(.fractionLength(0...3)))
-                .textFieldStyle(.roundedBorder)
-                .frame(width: 64)
-                .multilineTextAlignment(.trailing)
-                .keyboardType(.decimalPad)
-                .accessibilityIdentifier("BlendValueField")
+            // Text, applied live, arithmetic allowed — see ExpressionValueField.
+            ExpressionValueField(placeholder: settings.unit.symbol, mm: value,
+                                 identifier: "BlendValueField")
             Text(settings.unit.symbol).font(.caption).foregroundStyle(.barLabel).fixedSize()
             // While dragging, show the kernel-derived ceiling the drag is
             // clamped to, so the stop doesn't read as a stuck gesture.
@@ -523,9 +519,9 @@ struct EditorView: View {
     }
 
     private func shellBar(_ viewModel: EditorViewModel) -> some View {
-        let value = settings.unit.binding(Binding(
+        let value = Binding(
             get: { viewModel.shellThickness },
-            set: { viewModel.shellThickness = max(0, $0) }))
+            set: { viewModel.shellThickness = max(0, $0) })
         return AdaptiveBar(style: .capsule, spacing: 12) {
             Image(systemName: "cube.transparent")
             Text(viewModel.shellBodyID == nil
@@ -537,13 +533,8 @@ struct EditorView: View {
                 .fixedSize()
             Divider().frame(height: 20)
             Text("Thickness").font(.caption).foregroundStyle(.barLabel).fixedSize()
-            TextField(settings.unit.symbol, value: value,
-                      format: .number.precision(.fractionLength(0...3)))
-                .textFieldStyle(.roundedBorder)
-                .frame(width: 64)
-                .multilineTextAlignment(.trailing)
-                .keyboardType(.decimalPad)
-                .accessibilityIdentifier("ShellThicknessField")
+            ExpressionValueField(placeholder: settings.unit.symbol, mm: value,
+                                 identifier: "ShellThicknessField")
             Text(settings.unit.symbol).font(.caption).foregroundStyle(.barLabel).fixedSize()
         } actions: {
             Button("Cancel") { viewModel.cancelShell() }

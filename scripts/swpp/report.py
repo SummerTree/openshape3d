@@ -12,8 +12,9 @@ import json, os, sys, collections
 HERE = os.path.dirname(os.path.abspath(__file__))
 LEDGER = os.path.join(HERE, "results.jsonl")
 NOTES = os.path.join(HERE, "notes.json")
-INDEX = os.environ.get("SWPP_INDEX", "/private/tmp/claude-501/-Users-thelodgestudio-projects-openshape3d/"
-                       "dc9b4b67-6478-4caa-9786-2ae7de0be4aa/scratchpad/swpp/problems.json")
+# The database's own index (365 rows from /api/headless/problems), kept in
+# the repo since 2026-09-04 so the report no longer depends on a scratchpad.
+INDEX = os.environ.get("SWPP_INDEX", os.path.join(HERE, "problems.json"))
 
 LEVELS = {
     1: "Basic Sketch & Extrusion", 2: "Sketch Tools & End Conditions",
