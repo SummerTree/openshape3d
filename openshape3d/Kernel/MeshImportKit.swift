@@ -52,13 +52,25 @@ nonisolated enum MeshImportKit {
             return try USDImporter.parts(from: data, fileName: fileName,
                                          unitScale: unitScale ?? USDImporter.unitScale(of: data, ext: ext))
         case "obj":
-            return try OBJTexturedImporter.parts(from: data, siblings: siblings,
-                                                 unitScale: unitScale ?? 1)
+            // OBJ has no unit. Most CAD exports are millimetres; Sketchfab
+            // and game-asset exports are metres. A whole model under 2 units
+            // across is not a 2 mm part, it is metres — scale it up.
+            let parts = try OBJTexturedImporter.parts(from: data, siblings: siblings, unitScale: unitScale ?? 1)
+            if unitScale == nil, let extent = overallExtent(of: parts), extent > 0, extent < 2 {
+                return parts.map { part in
+                    var scaled = part
+                    for i in scaled.mesh.positions.indices { scaled.mesh.positions[i] *= 1000 }
+                    return scaled
+                }
+            }
+            return parts
+        case "blend":
+            return try BlendImporter.parts(from: data, siblings: siblings, unitScale: unitScale ?? 1000)
         case "zip":
             let entries = try ZipReader.entries(in: data)
             // The archive's payload file, by preference: a self-contained
             // scene first, then the OBJ (its MTL/textures ride as siblings).
-            let order = ["glb", "gltf", "usdz", "obj"]
+            let order = ["glb", "gltf", "usdz", "obj", "blend"]
             for wanted in order {
                 if let (path, bytes) = entries.first(where: {
                     ($0.key as NSString).pathExtension.lowercased() == wanted
@@ -67,10 +79,49 @@ nonisolated enum MeshImportKit {
                     return try parts(from: bytes, fileName: path, siblings: entries, unitScale: unitScale)
                 }
             }
-            throw MeshImportError.unsupportedFormat("zip without a .glb, .gltf, .usdz or .obj inside")
+            throw MeshImportError.unsupportedFormat("zip without a .glb, .gltf, .usdz, .obj or .blend inside")
         default:
             throw MeshImportError.unsupportedFormat(ext)
         }
+    }
+
+    /// The longest side of every part's combined bounding box.
+    static func overallExtent(of parts: [ImportedPart]) -> Float? {
+        var lo = SIMD3<Float>(repeating: .infinity), hi = SIMD3<Float>(repeating: -.infinity)
+        for part in parts where !part.mesh.positions.isEmpty {
+            let aabb = part.mesh.localAABB
+            lo = simd_min(lo, aabb.min); hi = simd_max(hi, aabb.max)
+        }
+        guard lo.x.isFinite else { return nil }
+        return (hi - lo).max()
+    }
+
+    /// Files that sit beside `url` (and one folder down, for textures/), for
+    /// callers that can read the directory — the DEBUG bridge, or a file
+    /// opened in place on the Mac. An OBJ's .mtl and images, a .gltf's .bin,
+    /// a .blend's unpacked textures all live there.
+    static func folderSiblings(of url: URL, limitBytes: Int = 256 << 20) -> [String: Data] {
+        let dir = url.deletingLastPathComponent()
+        let fm = FileManager.default
+        guard let top = try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: [.isDirectoryKey, .fileSizeKey]) else { return [:] }
+        var out: [String: Data] = [:]
+        var budget = limitBytes
+        func add(_ file: URL, key: String) {
+            guard file != url, let size = (try? file.resourceValues(forKeys: [.fileSizeKey]))?.fileSize,
+                  size <= budget, let data = try? Data(contentsOf: file) else { return }
+            budget -= size
+            out[key] = data
+        }
+        for entry in top {
+            if (try? entry.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true {
+                for inner in (try? fm.contentsOfDirectory(at: entry, includingPropertiesForKeys: [.fileSizeKey])) ?? [] {
+                    add(inner, key: "\(entry.lastPathComponent)/\(inner.lastPathComponent)")
+                }
+            } else {
+                add(entry, key: entry.lastPathComponent)
+            }
+        }
+        return out
     }
 
     /// Case-insensitive lookup of a referenced file among the siblings, by

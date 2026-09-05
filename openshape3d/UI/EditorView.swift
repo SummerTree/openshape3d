@@ -796,9 +796,9 @@ struct EditorView: View {
                 showImporter = true
             }
             .accessibilityIdentifier("ImportSTEP")
-            // Textured meshes: glTF/GLB, USDZ, OBJ with its MTL and images,
+            // Textured meshes: glTF/GLB, USDZ, OBJ with its MTL and images, .blend,
             // or a zip holding any of them. Parts become mesh bodies.
-            Button("OBJ / glTF / USDZ…") {
+            Button("OBJ / glTF / USDZ / Blender…") {
                 importRequest = .mesh
                 showImporter = true
             }

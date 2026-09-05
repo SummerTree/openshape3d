@@ -110,6 +110,28 @@ design), `FREECAD_PLAYBOOK.md` (the FreeCAD-derived hardening ledger),
   data: URI, zipped OBJ+MTL+PNG with a deflated entry, OBJ without MTL, zip
   without a model refused, usda + usdz through Model I/O, `metersPerUnit`
   parsing, MeshBlob v2). Full unit suite 1291/1291 on os3d-unit.
+- **Blender files import too (2026-09-05, `Kernel/BlendImporter.swift`).**
+  A .blend is a memory dump described by its own DNA1 catalogue; the reader
+  parses that catalogue and reads every field by name at the offset it
+  gives, so one reader spans versions: uncompressed and gzip files, 32/64-
+  bit, either endianness; mesh objects via MVert/MPoly/MLoop (2.63–3.4) or
+  the "position" / ".corner_vert" / poly_offset_indices layers (3.5+); UVs
+  from `mloopuv`, a CD_MLOOPUV or a CD_PROP_FLOAT2 layer; one part per
+  material slot with the slot's viewport colour and a base-colour image
+  from a 2.7x texture slot or a 2.8+ Image Texture node (packed in the
+  file, or beside it). Z-up metres → Y-up mm. zstd-compressed saves
+  (Blender 3.0+ "Compress") are refused with a message — no zstd on iOS.
+  Checked against Sketchfab's own glTF conversions of two Blender 2.78 CAD
+  uploads (day16: 27 450 triangles, 6000 × 6000 × 9381 mm; day50: 1 482
+  triangles with its packed base colour): identical to 0.01 mm.
+  `BlendImportTests` builds a synthetic .blend (DNA and all) to pin the
+  axis swap, UV flip, packed image and gzip path.
+- **Loose OBJ/glTF/.blend paths pick up their folder** over the bridge
+  (`MeshImportKit.folderSiblings`), so an .obj finds its .mtl; and an OBJ
+  whose whole model is under 2 units across is taken as metres (×1000) —
+  Sketchfab's Case_for_Tools came in at 0.34 mm otherwise; now 337 mm, 27
+  material parts, 115 248 triangles. Unnamed OBJ groups take the file's
+  name ("Case (App0)").
 - **Verified on the real thing (2026-09-05):** the Sketchfab "Mechanical
   CAD Model Showcase" (CC-BY, devkrsm; the user downloaded it, since the
   site needs a login) imports from all three of its downloads — GLB, the

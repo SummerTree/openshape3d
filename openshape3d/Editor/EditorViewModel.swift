@@ -387,10 +387,10 @@ final class EditorViewModel {
     /// zip). Every part becomes its own body — texture coordinates and the
     /// albedo image ride along on the mesh and material — and all of them
     /// land as ONE undo step, like STEP.
-    func importMesh(data: Data, fileName: String) {
+    func importMesh(data: Data, fileName: String, siblings: [String: Data] = [:]) {
         let parts: [ImportedPart]
         do {
-            parts = try MeshImportKit.parts(from: data, fileName: fileName)
+            parts = try MeshImportKit.parts(from: data, fileName: fileName, siblings: siblings)
         } catch MeshImportError.unsupportedFormat(let what) {
             errorMessage = "Couldn't import “\(fileName)” — \(what.isEmpty ? "unknown" : what) files aren't supported."
             return
@@ -414,10 +414,14 @@ final class EditorViewModel {
             for i in mesh.positions.indices { mesh.positions[i] -= center }
             var transform = Transform3D.identity
             transform.translation = SIMD3<Double>(center)
-            let base = part.name.trimmingCharacters(in: .whitespaces)
+            // A part the file never named ("Part", "Part (material)") takes
+            // the file's own name instead.
+            var base = part.name.trimmingCharacters(in: .whitespaces)
+            if base.isEmpty || base == "Part" { base = fallback }
+            else if base.hasPrefix("Part (") { base = fallback + base.dropFirst(4) }
             var body = Body(
                 id: BodyID(),
-                name: document.uniqueBodyName(base: base.isEmpty || base == "Part" ? fallback : base),
+                name: document.uniqueBodyName(base: base),
                 transform: transform,
                 primitive: nil,
                 render: mesh,

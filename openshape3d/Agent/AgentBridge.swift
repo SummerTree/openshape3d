@@ -199,7 +199,11 @@ final class AgentBridge {
             }
             let before = Set(session.document.bodies.map(\.id))
             viewModel.errorMessage = nil
-            viewModel.importMesh(data: data, fileName: fileName ?? url.lastPathComponent)
+            // A loose .obj/.gltf/.blend needs the files beside it; the host
+            // directory is readable here, so hand them over.
+            let loose = ["obj", "gltf", "blend"].contains(url.pathExtension.lowercased())
+            viewModel.importMesh(data: data, fileName: fileName ?? url.lastPathComponent,
+                                 siblings: loose ? MeshImportKit.folderSiblings(of: url) : [:])
             if let message = viewModel.errorMessage {
                 return .failure(422, "Unprocessable Entity", error: "import_failed", message: message)
             }
