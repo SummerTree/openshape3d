@@ -1399,23 +1399,26 @@ nonisolated extension FeatureGraph {
             return planar.origin + planar.basisX * c.x + planar.basisY * c.y
         }
         guard let cyl = resolved.cylinder, !cyl.triangles.isEmpty else { return nil }
-        var sum = SIMD3<Double>.zero
-        var n = 0.0
+        // ONE facet's centroid, pushed out to the true radius — never the
+        // centroid of the whole face: a full 360° cylinder's facets average
+        // to a point ON the axis, whose radial direction is undefined, and
+        // every cylindrical draft in the app was silently skipped that way
+        // (found by the Level 12/13 casting sheets, 2026-09-04).
+        let axis = simd_normalize(cyl.axisDir)
         for t in cyl.triangles where t * 3 + 2 < mesh.indices.count {
+            var sum = SIMD3<Double>.zero
             for k in 0..<3 {
                 let p = mesh.positions[Int(mesh.indices[t * 3 + k])]
-                sum += SIMD3(Double(p.x), Double(p.y), Double(p.z)); n += 1
+                sum += SIMD3(Double(p.x), Double(p.y), Double(p.z))
             }
+            let centroid = sum / 3
+            let along = simd_dot(centroid - cyl.axisPoint, axis)
+            let onAxis = cyl.axisPoint + axis * along
+            let radial = centroid - onAxis
+            guard simd_length(radial) > 1e-9 else { continue }
+            return onAxis + simd_normalize(radial) * cyl.radius
         }
-        guard n > 0 else { return nil }
-        let centroid = sum / n
-        let axis = simd_normalize(cyl.axisDir)
-        let along = simd_dot(centroid - cyl.axisPoint, axis)
-        let onAxis = cyl.axisPoint + axis * along
-        var radial = centroid - onAxis
-        guard simd_length(radial) > 1e-9 else { return nil }
-        radial = simd_normalize(radial) * cyl.radius
-        return onAxis + radial
+        return nil
     }
 
     // MARK: Chamfer / Fillet (edge blends)

@@ -70,3 +70,32 @@ final class DraftFaceBRepTests: XCTestCase {
         }
     }
 }
+
+final class DraftCylinderBRepTests: XCTestCase {
+    /// A Ø40 × 30 boss drafted 10° about its base becomes a cone frustum:
+    /// R20 at the base, R20 − 30·tan10° at the top.
+    func testCylindricalWallDraftsToAFrustum() throws {
+        let cyl = try XCTUnwrap(OCCTKernel.primitiveShape(
+            .cylinder(radius: 20, height: 30), placement: .identity))
+        let r = OCCTKernel.renderMesh(from: cyl)
+        var lo = SIMD3<Double>(repeating: .infinity), hi = SIMD3<Double>(repeating: -.infinity)
+        for p in r.positions {
+            let q = SIMD3(Double(p.x), Double(p.y), Double(p.z)); lo = simd_min(lo, q); hi = simd_max(hi, q)
+        }
+        let center = (lo + hi) / 2
+        let base = SIMD3(center.x, lo.y, center.z)
+        let wallPoint = SIMD3(center.x + 20, center.y, center.z)
+        let result = OCCTKernel.draftResult(
+            cyl, facesAt: [wallPoint], degrees: 10,
+            neutralOrigin: base, neutralNormal: SIMD3(0, 1, 0),
+            tolerance: OCCTKernel.matchTolerance(for: cyl))
+        switch result {
+        case .failure(let error):
+            XCTFail("cylinder draft refused: \(error)")
+        case .success(let drafted):
+            let r1 = 20.0, r2 = 20 - 30 * tan(10 * Double.pi / 180)
+            let frustum = Double.pi * 30 / 3 * (r1 * r1 + r1 * r2 + r2 * r2)
+            XCTAssertEqual(OCCTKernel.volume(drafted), frustum, accuracy: 1e-2)
+        }
+    }
+}
