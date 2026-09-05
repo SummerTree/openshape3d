@@ -868,6 +868,21 @@ final class EditorViewModel {
             // profile can be pulled into 3D.
             scene.profileFills.append(contentsOf: fillBatches(for: sketch))
         }
+        // The regions an armed profile tool is working on read stronger than
+        // the rest: the first one and every extra one tapped in afterwards.
+        // Without this a second region joined the extrude (its volume proved
+        // it) with no visible sign that the tap had landed.
+        if let context = toolContext, let sketchID = context.sketchID,
+           let sketch = session.document.sketches.first(where: { $0.id == sketchID }) {
+            let armedColor = SIMD4<Float>(0.16, 0.55, 1.0, 0.45)
+            for entry in [(context.profile, context.holes)] + context.extraProfiles.map { ($0.profile, $0.holes) } {
+                let triangles = SketchTessellator.fillTriangles(
+                    for: entry.0, holes: entry.1, on: sketch.plane)
+                if !triangles.isEmpty {
+                    scene.profileFills.append(SketchFillBatch(triangles: triangles, color: armedColor))
+                }
+            }
+        }
         if case .sketching(let activeID, _) = mode,
            let sketch = session.document.sketches.first(where: { $0.id == activeID }) {
             let pendings = [pendingEntity, pendingArcEntity].compactMap { $0 }

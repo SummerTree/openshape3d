@@ -80,10 +80,11 @@ final class CameraTests: XCTestCase {
         let right = StandardView.right.applied(to: camera)
         XCTAssertEqual(right.azimuth, .pi / 2, accuracy: 1e-6)
 
-        // Top/bottom stop at the ±89° clamp (1° off a true plan view).
+        // Top/bottom stop at the ±89° clamp (1° off a true plan view) and
+        // square the azimuth to the nearest quadrant (the default 36° → 0).
         let top = StandardView.top.applied(to: camera)
         XCTAssertEqual(top.elevation, TurntableCamera.elevationLimit, accuracy: 1e-6)
-        XCTAssertEqual(top.azimuth, camera.azimuth, accuracy: 1e-6)
+        XCTAssertEqual(top.azimuth, StandardView.nearestQuadrant(camera.azimuth), accuracy: 1e-6)
         let bottom = StandardView.bottom.applied(to: camera)
         XCTAssertEqual(bottom.elevation, -TurntableCamera.elevationLimit, accuracy: 1e-6)
 
@@ -168,5 +169,19 @@ final class CameraTests: XCTestCase {
         XCTAssertNil(OrientationCube.intersectCube(
             origin: SIMD3(3, 0, 4), direction: SIMD3(0, 0, -1)
         ))
+    }
+
+    // MARK: - Plan views end upright
+
+    func testTopViewSquaresTheAzimuthToTheNearestQuadrant() {
+        var cam = TurntableCamera()
+        cam.azimuth = 36 * .pi / 180          // a stray orbit left the view rolled
+        let top = StandardView.top.applied(to: cam)
+        XCTAssertEqual(top.azimuth, 0, accuracy: 1e-6)
+        XCTAssertEqual(top.elevation, TurntableCamera.elevationLimit, accuracy: 1e-6)
+        cam.azimuth = 130 * .pi / 180
+        XCTAssertEqual(StandardView.bottom.applied(to: cam).azimuth, .pi / 2, accuracy: 1e-6)
+        cam.azimuth = -100 * .pi / 180
+        XCTAssertEqual(StandardView.top.applied(to: cam).azimuth, -.pi / 2, accuracy: 1e-6)
     }
 }

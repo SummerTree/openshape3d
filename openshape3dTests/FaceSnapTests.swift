@@ -45,12 +45,14 @@ final class FaceSnapTests: XCTestCase {
     }
 
     /// Sliding along a boundary: not near any named point, but close to the
-    /// edge, should land exactly ON the edge rather than on the grid.
+    /// edge, should land exactly ON the edge rather than on the grid — and
+    /// at a grid step along it (2026-09-04: a raw 10.025 slide made a wall
+    /// 0.25 % oversize).
     func testSlidesAlongAnEdge() {
         let result = snap(SIMD2(1.2, 2.1))       // near the top edge, away from corner/midpoint
         XCTAssertEqual(result.kind, .edge)
         XCTAssertEqual(result.point.y, 2, accuracy: 1e-9, "pinned onto the edge line")
-        XCTAssertEqual(result.point.x, 1.2, accuracy: 1e-9, "free to slide along it")
+        XCTAssertEqual(result.point.x, 1.0, accuracy: 1e-9, "slides in 0.5 mm steps from the corner")
     }
 
     /// A named point must beat a mere edge slide, or you could never land on a
@@ -83,5 +85,27 @@ final class FaceSnapTests: XCTestCase {
     func testNoFaceLoopsIsUnchangedGridBehaviour() {
         let result = SnapEngine.snap(SIMD2(1.2, 2.1), in: nil)
         XCTAssertEqual(result.kind, .grid)
+    }
+
+    // MARK: - Edge snaps land on grid steps from the nearer corner
+
+    func testEdgeSnapQuantisesAlongTheEdge() {
+        // A 20 mm face edge from (0,0) to (20,0); a finger 7.025 along and
+        // 0.1 above it used to snap to (7.025, 0). Now it lands on 7.0.
+        let loops: [[SIMD2<Double>]] = [[SIMD2(0, 0), SIMD2(20, 0), SIMD2(20, 12), SIMD2(0, 12)]]
+        let result = SnapEngine.snap(SIMD2(7.025, 0.1), in: nil, faceLoops: loops)
+        XCTAssertEqual(result.kind, .edge)
+        XCTAssertEqual(result.point.x, 7.0, accuracy: 1e-9)
+        XCTAssertEqual(result.point.y, 0.0, accuracy: 1e-9)
+    }
+
+    func testEdgeSnapMeasuresFromTheNearerCornerOnAnOffGridEdge() {
+        // Corners at .25 (the dimension-about-centre trap): steps are still
+        // whole 0.5 mm from the corner the finger is nearer to.
+        let a = SIMD2<Double>(0.25, 0.25), b = SIMD2<Double>(9.25, 0.25)
+        let near = SnapEngine.gridAlongEdge(SIMD2(1.4, 0.25), a, b)
+        XCTAssertEqual(near.x, 1.25, accuracy: 1e-9)   // 1.15 from a rounds to 1.0
+        let far = SnapEngine.gridAlongEdge(SIMD2(8.1, 0.25), a, b)
+        XCTAssertEqual(far.x, 8.25, accuracy: 1e-9)    // 1.0 from b
     }
 }
