@@ -1,6 +1,6 @@
 # Status & Next Steps — Handoff Notes
 
-Last updated: 2026-09-05 (in-app bug reporter, Items Manager folders, project folders in the gallery — see the three newest mission log entries; before that: textured mesh import glTF/USDZ/OBJ + exact OCCT face draft; before that: SOLIDWORKS practice problems through the UI; 2026-09-03 SOLIDWORKS practice-problem campaign — extrude end
+Last updated: 2026-09-05 (LiDAR scan import fixes, in-app bug reporter, Items Manager folders, project folders in the gallery — see the three newest mission log entries; before that: textured mesh import glTF/USDZ/OBJ + exact OCCT face draft; before that: SOLIDWORKS practice problems through the UI; 2026-09-03 SOLIDWORKS practice-problem campaign — extrude end
 conditions, B-rep touch commits, draft of an existing face; see the mission
 log just below, and **§4c for the campaign's state and how to resume it**).
 This is the living handoff document: what is DONE, how the newest subsystems
@@ -10,6 +10,42 @@ Companions: `IMPLEMENTATION_PLAN.md` (original phase plan),
 design), `FREECAD_PLAYBOOK.md` (the FreeCAD-derived hardening ledger),
 `TOPO_NAMING_HISTORY_DESIGN.md` (element-naming design, now complete), and
 `AGENT_CONTROL.md` (the `/v1/exec` scripting surface).
+
+## Mission log — 2026-09-05, LiDAR room-scan import: scale, plane picker, Extrude stall
+
+- **Report:** `Untitled_Scan_11_02_32.zip` (a scanner-app OBJ + JPG, 102 749
+  open triangles, 4.75 × 1.96 × 2.72 **metres**) imported "large and hard
+  to work with", the sketch plane picker was unusable, and Extrude crashed.
+- **What was actually happening.** (1) The OBJ metres heuristic fired only
+  under 2 units, so the room came in as a 4.7 mm object with a 0.5 mm grid
+  and a camera fitted to a speck. (2) The origin plane tiles were a fixed
+  0.3–2.3 mm square: inside the scan and, once the scale is right, a speck
+  beside a 4.7 m room. (3) On Extrude, `commitToolResult` intersected the
+  tool with EVERY body to decide Auto's union/subtract, judged the scan
+  "touched", then unioned the box into the scan and ran `makeWatertight`
+  on 100k+ polygons — over a minute on the main thread (sampled:
+  `commitExtrude → commitToolResult → Mesh.makeWatertight`), which a
+  device's watchdog reports as a crash.
+- **Fixes.** OBJ heuristic threshold 2 → 10 units (`MeshImportKit`);
+  `PlanePicking.worldTiles(sceneExtent:)` sized from the largest visible
+  body (`EditorViewModel.worldPlaneTiles`, 2.3 mm floor so the empty-scene
+  UI tests are unchanged); `BooleanCandidacy` (Kernel): mesh-only bodies
+  over 50 000 triangles never enter a CSG — Auto builds a new body beside
+  them, an explicit Union/Subtract/Intersect aimed at one is refused with a
+  message naming the body and its triangle count — plus an AABB gate in the
+  commit loop before any CSG. Verified by touch: scan imports at
+  4746 × 1960 × 2691 mm, room-sized picker tiles, a 1600 × 1200 × 300 mm
+  extrude commits instantly next to the scan. `HeavyMeshGuardTests` (3).
+- **Regression check:** ExtrudeFlow, BooleanFlow, FaceFlow, RevolveFlow,
+  Planes, Items and SketchEdit UI tests — all green except
+  `PlanesUITests/testSketchOnFaceThenExtrudeNewBody`, which fails the same
+  way with these changes stashed (the post-delete tap at (0.30, 0.62) no
+  longer selects the surviving box) — pre-existing on this branch, not
+  from this fix; listed with `HistoryReorderUITests` as a known break.
+- **Still open:** booleans *against* a heavy scan (e.g. cutting it) are
+  refused rather than slow; a decimate-on-import or an OCCT mesh boolean
+  would be the next step. Unit prompt on mesh import (Shapr3D asks) would
+  remove the heuristic entirely.
 
 ## Mission log — 2026-09-05, in-app bug reporter
 
@@ -220,7 +256,8 @@ design), `FREECAD_PLAYBOOK.md` (the FreeCAD-derived hardening ledger),
   axis swap, UV flip, packed image and gzip path.
 - **Loose OBJ/glTF/.blend paths pick up their folder** over the bridge
   (`MeshImportKit.folderSiblings`), so an .obj finds its .mtl; and an OBJ
-  whose whole model is under 2 units across is taken as metres (×1000) —
+  whose whole model is under 10 units across is taken as metres (×1000;
+  was 2 until a 4.7 m LiDAR room scan came in as 4.7 mm, 2026-09-05) —
   Sketchfab's Case_for_Tools came in at 0.34 mm otherwise; now 337 mm, 27
   material parts, 115 248 triangles. Unnamed OBJ groups take the file's
   name ("Case (App0)").
@@ -1908,7 +1945,9 @@ first differing frame is the one you want.
     field's right edge so typed text appends.
 49. **`kit.relaunch_fresh` hard-coded port 8899** (fixed): a second
     simulator's relaunched app failed to bind and came up bridge-less.
-50. Origin plane picker tiles are 2 × 2 mm (`PlanePicking.worldTiles`);
+50. Origin plane picker tiles scale with the scene — outer edge 60 % of the
+    largest visible body extent, 2.3 mm floor (`PlanePicking.worldTiles(sceneExtent:)`,
+    fixed 2 × 2 mm before 2026-09-05);
     a face sketch's plane origin is the face centroid; a hidden (consumed)
     sketch cannot be tapped for Extrude until the Items panel shows it. All
     three cost screenshots — `docs/TOUCH_DRIVING_PLAYBOOK.md` has the moves.

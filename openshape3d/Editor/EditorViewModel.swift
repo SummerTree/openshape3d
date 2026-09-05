@@ -1066,7 +1066,7 @@ final class EditorViewModel {
         // its plane, or while Insert Image waits for its target plane.
         switch mode {
         case .pickingSketchPlane, .pickingSplitCutter, .pickingSectionPlane, .pickingImagePlane:
-            scene.planePickers = PlanePicking.worldTiles + constructionPlaneTiles
+            scene.planePickers = worldPlaneTiles + constructionPlaneTiles
         default:
             break
         }
@@ -1155,6 +1155,18 @@ final class EditorViewModel {
                        corners[2], corners[3], corners[3], corners[0]],
             color: border
         ))
+    }
+
+    /// Origin plane pickers sized to what is in the scene (see
+    /// `PlanePicking.worldTiles(sceneExtent:)`): the largest visible body
+    /// extent, so a metre-scale scan gets metre-scale tiles.
+    private var worldPlaneTiles: [PlanePickerTile] {
+        var extent = 0.0
+        for body in session.document.bodies where !body.isHidden {
+            let b = Self.worldBounds(of: body)
+            extent = max(extent, b.max.x - b.min.x, b.max.y - b.min.y, b.max.z - b.min.z)
+        }
+        return PlanePicking.worldTiles(sceneExtent: extent)
     }
 
     /// Tappable quads for the document's visible construction planes.
@@ -4326,7 +4338,7 @@ final class EditorViewModel {
             return
         }
         let world = body.euclidMesh().transformed(by: body.transform.euclid)
-        let tiles = PlanePicking.worldTiles + constructionPlaneTiles
+        let tiles = worldPlaneTiles + constructionPlaneTiles
         if let hit = PlanePicking.pick(ray: ray, tiles: tiles) {
             let halves = KernelOps.split(body: world, byPlane: hit.tile.plane)
             performSplit(of: body, halves: (halves.kept, halves.other))
@@ -5040,7 +5052,7 @@ final class EditorViewModel {
     /// Tap routing while Section View waits for its plane: a world or
     /// construction plane tile, or a planar body face (spec §16.1).
     private func handleSectionPlanePick(ray: Ray) {
-        let tiles = PlanePicking.worldTiles + constructionPlaneTiles
+        let tiles = worldPlaneTiles + constructionPlaneTiles
         let tileHit = PlanePicking.pick(ray: ray, tiles: tiles)
         let bodyHit = HitTester.pickBody(ray: ray, in: scene)
 
@@ -6466,7 +6478,9 @@ final class EditorViewModel {
         if let source = context.sourceBody {
             return session.document.body(with: source).map { [$0] } ?? []
         }
-        return session.document.bodies
+        // Heavy imported meshes are scenery, never CSG operands
+        // (`BooleanCandidacy`) — the scan that took Extrude down.
+        return session.document.bodies.filter(BooleanCandidacy.allows)
     }
 
     /// World-space AABB from the render mesh's local AABB (cheap — no Euclid
@@ -6958,8 +6972,16 @@ final class EditorViewModel {
         // came back as a SECOND body. The flush contact leaves zero-volume
         // sliver polygons in the intersection (the very signal Auto had to
         // stop trusting), so an explicit union accepts contact as touching.
+        // AABB gate before any CSG: bodies nowhere near the tool cost
+        // nothing. Inflated a hair so flush contact (explicit Union) passes.
+        let toolBounds = mergeTool.bounds
+        let gate = Euclid.Bounds(
+            min: toolBounds.min - Vector(1e-3, 1e-3, 1e-3),
+            max: toolBounds.max + Vector(1e-3, 1e-3, 1e-3))
         var touched: [(target: Body, worldTarget: Euclid.Mesh, pushesIn: Bool)] = []
         for target in booleanCandidates(for: context) {
+            guard context.sourceBody == target.id
+                    || gate.intersects(Self.worldBounds(of: target)) else { continue }
             let worldTarget = target.euclidMesh().transformed(by: target.transform.euclid)
             let pushesIn = sample.map { worldTarget.intersects($0) } ?? false
             let overlap = worldTarget.intersection(mergeTool)
@@ -6970,6 +6992,15 @@ final class EditorViewModel {
             if touches {
                 touched.append((target, worldTarget, pushesIn))
             }
+        }
+
+        // An explicit boolean aimed at a heavy mesh gets told why nothing
+        // happened, instead of a silent stand-alone body or a stall.
+        if touched.isEmpty, context.booleanOverride != .auto,
+           let heavy = BooleanCandidacy.heavyBodies(in: session.document.bodies)
+               .first(where: { gate.intersects(Self.worldBounds(of: $0)) }) {
+            errorMessage = BooleanCandidacy.refusalMessage(for: heavy)
+            return
         }
 
         let kind: BooleanKind
@@ -8979,7 +9010,7 @@ final class EditorViewModel {
 
     /// Tap routing while the plane tiles are up.
     private func handlePlanePick(ray: Ray, tool: SketchTool) {
-        let tiles = PlanePicking.worldTiles + constructionPlaneTiles
+        let tiles = worldPlaneTiles + constructionPlaneTiles
         let tileHit = PlanePicking.pick(ray: ray, tiles: tiles)
         let bodyHit = HitTester.pickBody(ray: ray, in: scene)
 
@@ -10962,7 +10993,7 @@ final class EditorViewModel {
             mode = .idle
             return
         }
-        let tiles = PlanePicking.worldTiles + constructionPlaneTiles
+        let tiles = worldPlaneTiles + constructionPlaneTiles
         let plane = PlanePicking.pick(ray: ray, tiles: tiles)?.tile.plane ?? .ground
         pendingImageData = nil
         insertImage(data: data, on: plane)

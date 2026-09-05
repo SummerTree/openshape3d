@@ -56,7 +56,12 @@ nonisolated enum MeshImportKit {
             // and game-asset exports are metres. A whole model under 2 units
             // across is not a 2 mm part, it is metres — scale it up.
             let parts = try OBJTexturedImporter.parts(from: data, siblings: siblings, unitScale: unitScale ?? 1)
-            if unitScale == nil, let extent = overallExtent(of: parts), extent > 0, extent < 2 {
+            // No unit in the format. A whole model under 10 units across is
+            // metres (a LiDAR room scan is 3–8 m; a 4.7 m scan came in as a
+            // 4.7 mm object before this was raised from 2). A millimetre
+            // part under 10 mm is rarer than a scan, and still opens — just
+            // 1000× too big, with Scale to hand.
+            if unitScale == nil, let extent = overallExtent(of: parts), extent > 0, extent < 10 {
                 return parts.map { part in
                     var scaled = part
                     for i in scaled.mesh.positions.indices { scaled.mesh.positions[i] *= 1000 }
