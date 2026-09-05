@@ -11,6 +11,25 @@ design), `FREECAD_PLAYBOOK.md` (the FreeCAD-derived hardening ledger),
 `TOPO_NAMING_HISTORY_DESIGN.md` (element-naming design, now complete), and
 `AGENT_CONTROL.md` (the `/v1/exec` scripting surface).
 
+## Mission log — 2026-09-05, full UI suite on the branch (and a stuck test simulator)
+
+- **Result:** 109 executed, 100 passed, 2 skipped, 7 failed in 65 min on
+  `os3d-test`. Six of the seven were NOT the branch: Dimension line-length,
+  ParityWalkthrough 11 (dimension editing), both ReplaceFace tests, Section
+  via ZX tile, and Planes sketch-on-face all failed deterministically in
+  isolation on `os3d-test`, passed unchanged on `os3d-touch`, and passed on
+  `os3d-test` after a `simctl shutdown`/`boot`. Its home screen was
+  rendering LANDSCAPE in a portrait framebuffer — every precise viewport
+  tap (a 2 mm tile, a face, a dimension label, the 4 mm box) landed off
+  target while big-target taps kept passing, which is why the failures
+  looked like a regression in "taps". `GalleryFolderUITests` had set
+  `.landscapeLeft` in `setUp` earlier that day; it is portrait now.
+  (`CompactWidthBarUITests` also rotates to landscape, inside one test —
+  the suite has survived that before; the reboot is the fix either way.)
+- **Still failing, genuinely:** `HistoryReorderUITests/testDragReorderTwoExtrudes`
+  (pre-existing since 2026-09-03; fails on both simulators).
+- **Gotcha 56 added below.**
+
 ## Mission log — 2026-09-05, Import Units prompt (Shapr3D parity)
 
 - **What landed.** Picking a mesh file (OBJ, STL, glTF/GLB, USDZ, .blend,
@@ -2012,6 +2031,15 @@ first differing frame is the one you want.
 
 
 ---
+56. **A UI-test simulator can get stuck rotated.** Symptom: a handful of
+    precise viewport taps (plane tiles, faces, dimension labels, a 4 mm box)
+    fail deterministically while big-target taps pass, and the same tests
+    pass on another simulator. `simctl io <udid> screenshot` shows a
+    landscape home screen in a portrait image. Fix: `xcrun simctl shutdown`
+    + `boot` that simulator. Prevention: keep `XCUIDevice.shared.orientation
+    = .portrait` in `setUp`; a test that must rotate should rotate back in
+    `tearDown`. Cost 2026-09-05: an hour of bisecting the branch for a
+    "tap regression" that was the device.
 
 ## 4. Next missions (prioritized)
 

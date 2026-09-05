@@ -13,7 +13,7 @@ final class GalleryFolderUITests: XCTestCase {
 
     override func setUpWithError() throws {
         continueAfterFailure = false
-        XCUIDevice.shared.orientation = .landscapeLeft
+        XCUIDevice.shared.orientation = .portrait
     }
 
     /// Fill the alert's text field and confirm.
