@@ -1748,7 +1748,18 @@ tap-to-select, and Zoom To (camera fit to the item's AABB). Parity target:
 sketches consumed into a body (extrude/revolve/sweep/loft — profile, loft
 sections, sweep spine) auto-hide in the same undo step
 (`consumedSketchHideCommands`); the eye un-hides them, and re-opening a
-hidden sketch for editing still un-hides it. `isHidden` persists. Missing: folders, filter dropdown,
+hidden sketch for editing still un-hides it. `isHidden` persists.
+**Folders** (`ItemFolder`, `ItemFolderTree`): a nested tree at the top of
+the panel holding bodies, sketches, planes, axes and images; "New Folder"
+takes the current body selection (create-from-selection); every row's menu
+has "Move to Folder" (submenu of the whole tree + "New Folder with Item");
+rows drag onto folder rows, or onto a section header to file them back out;
+the folder eye hides/shows everything inside as one undo step; inline
+rename; "New Subfolder"; "Remove Folder" (contents move up a level) vs
+"Delete Folder and Items" (one undo step). Every edit is a
+`SetItemFoldersCommand` (before/after of the small tree). Persisted as one
+JSON column (`Project.itemFoldersData`), carried by `.os3d` archives and
+remapped on duplicate. Missing: filter dropdown,
 multi-select, per-row image opacity percentage (opacity edits live in the
 image bar), Reveal in Items, Show Hidden Items / Invert Visibility menu,
 shared names with History (no history engine).
@@ -1785,7 +1796,12 @@ and welded into a solid mesh body — `STLImporter` → `EuclidBridge` weld path
 everything is a mesh here), DXF (R12/R2000-common subset — LINE, CIRCLE,
 ARC, LW/POLYLINE — landing in a ground-plane sketch as one undo step,
 `DXFKit.importDXF`), and reference images (PNG/JPEG via Photos or
-Files, §6.3). Missing: every other format, unit options UI, import
+Files, §6.3), and textured meshes — glTF/GLB, USDZ, OBJ+MTL, .blend, or a
+zip of them (`MeshImportKit`). **Import Units prompt** (Shapr3D parity):
+every mesh pick (STL included) opens `MeshUnitPromptSheet` showing the
+model's size under mm / cm / m / in / ft with the detected unit
+preselected — declared for glTF/USD/Blender, a size guess for OBJ/STL —
+and builds only on Import. Missing: every other format, import
 preferences, assembly folders.
 **Feasibility:** STL/OBJ/3MF/DXF [mesh-kernel OK]; STEP/IGES
 [needs B-rep kernel] (OpenCASCADE); X_T/X_B, SLDPRT/SLDASM, CATIA/NX/Creo/
@@ -1845,8 +1861,17 @@ name/date. One-person-at-a-time editing guidance.
 **Status:** 🟡 partial — a project gallery exists: grid of cards with rendered
 thumbnails, create, open, rename (alert), duplicate (with bodies/sketches/
 thumbnail), delete (`ProjectGalleryView`, SwiftData persistence, debounced
-autosave in `DocumentSession`). Missing: search, sort, folders, recents,
-teams/spaces/drafts, storage states, everything cloud.
+autosave in `DocumentSession`). **Folders** (Shapr3D 5.492): nested
+`ProjectFolder`s with a folder sidebar on regular widths, breadcrumbs,
+browser-style Back/Forward (⌘[ / ⌘]), folder cards showing their counts,
+drag-and-drop of designs and folders onto folder cards / sidebar rows /
+crumbs, "Move to Folder…" (context menu, and in Select mode for many at
+once), rename, "New Folder Inside", and delete with a confirmation that
+spells out what goes with it (the subtree, designs included). New designs,
+imports and duplicates land in the folder on screen. Membership is a scalar
+`Project.folderID` so old stores migrate lightly (everything at the root).
+Missing: search, sort, recents, teams/spaces/drafts, storage states,
+everything cloud.
 **Feasibility:** local features [mesh-kernel OK]; teams/spaces
 [platform/service]
 
@@ -2142,7 +2167,7 @@ running totals, unit suffixes, labels on gizmo arrows and sketch elements.
 | History & parametrics (3) | 0 | 2 (direct modeling, Undo/Redo) | 1 |
 | Items Manager (1) | 0 | 1 | 0 |
 | Import/Export (2) | 0 | 2 (STL/DXF/image import; STL/OBJ/3MF/GLB/USDZ/DXF/PNG export) | 0 |
-| Projects/Sync/Collab (5) | 0 | 2 (local gallery, AR Quick Look preview) | 3 |
+| Projects/Sync/Collab (5) | 0 | 2 (local gallery with folders, AR Quick Look preview) | 3 |
 | Visualization (1) | 0 | 1 (materials-lite, ground shadow) | 0 |
 | Drawings (1) | 0 | 0 | 1 |
 | Modes & display (4) | 0 | 4 (Section, Isolate, Measure, display modes) | 0 |

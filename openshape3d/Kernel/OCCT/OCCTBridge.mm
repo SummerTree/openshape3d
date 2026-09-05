@@ -7,10 +7,20 @@
 //  plain Obj-C interface in OCCTBridge.h.
 //
 
+// OCCT was built with OCC_CONVERT_SIGNALS (its handler machinery is in the
+// archive); defining it here makes OCC_CATCH_SIGNALS expand to the matching
+// setjmp point, so a hardware fault inside the kernel becomes a C++
+// exception instead of taking the app down. See "Crash guard" below.
+#define OCC_CONVERT_SIGNALS 1
 #import "OCCTBridge.h"
 
 #include <vector>
 #include <algorithm>
+#include <csignal>
+#include <memory>
+#include <OSD.hxx>
+#include <Standard_ErrorHandler.hxx>
+#include <Standard_Failure.hxx>
 #include <limits>
 #include <set>
 #include <cmath>
@@ -33,6 +43,7 @@
 #include <STEPControl_Reader.hxx>
 #include <IFSelect_ReturnStatus.hxx>
 #include <BRepOffsetAPI_MakeThickSolid.hxx>
+#include <BRepOffsetAPI_DraftAngle.hxx>
 #include <BRepOffsetAPI_MakeOffsetShape.hxx>
 #include <TopTools_IndexedDataMapOfShapeListOfShape.hxx>
 #include <BRepAdaptor_Curve.hxx>
@@ -192,6 +203,70 @@ static void OS3DSetStatus(OCCTOpStatus *status, OCCTOpCode code, NSString *detai
     status.code = code;
     status.detail = detail;
 }
+
+// MARK: - Crash guard
+//
+// OCCT has a few hardware faults left in it: ChFi3d's corner solver
+// dereferences an empty extrema result on the practice-sheet 4.7 clevis
+// (an R2 fillet on the concave arcs where a lug cylinder meets the plate's
+// side faces) and took the whole app, and the unsaved document, with it
+// (2026-09-04). A C++ catch cannot see a SIGSEGV, so the builder calls that
+// do real work run inside OCCT's own conversion: OSD::SetSignal installs
+// handlers that turn the fault into a longjmp to the nearest
+// OCC_CATCH_SIGNALS, which rethrows it as a Standard_Failure — from a normal
+// context, with every Standard_ErrorHandler on the way unlinked while the
+// stack is still intact (a home-made sigsetjmp guard left them dangling and
+// the NEXT kernel call died in Standard_ErrorHandler::FindHandler). OCCT's
+// own try blocks up the stack may swallow it (a faulty contour), else the
+// catch in OS3D_GUARDED reports it typed. The previous signal actions are
+// restored on the way out, so a fault anywhere else still crashes the way
+// it always did.
+struct OS3DSignalScope {
+    static constexpr int signals[] = {SIGHUP, SIGINT, SIGQUIT, SIGILL, SIGTRAP, SIGABRT,
+                                      SIGFPE, SIGBUS, SIGSEGV, SIGSYS, SIGPIPE, SIGTERM};
+    static constexpr int count = sizeof(signals) / sizeof(signals[0]);
+    struct sigaction saved[count];
+    OS3DSignalScope() {
+        for (int i = 0; i < count; i++) sigaction(signals[i], nullptr, &saved[i]);
+        OSD::SetSignal(OSD_SignalMode_Set, Standard_False);
+    }
+    ~OS3DSignalScope() {
+        for (int i = 0; i < count; i++) sigaction(signals[i], &saved[i], nullptr);
+        // The jump out of the handler may have left the faulting signal
+        // blocked on this thread; a blocked synchronous signal is fatal.
+        sigset_t set;
+        sigemptyset(&set);
+        for (int i = 0; i < count; i++) sigaddset(&set, signals[i]);
+        pthread_sigmask(SIG_UNBLOCK, &set, nullptr);
+    }
+};
+
+static NSString *OS3DCrashMessage(const char *what, const char *detail) {
+    NSString *reason = detail ? [NSString stringWithUTF8String:detail] : @"";
+    if ([reason rangeOfString:@"SIG"].location != NSNotFound) {
+        return [NSString stringWithFormat:
+                @"%s: the kernel faulted computing this (%@) and the operation was "
+                @"abandoned — the body is unchanged; try a smaller size or fewer edges",
+                what, reason];
+    }
+    return [NSString stringWithFormat:@"%s: %@", what, reason.length ? reason : @"kernel error"];
+}
+
+// Run one kernel builder call under the guard. Any Standard_Failure that
+// escapes — a converted signal, or a plain OCCT exception the algorithm
+// did not handle itself — becomes a typed refusal and returns nil.
+#define OS3D_GUARDED(statusObj, what, ...) \
+    do { \
+        OS3DSignalScope _signalScope; \
+        try { \
+            OCC_CATCH_SIGNALS \
+            __VA_ARGS__; \
+        } catch (Standard_Failure &_failure) { \
+            OS3DSetStatus(statusObj, OCCTOpCodeKernelRefused, \
+                          OS3DCrashMessage(what, _failure.GetMessageString())); \
+            return nil; \
+        } \
+    } while (0)
 
 // True when the shape has a bounding box with only finite coordinates. A
 // shape carrying NaN/inf can parse cleanly and then spin forever inside
@@ -2269,7 +2344,7 @@ static OCCTShape *OS3DBlendEdgeSet(const TopoDS_Shape &shape,
         OS3DDeadlineProgress *deadline =
             new OS3DDeadlineProgress(kOS3DOpDeadlineSeconds);
         Handle(Message_ProgressIndicator) progress(deadline);
-        mk.Build(progress->Start());
+        OS3D_GUARDED(status, "fillet", mk.Build(progress->Start()));
         if (deadline->Fired()) {
             OS3DSetStatus(status, OCCTOpCodeKernelRefused,
                           @"the operation exceeded the kernel deadline");
@@ -2289,7 +2364,7 @@ static OCCTShape *OS3DBlendEdgeSet(const TopoDS_Shape &shape,
     OS3DDeadlineProgress *deadline =
         new OS3DDeadlineProgress(kOS3DOpDeadlineSeconds);
     Handle(Message_ProgressIndicator) progress(deadline);
-    mk.Build(progress->Start());
+    OS3D_GUARDED(status, "chamfer", mk.Build(progress->Start()));
     if (deadline->Fired()) {
         OS3DSetStatus(status, OCCTOpCodeKernelRefused,
                       @"the operation exceeded the kernel deadline");
@@ -2847,6 +2922,92 @@ static double OS3DVolume(const TopoDS_Shape &shape) {
         return props.Mass();
     } catch (...) {
         return 0.0;
+    }
+}
+
+
++ (nullable OCCTShape *)draftedShape:(OCCTShape *)shape
+                       atWorldPoints:(NSData *)worldPoints
+                        angleRadians:(double)angleRadians
+                          directionX:(double)dx directionY:(double)dy directionZ:(double)dz
+                      neutralOriginX:(double)ox neutralOriginY:(double)oy neutralOriginZ:(double)oz
+                      neutralNormalX:(double)nx neutralNormalY:(double)ny neutralNormalZ:(double)nz
+                           tolerance:(double)tolerance
+                              status:(nullable OCCTOpStatus *)status {
+    OS3DSetStatus(status, OCCTOpCodeKernelRefused, @"no input");
+    if (shape == nil || fabs(angleRadians) < 1e-9) return nil;
+    const NSUInteger count = worldPoints.length / (3 * sizeof(double));
+    if (count == 0) return nil;
+    const double *pts = (const double *)worldPoints.bytes;
+
+    try {
+        if (!OS3DFiniteBounds(shape->_shape)) {
+            OS3DSetStatus(status, OCCTOpCodeKernelRefused,
+                          @"the body has empty or non-finite geometry");
+            return nil;
+        }
+        int inputSolids = 0;
+        TopoDS_Shape input = OS3DExtractSingleSolid(shape->_shape, inputSolids);
+        if (input.IsNull()) input = shape->_shape;
+
+        TopTools_IndexedMapOfShape faceMap;
+        TopExp::MapShapes(input, TopAbs_FACE, faceMap);
+        const std::set<Standard_Integer> chosen =
+            OS3DNearestFaces(faceMap, pts, count, tolerance);
+        if (chosen.empty()) {
+            OS3DSetStatus(status, OCCTOpCodeNoTargetMatched,
+                          @"no face within tolerance of the pick");
+            return nil;
+        }
+
+        const gp_Dir pull(dx, dy, dz);
+        const gp_Pln neutral(gp_Pnt(ox, oy, oz), gp_Dir(nx, ny, nz));
+        BRepOffsetAPI_DraftAngle mk(input);
+        for (Standard_Integer i : chosen) {
+            const TopoDS_Face face = TopoDS::Face(faceMap(i));
+            // Sign checked against the mesh path (DraftFaceBRepTests): OCCT's
+            // positive angle already NARROWS the section along the pull
+            // direction, matching the app's convention.
+            mk.Add(face, pull, angleRadians, neutral, Standard_True);
+            if (!mk.AddDone()) {
+                OS3DSetStatus(status, OCCTOpCodeKernelRefused,
+                              [NSString stringWithFormat:
+                               @"draft: face %d cannot take this draft (it may be "
+                               @"parallel to the neutral plane, or the angle too large)",
+                               (int)i]);
+                return nil;
+            }
+        }
+        OS3D_GUARDED(status, "draft", mk.Build());
+        if (!mk.IsDone() || mk.Shape().IsNull()) {
+            OS3DSetStatus(status, OCCTOpCodeKernelRefused,
+                          @"draft: the kernel could not rebuild the drafted faces");
+            return nil;
+        }
+        const TopoDS_Shape valid = OS3DHealAndValidate(mk.Shape());
+        if (valid.IsNull()) {
+            OS3DSetStatus(status, OCCTOpCodeInvalidResult,
+                          @"draft: the drafted solid failed validity checking");
+            return nil;
+        }
+        int outSolids = 0;
+        const TopoDS_Shape single = OS3DExtractSingleSolid(valid, outSolids);
+        if (single.IsNull()) {
+            OS3DSetStatus(status, OCCTOpCodeMultiSolid,
+                          @"draft: the result is not a single solid");
+            return nil;
+        }
+        OS3DSetStatus(status, OCCTOpCodeOK, nil);
+        OCCTShape *out = [OCCTShape new];
+        out->_shape = single;
+        return out;
+    } catch (Standard_Failure &e) {
+        OS3DSetStatus(status, OCCTOpCodeKernelRefused,
+                      [NSString stringWithFormat:@"%s", e.GetMessageString()]);
+        return nil;
+    } catch (...) {
+        OS3DSetStatus(status, OCCTOpCodeKernelRefused, @"kernel exception");
+        return nil;
     }
 }
 

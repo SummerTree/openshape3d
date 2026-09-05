@@ -183,6 +183,9 @@ struct EditorView: View {
     @State private var viewModel: EditorViewModel?
     @State private var exportDocument: ExportDocument?
     @State private var showItemsPanel = false
+    @State private var showBugReport = false
+    @State private var pendingMeshImport: MeshImportProbe?
+    @State private var didHandleDebugImport = false
     @State private var showSettings = false
     /// Measured height of the bottom bar stack, fed by `BottomBarHeightKey`.
     /// The palette and the corner chips inset above it — see `bottomBarInset`.
@@ -203,7 +206,7 @@ struct EditorView: View {
     /// one in the chain (found 2026-08-29 while wiring STEP: "Image from
     /// Files…" presented, the three above it did not).
     private enum ImportRequest: Equatable {
-        case stl, dxf, step, image
+        case stl, dxf, step, mesh, image
 
         var contentTypes: [UTType] {
             switch self {
@@ -214,6 +217,9 @@ struct EditorView: View {
             // hatch the `.os3d` archive importer already uses.
             case .dxf: [ExportDocument.dxfType, .data]
             case .step: [ExportDocument.stepType, .data]
+            // glTF/GLB, USDZ, OBJ (+MTL/textures) and zips of them. `.data`
+            // again: .glb/.gltf/.obj have no system UTI worth trusting.
+            case .mesh: [ExportDocument.usdzType, .zip, .data]
             case .image: [.png, .jpeg, .image]
             }
         }
@@ -793,6 +799,13 @@ struct EditorView: View {
                 showImporter = true
             }
             .accessibilityIdentifier("ImportSTEP")
+            // Textured meshes: glTF/GLB, USDZ, OBJ with its MTL and images, .blend,
+            // or a zip holding any of them. Parts become mesh bodies.
+            Button("OBJ / glTF / USDZ / Blender…") {
+                importRequest = .mesh
+                showImporter = true
+            }
+            .accessibilityIdentifier("ImportMesh")
             Divider()
             // Insert Image (plan §B10, spec §6.3): the picked
             // picture waits for a plane tap (ground by default).
@@ -1531,6 +1544,15 @@ struct EditorView: View {
                     }
                     .accessibilityIdentifier("CommandSearchButton")
 
+                    // Report a Bug: form + optional .os3d attachment of this
+                    // design, sent to Firestore (`BugReporting.swift`).
+                    Button {
+                        showBugReport = true
+                    } label: {
+                        Label("Report a Bug", systemImage: "ladybug")
+                    }
+                    .accessibilityIdentifier("BugReportButton")
+
                     Button {
                         showSettings = true
                     } label: {
@@ -1541,6 +1563,20 @@ struct EditorView: View {
             }
             .sheet(isPresented: $showSettings) {
                 SettingsView(settings: AppSettings.shared)
+            }
+            .sheet(isPresented: $showBugReport) {
+                BugReportSheet(
+                    context: .current(
+                        documentName: project.name,
+                        bodyCount: viewModel.session.document.bodies.count,
+                        featureCount: viewModel.session.document.features.nodes.count,
+                        lastAction: viewModel.session.undoStack.undoTitle),
+                    attachmentProvider: {
+                        viewModel.session.save()   // rows must reflect live edits
+                        guard let data = ProjectArchive
+                            .archive(from: viewModel.session.project).encoded() else { return nil }
+                        return BugAttachment(fileName: "\(project.name).os3d", data: data)
+                    })
             }
     }
 
@@ -1566,7 +1602,12 @@ struct EditorView: View {
         }
         let name = url.lastPathComponent
         switch importRequest {
-        case .stl: viewModel.importSTL(data: data, fileName: name)
+        case .stl, .mesh:
+            // Mesh formats go through the units prompt (Shapr3D parity):
+            // parse now, build only once the user has picked the unit.
+            if let probe = viewModel.probeMesh(data: data, fileName: name) {
+                pendingMeshImport = probe
+            }
         case .dxf: viewModel.importDXF(data: data, fileName: name)
         case .step: viewModel.importSTEP(data: data, fileName: name)
         case .image: viewModel.beginInsertImage(data: data)
@@ -1582,6 +1623,27 @@ struct EditorView: View {
                 allowedContentTypes: importRequest.contentTypes
             ) { result in
                 handleImport(result, viewModel: viewModel)
+            }
+            .sheet(item: $pendingMeshImport) { probe in
+                MeshUnitPromptSheet(probe: probe) { unit in
+                    viewModel.importParts(
+                        MeshImportKit.scaled(probe.parts, by: unit.millimetresPerUnit),
+                        fileName: probe.fileName)
+                }
+            }
+            .onAppear {
+                // DEBUG hook for the UI suite: OS3D_DEBUG_IMPORT_MESH=<path>
+                // opens the units prompt for that file as if it had been
+                // picked — the system file picker can't be driven by XCUITest.
+                #if DEBUG
+                guard !didHandleDebugImport else { return }
+                didHandleDebugImport = true
+                if let path = ProcessInfo.processInfo.environment["OS3D_DEBUG_IMPORT_MESH"],
+                   let data = try? Data(contentsOf: URL(fileURLWithPath: path)) {
+                    pendingMeshImport = viewModel.probeMesh(
+                        data: data, fileName: (path as NSString).lastPathComponent)
+                }
+                #endif
             }
             .photosPicker(
                 isPresented: $showPhotoPicker,

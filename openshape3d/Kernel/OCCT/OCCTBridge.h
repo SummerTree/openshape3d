@@ -426,6 +426,23 @@ typedef NS_ENUM(NSInteger, OCCTOpCode) {
                            tolerance:(double)tolerance
                               status:(nullable OCCTOpStatus *)status;
 
+/// Exact face draft (`BRepOffsetAPI_DraftAngle`): every face with a sample
+/// within `tolerance` of a picked point is tilted by `angleRadians` about its
+/// intersection with the neutral plane, pulled along `direction` — a casting's
+/// taper as an analytic solid, where the mesh path (`KernelOps.draftFace`)
+/// only shears render polygons. A positive angle NARROWS the body away from
+/// the neutral plane along the pull direction, the same sign the mesh path
+/// uses. Nil when a face cannot take the draft or the result fails
+/// validation — `status` says which.
++ (nullable OCCTShape *)draftedShape:(OCCTShape *)shape
+                       atWorldPoints:(NSData *)worldPoints
+                        angleRadians:(double)angleRadians
+                          directionX:(double)dx directionY:(double)dy directionZ:(double)dz
+                      neutralOriginX:(double)ox neutralOriginY:(double)oy neutralOriginZ:(double)oz
+                      neutralNormalX:(double)nx neutralNormalY:(double)ny neutralNormalZ:(double)nz
+                           tolerance:(double)tolerance
+                              status:(nullable OCCTOpStatus *)status;
+
 /// Identity-addressed blends (docs/TOPO_NAMING_HISTORY_DESIGN.md step 4b):
 /// same pre-qualification, per-edge checks and validation as the
 /// point-matched entries — the two share one implementation — but edges are

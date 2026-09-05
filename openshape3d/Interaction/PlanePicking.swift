@@ -39,11 +39,19 @@ nonisolated enum PlanePicking {
     static let worldTileMin = 0.3
     static let worldTileMax = 2.3
 
+    /// The three origin plane pickers at their smallest (an empty scene).
+    static let worldTiles: [PlanePickerTile] = worldTiles(sceneExtent: 0)
+
     /// The three origin plane pickers (colors keyed like the gizmo axes by
-    /// normal: +Y green, +Z blue, +X red).
-    static let worldTiles: [PlanePickerTile] = {
-        let lo = SIMD2(worldTileMin, worldTileMin)
-        let hi = SIMD2(worldTileMax, worldTileMax)
+    /// normal: +Y green, +Z blue, +X red), sized to the scene: the outer
+    /// edge is 60 % of the largest body extent, never under the 2.3 mm
+    /// default. Fixed 2 mm tiles were a speck beside a metre-scale scan and
+    /// buried inside anything big centred on the origin (2026-09-05).
+    static func worldTiles(sceneExtent: Double) -> [PlanePickerTile] {
+        let outer = max(worldTileMax, sceneExtent * 0.6)
+        let inner = outer * (worldTileMin / worldTileMax)
+        let lo = SIMD2(inner, inner)
+        let hi = SIMD2(outer, outer)
         return [
             PlanePickerTile(
                 planeID: nil, plane: .ground, localMin: lo, localMax: hi,
@@ -58,7 +66,7 @@ nonisolated enum PlanePicking {
                 color: SIMD4(0.88, 0.26, 0.26, 0.35)
             ),
         ]
-    }()
+    }
 
     /// Nearest tile hit by the ray, with its world-space distance.
     static func pick(

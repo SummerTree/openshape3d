@@ -20,6 +20,7 @@ struct openshape3dApp: App {
     var sharedModelContainer: ModelContainer = {
         let schema = Schema([
             Project.self,
+            ProjectFolder.self,
             PersistedBody.self,
             PersistedSketch.self,
             PersistedPlane.self,

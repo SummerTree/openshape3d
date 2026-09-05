@@ -80,11 +80,19 @@ final class HistoryReorderUITests: XCTestCase {
             }
             return false
         }
-        rows.element(boundBy: 1).press(forDuration: 1.0,
-                                       thenDragTo: rows.element(boundBy: 0))
+        // Press the row's reorder GRIP, not the row: the row carries a
+        // context menu, and a 1 s press on it opens that menu instead of
+        // lifting a drag (the retry then found the rows covered — "Not
+        // hittable"). The grip has no menu, so the press always lifts.
+        func grip(_ index: Int) -> XCUIElement {
+            rows.element(boundBy: index).descendants(matching: .any)
+                .matching(NSPredicate(format: "identifier BEGINSWITH 'HistoryDragHandle-'"))
+                .firstMatch
+        }
+        XCTAssertTrue(grip(1).waitForExistence(timeout: 3), "each row has a reorder grip")
+        grip(1).press(forDuration: 0.8, thenDragTo: rows.element(boundBy: 0))
         if !reorderLanded() {
-            rows.element(boundBy: 1).press(forDuration: 1.2,
-                                           thenDragTo: rows.element(boundBy: 0))
+            grip(1).press(forDuration: 1.2, thenDragTo: rows.element(boundBy: 0))
             XCTAssertTrue(reorderLanded(),
                           "the drag never reordered the rows — the top row still reads "
                           + "\(topBefore) mm, so the Undo below would undo the extrude instead")

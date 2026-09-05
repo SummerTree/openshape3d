@@ -198,7 +198,15 @@ final class BlendUITests: XCTestCase {
         shot("drag-armed")
 
         // Drag the arrow toward the body interior (the way it points) to grow.
-        dragPullArrow(app, to: p(0.60, 0.55), duration: 0.3)
+        // A SHORT drag, measured from the handle itself. Strokes now start at
+        // the touch-down (2026-09-04); before that the pan recognizer only
+        // counted the tail of a fast synthetic drag, so the old window-
+        // relative target scrubbed ~0.5 mm — the same drag now scrubs the
+        // whole ~2.3 mm it always asked for, past what a 2 mm-high box can
+        // chamfer (the preview went invalid and Apply correctly disabled).
+        // ~0.007 mm per pt along the arrow: 55 pt ≈ +0.4 mm.
+        let handleCenter = app.pullArrowHandle.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+        dragPullArrow(app, to: handleCenter.withOffset(CGVector(dx: 24, dy: 48)), duration: 0.3)
         sleep(1)
         let after = (field.value as? String) ?? ""
         NSLog("OS3D_BUG blendDrag before=\(before) after=\(after)")

@@ -15,6 +15,12 @@ nonisolated struct RenderMesh: Sendable, Equatable {
     var positions: [SIMD3<Float>]
     var normals: [SIMD3<Float>]
     var indices: [UInt32]
+    /// Per-vertex texture coordinates (Metal convention: (0,0) is the image's
+    /// top-left), present only on meshes that arrived with a texture — an
+    /// imported OBJ/glTF/USDZ. Modelled bodies have none; every geometry op
+    /// that rebuilds a mesh drops them, which is right: a boolean or blend
+    /// has no way to carry a photo across the new faces.
+    var texcoords: [SIMD2<Float>]? = nil
 
     var triangleCount: Int { indices.count / 3 }
 
@@ -32,6 +38,7 @@ nonisolated struct RenderMesh: Sendable, Equatable {
 
     static func == (lhs: RenderMesh, rhs: RenderMesh) -> Bool {
         lhs.indices == rhs.indices && lhs.positions == rhs.positions && lhs.normals == rhs.normals
+            && lhs.texcoords == rhs.texcoords
     }
 }
 
@@ -109,7 +116,12 @@ nonisolated enum MeshQuantize {
 /// indices (u32 × indexCount).
 nonisolated enum MeshBlob {
     static let magic: UInt32 = 0x4F533344 // "OS3D"
+    /// v1: positions, normals, indices. v2 (2026-09-04) appends per-vertex
+    /// texture coordinates after the indices; written only when the mesh
+    /// carries them, so every untextured body stays a v1 blob older builds
+    /// can still read.
     static let version: UInt32 = 1
+    static let texturedVersion: UInt32 = 2
 
     enum BlobError: Error {
         case badMagic
@@ -123,9 +135,12 @@ nonisolated enum MeshBlob {
     static func encode(_ mesh: RenderMesh) -> Data {
         let vertexCount = UInt32(mesh.positions.count)
         let indexCount = UInt32(mesh.indices.count)
-        var data = Data(capacity: 16 + mesh.positions.count * 24 + mesh.indices.count * 4)
+        let texcoords = mesh.texcoords.flatMap { $0.count == mesh.positions.count ? $0 : nil }
+        var data = Data(capacity: 16 + mesh.positions.count * 32 + mesh.indices.count * 4)
         withUnsafeBytes(of: magic.littleEndian) { data.append(contentsOf: $0) }
-        withUnsafeBytes(of: version.littleEndian) { data.append(contentsOf: $0) }
+        withUnsafeBytes(of: (texcoords == nil ? version : texturedVersion).littleEndian) {
+            data.append(contentsOf: $0)
+        }
         withUnsafeBytes(of: vertexCount.littleEndian) { data.append(contentsOf: $0) }
         withUnsafeBytes(of: indexCount.littleEndian) { data.append(contentsOf: $0) }
         // SIMD3<Float> has 16-byte stride; write tightly packed 12-byte triples.
@@ -140,6 +155,12 @@ nonisolated enum MeshBlob {
             withUnsafeBytes(of: n.z) { data.append(contentsOf: $0) }
         }
         mesh.indices.withUnsafeBytes { data.append(contentsOf: $0) }
+        if let texcoords {
+            for t in texcoords {
+                withUnsafeBytes(of: t.x) { data.append(contentsOf: $0) }
+                withUnsafeBytes(of: t.y) { data.append(contentsOf: $0) }
+            }
+        }
         return data
     }
 
@@ -157,11 +178,14 @@ nonisolated enum MeshBlob {
         let magicValue = try read(UInt32.self)
         guard magicValue == magic else { throw BlobError.badMagic }
         let versionValue = try read(UInt32.self)
-        guard versionValue == version else { throw BlobError.unsupportedVersion(versionValue) }
+        guard versionValue == version || versionValue == texturedVersion else {
+            throw BlobError.unsupportedVersion(versionValue)
+        }
+        let textured = versionValue == texturedVersion
         let vertexCount = Int(try read(UInt32.self))
         let indexCount = Int(try read(UInt32.self))
 
-        let payloadBytes = vertexCount * 24 + indexCount * 4
+        let payloadBytes = vertexCount * (textured ? 32 : 24) + indexCount * 4
         guard offset + payloadBytes <= data.count else { throw BlobError.truncated }
         // Lengths alone are not enough: the INDEX VALUES are unvalidated input
         // too. Every consumer subscripts `positions[index]` directly
@@ -194,7 +218,18 @@ nonisolated enum MeshBlob {
             guard index < vertexLimit else { throw BlobError.corruptIndices }
             indices.append(index)
         }
-        return RenderMesh(positions: positions, normals: normals, indices: indices)
+        var mesh = RenderMesh(positions: positions, normals: normals, indices: indices)
+        if textured {
+            var texcoords = [SIMD2<Float>]()
+            texcoords.reserveCapacity(vertexCount)
+            for _ in 0..<vertexCount {
+                let u = try read(Float.self)
+                let v = try read(Float.self)
+                texcoords.append(SIMD2(u, v))
+            }
+            mesh.texcoords = texcoords
+        }
+        return mesh
     }
 }
 

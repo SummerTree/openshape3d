@@ -127,11 +127,34 @@ nonisolated enum SnapEngine {
                 let a = loop[i], b = loop[(i + 1) % loop.count]
                 out.append(SnapCandidate(point: (a + b) / 2, kind: .midpoint))
                 if let onEdge = closestPointOnSegment(p, a, b) {
-                    out.append(SnapCandidate(point: onEdge, kind: .edge))
+                    out.append(SnapCandidate(point: gridAlongEdge(onEdge, a, b), kind: .edge))
                 }
             }
         }
         return out
+    }
+
+    /// The edge point moved to a grid step measured from the NEARER corner.
+    /// A raw projection kept whatever along-edge coordinate the finger had
+    /// (10.025 mm, not 10), so a rectangle ended on a face edge came out
+    /// 0.25 % oversize while every other corner sat on the 0.5 mm grid. On a
+    /// face whose corners are themselves off-grid this still gives whole
+    /// steps from the corner, which is the dimension the user is after.
+    static func gridAlongEdge(
+        _ onEdge: SIMD2<Double>, _ a: SIMD2<Double>, _ b: SIMD2<Double>
+    ) -> SIMD2<Double> {
+        let ab = b - a
+        let length = simd_length(ab)
+        guard length > 1e-9 else { return onEdge }
+        let dir = ab / length
+        let s = min(max(simd_dot(onEdge - a, dir), 0), length)
+        let snapped: Double
+        if s <= length / 2 {
+            snapped = (s / gridSpacing).rounded() * gridSpacing
+        } else {
+            snapped = length - ((length - s) / gridSpacing).rounded() * gridSpacing
+        }
+        return a + dir * min(max(snapped, 0), length)
     }
 
     /// Closest point to `p` on segment a→b, or nil if the segment is degenerate.

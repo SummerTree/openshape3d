@@ -21,6 +21,7 @@ final class Renderer: NSObject, MTKViewDelegate {
 
     private let cache = GPUResourceCache()
     private let quadTextures = ImageQuadTextureCache()
+    private let bodyTextures = BodyTextureCache()
     private let gizmoRenderer = GizmoRenderer()
     private let orientationCubeRenderer = OrientationCubeRenderer()
     private var viewportSize = CGSize(width: 1, height: 1)
@@ -77,6 +78,7 @@ final class Renderer: NSObject, MTKViewDelegate {
 
         cache.sync(with: scene, device: context.device)
         quadTextures.sync(quads: scene.imageQuads, device: context.device)
+        bodyTextures.sync(bodies: scene.bodies, device: context.device)
 
         var frame = makeFrameUniforms()
         encodeScene(encoder: encoder, frame: &frame)
@@ -452,6 +454,7 @@ final class Renderer: NSObject, MTKViewDelegate {
 
         cache.sync(with: scene, device: context.device)
         quadTextures.sync(quads: scene.imageQuads, device: context.device)
+        bodyTextures.sync(bodies: scene.bodies, device: context.device)
         var frame = makeFrameUniforms(viewportSize: CGSize(width: width, height: height))
         encodeScene(
             encoder: encoder,
@@ -503,7 +506,24 @@ final class Renderer: NSObject, MTKViewDelegate {
         alphaOverride: Float? = nil
     ) {
         guard let resources = cache.resources(for: drawable.id) else { return }
-        encoder.setRenderPipelineState(pipeline)
+        // An imported body with a texture and texcoords shades through the
+        // textured twin of the requested lit pipeline; depth-only and other
+        // passes keep the pipeline they asked for.
+        var chosen = pipeline
+        if let texcoords = resources.texcoordBuffer,
+           let texture = bodyTextures.texture(for: drawable.id) {
+            if pipeline === context.pipelines.lit {
+                chosen = context.pipelines.litTextured
+            } else if pipeline === context.pipelines.litBlended {
+                chosen = context.pipelines.litTexturedBlended
+            }
+            if chosen !== pipeline {
+                encoder.setVertexBuffer(texcoords, offset: 0,
+                                        index: Int(BufferIndexTexcoords.rawValue))
+                encoder.setFragmentTexture(texture, index: 0)
+            }
+        }
+        encoder.setRenderPipelineState(chosen)
         var body = makeBodyUniforms(drawable)
         if let alphaOverride {
             body.baseColor.w = alphaOverride

@@ -16,6 +16,10 @@ struct BodyMaterial: Equatable {
     var baseColor: SIMD4<Float>
     var metallic: Float = 0
     var roughness: Float = 0
+    /// Encoded image bytes sampled as the albedo when the mesh has texcoords.
+    /// Decoded into an MTLTexture keyed by (body id, textureRevision).
+    var textureData: Data? = nil
+    var textureRevision: UInt64 = 0
 }
 
 /// Everything the renderer needs to draw one body.

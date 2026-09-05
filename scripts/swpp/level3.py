@@ -149,3 +149,72 @@ def p3_8():
         c = (57.5 * math.cos(a), 57.5 * math.sin(a))
         extrude(Sketch(top(10)).circle(c, 4.5), c, -10, cut=[body])
     return body
+
+
+@problem("3.4", 9921, features=("Extrude Boss", "Sketch: Offset", "Sketch: Fillets", "Sketch pattern (as polygon)"))
+def p3_4():
+    # T-slot extrusion 110 long. Section: 12 square (half-size 1.5 lip + 2
+    # cavity + 2.5 core, the overall size is not printed); four T-slots
+    # with a 2-wide throat, 1.5 lips, a 2-tall cavity whose 45° sides run
+    # down to the 5-square core, leaving 1.5-wide diagonal webs between
+    # neighbouring cavities (which fixes the cavity's top half-width at
+    # 4.5 − 1.5/√2 = 3.44); Ø2 centre hole; 36 × R0.25 on every corner.
+    # Closed form 9920.
+    a = 4.5 - 1.5 / math.sqrt(2); b = a - 2
+    S = [(1, 6), (1, 4.5), (a, 4.5), (b, 2.5), (-b, 2.5), (-a, 4.5), (-1, 4.5), (-1, 6)]
+    rot = lambda p, k: p if k == 0 else rot((-p[1], p[0]), k - 1)
+    pts = []
+    for k in range(4):
+        pts.append(rot((6, 6), k))
+        pts += [rot(p, k) for p in S]
+    sk = Sketch(front(0)).rounded_poly(pts, 0.25).circle((0, 0), 1)
+    return extrude(sk, (0, 1.75), 110)
+
+
+@problem("3.3", 81601, features=("Extrude Boss", "Extrude Cut", "Sketch pattern (as polygon)", "Fillet"))
+def p3_3():
+    # Spoked gear, callout reading: 24 straight-flanked teeth (top land 4,
+    # height 6, flanks 20° off radial = the 40° included angle) on a Ø96
+    # root circle, tips Ø108, teeth 14 wide (section: 2 in from each face
+    # of the 18 rim); rim R41.5..R48 (6.50) 18 wide; web recessed 1 per
+    # side (16); eight 5-wide spokes; hub R14, 18 wide, Ø16 bore with a
+    # 3-wide keyway to 10; 32 × R2 at the spoke roots. Closed form ≈
+    # 70 400 (−14 %): the printed volume needs more web than these
+    # callouts give (a rim ~10 wide would close it; the sheet says 6.50).
+    from kit import fillet, edges_where
+    half = 2 + 6 * math.tan(math.radians(20))          # root half-width 4.18
+    a_top = math.degrees(math.atan2(2, 54)); a_root = math.degrees(math.atan2(half, 48))
+    sk = Sketch(top(0))
+    for k in range(24):
+        c = 15 * k
+        P = lambda r, a: (r * math.cos(math.radians(a)), r * math.sin(math.radians(a)))
+        # root arc from the previous tooth's flank end to this one, then the tooth
+        sk.arc((0, 0), 48, c - 15 + a_root, c - a_root)
+        sk.line(P(48, c - a_root), P(54, c - a_top))
+        sk.line(P(54, c - a_top), P(54, c + a_top))
+        sk.line(P(54, c + a_top), P(48, c + a_root))
+    sk.circle((0, 0), 47)                              # inner loop: the seed region is the teeth, not the disc
+    teeth = extrude(sk, (51, 0), 7, symmetric=True)
+    rim = extrude(Sketch(top(-9)).circle((0, 0), 48).circle((0, 0), 41.5), (45, 0), 18, union=[teeth])
+    body = rim
+    hub = Sketch(top(-9)).circle((0, 0), 14)
+    extrude(hub, (11, 0), 18, union=[body])
+    for k in range(8):
+        a = math.radians(45 * k)
+        d = (math.cos(a), math.sin(a)); n = (-math.sin(a), math.cos(a))
+        pts = [(10 * d[0] + 2.5 * n[0], 10 * d[1] + 2.5 * n[1]), (44 * d[0] + 2.5 * n[0], 44 * d[1] + 2.5 * n[1]),
+               (44 * d[0] - 2.5 * n[0], 44 * d[1] - 2.5 * n[1]), (10 * d[0] - 2.5 * n[0], 10 * d[1] - 2.5 * n[1])]
+        extrude(Sketch(top(-8)).poly(pts), (27 * d[0], 27 * d[1]), 16, union=[body])
+    # bore with keyway: Ø16 + a 3-wide slot up to 10 from the centre
+    bore = (Sketch(top(9)).line((-1.5, math.sqrt(64 - 2.25)), (-1.5, 10)).line((-1.5, 10), (1.5, 10))
+            .line((1.5, 10), (1.5, math.sqrt(64 - 2.25)))
+            .arc((0, 0), 8, math.degrees(math.atan2(math.sqrt(64 - 2.25), -1.5)),
+                 math.degrees(math.atan2(math.sqrt(64 - 2.25), 1.5)) + 360))
+    extrude(bore, (0, 0), -18, cut=[body])
+    # R2 at the 32 spoke-root corners (vertical edges 16 long at R14 and R41.5)
+    rad = lambda e: math.hypot(e["midpoint"][0], e["midpoint"][2])
+    ids = edges_where(body, lambda e: abs(e["midpoint"][1]) < 0.6 and 10 < e["lengthMM"] < 18
+                      and (abs(rad(e) - math.sqrt(14 ** 2 - 2.5 ** 2)) < 0.6 or abs(rad(e) - math.sqrt(41.5 ** 2 - 2.5 ** 2)) < 0.6))
+    if ids:
+        fillet(body, 2.0, ids)
+    return body

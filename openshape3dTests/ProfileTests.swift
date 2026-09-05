@@ -270,3 +270,36 @@ final class ProfileTests: XCTestCase {
         XCTAssertFalse(hit, "A ray straight down through the hole center must pass through")
     }
 }
+
+/// Endpoints that agree to a few microns but not to the node quantum still
+/// close a loop — practice sheet 7.2's spherical cap (2026-09-05): the arc's
+/// angles were derived from a line endpoint rounded to 1e-3, so the arc
+/// started 2e-5 mm off the line and the loop was "unresolved".
+final class ProfileEndpointWeldTests: XCTestCase {
+    func testLineArcLoopWithMicronGapIsOneProfile() {
+        let sketch = Sketch(plane: .ground, entities: [
+            .line(id: UUID(), a: SIMD2(-105, 4), b: SIMD2(-94.802, 4)),
+            .line(id: UUID(), a: SIMD2(-94.802, 4), b: SIMD2(-94.802, 5)),
+            .arc(id: UUID(), center: SIMD2(-105, -6), radius: 15,
+                 startAngle: 0.8232138851249898, endAngle: .pi / 2),
+            .line(id: UUID(), a: SIMD2(-105, 9), b: SIMD2(-105, 4)),
+        ])
+        let profiles = ProfileDetector.detectProfiles(in: sketch)
+        XCTAssertEqual(profiles.count, 1, "the line/step/arc/line loop closes")
+        let area = abs(Profile.signedArea(profiles.first?.loop ?? []))
+        // 10.198 wide, from y = 4 up to an arc running 5 → 9: ≈ 38 mm².
+        // A sanity band, not a pin.
+        XCTAssertGreaterThan(area, 30)
+        XCTAssertLessThan(area, 45)
+    }
+
+    func testARealGapStillDoesNotClose() {
+        let sketch = Sketch(plane: .ground, entities: [
+            .line(id: UUID(), a: SIMD2(0, 0), b: SIMD2(10, 0)),
+            .line(id: UUID(), a: SIMD2(10, 0), b: SIMD2(10, 5)),
+            .line(id: UUID(), a: SIMD2(10, 5), b: SIMD2(0, 5)),
+            .line(id: UUID(), a: SIMD2(0, 5), b: SIMD2(0, 0.05)),   // 50 µm short
+        ])
+        XCTAssertTrue(ProfileDetector.detectProfiles(in: sketch).isEmpty)
+    }
+}

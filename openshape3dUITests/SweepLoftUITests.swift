@@ -40,10 +40,14 @@ final class SweepLoftUITests: XCTestCase {
         circleCenter.press(forDuration: 0.15, thenDragTo: circleEdge)
 
         // Two chained line segments to the right: the future sweep path.
+        // They start well clear of the circle's rim: strokes now run from the
+        // touch-down (2026-09-04), so the circle above is its full 0.08 of
+        // the width, and a line begun within the rim's grab tolerance
+        // (~0.5 mm, ≈45 pt at this zoom) resizes the circle instead.
         startSketchTool(app, "Line")
-        let lineStart = window.coordinate(withNormalizedOffset: CGVector(dx: 0.54, dy: 0.50))
-        let lineElbow = window.coordinate(withNormalizedOffset: CGVector(dx: 0.66, dy: 0.50))
-        let lineEnd = window.coordinate(withNormalizedOffset: CGVector(dx: 0.66, dy: 0.36))
+        let lineStart = window.coordinate(withNormalizedOffset: CGVector(dx: 0.58, dy: 0.50))
+        let lineElbow = window.coordinate(withNormalizedOffset: CGVector(dx: 0.70, dy: 0.50))
+        let lineEnd = window.coordinate(withNormalizedOffset: CGVector(dx: 0.70, dy: 0.36))
         lineStart.press(forDuration: 0.15, thenDragTo: lineElbow)
         lineElbow.press(forDuration: 0.15, thenDragTo: lineEnd)
 
@@ -61,10 +65,10 @@ final class SweepLoftUITests: XCTestCase {
         )
 
         // Chain both line segments into the spine.
-        window.coordinate(withNormalizedOffset: CGVector(dx: 0.60, dy: 0.50)).tap()
+        window.coordinate(withNormalizedOffset: CGVector(dx: 0.64, dy: 0.50)).tap()
         XCTAssertTrue(app.staticTexts["1 path segment"].waitForExistence(timeout: 3),
                       "The first tapped line should join the path")
-        window.coordinate(withNormalizedOffset: CGVector(dx: 0.66, dy: 0.43)).tap()
+        window.coordinate(withNormalizedOffset: CGVector(dx: 0.70, dy: 0.43)).tap()
         XCTAssertTrue(app.staticTexts["2 path segments"].waitForExistence(timeout: 3),
                       "The second tapped line should chain onto the path")
 

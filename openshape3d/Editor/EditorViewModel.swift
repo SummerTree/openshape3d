@@ -383,6 +383,86 @@ final class EditorViewModel {
         }
     }
 
+    /// Mesh import for glTF/GLB, USDZ and OBJ (+MTL/textures, alone or in a
+    /// zip). Every part becomes its own body — texture coordinates and the
+    /// albedo image ride along on the mesh and material — and all of them
+    /// land as ONE undo step, like STEP.
+    /// Parse a mesh file without applying units, for the import prompt.
+    /// Sets `errorMessage` and returns nil when the file can't be read.
+    func probeMesh(data: Data, fileName: String, siblings: [String: Data] = [:]) -> MeshImportProbe? {
+        do {
+            return try MeshImportKit.probe(data: data, fileName: fileName, siblings: siblings)
+        } catch MeshImportError.unsupportedFormat(let what) {
+            errorMessage = "Couldn't import “\(fileName)” — \(what.isEmpty ? "unknown" : what) files aren't supported."
+        } catch MeshImportError.empty {
+            errorMessage = "Couldn't import “\(fileName)” — no triangle meshes found."
+        } catch MeshImportError.malformed(let what) {
+            errorMessage = "Couldn't import “\(fileName)” — \(what)."
+        } catch {
+            errorMessage = "Couldn't import “\(fileName)” — \(error)."
+        }
+        return nil
+    }
+
+    /// Import with the detected unit, or `unitScale` mm per file unit (the
+    /// bridge's `units`). The UI goes through `probeMesh` + the prompt +
+    /// `importParts` instead so the user chooses.
+    func importMesh(data: Data, fileName: String, siblings: [String: Data] = [:],
+                    unitScale: Double? = nil) {
+        guard let probe = probeMesh(data: data, fileName: fileName, siblings: siblings) else { return }
+        importParts(MeshImportKit.scaled(probe.parts, by: unitScale ?? probe.detectedScale),
+                    fileName: fileName)
+    }
+
+    /// Parts (already in millimetres) become mesh bodies, one undo step.
+    func importParts(_ parts: [ImportedPart], fileName: String) {
+        let stem = (fileName as NSString).deletingPathExtension
+        let fallback = stem.isEmpty ? "Imported" : stem
+        var document = session.document
+        var bodies: [Body] = []
+        for part in parts where part.mesh.indices.count >= 3 {
+            // Pivot at the part's AABB centre, like STL; the file's placement
+            // survives in the transform.
+            var mesh = part.mesh
+            let aabb = mesh.localAABB
+            let center = (aabb.min + aabb.max) * 0.5
+            for i in mesh.positions.indices { mesh.positions[i] -= center }
+            var transform = Transform3D.identity
+            transform.translation = SIMD3<Double>(center)
+            // A part the file never named ("Part", "Part (material)") takes
+            // the file's own name instead.
+            var base = part.name.trimmingCharacters(in: .whitespaces)
+            if base.isEmpty || base == "Part" { base = fallback }
+            else if base.hasPrefix("Part (") { base = fallback + base.dropFirst(4) }
+            var body = Body(
+                id: BodyID(),
+                name: document.uniqueBodyName(base: base),
+                transform: transform,
+                primitive: nil,
+                render: mesh,
+                revision: document.nextRevision())
+            body.material = part.material?.clamped
+            document.bodies.append(body)
+            bodies.append(body)
+        }
+        guard !bodies.isEmpty else {
+            errorMessage = "Couldn't import “\(fileName)” — no triangle meshes found."
+            return
+        }
+        cancelTransientPicks()
+        session.perform(CompositeCommand(
+            title: "Import \(fallback)",
+            commands: bodies.map { AddBodyCommand(body: $0, title: "Import \($0.name)") }))
+        selection = Set(bodies.map(\.id))
+        mode = .idle
+        cameraControl?.fitScene()
+        let textured = bodies.filter { $0.material?.baseColorTexture != nil }.count
+        if bodies.count > 1 || textured > 0 {
+            showNotice("Imported \(bodies.count) part\(bodies.count == 1 ? "" : "s")"
+                       + (textured > 0 ? ", \(textured) textured" : "") + ".")
+        }
+    }
+
     func saveThumbnail() {
         if let data = thumbnailProvider?() {
             session.project.thumbnail = data
@@ -515,7 +595,11 @@ final class EditorViewModel {
                             Float($0.baseColor.z), Float($0.baseColor.w)
                         ),
                         metallic: Float($0.metallic),
-                        roughness: Float($0.roughness)
+                        roughness: Float($0.roughness),
+                        // Only a mesh with texcoords can sample it; a
+                        // rebuilt (boolean'd, blended) body drops both.
+                        textureData: body.render.texcoords == nil ? nil : $0.baseColorTexture,
+                        textureRevision: body.meshRevision
                     )
                 }
             ))
@@ -803,6 +887,21 @@ final class EditorViewModel {
             // profile can be pulled into 3D.
             scene.profileFills.append(contentsOf: fillBatches(for: sketch))
         }
+        // The regions an armed profile tool is working on read stronger than
+        // the rest: the first one and every extra one tapped in afterwards.
+        // Without this a second region joined the extrude (its volume proved
+        // it) with no visible sign that the tap had landed.
+        if let context = toolContext, let sketchID = context.sketchID,
+           let sketch = session.document.sketches.first(where: { $0.id == sketchID }) {
+            let armedColor = SIMD4<Float>(0.16, 0.55, 1.0, 0.45)
+            for entry in [(context.profile, context.holes)] + context.extraProfiles.map { ($0.profile, $0.holes) } {
+                let triangles = SketchTessellator.fillTriangles(
+                    for: entry.0, holes: entry.1, on: sketch.plane)
+                if !triangles.isEmpty {
+                    scene.profileFills.append(SketchFillBatch(triangles: triangles, color: armedColor))
+                }
+            }
+        }
         if case .sketching(let activeID, _) = mode,
            let sketch = session.document.sketches.first(where: { $0.id == activeID }) {
             let pendings = [pendingEntity, pendingArcEntity].compactMap { $0 }
@@ -982,7 +1081,7 @@ final class EditorViewModel {
         // its plane, or while Insert Image waits for its target plane.
         switch mode {
         case .pickingSketchPlane, .pickingSplitCutter, .pickingSectionPlane, .pickingImagePlane:
-            scene.planePickers = PlanePicking.worldTiles + constructionPlaneTiles
+            scene.planePickers = worldPlaneTiles + constructionPlaneTiles
         default:
             break
         }
@@ -1071,6 +1170,18 @@ final class EditorViewModel {
                        corners[2], corners[3], corners[3], corners[0]],
             color: border
         ))
+    }
+
+    /// Origin plane pickers sized to what is in the scene (see
+    /// `PlanePicking.worldTiles(sceneExtent:)`): the largest visible body
+    /// extent, so a metre-scale scan gets metre-scale tiles.
+    private var worldPlaneTiles: [PlanePickerTile] {
+        var extent = 0.0
+        for body in session.document.bodies where !body.isHidden {
+            let b = Self.worldBounds(of: body)
+            extent = max(extent, b.max.x - b.min.x, b.max.y - b.min.y, b.max.z - b.min.z)
+        }
+        return PlanePicking.worldTiles(sceneExtent: extent)
     }
 
     /// Tappable quads for the document's visible construction planes.
@@ -4242,7 +4353,7 @@ final class EditorViewModel {
             return
         }
         let world = body.euclidMesh().transformed(by: body.transform.euclid)
-        let tiles = PlanePicking.worldTiles + constructionPlaneTiles
+        let tiles = worldPlaneTiles + constructionPlaneTiles
         if let hit = PlanePicking.pick(ray: ray, tiles: tiles) {
             let halves = KernelOps.split(body: world, byPlane: hit.tile.plane)
             performSplit(of: body, halves: (halves.kept, halves.other))
@@ -4956,7 +5067,7 @@ final class EditorViewModel {
     /// Tap routing while Section View waits for its plane: a world or
     /// construction plane tile, or a planar body face (spec §16.1).
     private func handleSectionPlanePick(ray: Ray) {
-        let tiles = PlanePicking.worldTiles + constructionPlaneTiles
+        let tiles = worldPlaneTiles + constructionPlaneTiles
         let tileHit = PlanePicking.pick(ray: ray, tiles: tiles)
         let bodyHit = HitTester.pickBody(ray: ray, in: scene)
 
@@ -6382,7 +6493,9 @@ final class EditorViewModel {
         if let source = context.sourceBody {
             return session.document.body(with: source).map { [$0] } ?? []
         }
-        return session.document.bodies
+        // Heavy imported meshes are scenery, never CSG operands
+        // (`BooleanCandidacy`) — the scan that took Extrude down.
+        return session.document.bodies.filter(BooleanCandidacy.allows)
     }
 
     /// World-space AABB from the render mesh's local AABB (cheap — no Euclid
@@ -6874,8 +6987,16 @@ final class EditorViewModel {
         // came back as a SECOND body. The flush contact leaves zero-volume
         // sliver polygons in the intersection (the very signal Auto had to
         // stop trusting), so an explicit union accepts contact as touching.
+        // AABB gate before any CSG: bodies nowhere near the tool cost
+        // nothing. Inflated a hair so flush contact (explicit Union) passes.
+        let toolBounds = mergeTool.bounds
+        let gate = Euclid.Bounds(
+            min: toolBounds.min - Vector(1e-3, 1e-3, 1e-3),
+            max: toolBounds.max + Vector(1e-3, 1e-3, 1e-3))
         var touched: [(target: Body, worldTarget: Euclid.Mesh, pushesIn: Bool)] = []
         for target in booleanCandidates(for: context) {
+            guard context.sourceBody == target.id
+                    || gate.intersects(Self.worldBounds(of: target)) else { continue }
             let worldTarget = target.euclidMesh().transformed(by: target.transform.euclid)
             let pushesIn = sample.map { worldTarget.intersects($0) } ?? false
             let overlap = worldTarget.intersection(mergeTool)
@@ -6886,6 +7007,15 @@ final class EditorViewModel {
             if touches {
                 touched.append((target, worldTarget, pushesIn))
             }
+        }
+
+        // An explicit boolean aimed at a heavy mesh gets told why nothing
+        // happened, instead of a silent stand-alone body or a stall.
+        if touched.isEmpty, context.booleanOverride != .auto,
+           let heavy = BooleanCandidacy.heavyBodies(in: session.document.bodies)
+               .first(where: { gate.intersects(Self.worldBounds(of: $0)) }) {
+            errorMessage = BooleanCandidacy.refusalMessage(for: heavy)
+            return
         }
 
         let kind: BooleanKind
@@ -8895,7 +9025,7 @@ final class EditorViewModel {
 
     /// Tap routing while the plane tiles are up.
     private func handlePlanePick(ray: Ray, tool: SketchTool) {
-        let tiles = PlanePicking.worldTiles + constructionPlaneTiles
+        let tiles = worldPlaneTiles + constructionPlaneTiles
         let tileHit = PlanePicking.pick(ray: ray, tiles: tiles)
         let bodyHit = HitTester.pickBody(ray: ray, in: scene)
 
@@ -10878,7 +11008,7 @@ final class EditorViewModel {
             mode = .idle
             return
         }
-        let tiles = PlanePicking.worldTiles + constructionPlaneTiles
+        let tiles = worldPlaneTiles + constructionPlaneTiles
         let plane = PlanePicking.pick(ray: ray, tiles: tiles)?.tile.plane ?? .ground
         pendingImageData = nil
         insertImage(data: data, on: plane)
@@ -11097,6 +11227,173 @@ final class EditorViewModel {
     func zoomToImage(_ id: InsertedImageID) {
         guard let image = session.document.images.first(where: { $0.id == id }) else { return }
         cameraControl?.fitTo(bounds: Self.imageBounds(image))
+    }
+
+    // MARK: - Items Manager folders (spec §11)
+
+    var itemFolderTree: ItemFolderTree { ItemFolderTree(session.document.itemFolders) }
+
+    /// New folder. With no explicit members it takes the current body
+    /// selection (Shapr3D: "create folder from selection").
+    @discardableResult
+    func createItemFolder(named name: String? = nil, in parent: ItemFolderID? = nil,
+                          containing keys: [DocumentItemKey]? = nil) -> ItemFolderID {
+        let tree = itemFolderTree
+        let members = keys ?? session.document.bodies
+            .filter { selection.contains($0.id) }
+            .map { DocumentItemKey.body($0.id) }
+        let folder = ItemFolder(name: name ?? tree.uniqueName(), parentID: parent, members: members)
+        session.perform(SetItemFoldersCommand(
+            title: "New Folder", before: tree.folders, after: tree.adding(folder)))
+        return folder.id
+    }
+
+    func renameItemFolder(_ id: ItemFolderID, to newName: String) {
+        let tree = itemFolderTree
+        let trimmed = newName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let current = tree.folder(id)?.name, !trimmed.isEmpty, trimmed != current else { return }
+        session.perform(SetItemFoldersCommand(
+            title: "Rename Folder", before: tree.folders, after: tree.renaming(id, to: trimmed)))
+    }
+
+    /// Move items into a folder (`nil` = out of every folder).
+    func moveItems(_ keys: [DocumentItemKey], toFolder destination: ItemFolderID?) {
+        let tree = itemFolderTree
+        let after = tree.moving(keys, to: destination)
+        guard after != tree.folders else { return }
+        let title = destination.flatMap { tree.folder($0)?.name }
+            .map { "Move to \($0)" } ?? "Move out of Folder"
+        session.perform(SetItemFoldersCommand(title: title, before: tree.folders, after: after))
+    }
+
+    func moveItemFolder(_ id: ItemFolderID, into parent: ItemFolderID?) {
+        let tree = itemFolderTree
+        guard tree.canMove(folder: id, into: parent), tree.parent(of: id) != parent else { return }
+        session.perform(SetItemFoldersCommand(
+            title: "Move Folder", before: tree.folders, after: tree.reparenting(id, to: parent)))
+    }
+
+    /// Remove the folder only; what it held moves up a level.
+    func removeItemFolder(_ id: ItemFolderID) {
+        let tree = itemFolderTree
+        guard tree.folder(id) != nil else { return }
+        session.perform(SetItemFoldersCommand(
+            title: "Remove Folder", before: tree.folders, after: tree.removingKeepingContents(id)))
+    }
+
+    /// Delete the folder, its subfolders and every item inside — one undo
+    /// step. Mode/tool cleanup mirrors `deleteItem` for each kind.
+    func deleteItemFolderAndItems(_ id: ItemFolderID) {
+        let tree = itemFolderTree
+        guard tree.folder(id) != nil else { return }
+        let keys = tree.keys(inSubtree: id)
+        var bodyIDs = Set<BodyID>()
+        // Leave any state that points at a doomed item BEFORE snapshotting
+        // the document for the delete commands (finishing a sketch can edit it).
+        for key in keys {
+            switch key {
+            case .body(let bodyID):
+                bodyIDs.insert(bodyID)
+            case .sketch(let sketchID):
+                if toolContext?.sketchID == sketchID { cancelTool() }
+                if case .sketching(let active, _) = mode, active == sketchID { finishSketch() }
+            case .image(let imageID):
+                endImageInteraction()
+                if selectedImageID == imageID { selectedImageID = nil }
+            case .plane, .axis:
+                break
+            }
+        }
+        if !bodyIDs.isEmpty {
+            cancelTransientPicks()
+            if let source = toolContext?.sourceBody, bodyIDs.contains(source) { cancelTool() }
+            selection.subtract(bodyIDs)
+            switch mode {
+            case .editingPrimitive(let selected) where bodyIDs.contains(selected),
+                 .selected(let selected) where bodyIDs.contains(selected),
+                 .faceSelected(let selected) where bodyIDs.contains(selected):
+                mode = .idle
+            case .pickingBooleanTool(_, let target) where bodyIDs.contains(target):
+                mode = .idle
+            case .pickingSplitCutter(let target) where bodyIDs.contains(target):
+                mode = .idle
+            default:
+                break
+            }
+        }
+        let document = session.document
+        var commands: [DocumentCommand] = [SetItemFoldersCommand(
+            title: "Delete Folder", before: tree.folders, after: tree.removingSubtree(id))]
+        for key in keys {
+            switch key {
+            case .body:
+                break
+            case .sketch(let sketchID):
+                if let command = DeleteSketchCommand(id: sketchID, document: document) {
+                    commands.append(command)
+                }
+            case .plane(let planeID):
+                if let command = DeletePlaneCommand(id: planeID, document: document) {
+                    commands.append(command)
+                }
+            case .axis(let axisID):
+                if let command = DeleteAxisCommand(id: axisID, document: document) {
+                    commands.append(command)
+                }
+            case .image(let imageID):
+                if let command = RemoveImageCommand(id: imageID, document: document) {
+                    commands.append(command)
+                }
+            }
+        }
+        let liveBodies = bodyIDs.filter { document.body(with: $0) != nil }
+        if !liveBodies.isEmpty {
+            commands.append(DeleteBodiesCommand(ids: liveBodies, document: document))
+        }
+        session.perform(CompositeCommand(title: "Delete Folder", commands: commands))
+        session.save()
+    }
+
+    /// Whether a scene item is hidden; nil when the item no longer exists.
+    func isItemHidden(_ key: DocumentItemKey) -> Bool? {
+        let document = session.document
+        switch key {
+        case .body(let id): return document.body(with: id)?.isHidden
+        case .sketch(let id): return document.sketches.first { $0.id == id }?.isHidden
+        case .plane(let id): return document.planes.first { $0.id == id }?.isHidden
+        case .axis(let id): return document.axes.first { $0.id == id }?.isHidden
+        case .image(let id): return document.images.first { $0.id == id }?.isHidden
+        }
+    }
+
+    /// A folder reads hidden when every item in its subtree is hidden.
+    func itemFolderIsHidden(_ id: ItemFolderID) -> Bool {
+        let states = itemFolderTree.keys(inSubtree: id).compactMap(isItemHidden)
+        return !states.isEmpty && states.allSatisfy { $0 }
+    }
+
+    /// The folder eye: hide everything inside, or show everything inside,
+    /// as one undo step.
+    func setItemFolderHidden(_ id: ItemFolderID, hidden: Bool) {
+        var commands: [DocumentCommand] = []
+        for key in itemFolderTree.keys(inSubtree: id) {
+            guard let current = isItemHidden(key), current != hidden else { continue }
+            switch key {
+            case .body(let bodyID):
+                commands.append(SetItemVisibilityCommand(item: .body(bodyID), isHidden: hidden))
+            case .sketch(let sketchID):
+                commands.append(SetItemVisibilityCommand(item: .sketch(sketchID), isHidden: hidden))
+            case .plane(let planeID):
+                commands.append(SetItemVisibilityCommand(item: .plane(planeID), isHidden: hidden))
+            case .axis(let axisID):
+                commands.append(SetAxisHiddenCommand(id: axisID, hidden: hidden))
+            case .image(let imageID):
+                commands.append(SetItemVisibilityCommand(imageID: imageID, isHidden: hidden))
+            }
+        }
+        guard !commands.isEmpty else { return }
+        session.perform(CompositeCommand(
+            title: hidden ? "Hide Folder" : "Show Folder", commands: commands))
     }
 
     // MARK: - Items Manager (spec §11)

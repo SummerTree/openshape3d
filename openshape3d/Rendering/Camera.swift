@@ -137,8 +137,12 @@ nonisolated enum StandardView: String, CaseIterable, Identifiable, Sendable {
 
     /// The pose for this view, keeping target/distance/projection. Top and
     /// Bottom clamp to ±89° (TurntableCamera.elevationLimit) — 1° short of a
-    /// true plan view, because the turntable's fixed Y-up degenerates at ±90°;
-    /// they also keep the current azimuth so the flight doesn't spin.
+    /// true plan view, because the turntable's fixed Y-up degenerates at ±90°.
+    /// They square the azimuth up to the nearest quadrant: near-vertical, the
+    /// azimuth IS the on-screen roll, and a plan view that keeps an arbitrary
+    /// orbit angle comes out rolled by that angle (a 36° tilt was reported
+    /// after a stray orbit, and no view command could undo it). Nearest
+    /// quadrant rather than always 0 so the flight stays short.
     func applied(to camera: TurntableCamera) -> TurntableCamera {
         var cam = camera
         switch self {
@@ -146,8 +150,10 @@ nonisolated enum StandardView: String, CaseIterable, Identifiable, Sendable {
             cam.azimuth = .pi / 5
             cam.elevation = .pi / 7
         case .top:
+            cam.azimuth = Self.nearestQuadrant(camera.azimuth)
             cam.elevation = TurntableCamera.elevationLimit
         case .bottom:
+            cam.azimuth = Self.nearestQuadrant(camera.azimuth)
             cam.elevation = -TurntableCamera.elevationLimit
         case .front:
             cam.azimuth = 0
@@ -163,5 +169,10 @@ nonisolated enum StandardView: String, CaseIterable, Identifiable, Sendable {
             cam.elevation = 0
         }
         return cam
+    }
+
+    /// The multiple of 90° closest to `azimuth`, so a plan view ends upright.
+    static func nearestQuadrant(_ azimuth: Float) -> Float {
+        (azimuth / (.pi / 2)).rounded() * (.pi / 2)
     }
 }

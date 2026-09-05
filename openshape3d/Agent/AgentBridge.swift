@@ -191,6 +191,31 @@ final class AgentBridge {
 
         switch op {
 
+        case let .importFile(path, fileName, unitScale):
+            let url = URL(fileURLWithPath: path)
+            guard let data = try? Data(contentsOf: url) else {
+                return .failure(404, "Not Found", error: "unreadable_path",
+                                message: "Could not read \(path).")
+            }
+            let before = Set(session.document.bodies.map(\.id))
+            viewModel.errorMessage = nil
+            // A loose .obj/.gltf/.blend needs the files beside it; the host
+            // directory is readable here, so hand them over.
+            let loose = ["obj", "gltf", "blend"].contains(url.pathExtension.lowercased())
+            viewModel.importMesh(data: data, fileName: fileName ?? url.lastPathComponent,
+                                 siblings: loose ? MeshImportKit.folderSiblings(of: url) : [:],
+                                 unitScale: unitScale)
+            if let message = viewModel.errorMessage {
+                return .failure(422, "Unprocessable Entity", error: "import_failed", message: message)
+            }
+            let added = session.document.bodies.filter { !before.contains($0.id) }
+            return execOK(viewModel, [
+                "bodyIDs": added.map { $0.id.raw.uuidString },
+                "names": added.map(\.name),
+                "textured": added.filter { $0.material?.baseColorTexture != nil }.count,
+                "triangles": added.reduce(0) { $0 + $1.render.indices.count / 3 },
+                "undoSteps": 1])
+
         case let .createSketch(name, plane):
             let sketch = Sketch(name: name, plane: plane)
             session.perform(AddSketchCommand(sketch: sketch, title: "Add \(name)"))
@@ -1086,6 +1111,23 @@ final class AgentBridge {
             "commandSearchActive": viewModel.commandSearchActive,
         ]
         if let title = viewModel.session.undoStack.undoTitle { state["undoTitle"] = title }
+        // Items Manager folders (spec §11): the tree as the panel shows it.
+        state["itemFolders"] = document.itemFolders.map { folder -> [String: Any] in
+            [
+                "id": folder.id.raw.uuidString,
+                "name": folder.name,
+                "parent": folder.parentID.map { $0.raw.uuidString } ?? "",
+                "members": folder.members.map { key -> [String: String] in
+                    switch key {
+                    case .body(let id): return ["kind": "body", "id": id.raw.uuidString]
+                    case .sketch(let id): return ["kind": "sketch", "id": id.raw.uuidString]
+                    case .plane(let id): return ["kind": "plane", "id": id.raw.uuidString]
+                    case .axis(let id): return ["kind": "axis", "id": id.raw.uuidString]
+                    case .image(let id): return ["kind": "image", "id": id.raw.uuidString]
+                    }
+                },
+            ]
+        }
         if let error = viewModel.errorMessage { state["error"] = error }
         // Per-feature replay failures — the same signal the History badges
         // render. `error` above is the one-shot interactive alert; this is the

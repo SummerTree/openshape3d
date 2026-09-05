@@ -21,6 +21,8 @@ final class BodyGPUResources {
     let indexCount: Int
     let edgeVertexBuffer: MTLBuffer?
     let edgeVertexCount: Int
+    /// Present only for meshes that carry texture coordinates (imports).
+    let texcoordBuffer: MTLBuffer?
 
     init?(drawable: BodyDrawable, device: MTLDevice) {
         let mesh = drawable.renderMesh
@@ -45,6 +47,14 @@ final class BodyGPUResources {
         normalBuffer = normals
         indexBuffer = indices
         indexCount = mesh.indices.count
+        if let texcoords = mesh.texcoords, texcoords.count == mesh.positions.count {
+            let length = texcoords.count * MemoryLayout<SIMD2<Float>>.stride
+            texcoordBuffer = texcoords.withUnsafeBytes { raw in
+                device.makeBuffer(bytes: raw.baseAddress!, length: length, options: .storageModeShared)
+            }
+        } else {
+            texcoordBuffer = nil
+        }
 
         if let edges = drawable.edges, !edges.segments.isEmpty {
             let edgeLength = edges.segments.count * MemoryLayout<SIMD3<Float>>.stride
@@ -127,5 +137,51 @@ nonisolated final class ImageQuadTextureCache {
     }
 
     /// Live entries — test hook for revision/eviction behavior.
+    var entryCount: Int { cache.count }
+}
+
+
+/// Albedo textures for imported bodies — the body-side twin of
+/// `ImageQuadTextureCache`, keyed by body id and refreshed when the
+/// material's `textureRevision` moves. A body without texture data (every
+/// modelled body) never enters the cache.
+final class BodyTextureCache {
+    private struct Entry {
+        let revision: UInt64
+        let texture: MTLTexture?
+    }
+
+    private var cache: [BodyID: Entry] = [:]
+    private var loader: MTKTextureLoader?
+
+    func sync(bodies: [BodyDrawable], device: MTLDevice) {
+        var liveIDs = Set<BodyID>()
+        for body in bodies {
+            guard let material = body.material, let data = material.textureData else { continue }
+            liveIDs.insert(body.id)
+            if let existing = cache[body.id], existing.revision == material.textureRevision {
+                continue
+            }
+            let loader = self.loader ?? MTKTextureLoader(device: device)
+            self.loader = loader
+            var texture: MTLTexture?
+            if let source = CGImageSourceCreateWithData(data as CFData, nil),
+               let image = CGImageSourceCreateImageAtIndex(source, 0, nil) {
+                texture = try? loader.newTexture(cgImage: image, options: [
+                    .SRGB: false,
+                    .textureUsage: MTLTextureUsage.shaderRead.rawValue,
+                    .textureStorageMode: MTLStorageMode.shared.rawValue,
+                    .generateMipmaps: true,
+                ])
+            }
+            cache[body.id] = Entry(revision: material.textureRevision, texture: texture)
+        }
+        cache = cache.filter { liveIDs.contains($0.key) }
+    }
+
+    func texture(for id: BodyID) -> MTLTexture? {
+        cache[id]?.texture
+    }
+
     var entryCount: Int { cache.count }
 }

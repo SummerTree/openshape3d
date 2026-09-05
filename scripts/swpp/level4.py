@@ -1,6 +1,6 @@
 """Level 4 — Extrude Cut & Fillet/Chamfer (70 problems)."""
 import math
-from kit import Sketch, front, top, bottom, right, left, back, plane_at, extrude, revolve, fillet, chamfer, edges_where, edges_near, edges_along, union, subtract, move, mirror, pattern
+from kit import Sketch, front, top, bottom, right, left, back, plane_at, extrude, revolve, fillet, chamfer, edges_where, edges_near, edges_along, union, subtract, move, mirror, pattern, X
 
 PROBLEMS = {}
 
@@ -650,4 +650,649 @@ def p4_57():
     # The R6 blends along the flank/tube arcs end where the lug's z-faces
     # are tangent to the tube; OCCT rejects them ("blended solid failed
     # validity checking"), so they are left off (about -0.4 %).
+    return body
+
+
+# ---------------------------------------------------------------------------
+# Round 4 (2026-09-04): the sheets earlier passes deferred, built on the most
+# defensible reading; each recipe's comment states the assumptions taken.
+
+
+@problem("4.11", 89495, features=("Extrude Boss", "Extrude Cut", "Sketch: Arcs"))
+def p4_11():
+    # Keyed plate 110 × 52, 17 thick (R20 on the right corners) with an
+    # 8-tall raised band on the left: a lip left of the R96 arc and a block
+    # between the R72 arc and x = 59, both arcs about (102, 0) (8 from the
+    # right end); Ø28 through at x = 65 (45 from the end) with an 8-wide
+    # through keyway to 19 from its centre; a 22-wide slot 7 deep from the
+    # hole to the end; 2 × Ø9 through the groove floor on the R85 arc at
+    # ±17.5° from the Ø28 centre (the sheet's 35°). Hand: 89,494.9.
+    a96 = math.degrees(math.asin(26 / 96)); x96 = 102 - math.sqrt(96 ** 2 - 26 ** 2)
+    a72 = math.degrees(math.asin(26 / 72)); x72 = 102 - math.sqrt(72 ** 2 - 26 ** 2)
+    body = extrude(Sketch(top(0)).rounded_poly([(0, -26), (110, -26), (110, 26), (0, 26)], [0, 20, 20, 0]), (50, 0), 17)
+    lip = (Sketch(top(17)).line((0, -26), (0, 26)).line((0, 26), (x96, 26)).arc((102, 0), 96, 180 - a96, 180 + a96)
+           .line((x96, -26), (0, -26)))
+    extrude(lip, (3, 0), 8, union=[body])
+    blk = (Sketch(top(17)).line((x72, 26), (59, 26)).line((59, 26), (59, -26)).line((59, -26), (x72, -26))
+           .arc((102, 0), 72, 180 - a72, 180 + a72))
+    extrude(blk, (45, 0), 8, union=[body])
+    extrude(Sketch(top(-1)).circle((65, 0), 14), (65, 0), 27, cut=[body])
+    extrude(Sketch(top(-1)).rect(65, -4, 84, 4), (80, 0), 27, cut=[body])
+    extrude(Sketch(top(10)).rect(65, -11, 111, 11), (95, 0), 8, cut=[body])
+    c, s = math.cos(math.radians(17.5)), math.sin(math.radians(17.5))
+    t = (-74 * c + math.sqrt((74 * c) ** 2 + 4 * 5856)) / 2          # ray from (65,0) meets R85 about (102,0)
+    for sgn in (1, -1):
+        extrude(Sketch(top(-1)).circle((65 - t * c, sgn * t * s), 4.5), (65 - t * c, sgn * t * s), 19, cut=[body])
+    return body
+
+
+@problem("4.12", 59730, features=("Extrude Boss", "Extrude Cut", "Sketch: Trim"))
+def p4_12():
+    # Fan housing: 80-square (R7 corners) 25 long; the middle 20 is a
+    # mid-plane cut to Ø85 clipped by the 80 flats (the 'Ø85 CUTAWAY'),
+    # leaving two 2.5 plates with 4 × Ø6 concentric with the R7 corners;
+    # Ø70 bore 17 deep from the front, Ø50 through the 8 flange behind.
+    # Hand: 59,729.8.
+    sq = Sketch(front(0)).rounded_poly([(-40, -40), (40, -40), (40, 40), (-40, 40)], 7)
+    for sx in (1, -1):
+        for sy in (1, -1):
+            sq.circle((33 * sx, 33 * sy), 3)
+    body = extrude(sq, (0, 38), 25)
+    h = math.sqrt(42.5 ** 2 - 40 ** 2); a0 = math.degrees(math.atan2(h, 40))
+    cut = Sketch(front(2.5))
+    for k in range(4):
+        rot = 90 * k
+        def P(x, y):
+            r = math.radians(rot); return (x * math.cos(r) - y * math.sin(r), x * math.sin(r) + y * math.cos(r))
+        cut.arc((0, 0), 42.5, a0 + rot, 90 - a0 + rot)
+        cut.line(P(h, 40), P(h, 45)).line(P(h, 45), P(45, 45)).line(P(45, 45), P(45, h)).line(P(45, h), P(40, h))
+    for k in range(4):
+        r = math.radians(90 * k)
+        extrude(cut, (36 * math.cos(r) - 36 * math.sin(r), 36 * math.sin(r) + 36 * math.cos(r)), 20, cut=[body])
+    extrude(Sketch(front(-1)).circle((0, 0), 35), (0, 0), 18, cut=[body])
+    extrude(Sketch(front(-1)).circle((0, 0), 25), (0, 0), 27, cut=[body])
+    return body
+
+
+def extrude_intersect(sk, seed, distance, targets):
+    """Extrude with the inline `intersect` boolean (the kit's extrude() has
+    no flag for it): the target keeps its id and becomes the common volume."""
+    sk.commit()
+    X("feature.extrude", {"sketchID": sk.id, "seedPoint": list(seed), "distance": distance,
+                          "boolean": "intersect", "booleanTargets": list(targets)})
+    return targets[0]
+
+
+@problem("4.13", 38349, features=("Extrude Boss", "Extrude Cut", "Sketch: Offset", "Sketch: Trim", "Fillet"))
+def p4_13():
+    # Y-lever = (front Y profile, through z) ∩ (plan lever profile, through
+    # y). Y: 14-tall bar from the hub's edge (x = −25) to x = 35, two 8-thick
+    # arms from (35, ±7) to (75, ±32.5) (32.5°), 8-tall tabs to the end; R5
+    # in the crotch and the four concave junction corners. Lever: hull of
+    # R25 about the origin and R12 about (100, 0), Ø36 bore (the '7' wall),
+    # Ø12 end hole, a window offset 7 inside the sides and 7 outside both
+    # holes (R25 / R13 arcs) with rounded corners; their radius is not
+    # called out — a circle fit on the drawing's corner gives R4 (centre
+    # (27.7, 10.6) vs R4's (27.0, 10.6)). Hand (raster, R4): 38,380.6;
+    # sharp corners would read −1.19 %.
+    phi = math.atan2(25.5, 40); t = math.tan(phi); c = math.cos(phi); s = math.sin(phi)
+    x_in0 = 35 + 8 * s - (7 - 8 * c) / t                # inner arm line crosses y = 0 (crotch apex)
+    x_pc = x_in0 + 24.5 / t                              # inner line meets the tab's underside
+    pts = [(-25, -7), (35, -7), (75, -32.5), (115, -32.5), (115, -24.5), (x_pc, -24.5), (x_in0, 0),
+           (x_pc, 24.5), (115, 24.5), (115, 32.5), (75, 32.5), (35, 7), (-25, 7)]
+    radii = [0, 5, 0, 0, 0, 5, 5, 5, 0, 0, 0, 5, 0]
+    R = 4.0
+    alpha = math.asin(13 / 100); n = (math.sin(alpha), math.cos(alpha)); tv = (n[1], -n[0])
+    d = 18 - R; h = math.sqrt((25 + R) ** 2 - d * d)
+    C1 = (d * n[0] + h * n[1], d * n[1] - h * n[0]); b = math.degrees(math.atan2(C1[1], C1[0]))
+    a = 5 - R; bb = -math.sqrt((13 + R) ** 2 - a * a)
+    C2 = (100 + a * n[0] + bb * tv[0], a * n[1] + bb * tv[1]); g = math.degrees(math.atan2(C2[1], C2[0] - 100))
+    a1 = math.degrees(math.atan2(n[1], n[0]))
+    T2 = (C1[0] + R * n[0], C1[1] + R * n[1]); T3 = (C2[0] + R * n[0], C2[1] + R * n[1])
+    lever = (Sketch(top(-40)).hull2((0, 0), 25, (100, 0), 12).circle((0, 0), 18).circle((100, 0), 6)
+             .arc((0, 0), 25, -b, b)
+             .arc(C1, R, a1, 180 + b).line(T2, T3).arc(C2, R, g - 180, a1).arc((100, 0), 13, g, 360 - g)
+             .arc((C2[0], -C2[1]), R, 360 - a1, 540 - g).line((T3[0], -T3[1]), (T2[0], -T2[1]))
+             .arc((C1[0], -C1[1]), R, 180 - b, 360 - a1))
+    body = extrude(lever, (0, 21.5), 80)
+    yprof = Sketch(front(-40)).rounded_poly(pts, radii)
+    return extrude_intersect(yprof, (0, 0), 80, [body])
+
+
+@problem("4.36", 6333, features=("Revolve", "Extrude Cut", "Sketch: Fillets", "Fillet and Chamfer"))
+def p4_36():
+    # Turned pin: Ø19 base, Ø13 shank, 40 tall; the shoulder is an R5/R5
+    # S-curve (two tangent sketch fillets). Its position is read from the
+    # drawn tangent edges — both views show them at y = 13.4 / 17.0 / 20.5,
+    # i.e. the S centred at y = 17 (the printed 16.00 lands on nothing
+    # drawn); 1 × 45° chamfer on the top rim; a D-flat 6 deep beyond 4.5
+    # from the axis on the top; a Ø12 bore 14 deep with a flat at 4 from
+    # the axis; one Ø2 cross hole at y = 7 through one wall into the bore
+    # (Section A-A shows one wall only). Hand: 6,332.6.
+    th = math.acos(0.7); h = 5 * math.sin(th)                # each fillet turns 45.57°, S is 7.14 tall
+    yc = 17.0
+    prof = (Sketch(front(0)).poly([(0, 0), (9.5, 0), (9.5, yc - h)], close=False)
+            .arc((4.5, yc - h), 5, 0, math.degrees(th))
+            .arc((11.5, yc + h), 5, 180, 180 + math.degrees(th))
+            .poly([(6.5, yc + h), (6.5, 39), (5.5, 40), (0, 40), (0, 0)], close=False))
+    body = revolve(prof, (3, 25), (0, 0), (0, 1))
+    extrude(Sketch(front(-10)).rect(4.5, 34, 8, 41), (6, 37), 20, cut=[body])
+    a0 = math.degrees(math.acos(4 / 6))
+    bore = Sketch(top(-1)).arc((0, 0), 6, a0, 360 - a0).line((4, -math.sqrt(20)), (4, math.sqrt(20)))
+    extrude(bore, (0, 0), 15, cut=[body])
+    extrude(Sketch(front(5)).circle((0, 7), 1), (0, 7), 6, cut=[body])
+    return body
+
+
+@problem("4.33", 70920, features=("Extrude Boss", "Extrude Cut", "Sketch: Slot", "Sketch: Arcs", "Sketch: Fillets"))
+def p4_33():
+    # L-bracket, both legs 10 thick. Plate (plan, z = −Y): a 50-wide band
+    # from the upright to an R38 boss about the Ø48 hole 50 down (Detail A:
+    # R38 / R24), R10 in the two side junctions, R50 concave blends down to
+    # an R18 lobe about the Ø15 hole 45 further, a 6-wide slit whose lower
+    # edge is the 25° radial from the hole centre. Upright 50 × 10 to 75
+    # tall with an R25 top (centre 50 up) and an R7 slot between 25 and 50.
+    # Hand (raster): 70,914.7.
+    body = extrude(Sketch(top(0)).rect(-25, -50, 25, 10), (0, -20), 10)
+    extrude(Sketch(top(0)).circle((0, -50), 38), (0, -50), 10, union=[body])
+    extrude(Sketch(top(0)).circle((0, -95), 18), (0, -95), 10, union=[body])
+    zj = 50 - math.sqrt(38 ** 2 - 25 ** 2)                      # side lines meet the boss
+    yi = (-1120 / 45 - 145) / 2; xi = math.sqrt(324 - (yi + 95) ** 2)        # boss/lobe intersection
+    fillet(body, 10.0, edges_near(body, (25, 5, zj), 0.6) + edges_near(body, (-25, 5, zj), 0.6))
+    fillet(body, 50.0, edges_near(body, (xi, 5, -yi), 0.6) + edges_near(body, (-xi, 5, -yi), 0.6))
+    extrude(Sketch(top(-1)).circle((0, -50), 24), (0, -50), 12, cut=[body])
+    extrude(Sketch(top(-1)).circle((0, -95), 7.5), (0, -95), 12, cut=[body])
+    a = math.radians(25); dd = (-math.cos(a), -math.sin(a)); n = (-math.sin(a), math.cos(a))
+    H = (0, -50)
+    P = [H, (H[0] + 45 * dd[0], H[1] + 45 * dd[1]), (H[0] + 45 * dd[0] + 6 * n[0], H[1] + 45 * dd[1] + 6 * n[1]),
+         (H[0] + 6 * n[0], H[1] + 6 * n[1])]
+    extrude(Sketch(top(-1)).poly(P), (H[0] + 30 * dd[0] + 3 * n[0], H[1] + 30 * dd[1] + 3 * n[1]), 12, cut=[body])
+    up = (Sketch(front(-10)).line((-25, 0), (25, 0)).line((25, 0), (25, 50)).arc((0, 50), 25, 0, 180)
+          .line((-25, 50), (-25, 0)).slot((0, 25), (0, 50), 7))
+    extrude(up, (20, 10), 10, union=[body])
+    return body
+
+
+@problem("4.64", 156401, features=("Extrude Boss", "Extrude Cut"))
+def p4_64():
+    # Stepped block 86 × 64 (plan V = −z) × 39 with a 30 × 64 × 7 tab under
+    # x 31..61. Raised at 39 left of the 40°-from-vertical diagonal through
+    # (54, 52) and, beyond V = 52, left of x = 54; the raised top slopes 25°
+    # down over V 40..64. Everything right of that is stepped to 21 (the
+    # 18), and the corner triangle beyond the parallel line 18 from the
+    # corner (86, 0) to 12 (the 9). Ø14 through at (46, 26). Hand: 156,401.1.
+    t40 = math.tan(math.radians(40)); t25 = math.tan(math.radians(25))
+    x0 = 54 - 52 * t40
+    body = extrude(Sketch(top(0)).rect(0, 0, 86, 64), (43, 32), 39)
+    extrude(Sketch(top(-7)).rect(31, 0, 61, 64), (46, 32), 7, union=[body])
+    extrude(Sketch(top(21)).poly([(x0, 0), (86, 0), (86, 64), (54, 64), (54, 52)]), (70, 30), 19, cut=[body])
+    extrude(Sketch(right(-1)).poly([(40, 39), (66, 39 - 26 * t25), (66, 45), (40, 45)]), (55, 42), 88, cut=[body])
+    s, c = math.sin(math.radians(40)), math.cos(math.radians(40))
+    P1 = (86 - 18 / c - 2 * s, -2 * c); P2 = (86 + 2 * s, 18 / s + 2 * c)
+    extrude(Sketch(top(12)).poly([P1, (90, P1[1]), (90, P2[1]), P2]), (82, 5), 10, cut=[body])
+    extrude(Sketch(top(-8)).circle((46, 26), 7), (46, 26), 30, cut=[body])
+    return body
+
+
+@problem("4.67", 118352, features=("Extrude Boss", "Extrude Cut", "Sketch: Fillets"))
+def p4_67():
+    # Chevron plate 100 × 95 × 25: a right-angle V notch from the right
+    # (apex (52.5, 47.5)); a 12-wide slot through the middle of the
+    # thickness removes everything right of the right-angle triangle whose
+    # arms run from the two left corners to an R5-rounded apex at
+    # (47.5, 47.5) (Section A-A); Ø12 through at (20, 47.5). Hand: 118,352.3.
+    body = extrude(Sketch(front(0)).poly([(0, 0), (100, 0), (52.5, 47.5), (100, 95), (0, 95)]), (20, 20), 25)
+    cutter = Sketch(front(6.5)).rounded_poly([(0, 95), (47.5, 47.5), (0, 0), (0, -5), (110, -5), (110, 100), (0, 100)],
+                                             [0, 5, 0, 0, 0, 0, 0])
+    extrude(cutter, (80, 47.5), 12, cut=[body])
+    extrude(Sketch(front(-1)).circle((20, 47.5), 6), (20, 47.5), 27, cut=[body])
+    return body
+
+
+@problem("4.40", 4533315, features=("Extrude Boss", "Extrude Cut", "Fillet"))
+def p4_40():
+    # Rocker 750 long, 40 thick: ends 100 tall (top at 225), a 40-deep
+    # recess between x = ±280 (750/2 − 95) with R30 floor corners, bottom
+    # slopes from (±375, 125) tangent to the R70 arc through the origin,
+    # R10 on the two end/slope corners. Hub: the R70 arc IS the boss —
+    # Ø140 × 85 concentric with the Ø50 bore at (0, 70), R10 rounds on both
+    # rims (the drawing's two circles are the rim and its Ø120 tangent
+    # edge; their measured ratio 1.17 fits 140/120, not 160/140).
+    # Hand: 4,559,179 (+0.57 %); slopes to the origin instead of tangent
+    # would read −0.61 %; a Ø160 boss +5.6 %.
+    C = (0.0, 70.0); P = (375.0, 125.0)
+    d = math.hypot(P[0] - C[0], P[1] - C[1]); L = math.sqrt(d * d - 4900)
+    base = math.atan2(C[1] - P[1], C[0] - P[0]); off = math.asin(70 / d)
+    T = min(((P[0] + L * math.cos(base + s * off), P[1] + L * math.sin(base + s * off)) for s in (1, -1)), key=lambda t: t[1])
+    aT = math.degrees(math.atan2(T[1] - 70, T[0]))
+    prof = (Sketch(front(-20)).poly([P, (375, 225), (280, 225), (280, 215)], close=False)
+            .arc((250, 215), 30, 270, 360).line((250, 185), (-250, 185)).arc((-250, 215), 30, 180, 270)
+            .poly([(-280, 215), (-280, 225), (-375, 225), (-375, 125), (-T[0], T[1])], close=False)
+            .arc((0, 70), 70, 180 - aT, 360 + aT).line(T, P))
+    body = extrude(prof, (0, 150), 40)
+    fillet(body, 10.0, edges_where(body, lambda e: abs(abs(e["midpoint"][0]) - 375) < 0.6 and abs(e["midpoint"][1] - 125) < 0.6))
+    extrude(Sketch(front(-42.5)).circle((0, 70), 70), (0, 70), 85, union=[body])
+    fillet(body, 10.0, edges_where(body, lambda e: abs(abs(e["midpoint"][2]) - 42.5) < 0.6 and abs(e["lengthMM"] - 2 * math.pi * 70) < 2))
+    extrude(Sketch(front(-45)).circle((0, 70), 25), (0, 70), 90, cut=[body])
+    return body
+
+
+@problem("4.1", 7393, features=("Extrude Boss", "Extrude Cut", "Sketch: Polygon", "Fillet and Chamfer"))
+def p4_1():
+    # Punch along +x: hex shank 6 A/F, 20 long (x −20..0); Ø9 body 120 long
+    # with a 1 × 45° chamfer at the shoulder; the last 25 is a flat blade
+    # (iso): the round is cut top and bottom by 4° flats ending 1.5 thick,
+    # each blended into the Ø9 surface at the 25 line by a concave R5.
+    t4 = math.tan(math.radians(4)); n = (math.sin(math.radians(4)), math.cos(math.radians(4)))
+    c = n[0] * 120 + n[1] * 0.75                    # line n·p = c through the tip corner (120, 0.75)
+    # R5 centre: n·C = c + 5 and |C − (95, 4.5)| = 5
+    # parametrise C = (95 + s, 4.5 + w): solve numerically
+    # C = P + 5·(cos φ, sin φ) with n·C = c + 5, P = (95, 4.5):  n·P + 5(n·u(φ)) = c + 5
+    # → cos(φ − φn) = (c + 5 − n·P) / 5 where φn = atan2(n[1], n[0])
+    P = (95.0, 4.5)
+    phin = math.atan2(n[1], n[0]); k = (c + 5 - (n[0] * P[0] + n[1] * P[1])) / 5
+    phi = phin - math.acos(max(-1.0, min(1.0, k)))                # the solution ahead of the corner (+x)
+    C = (P[0] + 5 * math.cos(phi), P[1] + 5 * math.sin(phi)); T = (C[0] - 5 * n[0], C[1] - 5 * n[1])
+    body = extrude(Sketch(right(0)).circle((0, 0), 4.5), (0, 0), 120)
+    extrude(Sketch(right(-20)).polygon_flats((0, 0), 6, 6), (0, 0), 20, union=[body])
+    from kit import chamfer, edges_where
+    chamfer(body, 1.0, edges_where(body, lambda e: abs(e["midpoint"][0]) < 0.3 and abs(e["lengthMM"] - 2 * math.pi * 4.5) < 1.0))
+    ang = lambda cc, p: math.degrees(math.atan2(p[1] - cc[1], p[0] - cc[0]))
+    for sy in (1, -1):
+        cut = Sketch(front(-6))
+        if sy > 0:
+            cut.arc(C, 5, ang(C, (95, 4.5)), ang(C, T))            # short way, CCW
+            cut.line(T, (121, 0.75 - t4)).line((121, 0.75 - t4), (121, 10)).line((121, 10), (95, 10)).line((95, 10), (95, 4.5))
+            seed = (110, 6)
+        else:
+            Cm = (C[0], -C[1]); Tm = (T[0], -T[1])
+            cut.arc(Cm, 5, ang(Cm, Tm), ang(Cm, (95, -4.5)))          # short way, CCW
+            cut.line(Tm, (121, -(0.75 - t4))).line((121, -(0.75 - t4)), (121, -10)).line((121, -10), (95, -10)).line((95, -10), (95, -4.5))
+            seed = (110, -6)
+        extrude(cut, seed, 12, cut=[body])
+    return body
+
+
+@problem("4.2", 226455, features=("Extrude Boss", "Extrude Cut", "Sketch: Arcs", "Sketch: Fillets", "Fillet and Chamfer"))
+def p4_2():
+    # Clevis. Front outline: R25 lug about the upper Ø20 hole (0, 100),
+    # concave R30 waist arcs centred (±55, 100), 45° edges (90° between)
+    # to R10 shoulders, 30° edges (60° between) tangent to an R30 bottom
+    # about the lower Ø20 hole at the origin. Body 45 wide (z) with a
+    # 25-wide slot 92 deep (R10 top corners); above 92 the lug is 12 thick
+    # with R25 blends down to the body (side view); 4 × 5 × 45° chamfers
+    # on the outer hole edges. The "20" callout at the bottom matches no
+    # feature of this reading (the bottom arc measures R30).
+    from kit import chamfer, edges_where
+    r2 = math.sqrt(2) / 2
+    Tw = (55 - 30 * r2, 100 - 30 * r2)
+    L1 = Tw[0] + Tw[1]
+    # R10 centre: x + y = L1 − 10√2, 0.866x − 0.5y = 20
+    k1 = L1 - 10 * math.sqrt(2)
+    x10 = (20 + 0.5 * k1) / (math.cos(math.radians(30)) + 0.5); y10 = k1 - x10
+    C10 = (x10, y10)
+    T1 = (C10[0] + 10 * r2, C10[1] + 10 * r2)
+    T2 = (C10[0] + 10 * math.cos(math.radians(30)), C10[1] - 10 * math.sin(math.radians(30)))
+    T3 = (30 * math.cos(math.radians(30)), -15.0)
+    sk = Sketch(front(-22.5))
+    sk.arc((0, 100), 25, 0, 180)
+    for sx in (1, -1):
+        M = lambda p: (sx * p[0], p[1])
+        if sx > 0:
+            sk.arc((55, 100), 30, 180, 225)
+            sk.arc(C10, 10, -30, 45)
+            sk.arc((0, 0), 30, -150, -30)
+        else:
+            sk.arc((-55, 100), 30, -45, 0)
+            sk.arc((-C10[0], C10[1]), 10, 135, 210)
+        sk.line(M(Tw), M(T1)).line(M(T2), M(T3))
+    sk.circle((0, 0), 10).circle((0, 100), 10)
+    body = extrude(sk, (0, 50), 45)
+    # side profile trims above y = 92 outside the 12-thick lug: fillet R25
+    # between the lug face (|z| = 6) and the shoulder at y = 92
+    for sz in (1, -1):
+        u = lambda z: -sz * z                                   # right plane: u = -z
+        cutp = Sketch(right(-60))
+        ys = 117 - math.sqrt(25 ** 2 - (37 - 22.5) ** 2)
+        ang = lambda cc, p: math.degrees(math.atan2(p[1] - cc[1], p[0] - cc[0]))
+        pts_arc_start, pts_arc_end = (6.0, 117.0), (22.5, ys)
+        # in (u, v) with u = -z: right side z>0 -> u negative
+        if sz > 0:
+            Fu = (-37.0, 117.0)
+            cutp.arc(Fu, 25, ang(Fu, (-22.5, ys)), ang(Fu, (-12, 117)))
+            cutp.line((-12, 117), (-12, 200)).line((-12, 200), (-22.5, 200)).line((-22.5, 200), (-22.5, ys))
+            seed = (-17, 150)
+        else:
+            Fu = (37.0, 117.0)
+            cutp.arc(Fu, 25, ang(Fu, (12, 117)), ang(Fu, (22.5, ys)))
+            cutp.line((12, 117), (12, 200)).line((12, 200), (22.5, 200)).line((22.5, 200), (22.5, ys))
+            seed = (17, 150)
+        extrude(cutp, seed, 120, cut=[body])
+    # slot 25 wide to 92 with R10 top corners (through all x)
+    slot = (Sketch(right(-60)).line((-12.5, -40), (12.5, -40)).line((12.5, -40), (12.5, 82))
+            .arc((2.5, 82), 10, 0, 90).line((2.5, 92), (-2.5, 92)).arc((-2.5, 82), 10, 90, 180)
+            .line((-12.5, 82), (-12.5, -40)))
+    extrude(slot, (0, 20), 120, cut=[body])
+    # 5 × 45° chamfers on the four outer hole edges, cut as revolved cones
+    # (the upper hole meets the R25 blend zone, so its edges are not planar
+    # circles and the kernel's edge chamfer is refused there)
+    from kit import revolve
+    for (yc, zf) in ((0, 22.5), (0, -22.5), (100, 12), (100, -12)):
+        sgn = 1 if zf > 0 else -1
+        u0 = -zf                                        # right plane: u = -z
+        tri = Sketch(right(0)).poly([(u0, yc + 10), (u0, yc + 15.5), (u0 + sgn * 5.5, yc + 10)])
+        revolve(tri, (u0 + sgn * 1.5, yc + 11.5), (0, yc), (1, 0), 360, cut=[body])
+    return body
+
+
+@problem("4.3", 10173, features=("Extrude Boss", "Extrude Cut", "Fillet and Chamfer"))
+def p4_3():
+    # Split shaft collar: ring Ø53 / Ø35 (9 radial wall), 9 thick, 1.5 slit;
+    # a Ø4 clamp hole across the slit at mid-wall (4.5 in from the outer
+    # surface, i.e. 22 from the centre), counterbored Ø6 for 7 each side
+    # of the slit (14); 6 × 1 × 45° chamfers on the outer and bore edges.
+    # Closed form 10 185.
+    from kit import chamfer, edges_where
+    body = extrude(Sketch(top(0)).circle((0, 0), 26.5).circle((0, 0), 17.5), (22, 0), 9)
+    extrude(Sketch(top(9)).rect(-0.75, -30, 0.75, -10), (0, -20), -9, cut=[body])   # slit at plan v<0 (z>0 side)
+    # clamp hole along x at plan v = -22 (z = 22), y = 4.5
+    extrude(Sketch(right(-40)).circle((-22, 4.5), 2), (-22, 4.5), 80, cut=[body])   # u = -z -> u = -22
+    extrude(Sketch(right(-7)).circle((-22, 4.5), 3), (-22, 4.5), 14, cut=[body])
+    rad = lambda e: math.hypot(e["midpoint"][0], e["midpoint"][2])
+    ids = edges_where(body, lambda e: (abs(e["midpoint"][1]) < 0.3 or abs(e["midpoint"][1] - 9) < 0.3)
+                      and (abs(rad(e) - 26.5) < 0.6 or abs(rad(e) - 17.5) < 0.6) and e["lengthMM"] > 3)
+    chamfer(body, 1.0, ids)
+    return body
+
+
+# ---------------------------------------------------------------- R1B pass ---
+
+def _edges_between(bid, pred_a, pred_b):
+    """Edge indices shared by a face matching pred_a and one matching pred_b.
+    Needed because /v1/edges reports no midpoint/length for the lateral
+    (extrude-direction) edges between two profile walls, so kit.edges_where
+    cannot see them (R1B finding)."""
+    from kit import faces, G
+    fa = {f["index"] for f in faces(bid) if pred_a(f)}
+    fb = {f["index"] for f in faces(bid) if pred_b(f)}
+    out = []
+    for e in G(f"/v1/edges?body={bid}")["edges"]:
+        fs = e.get("faces") or []
+        if len(fs) == 2 and ((fs[0] in fa and fs[1] in fb) or (fs[1] in fa and fs[0] in fb)):
+            out.append(e["index"])
+    return out
+
+
+@problem("4.4", 66264, features=("Extrude Boss", "Extrude Cut", "Fillet and Chamfer"))
+def p4_4():
+    # Tool block, 78 wide (x) × 48 deep (z) × 32 tall (y). Side profile (z, y):
+    # a 19.2-deep foot (48 − 28.80) 10.67 tall whose front face is 8 tall and
+    # then slopes back at 60° to the vertical (30° from horizontal) into the
+    # z = 6 wall; the body z 6..48 above the 10.67 ledge, the z 6..24 part
+    # 32 tall, the z 24..48 part 25 tall (32 − 7) with a 1.5 × 45° chamfer
+    # on its outer top edge and Detail A's tongue at the wall: an isosceles
+    # trapezoid 1.5 tall, 2 wide on top, 40° flanks (100° included), whose
+    # left base corner is the wall. R1.5 TYP on the four foot corners.
+    # Front view: both x ends slope in at 24° (from vertical) between
+    # y = 13.33 and y = 21.33 (the '8' band), so the top is 70.876 wide.
+    # 3 × Ø8 blind holes 10 deep from the top at z = 15, 1.5 × 45° chamfered,
+    # centres 12 in from the top face's ends and at x = 39.
+    t30 = math.tan(math.radians(30)); t40 = math.tan(math.radians(40)); t24 = math.tan(math.radians(24))
+    b = 2 * 1.5 / t40                                       # tongue base extra width (3.575)
+    pts = [(0, 0), (19.2, 0), (19.2, 10.6667), (48, 10.6667), (48, 23.5), (46.5, 25),
+           (24 + 2 + b, 25), (24 + 2 + b / 2, 26.5), (24 + b / 2, 26.5), (24, 25),
+           (24, 32), (6, 32), (6, 8 - 6 * t30), (0, 8)]
+    radii = [1.5, 1.5, 1.5, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1.5, 0]
+    body = extrude(Sketch(left(78)).rounded_poly(pts, radii), (30, 20), 78)
+    dx = 8 * t24                                            # 3.562 end inset
+    for x0, sgn in ((0, 1), (78, -1)):
+        end = Sketch(front(-1)).poly([(x0 - sgn, 13.3333), (x0 - sgn, 33), (x0 + sgn * dx, 33),
+                                       (x0 + sgn * dx, 21.3333), (x0, 13.3333)])
+        extrude(end, (x0 + sgn * 0.5, 30), 50, cut=[body])
+    for x in (78 - dx - 12, 39, dx + 12):
+        extrude(Sketch(bottom(32)).circle((x, 15), 4), (x, 15), 10, cut=[body])
+        rim = edges_where(body, lambda e: abs(e["midpoint"][1] - 32) < 0.3 and abs(e["lengthMM"] - 2 * math.pi * 4) < 1.0
+                          and abs(math.hypot(e["midpoint"][0] - x, e["midpoint"][2] - 15) - 4) < 0.3)
+        chamfer(body, 1.5, rim)
+    return body
+
+
+@problem("4.5", 107923, features=("Extrude Boss", "Extrude Cut", "Fillet and Chamfer"))
+def p4_5():
+    # Channelled wedge, 125 long (x) × 43 wide (z, symmetric) × 55 tall.
+    # Front profile: R15 lug about the Ø15 hole at (34, 40), a 45° nose
+    # tangent to it running down to the x = 0 face (meets it at y = 27.21),
+    # a straight top tangent to the lug running down to the x = 125 face at
+    # the same height (pixel-measured 27.3; 17.4°), R5 at both of those
+    # corners; the lower 18 mm is inset 6 at both ends (Detail A). A 27-wide
+    # channel between 8-thick rails, floor 10 above the crest of the R160
+    # concave bottom (axis along x, 160 below the crest, so the sides sit
+    # 1.45 lower). Ø15 through both rails.
+    C = (34.0, 40.0); R = 15.0
+    T1 = (C[0] - R / math.sqrt(2), C[1] + R / math.sqrt(2)); h = T1[1] - T1[0]
+    lo, hi = 0.15, 1.0
+    for _ in range(60):
+        t = (lo + hi) / 2
+        d = abs(C[1] - h - (125 - C[0]) * t) / math.sqrt(1 + t * t)
+        lo, hi = (t, hi) if d < R else (lo, t)
+    t = (lo + hi) / 2
+    n = (t / math.sqrt(1 + t * t), 1 / math.sqrt(1 + t * t))
+    T2 = (C[0] + R * n[0], C[1] + R * n[1])
+    a1 = math.degrees(math.atan2(T2[1] - C[1], T2[0] - C[0]))
+    # R5 at the two end corners as sketch fillets: the bridge cannot fillet
+    # lateral profile-wall edges (see agent_bugs_R1B).
+    th = math.atan(t)
+    dL = 5 / math.tan(math.radians(67.5)); dR = 5 / math.tan((math.pi / 2 + th) / 2)
+    sk = (Sketch(front(-21.5)).poly([(6, 0), (119, 0), (119, 18), (125, 18), (125, h - dR)], close=False)
+          .arc((120, h - dR), 5, 0, 90 - math.degrees(th))
+          .line((125 - dR * math.cos(th), h + dR * math.sin(th)), T2)
+          .arc(C, R, a1, 135.0)
+          .line(T1, (dL / math.sqrt(2), h + dL / math.sqrt(2)))
+          .arc((5, h - dL), 5, 135, 180)
+          .poly([(0, h - dL), (0, 18), (6, 18), (6, 0)], close=False)
+          .circle(C, 7.5))
+    body = extrude(sk, (60, 10), 43)
+    crest = 160 - math.sqrt(160 ** 2 - 21.5 ** 2)
+    extrude(Sketch(bottom(60)).rect(-1, -13.5, 126, 13.5), (60, 0), 60 - (10 + crest), cut=[body])
+    extrude(Sketch(right(-1)).circle((0, crest - 160), 160), (0, crest - 160), 127, cut=[body])
+    return body
+
+
+@problem("4.7", 130592, features=("Extrude Boss", "Extrude Cut", "Fillet and Chamfer"))
+def p4_7():
+    # Clevis plate 125 (x) × 80 (z) × 20: the underside is relieved 6 deep
+    # from the fork end to x = 110 with an R6 blending the step (it eats the
+    # whole 6 step); a 31-wide slot 62 deep from the fork end with R6 at its
+    # closed corners (flat end, 19 straight — pixel-checked, not a full
+    # round); an R11 lug about the Ø12 hole at (11, 6), tangent to the x = 0
+    # face, over the arms and 10 beyond each side (z 15.5..50), i.e. the
+    # feet 22 wide × 100 overall in the end view; a Ø20 boss 15 tall with a
+    # 3 wall (Ø14 bore, through the plate) 30 from the right end; R2 at the
+    # boss base (the other R2s — lug/side-face and lug/underside junctions —
+    # can't be applied over the bridge, see agent_bugs_R1B; ~120 mm³).
+    body = extrude(Sketch(top(0)).rect(0, -40, 125, 40), (60, 0), 20)
+    relief = Sketch(front(-41)).rounded_poly([(-1, -1), (110, -1), (110, 6), (-1, 6)], [0, 0, 6, 0])
+    extrude(relief, (50, 3), 82, cut=[body])
+    slot = Sketch(top(-1)).rounded_poly([(-1, -15.5), (62, -15.5), (62, 15.5), (-1, 15.5)], [0, 6, 6, 0])
+    extrude(slot, (30, 0), 22, cut=[body])
+    extrude(Sketch(top(20)).circle((95, 0), 10).circle((95, 0), 7), (95, 8.5), 15, union=[body])
+    extrude(Sketch(top(-1)).circle((95, 0), 7), (95, 0), 22, cut=[body])
+    for z0 in (15.5, -50):
+        extrude(Sketch(front(z0)).circle((11, 6), 11), (11, -3), 34.5, union=[body])
+    extrude(Sketch(front(-51)).circle((11, 6), 6), (11, 6), 102, cut=[body])
+    rim = edges_where(body, lambda e: abs(e["midpoint"][1] - 20) < 0.3
+                      and abs(math.hypot(e["midpoint"][0] - 95, e["midpoint"][2]) - 10) < 0.3)
+    fillet(body, 2.0, rim)
+    return body
+
+
+@problem("4.9", 141606, features=("Extrude Boss", "Extrude Cut"))
+def p4_9():
+    # Jaw block, 120 to the theoretical point of the 52° nose. Head 28 × 61
+    # × 52 with a 23 × 11 slot along its top and a 10-deep × 38-wide slot
+    # through its full height at the left end; shank 41 × 29 from x = 28,
+    # tapering at 52° included from x = 78 to a flat tip at x = 111 (33) —
+    # the apex at 120 fixes the start at 78; the top steps down 12 at
+    # x = 98 (22 from the apex); Ø11 across at (78, 17), on the taper start.
+    body = extrude(Sketch(top(0)).rect(0, -30.5, 28, 30.5), (14, 0), 52)
+    extrude(Sketch(bottom(52)).rect(-1, -11.5, 29, 11.5), (14, 0), 11, cut=[body])
+    extrude(Sketch(top(-1)).rect(-1, -19, 10, 19), (5, 0), 54, cut=[body])
+    wt = 20.5 - 33 * math.tan(math.radians(26))
+    extrude(Sketch(top(0)).poly([(28, -20.5), (78, -20.5), (111, -wt), (111, wt), (78, 20.5), (28, 20.5)]),
+            (50, 0), 29, union=[body])
+    extrude(Sketch(front(-25)).rect(98, 17, 113, 30), (105, 25), 50, cut=[body])
+    extrude(Sketch(front(-25)).circle((78, 17), 5.5), (78, 17), 50, cut=[body])
+    return body
+
+
+@problem("4.50", 238068, features=("Extrude Boss", "Extrude Cut"))
+def p4_50():
+    # Asymmetric angle bracket. Upright block 36 thick (z -36..0): profile
+    # (x, y) with the vertical face at x = 125, top flat 12 wide at y = 90
+    # and the 42° hypotenuse running all the way down to y = 0 (the back
+    # view shows it reaching the bottom at 13 from the origin end). Base bar
+    # 32 × 16 × 125 in front of it (z 0..32) with its outer top edge
+    # chamfered at 50° from vertical down to a 4-tall end face. Notch: the
+    # back 11 mm of the upright removed above the plane perpendicular to
+    # the hypotenuse 15 down the slope from the top corner (reads as 11 ×
+    # 10 in the end view since 15·sin 42° = 10). 2 × Ø13 through, 20 off
+    # the hypotenuse at heights 56 and 31 (40 and 15 above the base top);
+    # Ø12 × 11 deep normal to the hypotenuse, 67 up the slope, 17 from the
+    # back face.
+    a = math.radians(42); ta = math.tan(a)
+    x0 = 113 - 90 / ta                                       # hypotenuse foot at y = 0 (13.04)
+    body = extrude(Sketch(front(-36)).poly([(x0, 0), (125, 0), (125, 90), (113, 90)]), (100, 40), 36)
+    run = 12 / math.tan(math.radians(40))
+    base = Sketch(right(0)).poly([(0, 0), (-32, 0), (-32, 4), (-(32 - run), 16), (0, 16)])
+    extrude(base, (-10, 8), 125, union=[body])
+    d = (math.cos(a), math.sin(a)); nrm = (-math.sin(a), math.cos(a))
+    P1 = (113 - 15 * d[0], 90 - 15 * d[1])
+    far = (135, P1[1] - (135 - P1[0]) * (math.cos(a) / math.sin(a)))   # cut plane meets x = 135
+    notch = Sketch(front(-37)).poly([P1, far, (135, 95), (P1[0] + 20 * nrm[0], P1[1] + 20 * nrm[1])])
+    extrude(notch, (120, 88), 12, cut=[body])
+    def hole_x(y):  # 20 from the hypotenuse (line through (113, 90) at 42°)
+        return (y + (ta * 113 - 90) + 20 * math.sqrt(1 + ta * ta)) / ta
+    extrude(Sketch(front(-37)).circle((hole_x(56), 56), 6.5).circle((hole_x(31), 31), 6.5), (hole_x(56), 56), 38, cut=[body])
+    extrude(Sketch(front(-37)).circle((hole_x(31), 31), 6.5), (hole_x(31), 31), 38, cut=[body])
+    c = (x0 + 67 * d[0], 67 * d[1], -19.0)
+    o = (c[0] + nrm[0], c[1] + nrm[1], c[2])
+    hs = Sketch(plane_at(o, (0, 0, 1), (d[0], d[1], 0))).circle((0, 0), 6)
+    extrude(hs, (0, 0), -12, cut=[body])
+    return body
+
+
+@problem("4.58", 81002, features=("Extrude Boss", "Extrude Cut", "Sketch: Slot"))
+def p4_58():
+    # Square tube 50 × 50 × 90 long (x), 5 walls, open both ends. Mid-length:
+    # an obround boss on top (R10 ends 20 apart, 3 wall, 7 tall) with its
+    # R7 slot through the top wall; Ø25 bosses with Ø19 bores on the front
+    # and back (74 overall → 12 long each), bores through both walls; Ø8
+    # through both walls 35 either side of mid-length. At the x = 0 end an
+    # 8 × 10 notch in the top wall 7 in from one side (10 from the boss
+    # centreline); at the x = 90 end Detail B's R4 U-slot, 8 wide, 10 deep,
+    # centred 15 from the other side.
+    body = extrude(Sketch(right(0)).rect(-25, 0, 25, 50).rect(-20, 5, 20, 45), (22.5, 25), 90)
+    extrude(Sketch(top(50)).slot((35, 0), (55, 0), 10).slot((35, 0), (55, 0), 7), (45, 8.5), 7, union=[body])
+    extrude(Sketch(top(44)).slot((35, 0), (55, 0), 7), (45, 0), 14, cut=[body])
+    extrude(Sketch(front(25)).circle((45, 25), 12.5).circle((45, 25), 9.5), (45, 36), 12, union=[body])
+    extrude(Sketch(back(-25)).circle((-45, 25), 12.5).circle((-45, 25), 9.5), (-45, 36), 12, union=[body])
+    extrude(Sketch(front(-38)).circle((45, 25), 9.5), (45, 25), 76, cut=[body])
+    for x in (10, 80):
+        extrude(Sketch(front(-38)).circle((x, 25), 4), (x, 25), 76, cut=[body])
+    extrude(Sketch(top(44)).rect(-1, 10, 10, 18), (5, 14), 8, cut=[body])
+    extrude(Sketch(top(44)).slot((84, -10), (95, -10), 4), (88, -10), 8, cut=[body])
+    return body
+
+
+@problem("4.60", 134393, features=("Extrude Boss", "Extrude Cut", "Sketch: Slot", "Sketch: Arcs"))
+def p4_60():
+    # Channel-backed plate. Plate 75 wide × 10 thick (z -10..0): top edge 54
+    # above the origin (the slot centre), R13 top corners, Ø10 × 2 on 35
+    # centres 13 below the top, straight sides down to 21 below the origin
+    # (the channel's bottom), then tangents to the R25 end about the Ø23
+    # hole 127 below the top. The plate is cut through its full width by
+    # the 13-tall gap centred on the origin (the side view and Detail A both
+    # show the strip open there). C-channel on the front, 75 long: web 10
+    # thick, 42 tall, its outer face 37 from the plate's back (Detail A),
+    # flanges 10 thick spanning the 17 between plate and web; R6 slot on 35
+    # centres through the web.
+    C = (0.0, -73.0); R = 25.0; P = (37.5, -21.0)
+    d = math.hypot(P[0] - C[0], P[1] - C[1]); alpha = math.acos(R / d)
+    aT = math.atan2(P[1] - C[1], P[0] - C[0]) - alpha
+    T = (C[0] + R * math.cos(aT), C[1] + R * math.sin(aT))
+    top = (Sketch(front(-10)).rounded_poly([(-37.5, -21), (-37.5, 54), (37.5, 54), (37.5, -21)], [0, 13, 13, 0])
+           .circle((-17.5, 41), 5).circle((17.5, 41), 5))
+    body = extrude(top, (0, 20), 10)
+    lug = (Sketch(front(-10)).line((-37.5, -21), (37.5, -21)).line((37.5, -21), T)
+           .arc(C, R, 180 - math.degrees(aT), 360 + math.degrees(aT))      # round the bottom, T' to T
+           .line((-T[0], T[1]), (-37.5, -21)).circle(C, 11.5))
+    extrude(lug, (0, -40), 10, union=[body])
+    extrude(Sketch(front(-11)).rect(-40, -6.5, 40, 6.5), (0, 0), 12, cut=[body])
+    ch = Sketch(right(-37.5)).poly([(0, 21), (-27, 21), (-27, -21), (0, -21), (0, -11), (-17, -11), (-17, 11), (0, 11)])
+    extrude(ch, (-22, 0), 75, union=[body])
+    extrude(Sketch(front(28)).slot((-17.5, 0), (17.5, 0), 6), (0, 0), -12, cut=[body])
+    return body
+
+
+@problem("4.66", 104107, features=("Extrude Boss", "Extrude Cut", "Sketch: Slot", "Fillet and Chamfer"))
+def p4_66():
+    # Gable block, origin at the back face's bottom centre; z runs toward
+    # the front (35 deep overall). Front profile: 84 wide, sides vertical
+    # to y = 35, then 33° from vertical up to the y = 53 bend (the side
+    # view's 18), then 51° from vertical up to the 71 flat (16.2 wide).
+    # The main body is 27 deep (z 8..35); a 25-wide lug with the same roof
+    # fills the back 8 (top view). Full-width front notch y 10..47 × 12
+    # deep (side view / the tiny 8 × 12 slab patches in the top view);
+    # 35° chamfer with a 15 run on the front top edge; Ø8 slot 8 wide
+    # between centres (0, 18) and (0, 39) through the back 23.
+    t33 = math.tan(math.radians(33)); t51 = math.tan(math.radians(51)); t35 = math.tan(math.radians(35))
+    x53 = 42 - 18 * t33; x71 = x53 - 18 * t51
+    prof = [(-42, 0), (42, 0), (42, 35), (x53, 53), (x71, 71), (-x71, 71), (-x53, 53), (-42, 35)]
+    body = extrude(Sketch(front(0)).poly(prof), (0, 10), 35)
+    for sx in (1, -1):
+        extrude(Sketch(front(-1)).rect(sx * 12.5, -1, sx * 50, 80), (sx * 30, 20), 9, cut=[body])
+    extrude(Sketch(front(23)).rect(-50, 10, 50, 47), (0, 30), 13, cut=[body])
+    y0 = 71 - 15 * t35
+    zt = 35 - (75 - y0) / t35
+    ch = Sketch(right(-50)).poly([(-35, y0), (-35, 75), (-zt, 75)])
+    extrude(ch, (-34, 72), 100, cut=[body])
+    extrude(Sketch(front(-1)).slot((0, 18), (0, 39), 4), (0, 28), 40, cut=[body])
+    return body
+
+
+@problem("4.39", 166787, features=("Extrude Boss", "Extrude Cut", "Sketch: Arcs"))
+def p4_39():
+    # Two identical D-shaped eyes, 22 thick, meeting face to face at x = 50:
+    # each is a 64-wide rectangle from the hole centre out 50 plus an R32
+    # semicircle, Ø36 through. The first lies flat (origin at its hole
+    # centre, thickness along y); the second stands upright (thickness
+    # along z) with its centre at x = 100. Nothing else joins them: the
+    # tangent-edge lines at x = 0 and x = 100 are the flat/cylinder seams.
+    flat = (Sketch(top(-11)).arc((0, 0), 32, 90, 270).line((0, -32), (50, -32))
+            .line((50, -32), (50, 32)).line((50, 32), (0, 32)).circle((0, 0), 18))
+    body = extrude(flat, (25, 0), 22)
+    up = (Sketch(front(-11)).arc((100, 0), 32, -90, 90).line((100, 32), (50, 32))
+          .line((50, 32), (50, -32)).line((50, -32), (100, -32)).circle((100, 0), 18))
+    extrude(up, (75, 0), 22, union=[body])
+    return body
+
+
+@problem("4.55", 230344, features=("Extrude Boss", "Extrude Cut", "Sketch: Arcs", "Sketch: Trim"))
+def p4_55():
+    # Bell-crank lever. Hub Ø62 × 50 tall on the origin (z 0..50) with a
+    # Ø26 bore and a 4-wide keyway to r = 18. Right arm: hull of the hub
+    # and an R22 end 65 out, 10 thick at the hub's top (z 40..50), the end
+    # a Ø44 boss 20 tall (z 40..60). Left arm: hull to an R22 end 120 out
+    # at 30° below the −x axis, 10 thick at the hub's bottom (z 0..10),
+    # its end a Ø44 boss 20 tall (z −10..10). Ø15 through both ends.
+    E = (-120 * math.cos(math.radians(30)), -120 * math.sin(math.radians(30)))
+    body = extrude(Sketch(front(40)).hull2((0, 0), 31, (65, 0), 22), (40, 0), 10)
+    extrude(Sketch(front(40)).circle((65, 0), 22), (65, 0), 20, union=[body])
+    extrude(Sketch(front(0)).hull2((0, 0), 31, E, 22), (E[0] / 2, E[1] / 2), 10, union=[body])
+    extrude(Sketch(front(-10)).circle(E, 22), E, 20, union=[body])
+    extrude(Sketch(front(0)).circle((0, 0), 31), (0, 0), 50, union=[body])
+    extrude(Sketch(front(-1)).circle((0, 0), 13), (0, 0), 52, cut=[body])
+    extrude(Sketch(front(-1)).rect(10, -2, 18, 2), (15, 0), 52, cut=[body])
+    extrude(Sketch(front(-11)).circle((65, 0), 7.5), (65, 0), 72, cut=[body])
+    extrude(Sketch(front(-11)).circle(E, 7.5), E, 72, cut=[body])
     return body

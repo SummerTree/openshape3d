@@ -88,3 +88,52 @@ def _rail_block(length=165.0, width=132.0, pocket_len=60.0, pocket_z0=38.0):
 @problem("10.8A", 431376, features=("Extrude Boss", "Extrude Cut", "Fillet (sketch)", "Chamfer (as revolve cut)"))
 def p10_8A():
     return _rail_block()
+
+
+# -------------------------------------------------------------- 10.10 ----
+# F3 worker. Plate 144 x 88 x 13 (4x R12 plan corners), origin at the plate
+# top / right end / front edge: world x runs 0..144 left->right, z 0..88 is
+# the plan depth (front edge z = 0), y is height with the plate top at 0.
+# Pixel-read from the three views (1.514 px/mm): the right view is a C —
+# the 13 plate plus two 22-wide side rails hanging 13 below it (the '13' is
+# the rail depth under the plate, 26 = plate + rail in the front view, 44 is
+# the clear web), 2x R3 in the rail/web corners; the 4x O18 bosses stand
+# on the long edges (centres ON the edge lines), 5 above the plate top and,
+# in both views and in 10.10B's Section B-B, ~2.5 below the rail bottom
+# (undimensioned; 2.4-2.6 measured); the O8 holes run from the boss top to
+# the rail-bottom level (10.10B's section shows the unhatched bore ending on
+# that plane, the cap below hatched) - the callout's 5.00 is the boss height
+# above the plate. Notch 30 x 8.67 with R3 corners in both rails 45 from
+# the right end; 2x O5 through each rail at 21 / 31 from the left end, 5
+# above the rail bottom (Detail A); R5 on the plate's top perimeter (the
+# tangent line 5 below the top runs the whole front view).
+
+def _p10_10A(boss_below=2.5):
+    body = extrude(Sketch(bottom(0)).rounded_poly([(0, 0), (144, 0), (144, 88), (0, 88)], 12), (72, 44), 13)
+    top_loop = edges_where(body, lambda e: abs(e["midpoint"][1]) < 0.3)
+    assert len(top_loop) == 8, top_loop
+    fillet(body, 5.0, top_loop)
+    rail_f = extrude(Sketch(bottom(-13)).rounded_poly([(0, 0), (144, 0), (144, 22), (0, 22)], [12, 12, 0, 0]), (72, 11), 13, union=[body])
+    extrude(Sketch(bottom(-13)).rounded_poly([(0, 66), (144, 66), (144, 88), (0, 88)], [0, 0, 12, 12]), (72, 77), 13, union=[body])
+    inner = edges_where(body, lambda e: abs(e["midpoint"][1] + 13) < 0.3 and e["lengthMM"] > 100
+                        and (abs(e["midpoint"][2] - 22) < 0.3 or abs(e["midpoint"][2] - 66) < 0.3))
+    assert len(inner) == 2, inner
+    fillet(body, 3.0, inner)
+    # notch through both rails, 45..75 from the right end, 8.67 tall, R3 at its ceiling corners
+    x0, x1, yt = 144 - 75, 144 - 45, -26 + 8.67
+    extrude(Sketch(front(-1)).rounded_poly([(x0, -27), (x1, -27), (x1, yt), (x0, yt)], [0, 0, 3, 3]), ((x0 + x1) / 2, -22), 90, cut=[body])
+    # O5 through the rails, 21 and 31 from the left end, 5 above the rail bottom
+    for x in (21, 31):
+        extrude(Sketch(front(-1)).circle((x, -21), 2.5), (x, -21), 90, cut=[body])
+    # bosses: O18 on the long edges, 5 above the plate top down to boss_below under the rails
+    h = 5 + 26 + boss_below
+    for c in [(48, 0), (120, 0), (48, 88), (120, 88)]:
+        extrude(Sketch(bottom(5)).circle(c, 9), c, h, union=[body])
+    for c in [(48, 0), (120, 0), (48, 88), (120, 88)]:
+        extrude(Sketch(bottom(5)).circle(c, 4), c, 31, cut=[body])
+    return body
+
+
+@problem("10.10A", 244027, features=("Extrude Boss", "Extrude Cut", "Fillet"))
+def p10_10A():
+    return _p10_10A()

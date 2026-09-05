@@ -14,6 +14,10 @@ final class PipelineStore {
     // Render pipelines
     let background: MTLRenderPipelineState
     let lit: MTLRenderPipelineState
+    /// `lit` with the albedo sampled from a per-body texture (imported
+    /// OBJ/glTF/USDZ bodies whose meshes carry texcoords).
+    let litTextured: MTLRenderPipelineState
+    let litTexturedBlended: MTLRenderPipelineState
     let litBlended: MTLRenderPipelineState   // preview bodies (translucent) + x-ray
     let depthOnly: MTLRenderPipelineState    // wireframe hidden-line prepass (no color writes)
     let unlitColor: MTLRenderPipelineState
@@ -69,6 +73,10 @@ final class PipelineStore {
                 vertex: "vertex_fullscreen", fragment: "fragment_backgroundGradient", blended: false
             ),
             let lit = makePipeline(vertex: "vertex_lit", fragment: "fragment_lit", blended: false),
+            let litTextured = makePipeline(
+                vertex: "vertex_litTextured", fragment: "fragment_litTextured", blended: false),
+            let litTexturedBlended = makePipeline(
+                vertex: "vertex_litTextured", fragment: "fragment_litTextured", blended: true),
             let litBlended = makePipeline(vertex: "vertex_lit", fragment: "fragment_lit", blended: true),
             let depthOnly = makePipeline(
                 vertex: "vertex_lit", fragment: "fragment_lit", blended: false, writesColor: false
@@ -94,6 +102,8 @@ final class PipelineStore {
         self.thickLine = thickLine
         self.background = background
         self.lit = lit
+        self.litTextured = litTextured
+        self.litTexturedBlended = litTexturedBlended
         self.litBlended = litBlended
         self.depthOnly = depthOnly
         self.unlitColor = unlitColor

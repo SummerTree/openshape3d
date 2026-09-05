@@ -1,6 +1,6 @@
 # Status & Next Steps — Handoff Notes
 
-Last updated: 2026-09-04 (SOLIDWORKS practice problems through the UI — see the newest mission log entry; before that: 2026-09-03 SOLIDWORKS practice-problem campaign — extrude end
+Last updated: 2026-09-05 (Import Units prompt, LiDAR scan import fixes, in-app bug reporter, Items Manager folders, project folders in the gallery — see the three newest mission log entries; before that: textured mesh import glTF/USDZ/OBJ + exact OCCT face draft; before that: SOLIDWORKS practice problems through the UI; 2026-09-03 SOLIDWORKS practice-problem campaign — extrude end
 conditions, B-rep touch commits, draft of an existing face; see the mission
 log just below, and **§4c for the campaign's state and how to resume it**).
 This is the living handoff document: what is DONE, how the newest subsystems
@@ -10,6 +10,343 @@ Companions: `IMPLEMENTATION_PLAN.md` (original phase plan),
 design), `FREECAD_PLAYBOOK.md` (the FreeCAD-derived hardening ledger),
 `TOPO_NAMING_HISTORY_DESIGN.md` (element-naming design, now complete), and
 `AGENT_CONTROL.md` (the `/v1/exec` scripting surface).
+
+## Mission log — 2026-09-05, full UI suite: green
+
+- After the reorder fix and the simulator reboot: **109 executed, 107
+  passed, 2 skipped, 0 failures** in 60 min on `os3d-test` (portrait,
+  freshly booted). No known UI-test failures remain on
+  `feat/textured-mesh-import`. Unit suite: 1334 green.
+
+## Mission log — 2026-09-05, history drag-reorder fixed (two bugs behind one failing test)
+
+- **Symptom since 2026-09-03:** `HistoryReorderUITests/testDragReorderTwoExtrudes`
+  failed at the press-and-drag with "Not hittable: HistoryRow-Extrude".
+- **Bug 1 — the long press opened the context menu.** History rows carry
+  both `.contextMenu` and `.draggable`; a 1 s press opens the menu before a
+  drag lifts, and the retry then found the rows covered. Fix: a reorder
+  grip (`line.3.horizontal`, `HistoryDragHandle-<name>`) on each row that
+  sits OUTSIDE the content carrying the context menu, so a press there
+  always lifts a drag. The row-level draggable stays for finger drags.
+- **Bug 2 — a String drop pasted into the Distance field.** With the grip,
+  the drag reached the target row, but XCUITest drops at the row's centre,
+  which is the Distance text field — and a text field accepts a String
+  drop. The feature's UUID was pasted into the field, the test read the
+  changed value as "reordered", and its Undo undid the extrude ("1 row").
+  A real bug for fingers too. Fix: `AppDragPayload` (typed Transferable,
+  custom UTType `com.laan.labs.openshape3d.drag-payload`) is now the
+  payload for history rows and Items rows/folders; text fields refuse it
+  and the row's `dropDestination` receives it. (Gallery cards still drag
+  Strings — no text fields there.)
+- Verified by touch (grip drag reorders, one "Reorder Feature" undo step,
+  Undo restores both) and by the suite: HistoryReorder, HistoryPanel and
+  ItemsFolder UI tests pass. No known UI-test failures remain on the branch.
+
+## Mission log — 2026-09-05, full UI suite on the branch (and a stuck test simulator)
+
+- **Result:** 109 executed, 100 passed, 2 skipped, 7 failed in 65 min on
+  `os3d-test`. Six of the seven were NOT the branch: Dimension line-length,
+  ParityWalkthrough 11 (dimension editing), both ReplaceFace tests, Section
+  via ZX tile, and Planes sketch-on-face all failed deterministically in
+  isolation on `os3d-test`, passed unchanged on `os3d-touch`, and passed on
+  `os3d-test` after a `simctl shutdown`/`boot`. Its home screen was
+  rendering LANDSCAPE in a portrait framebuffer — every precise viewport
+  tap (a 2 mm tile, a face, a dimension label, the 4 mm box) landed off
+  target while big-target taps kept passing, which is why the failures
+  looked like a regression in "taps". `GalleryFolderUITests` had set
+  `.landscapeLeft` in `setUp` earlier that day; it is portrait now.
+  (`CompactWidthBarUITests` also rotates to landscape, inside one test —
+  the suite has survived that before; the reboot is the fix either way.)
+- **Still failing at that point:** `HistoryReorderUITests/testDragReorderTwoExtrudes`
+  (pre-existing since 2026-09-03; fails on both simulators) — fixed in the
+  entry above.
+- **Gotcha 56 added below.**
+
+## Mission log — 2026-09-05, Import Units prompt (Shapr3D parity)
+
+- **What landed.** Picking a mesh file (OBJ, STL, glTF/GLB, USDZ, .blend,
+  or a zip of them) no longer builds bodies straight away: `MeshUnitPromptSheet`
+  ("Import Units") shows the file, its part/triangle count, and the model's
+  size under Millimetres / Centimetres / Metres / Inches / Feet, with the
+  detected unit preselected and tagged. Import applies the choice. The
+  footer says whether the format records a unit (glTF, USD, Blender) or the
+  detection is a size guess (OBJ, STL).
+- **How.** `MeshImportKit.probe(data:fileName:siblings:)` parses at scale 1
+  and returns a `MeshImportProbe` (parts in file units, `detectedScale`,
+  `unitIsDeclared`, `sizeDescription(for:)`); `MeshImportKit.scaled(_:by:)`
+  applies a unit; `parts(unitScale:)` is now exactly probe + scale, so the
+  bridge and every existing caller behave as before. `MeshImportUnit` holds
+  the five units (`nearest(toScale:)`, `parse`). `EditorViewModel.probeMesh`
+  + `importParts` split the old `importMesh`; the editor's `.stl` and `.mesh`
+  picks both route through the prompt (`pendingMeshImport`). A zip's bodies
+  keep the archive's name. `/v1/exec document.import` takes `units`
+  ("mm"|"cm"|"m"|"in"|"ft") or a numeric `unitScale`; absent → detected.
+- **Testing the prompt without a file picker:** DEBUG env
+  `OS3D_DEBUG_IMPORT_MESH=<path>` opens the prompt for that file on launch
+  (`MeshUnitPromptUITests` writes a 4.7-unit OBJ to its temp dir, picks
+  Centimetres, and reads 47.00 × 47.00 × 47.00 mm off the info bar).
+  Verified by touch with the LiDAR scan zip: Metres detected, sizes
+  previewed per unit, Import → 4746 × 1960 × 2691 mm.
+- **Tests.** `MeshUnitPromptTests` (5), `MeshUnitPromptUITests` (1); the
+  import suites (MeshImport, BlendImport, HeavyMeshGuard) still pass.
+
+## Mission log — 2026-09-05, LiDAR room-scan import: scale, plane picker, Extrude stall
+
+- **Report:** `Untitled_Scan_11_02_32.zip` (a scanner-app OBJ + JPG, 102 749
+  open triangles, 4.75 × 1.96 × 2.72 **metres**) imported "large and hard
+  to work with", the sketch plane picker was unusable, and Extrude crashed.
+- **What was actually happening.** (1) The OBJ metres heuristic fired only
+  under 2 units, so the room came in as a 4.7 mm object with a 0.5 mm grid
+  and a camera fitted to a speck. (2) The origin plane tiles were a fixed
+  0.3–2.3 mm square: inside the scan and, once the scale is right, a speck
+  beside a 4.7 m room. (3) On Extrude, `commitToolResult` intersected the
+  tool with EVERY body to decide Auto's union/subtract, judged the scan
+  "touched", then unioned the box into the scan and ran `makeWatertight`
+  on 100k+ polygons — over a minute on the main thread (sampled:
+  `commitExtrude → commitToolResult → Mesh.makeWatertight`), which a
+  device's watchdog reports as a crash.
+- **Fixes.** OBJ heuristic threshold 2 → 10 units (`MeshImportKit`);
+  `PlanePicking.worldTiles(sceneExtent:)` sized from the largest visible
+  body (`EditorViewModel.worldPlaneTiles`, 2.3 mm floor so the empty-scene
+  UI tests are unchanged); `BooleanCandidacy` (Kernel): mesh-only bodies
+  over 50 000 triangles never enter a CSG — Auto builds a new body beside
+  them, an explicit Union/Subtract/Intersect aimed at one is refused with a
+  message naming the body and its triangle count — plus an AABB gate in the
+  commit loop before any CSG. Verified by touch: scan imports at
+  4746 × 1960 × 2691 mm, room-sized picker tiles, a 1600 × 1200 × 300 mm
+  extrude commits instantly next to the scan. `HeavyMeshGuardTests` (3).
+- **Regression check:** ExtrudeFlow, BooleanFlow, FaceFlow, RevolveFlow,
+  Planes, Items and SketchEdit UI tests — all green except
+  `PlanesUITests/testSketchOnFaceThenExtrudeNewBody`, which fails the same
+  way with these changes stashed (the post-delete tap at (0.30, 0.62) no
+  longer selects the surviving box) — pre-existing on this branch, not
+  from this fix; listed with `HistoryReorderUITests` as a known break.
+- **Still open:** booleans *against* a heavy scan (e.g. cutting it) are
+  refused rather than slow; a decimate-on-import or an OCCT mesh boolean
+  would be the next step. Unit prompt on mesh import (Shapr3D asks) would
+  remove the heuristic entirely.
+
+## Mission log — 2026-09-05, in-app bug reporter
+
+- **What landed.** A ladybug button at the right end of the editor toolbar
+  (`BugReportButton`; also "Report a Bug…" in the gallery's ⋯ menu) opens
+  `BugReportSheet`: summary, what happened, steps, optional email, and in
+  the editor a toggle to attach the open design as an `.os3d`. Send writes
+  one Firestore document to `bugReports` and the attachment to Cloud
+  Storage under `bugReports/<id>/` — through the REST APIs
+  (`BugReporting.swift`), **no Firebase SDK, no analytics, nothing sent
+  until Send**. The form's footer lists exactly what goes along (app
+  version, OS, device model, design name and counts, last undo title).
+- **Config is git-ignored.** `openshape3d/GoogleService-Info.plist`
+  (API key, project ID, bucket) is in `.gitignore`; copy
+  `docs/GoogleService-Info.example.plist` there. Without it the sheet
+  shows "not configured" and Send stays disabled. Rules the project needs
+  (create-only, size-capped) and the field table: `docs/BUG_REPORTS.md`.
+- **Verified end to end** once the owner provisioned Firestore and Storage:
+  a report from the simulator landed as a document with context and a
+  27 KB `.os3d` in the bucket. **Rules are still wide open** (anonymous
+  list/read worked) — the create-only rules in `docs/BUG_REPORTS.md` need
+  publishing before anyone else runs the build.
+- **Tests.** `BugReportingTests` (4: config parsing incl. placeholder
+  rejection, Firestore field shape, attachment path sanitising, server
+  message extraction); `BugReportUITests` (opens, validates, cancels — never
+  sends).
+
+## Mission log — 2026-09-05, Items Manager folders (spec §11)
+
+- **What landed.** The Items panel has a folder tree above its type
+  sections. `ItemFolder {id, name, parentID, members: [DocumentItemKey]}`
+  lives on `DesignDocument.itemFolders`; membership is on the folder, so no
+  item type's Codable or persistence changed — the tree is one JSON column
+  (`Project.itemFoldersData`), pruned of deleted items on save but NOT in
+  memory (undo of a delete puts the item back in its folder). `.os3d`
+  archives carry it and the duplicate remap rewrites the IDs inside.
+  Panel: "New Folder" button (takes the body selection), row menus "Move to
+  Folder ▸" (+ "New Folder with Item"), drag rows onto folder rows or onto a
+  section header to file them out, folder eye = hide/show the subtree as one
+  `CompositeCommand`, inline rename, "New Subfolder", "Remove Folder"
+  (contents move up) vs "Delete Folder and Items" (folders + delete
+  commands in one composite). Every tree edit is `SetItemFoldersCommand`
+  (whole-array before/after — the tree is tiny, and it keeps undo trivial).
+  `/v1/state` gained `itemFolders`.
+- **Verified by touch** on the iPad simulator: select the seeded body → New
+  Folder → "Folder 1 ▸ Drilled"; folder eye → body hidden, undo title
+  "Hide Folder"; row menu → Move to Folder ▸ Top Level ("Move out of
+  Folder"); relaunch → the folder and membership load back.
+- **Not verified by touch: dragging rows inside the panel.** Five synthetic
+  touch paths (holds of 420–1000 ms, then a move) all opened the row's
+  context menu instead of lifting a drag, for item rows and folder rows
+  alike, even after moving `.draggable` onto the inner content beneath the
+  `.contextMenu` wrapper (the layout the gallery cards use, where a
+  synthetic drag DID move a card). The rows use the same
+  `.draggable`/`.dropDestination` API as the gallery; whether a real finger
+  lifts a drag in the panel's ScrollView is untested. "Move to Folder" is
+  the covered path (UI test + touch).
+- **Tests.** `ItemFolderTreeTests` (9), `ItemsFolderUITests` (create, move
+  via menu, folder eye, rename, Remove Folder, undo). Unit suite 1322 green.
+
+## Mission log — 2026-09-05, project folders (spec §13.1; Shapr3D 5.492 "Folders are here")
+
+- **What landed.** The gallery organises designs into nested folders:
+  `ProjectFolder` (new `@Model`: `folderID`, `name`, `parentID`) plus a
+  defaulted `Project.folderID` scalar. Regular widths get a folder sidebar
+  ("Designs" root + disclosure tree, drop targets, context menu); every
+  width gets breadcrumbs inside a folder, toolbar Back/Forward with ⌘[ / ⌘]
+  (`FolderNavigationHistory`), folder cards with "N folders, M designs",
+  drag-and-drop of designs AND folders onto cards / sidebar rows / crumbs /
+  the empty grid, "Move to Folder…" from the card context menu and a
+  Move (n) button in Select mode (`FolderPickerSheet`, disables a moving
+  folder's own subtree), "New Folder Inside", rename, and delete with a
+  confirmation naming the counts. New designs, archive imports and
+  duplicates land in the folder on screen. Verified by touch on the iPad
+  simulator against the existing 50-project store (lightweight migration,
+  everything at the root) — a card dragged onto a folder card moved.
+- **Why scalar IDs, not a relationship.** `ProjectFolder.swift` explains:
+  seventeen unit tests build `Schema([Project.self, …])` by hand and a
+  `Project → ProjectFolder` relationship would make every one of them fail
+  to open a container; a self-referential SwiftData relationship is a
+  second thing to fight; and the defaulted-scalar route is the repo's
+  proven migration path (see the construction-axes note). The cost is a
+  hand-rolled cascade in `delete(folder:)` — `ProjectFolderTree.descendants`
+  is the single source of what a folder contains. Orphans (a parent that
+  no longer exists) list at the root rather than vanishing.
+- **Tests.** `ProjectFolderTreeTests` (8: sorting, paths, descendants, move
+  legality, orphan/cycle safety, flattening, unique names, history incl.
+  deleted-folder pruning); `GalleryFolderUITests` (create → open → design
+  inside → crumbs → Back/Forward → Move to Folder… → nested folder from
+  the sidebar → delete with counts). Unit suite 1313/1313 green.
+- **Gotcha reminder that bit again (2):** the sidebar row's identifier had
+  to go on its select Button, not the HStack around chevron + button.
+
+## Mission log — 2026-09-04/05, fourth session (practice-problem retry round; four kernel/UI fixes; 1298/1298 unit tests green)
+
+- **Kernel crash guard (`OCCTBridge.mm`, "Crash guard").** Sheet 4.7's clevis
+  plate: an R2 fillet on the concave arcs where the lug cylinder meets the
+  plate's side faces segfaulted inside `ChFi3d_Builder::PerformOneCorner →
+  Extrema_ExtCC::Points` and took the app and its unsaved document down. The
+  OCCT archive was built with `OCC_CONVERT_SIGNALS`, so the bridge defines it,
+  arms `OSD::SetSignal` for the duration of each fillet/chamfer/draft build
+  inside `OCC_CATCH_SIGNALS`, and restores the previous signal actions after.
+  The fault becomes a `Standard_Failure` from a normal context; ChFi3d's own
+  try block catches it and the op reports `partialResult(failed: 2)`. A
+  home-made `sigsetjmp` guard was tried first and is the wrong tool: it
+  leaves OCCT's `Standard_ErrorHandler` chain dangling and the NEXT kernel
+  call dies in `FindHandler` (gotcha 55). Fixture:
+  `openshape3dTests/Fixtures/Captures/clevis-lug-junction-fillet-r2`.
+- **Cylindrical face draft reached the kernel only on paper.** The point that
+  identified the picked face to OCCT was the centroid of ALL side facets —
+  on a full cylinder that is on the axis, its radial push-out undefined —
+  so every cylindrical draft fell through to the mesh path's "declined"
+  error. One facet's centroid, pushed to the true radius, fixes it (Ø40×30
+  boss +10° → 28 607.139 mm³, the frustum to 1e-10, brep kept).
+- **Shell through a ring face refused.** The open face was handed over by its
+  outline centroid, which for an annulus lies in the hole ("no face within
+  tolerance of the pick", every Level 13 hub). `FeatureGraph.pointOnPlanarFace`
+  (largest facet's centroid) now serves both shell and planar draft; ring
+  Ø100/Ø40×20 shelled 3 mm through its top = 42 223.005 mm³ exactly.
+- **Touch-pass findings fixed:** edge snaps step 0.5 mm along the edge from
+  the nearer corner (`SnapEngine.gridAlongEdge`; a raw 10.025 slide made a
+  wall 0.25 % oversize); Top/Bottom views square the azimuth to the nearest
+  quadrant (near-vertical it IS the roll — a stray orbit left a plan view
+  36° tilted with no way back); the armed profile and every extra region
+  tapped into an extrude draw a stronger fill (a second region used to join
+  with no visible sign).
+- **UI tests re-laid out for full-length drags** (gotcha 54): Blend arrow
+  scrub measured from the handle, sweep path lines a grab tolerance clear of
+  the circle rim. Suite: 100 pass, 1 pre-existing fail (History drag-reorder).
+- **Practice-problem retry round** (`scripts/swpp`, `docs/SWPP_PRACTICE_PROBLEMS.md`):
+  eight bridge workers over the deferred list. Highlights: 4.4/4.5/4.7/4.9/
+  4.50/4.58/4.60 (all pass, several beating "structural" deferrals by
+  pixel-measuring the drawing), 4.11/4.12/4.33/4.36/4.64/4.67, 1.2/1.7/1.8/
+  1.10, 2.x, 3.4, 4.1, 7.33/7.42/7.44, 15.2B exact; 13.9A/B built and scored
+  as honest fails (the printed numbers sit between two readings). 111 sheets
+  had never been downloaded; fetched this session with the user's go-ahead
+  (HTTP/1.1 only — the CDN resets HTTP/2 streams) and dispatched.
+- **Open kernel findings from the round (not fixed):** (1) lateral profile-
+  wall edges (the prism corners parallel to the extrusion) list without a
+  mesh-side signature after `feature.extrude`, so `feature.fillet` answers
+  `unaddressable_edge` — every "R n TYP" on such a corner needs a sketch
+  fillet instead; (2) `feature.shell` on the 13.9 hub (`level13._p139_build(60,
+  5, do_shell="app")`) succeeds with brep true and a clean check but removes
+  517k mm³ where the offset cavity is 286k — the 25-deep front pockets'
+  offsets are not honoured; (3) a Level 10-13 worker's earlier note that
+  `/v1/faces` reports a meaningless normal for cylindrical faces (select by
+  `kind`) and `kind: "other"` for conical walls.
+
+## Mission log — 2026-09-04, third session (textured mesh import; exact face draft; 1291/1291 unit tests green)
+
+- **Import OBJ (+MTL/textures), glTF/GLB and USDZ (2026-09-04).** New
+  `Kernel/MeshImportKit.swift`: a self-written glTF 2.0 reader (GLB + JSON,
+  data: URIs and sibling buffers, node TRS/matrix baked into world space,
+  normals computed when a file ships none, PBR base colour + base colour
+  texture, KHR specular-glossiness diffuse as fallback), an OBJ reader that
+  keeps `vt`, honours `usemtl`/`mtllib` and pulls `map_Kd` images from the
+  files that travelled with it, Model I/O for USD (`metersPerUnit` read
+  from text layers, USD's cm default otherwise), and a minimal zip reader
+  (stored + deflate via Compression) so a downloaded archive can be dropped
+  in whole — the `.obj` or `.glb` inside is found and its siblings resolved
+  case-insensitively by path, then by bare name. Units: glTF is metres so
+  ×1000; USD per `metersPerUnit`; OBJ 1:1. Every part becomes a mesh body
+  (pivot at its AABB centre, placement kept in the transform, like STL) in
+  ONE undo step (`EditorViewModel.importMesh`). Import menu: "OBJ / glTF /
+  USDZ…" (`ImportMesh`); bridge: `POST /v1/exec {"op":"document.import",
+  "args":{"path":…}}` reads the file straight off the host, since the
+  simulator shares the Mac's file system.
+- **Textures render.** `RenderMesh.texcoords` (MeshBlob v2; v1 blobs still
+  decode), `BodyMaterialSpec.baseColorTexture` (raw PNG/JPEG bytes,
+  persisted by the synthesized Codable), `BodyMaterial.textureData` on the
+  drawable, `BodyTextureCache` (MTKTextureLoader, mipmapped, keyed by body
+  + mesh revision), `litTextured`/`litTexturedBlended` pipelines and
+  `vertex_/fragment_litTextured` in `Shaders.metal` — the texel multiplies
+  the base colour and then takes the exact lighting/selection/section path
+  `fragment_lit` does, so a textured body highlights and clips like any
+  other. UV origins: glTF's is top-left (Metal's too); OBJ and USD `st` are
+  bottom-left, so those importers flip v. Verified live: a 40 mm checker
+  cube imported from a GLB and from a zipped OBJ+MTL+PNG both render the
+  8×8 checker on every face (64 000 mm³, 12 triangles, `textured: 1`).
+- **Exact face draft on the B-rep path.** `evalDraftFace` now tries OCCT
+  first (`OCCTKernel.draftResult` → `BRepOffsetAPI_DraftAngle`, planar AND
+  cylindrical faces, healed + adopted); the mesh shear stays as the
+  fallback for non-analytic bodies, and a curved face without a brep gets a
+  clear error instead of a silent no-op. Positive angle narrows the body
+  away from the neutral plane — `DraftFaceBRepTests` pins the removed
+  wedge to ½h²·tanθ·d within 1e-3 and checks the hinge edge stays put.
+  This is what the Level 12/13 casting sheets were deferred on.
+- **Tests:** `MeshImportTests` (12: GLB round trip through `GLBExporter`,
+  default m→mm, hand-built textured GLB with node transform, .gltf with a
+  data: URI, zipped OBJ+MTL+PNG with a deflated entry, OBJ without MTL, zip
+  without a model refused, usda + usdz through Model I/O, `metersPerUnit`
+  parsing, MeshBlob v2). Full unit suite 1291/1291 on os3d-unit.
+- **Blender files import too (2026-09-05, `Kernel/BlendImporter.swift`).**
+  A .blend is a memory dump described by its own DNA1 catalogue; the reader
+  parses that catalogue and reads every field by name at the offset it
+  gives, so one reader spans versions: uncompressed and gzip files, 32/64-
+  bit, either endianness; mesh objects via MVert/MPoly/MLoop (2.63–3.4) or
+  the "position" / ".corner_vert" / poly_offset_indices layers (3.5+); UVs
+  from `mloopuv`, a CD_MLOOPUV or a CD_PROP_FLOAT2 layer; one part per
+  material slot with the slot's viewport colour and a base-colour image
+  from a 2.7x texture slot or a 2.8+ Image Texture node (packed in the
+  file, or beside it). Z-up metres → Y-up mm. zstd-compressed saves
+  (Blender 3.0+ "Compress") are refused with a message — no zstd on iOS.
+  Checked against Sketchfab's own glTF conversions of two Blender 2.78 CAD
+  uploads (day16: 27 450 triangles, 6000 × 6000 × 9381 mm; day50: 1 482
+  triangles with its packed base colour): identical to 0.01 mm.
+  `BlendImportTests` builds a synthetic .blend (DNA and all) to pin the
+  axis swap, UV flip, packed image and gzip path.
+- **Loose OBJ/glTF/.blend paths pick up their folder** over the bridge
+  (`MeshImportKit.folderSiblings`), so an .obj finds its .mtl; and an OBJ
+  whose whole model is under 10 units across is taken as metres (×1000;
+  was 2 until a 4.7 m LiDAR room scan came in as 4.7 mm, 2026-09-05) —
+  Sketchfab's Case_for_Tools came in at 0.34 mm otherwise; now 337 mm, 27
+  material parts, 115 248 triangles. Unnamed OBJ groups take the file's
+  name ("Case (App0)").
+- **Verified on the real thing (2026-09-05):** the Sketchfab "Mechanical
+  CAD Model Showcase" (CC-BY, devkrsm; the user downloaded it, since the
+  site needs a login) imports from all three of its downloads — GLB, the
+  zipped glTF+BIN+PNG, and USDZ — as the same 7 parts, 11 166 triangles
+  (the published face count), 348.66 × 164.16 × 211.04 mm, 266 240 mm³,
+  with the SteelCast base-colour texture on the clamp frame ("Heavy Duty /
+  Steel Screw Clamp" lettering renders) and `/v1/check` clean on all 7.
 
 ## Mission log — 2026-09-04, second session (UI-driven practice-problem pass; 1279/1279 unit tests green)
 
@@ -1096,6 +1433,7 @@ Notes:
 | `OS3D_DEBUG_SEED_PRIMBOOL` | Cylinder primitive − box primitive (mixed analytic boolean) |
 | `OS3D_DEBUG_SEED_IMAGE` | Reference image on the ground plane, left unselected |
 | `OS3D_GIZMO_DEBUG` | Print the gizmo part each drag grabs, its world delta, and the rotation pill's live value |
+| `OS3D_DEBUG_IMPORT_MESH=<path>` | Open the Import Units prompt for that mesh file once the editor appears (the UI suite's stand-in for the file picker). |
 | `OS3D_RESET_STORE` | **Destructive.** Delete the SwiftData store before it opens — the app starts with zero projects. Every UI test sets it (see below); do not put it in a shell profile or a scheme you also model in. |
 | `OS3D_AGENT` / `OS3D_AGENT_PORT` | Loopback control channel for driving the app from Claude (`Agent/`). Health, command catalog, editor state (incl. per-feature `evalErrors`), `POST /v1/command`, `POST /v1/exec`, `GET /v1/check` (geometry health), `POST /v1/capture` (repro snapshot), and a PNG of the viewport. Clients: `.claude/skills/drive-openshape3d/` (Claude Code, via curl) and `scripts/mcp_openshape3d.py` (Claude Desktop). Protocol: **`docs/AGENT_CONTROL.md`**. NOTE: another local service may squat port 8787 (it did on this machine) — the app then binds IPv6 only and curl answers from the wrong server; launch with `OS3D_AGENT_PORT=8899`. |
 | `OS3D_KERNEL_CAPTURE` | Failing kernel ops auto-dump their inputs + params as replayable bundles to `Documents/KernelCaptures` (`=0` disables; default ON in the app, OFF under XCTest). Pull with `scripts/fetch_captures.sh`; promote to `openshape3dTests/Fixtures/Captures`. **`docs/KERNEL_DEBUG_TOOLING.md`** is the workflow. |
@@ -1687,13 +2025,53 @@ first differing frame is the one you want.
     field's right edge so typed text appends.
 49. **`kit.relaunch_fresh` hard-coded port 8899** (fixed): a second
     simulator's relaunched app failed to bind and came up bridge-less.
-50. Origin plane picker tiles are 2 × 2 mm (`PlanePicking.worldTiles`);
+50. Origin plane picker tiles scale with the scene — outer edge 60 % of the
+    largest visible body extent, 2.3 mm floor (`PlanePicking.worldTiles(sceneExtent:)`,
+    fixed 2 × 2 mm before 2026-09-05);
     a face sketch's plane origin is the face centroid; a hidden (consumed)
     sketch cannot be tapped for Extrude until the Items panel shows it. All
     three cost screenshots — `docs/TOUCH_DRIVING_PLAYBOOK.md` has the moves.
+51. **`USDZExporter.usdz` returns nil on the simulator** (Model I/O has no
+    USD writer there), so a USDZ round-trip test is impossible; test USD
+    IMPORT with a hand-written `.usda` layer (it reads `.usda`, `.usdc` and
+    `.usdz` fine, and even a stored zip of a usda passes as usdz).
+52. **UV origins differ per format**: glTF (0,0) is the image's top-left,
+    same as Metal; OBJ `vt` and USD `st` are bottom-left. Forgetting the
+    flip renders the texture upside-down with no other symptom.
+53. **`/v1/exec` arguments go under `"args"`** — `{"op":…, "path":…}` is
+    answered with `missing_path`, which reads like a parser bug.
+54. **XCUITest drags used to be short-changed.** A synthetic
+    `press(thenDragTo:)` moves fast, so the one-finger pan recognizer's
+    `.began` location was well ALONG the stroke, and every UI-test circle,
+    rect and pull-arrow scrub was shorter than the coordinates asked for.
+    Since the touch-down capture (2026-09-04) strokes run their full
+    length: a circle that now reaches the next stroke's start gets RESIZED
+    by it (entity grab tolerance ≈0.5 mm ≈ 45 pt zoomed in — that was
+    `SweepLoftUITests`), and an arrow scrub that used to move 0.5 mm moves
+    the whole 2.3 mm (`BlendUITests`). Measure test drags from the handle
+    with `withOffset`, keep them short, and keep strokes a full grab
+    tolerance apart.
+55. **Never `siglongjmp` out of OCCT.** A fault inside the kernel cannot be
+    caught in C++; a sigsetjmp guard that jumps back over OCCT frames leaves
+    the `Standard_ErrorHandler` chain (`OCC_CATCH_SIGNALS` objects on the
+    unwound stack) dangling, and the next kernel call segfaults in
+    `Standard_ErrorHandler::FindHandler`. Use OCCT's own conversion:
+    `#define OCC_CONVERT_SIGNALS`, `OSD::SetSignal`, `OCC_CATCH_SIGNALS`
+    inside the try — that is what `OS3D_GUARDED` in `OCCTBridge.mm` does,
+    and it restores the previous signal actions on the way out so Swift
+    traps elsewhere still crash the way they always did.
 
 
 ---
+56. **A UI-test simulator can get stuck rotated.** Symptom: a handful of
+    precise viewport taps (plane tiles, faces, dimension labels, a 4 mm box)
+    fail deterministically while big-target taps pass, and the same tests
+    pass on another simulator. `simctl io <udid> screenshot` shows a
+    landscape home screen in a portrait image. Fix: `xcrun simctl shutdown`
+    + `boot` that simulator. Prevention: keep `XCUIDevice.shared.orientation
+    = .portrait` in `setUp`; a test that must rotate should rotate back in
+    `tearDown`. Cost 2026-09-05: an hour of bisecting the branch for a
+    "tap regression" that was the device.
 
 ## 4. Next missions (prioritized)
 
@@ -2316,14 +2694,14 @@ B-rep source, analytic holes, extrude-into-target boolean — see mission 2.
 STEP is no longer a build-flag question either: the bridge is compiled in and
 just needs UI (mission 1).
 
-### 4c. SOLIDWORKS practice-problem campaign — IN PROGRESS (2026-09-04)
+### 4c. SOLIDWORKS practice-problem campaign — IN PROGRESS (2026-09-05)
 
 The 365-sheet practice database at solidworks.com/solution/education/
 practice-problems, every sheet printing the finished part's volume, used as
 an outside-in parity harness: read the drawing, build it, score the body's
 volume against the printed number to 0.5 %.
 
-**Where it stands (2026-09-04, evening).** 115 sheets attempted, 102 pass, 13 fail (every fail a drawing that admits two readings whose printed volume picks the one not drawn, or a blend the kernel refuses — see the 4.57 note; none a wrong volume from a correct feature). A further 130 sheets were read and set aside with a written reason each, in `scripts/swpp/deferred.json`. Three sheets (1.1, 2.13, 4.38) were built entirely BY TOUCH on the simulator and score exactly like their bridge recipes; `docs/TOUCH_DRIVING_PLAYBOOK.md` is how.
+**Where it stands (2026-09-05, small hours).** 202 sheets attempted, 170 pass (114 within 0.01 %), 32 fail — every fail a drawing that admits two readings whose printed volume picks the one not drawn (the notes name the reading that WOULD hit the number and the view it contradicts), or a blend the kernel refuses (4.57; 4.7's lug arcs now a typed refusal via the crash guard); none a wrong volume from a correct feature. 155 sheets carry a written reason in `scripts/swpp/deferred.json`: 83 readable-but-not-reached (the best next picks are named), 22 undimensioned to 0.5 %, 31 packages the database no longer serves (404 — assembly / START-part exercises), 11 assemblies or centre-of-mass studies, 6 needing an unsupplied parent part, 2 needing a normal-to-profile loft. Four sheets (1.1, 1.9, 2.13, 4.38) were built entirely BY TOUCH; `docs/TOUCH_DRIVING_PLAYBOOK.md` is how. Resume by dispatching bridge workers over `deferred.json`'s "readable" entries with `scripts/swpp/run.py` (see the worker brief pattern in the 2026-09-04/05 mission log).
 
 | Level | Title | Sheets | Attempted | Pass |
 |---|---|---|---|---|
