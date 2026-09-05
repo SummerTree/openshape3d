@@ -1845,8 +1845,17 @@ name/date. One-person-at-a-time editing guidance.
 **Status:** 🟡 partial — a project gallery exists: grid of cards with rendered
 thumbnails, create, open, rename (alert), duplicate (with bodies/sketches/
 thumbnail), delete (`ProjectGalleryView`, SwiftData persistence, debounced
-autosave in `DocumentSession`). Missing: search, sort, folders, recents,
-teams/spaces/drafts, storage states, everything cloud.
+autosave in `DocumentSession`). **Folders** (Shapr3D 5.492): nested
+`ProjectFolder`s with a folder sidebar on regular widths, breadcrumbs,
+browser-style Back/Forward (⌘[ / ⌘]), folder cards showing their counts,
+drag-and-drop of designs and folders onto folder cards / sidebar rows /
+crumbs, "Move to Folder…" (context menu, and in Select mode for many at
+once), rename, "New Folder Inside", and delete with a confirmation that
+spells out what goes with it (the subtree, designs included). New designs,
+imports and duplicates land in the folder on screen. Membership is a scalar
+`Project.folderID` so old stores migrate lightly (everything at the root).
+Missing: search, sort, recents, teams/spaces/drafts, storage states,
+everything cloud.
 **Feasibility:** local features [mesh-kernel OK]; teams/spaces
 [platform/service]
 
@@ -2142,7 +2151,7 @@ running totals, unit suffixes, labels on gizmo arrows and sketch elements.
 | History & parametrics (3) | 0 | 2 (direct modeling, Undo/Redo) | 1 |
 | Items Manager (1) | 0 | 1 | 0 |
 | Import/Export (2) | 0 | 2 (STL/DXF/image import; STL/OBJ/3MF/GLB/USDZ/DXF/PNG export) | 0 |
-| Projects/Sync/Collab (5) | 0 | 2 (local gallery, AR Quick Look preview) | 3 |
+| Projects/Sync/Collab (5) | 0 | 2 (local gallery with folders, AR Quick Look preview) | 3 |
 | Visualization (1) | 0 | 1 (materials-lite, ground shadow) | 0 |
 | Drawings (1) | 0 | 0 | 1 |
 | Modes & display (4) | 0 | 4 (Section, Isolate, Measure, display modes) | 0 |

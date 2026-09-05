@@ -1,6 +1,6 @@
 # Status & Next Steps — Handoff Notes
 
-Last updated: 2026-09-04 (textured mesh import glTF/USDZ/OBJ + exact OCCT face draft — see the newest mission log entry; before that: SOLIDWORKS practice problems through the UI; 2026-09-03 SOLIDWORKS practice-problem campaign — extrude end
+Last updated: 2026-09-05 (project folders in the gallery — see the newest mission log entry; before that: textured mesh import glTF/USDZ/OBJ + exact OCCT face draft; before that: SOLIDWORKS practice problems through the UI; 2026-09-03 SOLIDWORKS practice-problem campaign — extrude end
 conditions, B-rep touch commits, draft of an existing face; see the mission
 log just below, and **§4c for the campaign's state and how to resume it**).
 This is the living handoff document: what is DONE, how the newest subsystems
@@ -10,6 +10,39 @@ Companions: `IMPLEMENTATION_PLAN.md` (original phase plan),
 design), `FREECAD_PLAYBOOK.md` (the FreeCAD-derived hardening ledger),
 `TOPO_NAMING_HISTORY_DESIGN.md` (element-naming design, now complete), and
 `AGENT_CONTROL.md` (the `/v1/exec` scripting surface).
+
+## Mission log — 2026-09-05, project folders (spec §13.1; Shapr3D 5.492 "Folders are here")
+
+- **What landed.** The gallery organises designs into nested folders:
+  `ProjectFolder` (new `@Model`: `folderID`, `name`, `parentID`) plus a
+  defaulted `Project.folderID` scalar. Regular widths get a folder sidebar
+  ("Designs" root + disclosure tree, drop targets, context menu); every
+  width gets breadcrumbs inside a folder, toolbar Back/Forward with ⌘[ / ⌘]
+  (`FolderNavigationHistory`), folder cards with "N folders, M designs",
+  drag-and-drop of designs AND folders onto cards / sidebar rows / crumbs /
+  the empty grid, "Move to Folder…" from the card context menu and a
+  Move (n) button in Select mode (`FolderPickerSheet`, disables a moving
+  folder's own subtree), "New Folder Inside", rename, and delete with a
+  confirmation naming the counts. New designs, archive imports and
+  duplicates land in the folder on screen. Verified by touch on the iPad
+  simulator against the existing 50-project store (lightweight migration,
+  everything at the root) — a card dragged onto a folder card moved.
+- **Why scalar IDs, not a relationship.** `ProjectFolder.swift` explains:
+  seventeen unit tests build `Schema([Project.self, …])` by hand and a
+  `Project → ProjectFolder` relationship would make every one of them fail
+  to open a container; a self-referential SwiftData relationship is a
+  second thing to fight; and the defaulted-scalar route is the repo's
+  proven migration path (see the construction-axes note). The cost is a
+  hand-rolled cascade in `delete(folder:)` — `ProjectFolderTree.descendants`
+  is the single source of what a folder contains. Orphans (a parent that
+  no longer exists) list at the root rather than vanishing.
+- **Tests.** `ProjectFolderTreeTests` (8: sorting, paths, descendants, move
+  legality, orphan/cycle safety, flattening, unique names, history incl.
+  deleted-folder pruning); `GalleryFolderUITests` (create → open → design
+  inside → crumbs → Back/Forward → Move to Folder… → nested folder from
+  the sidebar → delete with counts). Unit suite 1313/1313 green.
+- **Gotcha reminder that bit again (2):** the sidebar row's identifier had
+  to go on its select Button, not the HStack around chevron + button.
 
 ## Mission log — 2026-09-04/05, fourth session (practice-problem retry round; four kernel/UI fixes; 1298/1298 unit tests green)
 

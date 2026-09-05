@@ -64,6 +64,14 @@ final class Project {
     /// The newest store format this build reads AND writes.
     static let currentFormatVersion = 1
 
+    /// The gallery folder this design sits in (`ProjectFolder.folderID`);
+    /// `nil` = the top level. A defaulted scalar rather than a relationship
+    /// so pre-folder stores migrate lightly and every existing design lands
+    /// in the root — see `ProjectFolder.swift` for why. A folder deletion
+    /// deletes its designs, so a dangling ID only ever means a damaged
+    /// store; the gallery lists such a design at the root.
+    var folderID: UUID? = nil
+
     init(name: String) {
         self.name = name
         self.createdAt = Date()
