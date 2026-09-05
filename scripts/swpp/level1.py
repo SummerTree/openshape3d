@@ -324,3 +324,102 @@ def p1_13():
             sk.arc(cc, r, a0, a1); sk.arc((-cc[0], cc[1]), r, 180 - a1, 180 - a0)
     sk.circle((0, 0), 11.5)
     return extrude(sk, (0, -16), 5)
+
+
+@problem("1.2", 70039)
+def p1_2():
+    # Wedge block 78 long, 28 deep in two strips. Back strip (18 deep):
+    # floor 16 tall to x = 24, a step 34 tall to x = 40 where the 65° slope
+    # starts; front strip (10 deep): floor 8 tall to the slope's foot
+    # (x = 27.88). One slope plane through (40, 34) up to the apex at 58,
+    # a top face perpendicular to it down to the right face at x = 78
+    # (y = 45.5). Two Ø6 × 6 pins on the top face 7.5 from the apex edge
+    # (z = 7 and 22) and a 5-wide slot 36 deep, perpendicular to the top
+    # face, through the full depth. Ledger check: 70039.2 by hand.
+    import math
+    t65, t25 = math.tan(math.radians(65)), math.tan(math.radians(25))
+    xa = 40 + 24 / t65; yr = 58 - (78 - xa) * t25; x0 = 40 - 26 / t65
+    back = Sketch(front(0)).poly([(0, 0), (78, 0), (78, yr), (xa, 58), (40, 34), (24, 34), (24, 16), (0, 16)])
+    body = extrude(back, (60, 20), 18)
+    frontp = Sketch(front(18)).poly([(0, 0), (78, 0), (78, yr), (xa, 58), (x0, 8), (0, 8)])
+    extrude(frontp, (60, 20), 10, union=[body])
+    # sketch plane on the top face: u along the face from the apex, v = -z
+    from kit import plane_at
+    s65, c65 = math.sin(math.radians(65)), math.cos(math.radians(65))
+    topf = plane_at((xa, 58, 0), (s65, -c65, 0), (0, 0, -1))
+    for zc in (7, 22):
+        extrude(Sketch(topf).circle((7.5, -zc), 3), (7.5, -zc), 6, union=[body])
+    # slot centred 16 along the top face (not dimensioned; volume-neutral)
+    extrude(Sketch(topf).rect(13.5, -29, 18.5, 1), (16, -14), -36, cut=[body])
+    return body
+
+
+@problem("1.7", 148172, features=("Extrude Boss", "Extrude Cut"))
+def p1_7():
+    # Fork bracket. Back plate 100 × 60 × 15 (x −50..50, y −30..30, z −15..0)
+    # with a Ø20 hole at the origin; a 25 × 15 × 30 tab at the right (x 50..75,
+    # y −30..−15, z −15..15) with a Ø13 hole 12 in from its end; a 25-wide
+    # base bar (x 25..50, y −30..−15) running 53 forward (side view: 15 tab
+    # + 23 + 15 upright); a 15-thick front upright at z 38..53 shaped as an
+    # L — a 75 × 15 arm along the top (y 15..30, x −50..25) and a 25 × 60
+    # post at x 25..50 (front view: the line 15 down from the top ends at
+    # the vertical line 25 right of the origin). 85288 + 9259 + 19875 +
+    # 16875 + 16875 = 148172.
+    plate = extrude(Sketch(front(-15)).rect(-50, -30, 50, 30).circle((0, 0), 10), (-30, 0), 15)
+    extrude(Sketch(top(-30)).rect(50, -15, 75, 15).circle((63, 0), 6.5), (53, 10), 15, union=[plate])
+    extrude(Sketch(top(-30)).rect(25, -53, 50, 0), (37, -20), 15, union=[plate])
+    upright = Sketch(front(38)).poly([(-50, 15), (25, 15), (25, -30), (50, -30), (50, 30), (-50, 30)])
+    extrude(upright, (0, 22), 15, union=[plate])
+    return plate
+
+
+@problem("1.8", 2928250)
+def p1_8():
+    # 200 × 175 block: base 50 tall, a right-angle roof (apex at 125, slopes
+    # to y = 50 at x = ±75) the full depth; two 15-thick ribs at |z| 22.5..37.5
+    # 100 tall the full length (the front view's 200 × 100 outline, "100
+    # TYP") and a 65-tall fill between them (|z| < 22.5; the right view's
+    # 15 step over 50, the top view's line at x = ±60 where the roof crosses
+    # y = 65). 1 750 000 + 984 375 + 150 000 + 43 875 = 2 928 250.
+    body = extrude(Sketch(front(-87.5)).poly([(-100, 0), (100, 0), (100, 50), (75, 50), (0, 125),
+                                              (-75, 50), (-100, 50)]), (0, 25), 175)
+    for zc in (-30, 30):
+        extrude(Sketch(front(zc - 7.5)).rect(-100, 50, 100, 100), (-90, 75), 15, union=[body])
+    extrude(Sketch(front(-22.5)).rect(-100, 50, 100, 65), (-90, 57), 45, union=[body])
+    return body
+
+
+@problem("1.10", 46037)
+def p1_10():
+    # Bent lug bracket, 10 thick throughout. Central plate in XY (z −10..0):
+    # R20 top about the Ø25 hole 45 above the origin, V-shaped bottom whose
+    # two edges rise 17.5° each side (35° between them), sides tangent to the
+    # R20 and perpendicular to the wings (they meet the wing tops 33.5 out).
+    # Two wings 10 thick lie on the V edges from 20 to 56 out (36 wide,
+    # "Ø36 TYP") and run 50 back from the front face (32 to the Ø22 centre +
+    # R18 end). Closed form 46026 (−0.02 %).
+    import math
+    from kit import plane_at
+    a = math.radians(17.5); c, s = math.cos(a), math.sin(a)
+    d = (c, s); n = (-s, c)
+    V = lambda al, pe: (al * d[0] + pe * n[0], al * d[1] + pe * n[1])
+    T = (20 * c, 45 + 20 * s)
+    sk = (Sketch(front(-10)).line((0, 0), V(33.5, 0)).line(V(33.5, 0), V(33.5, 10)).line(V(33.5, 10), T)
+          .arc((0, 45), 20, 17.5, 162.5)
+          .line((-T[0], T[1]), (-V(33.5, 10)[0], V(33.5, 10)[1]))
+          .line((-V(33.5, 10)[0], V(33.5, 10)[1]), (-V(33.5, 0)[0], V(33.5, 0)[1]))
+          .line((-V(33.5, 0)[0], V(33.5, 0)[1]), (0, 0))
+          .circle((0, 45), 12.5))
+    body = extrude(sk, (0, 20), 10)
+    for sgn in (1, -1):
+        if sgn > 0:
+            pl = plane_at((0, 0, 0), (c, s, 0), (0, 0, -1))      # normal (-s, c): the right wing's top
+            w = (Sketch(pl).line((20, 0), (56, 0)).line((56, 0), (56, 32)).arc((38, 32), 18, 0, 180)
+                 .line((20, 32), (20, 0)).circle((38, 32), 11))
+            extrude(w, (38, 10), 10, union=[body])
+        else:
+            pl = plane_at((0, 0, 0), (-c, s, 0), (0, 0, 1))      # normal (s, c): the left wing's top
+            w = (Sketch(pl).line((20, 0), (56, 0)).line((56, 0), (56, -32)).arc((38, -32), 18, 180, 360)
+                 .line((20, -32), (20, 0)).circle((38, -32), 11))
+            extrude(w, (38, -10), 10, union=[body])
+    return body

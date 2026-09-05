@@ -138,3 +138,36 @@ def p16_5():
             sk.circle((L - 10 - A / 2 - i * A, oy + W / 2), 5)
         out.append([extrude(sk, (2, oy + 2), 3)])
     return out
+
+
+@problem("16.1", [("RibThickness=2", 36190.0), ("RibThickness=3", 41215.2)],
+         features=("Extrude Boss", "Extrude Cut", "Revolve", "Pattern (as recipe)", "Link Values (as recipe)"))
+def p16_1():
+    # Spool, axis along +y, floor at y = 0. Floor: R65 × 1 with the Ø16 bore
+    # through; drum wall R49..R50 from the floor to the open end; open-end
+    # flange R50..R65 × 1 (y 24..25); spindle Ø20 with a wall equal to the
+    # rib thickness (bore Ø16 for t = 2), from the floor to 10 below the
+    # open end (y = 15); six ribs t thick from the spindle to the wall,
+    # full height (top at y = 20, 5 below the rim) from R39 to R49, then
+    # the top falls straight to the spindle top (y = 15) — the section's
+    # 20° / 2 × R10 arcs are read as this taper and its end rounds (area-
+    # neutral, omitted). Closed form 35 248 / 39 887 (−2.6 % / −3.2 %).
+    out = []
+    for k, t in enumerate((2.0, 3.0)):
+        ox = k * 200
+        rb = 10 - t                                     # spindle bore radius
+        body = extrude(Sketch(top(0)).circle((ox, 0), 65).circle((ox, 0), rb), (ox + 40, 0), 1)
+        extrude(Sketch(top(1)).circle((ox, 0), 50).circle((ox, 0), 49), (ox + 49.5, 0), 24, union=[body])
+        extrude(Sketch(top(24)).circle((ox, 0), 65).circle((ox, 0), 50), (ox + 57, 0), 1, union=[body])
+        extrude(Sketch(top(1)).circle((ox, 0), 10).circle((ox, 0), rb), (ox + 10 - t / 2, 0), 14, union=[body])
+        for i in range(6):
+            a = math.radians(60 * i)
+            # rib profile in a plane containing the axis: sketch on a vertical
+            # plane through the axis rotated by a; u = radial, v = y
+            from kit import plane_at
+            xa = (math.cos(a), 0, -math.sin(a))          # radial direction (plan v = -z)
+            pl = plane_at((ox, 0, 0), xa, (0, 1, 0))
+            prof = Sketch(pl).poly([(10, 1), (49, 1), (49, 20), (39, 20), (10, 15)])
+            extrude(prof, (30, 8), t / 2, symmetric=True, union=[body])
+        out.append([body])
+    return out

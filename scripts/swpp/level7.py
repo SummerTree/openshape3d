@@ -669,3 +669,218 @@ def p7_43():
     assert len(ears) == 4, f"expected four gussets, found {len(ears)}"
     union(plate, ears)
     return plate
+
+
+@problem("7.6", 554821, features=("Extrude Boss", "Extrude Cut", "Sketch: Slot", "Chamfer", "Fillet", "Linear Pattern"))
+def p7_6():
+    # Z-bracket, 20 thick throughout, 60 deep: bottom flange 0..150, web at
+    # x 0..20 to 180, top flange −80..150; R10 in the three inside corners;
+    # 10 × 45° chamfers on the flanges' plan corners; Ø35 through both
+    # flanges 30 from the end; two R7 slots (40 between centres) in the top
+    # flange 105 apart, the right one 35 left of the hole. 627 860 − 6 000
+    # − 38 485 − 28 558 = 554 817.
+    pts = [(0, 0), (150, 0), (150, 20), (20, 20), (20, 160), (150, 160), (150, 180), (-80, 180), (-80, 160), (0, 160)]
+    body = extrude(Sketch(front(0)).rounded_poly(pts, [0, 0, 0, 10, 10, 0, 0, 0, 0, 10]), (10, 90), 30, symmetric=True)
+    for cx, sx in ((150, -1), (-80, 1)):
+        for cz in (-30, 30):
+            tri = Sketch(top(200)).poly([(cx, cz), (cx + sx * 10, cz), (cx, cz - (10 if cz > 0 else -10))])
+            extrude(tri, (cx + sx * 3, cz - (3 if cz > 0 else -3)), -220, cut=[body])
+    extrude(Sketch(top(200)).circle((120, 0), 17.5), (120, 0), -220, cut=[body])
+    for x0 in (-60, 45):
+        extrude(Sketch(top(190)).slot((x0, 0), (x0 + 40, 0), 7), (x0 + 20, 0), -40, cut=[body])
+    return body
+
+
+@problem("7.3", 398448, features=("Revolve", "Extrude Boss", "Linear Pattern", "Fillet"))
+def p7_3():
+    # Muffin tin: plate 180 × 352 × 3 (8 TYP margin beyond the cups, R10
+    # corners, R1 on both edge rounds), 8 cups on 86 × 86 (2 × 4), origin at
+    # the first cup's centre on the plate top. Cup = 3-thick sheet of
+    # revolution: Ø78 outside at the plate's underside, wall 18° from the
+    # axis, 58 deep overall, R3 inside / R6 outside at the bottom corner.
+    # Closed form 358 500 (−10 %); no reading of the callouts closes it.
+    from kit import fillet
+    T = math.tan(math.radians(18)); s = math.sqrt(1 + T * T)
+    K = 39 + 3 * T                                  # r_out(y) = K + T y (y = 0 at the plate top)
+    yc = -58 + 6; rc = K + T * yc - 6 * s
+    n = (1 / s, -T / s)
+    Tp = (rc + 6 * n[0], yc + 6 * n[1]); Ti = (rc + 3 * n[0], yc + 3 * n[1])
+    Ki = K - 3 * s
+    a0 = math.degrees(math.atan2(Tp[1] - yc, Tp[0] - rc))
+    plate = Sketch(top(-3)).rounded_poly([(-47, -47), (133, -47), (133, 305), (-47, 305)], 10)
+    body = extrude(plate, (43, 129), 3)
+    rims = edges_where(body, lambda e: (abs(e["midpoint"][1]) < 0.01 or abs(e["midpoint"][1] + 3) < 0.01)
+                       and (abs(e["midpoint"][0] + 47) < 0.05 or abs(e["midpoint"][0] - 133) < 0.05
+                            or abs(e["midpoint"][2] - 47) < 0.05 or abs(e["midpoint"][2] + 305) < 0.05
+                            or 12 < e["lengthMM"] < 18))
+    fillet(body, 1, rims)
+    def cup_at(x0, v0):
+        z0 = -v0                                           # plan up = −z
+        sk = (Sketch(front(z0)).line((x0 + K, 0), (x0 + Ki, 0)).line((x0 + Ki, 0), (x0 + Ti[0], Ti[1]))
+              .arc((x0 + rc, yc), 3, -90, a0).line((x0 + rc, -55), (x0, -55)).line((x0, -55), (x0, -58))
+              .line((x0, -58), (x0 + rc, -58)).arc((x0 + rc, yc), 6, -90, a0).line((x0 + Tp[0], Tp[1]), (x0 + K, 0)))
+        revolve(sk, (x0 + 0.5 * (K + Ki), -1), (x0, 0), (0, 1), union=[body])
+        extrude(Sketch(top(1)).circle((x0, v0), Ki), (x0, v0), -5, cut=[body])
+    for i in range(2):
+        for j in range(4):
+            cup_at(86 * i, 86 * j)
+    return body
+
+
+# ---------------------------------------------------------------- R5B ---
+
+@problem("7.44", 220457, features=("Extrude Boss", "Extrude Cut", "Mirror Pattern"))
+def p7_44():
+    # V-block, origin at the bottom centre of the 60-wide foot. Body 105 ×
+    # 65 × 51 on a 60 × 6 foot; the front/back 7 bands carry the V (flanks
+    # (±46.5, 51) → (±6.5, 25), 13 flat) with a 13 slot down to the base;
+    # the middle 51 is a 51 × 51 pocket to the same floor (25) with the
+    # Ø40 through hole; end flanges 10 × 65 × 13 (y 22..35) with R10 notches.
+    # Closed form 220 457 exactly.
+    body = extrude(Sketch(front(-32.5)).poly([(-30, 0), (30, 0), (30, 6), (52.5, 6), (52.5, 51),
+                                              (-52.5, 51), (-52.5, 6), (-30, 6)]), (0, 20), 65)
+    vee = [(-46.5, 51), (-6.5, 25), (6.5, 25), (46.5, 51), (46.5, 60), (-46.5, 60)]
+    for z0 in (25.5, -33.5):            # the V and its slot live in the 7 bands only
+        extrude(Sketch(front(z0)).poly(vee), (0, 45), 8, cut=[body])
+        extrude(Sketch(front(z0)).rect(-6.5, -1, 6.5, 25), (0, 10), 8, cut=[body])
+    extrude(Sketch(front(-25.5)).rect(-25.5, 25, 25.5, 60), (0, 40), 51, cut=[body])
+    extrude(Sketch(top(-1)).circle((0, 0), 20), (0, 0), 27, cut=[body])
+    for s in (1, -1):
+        extrude(Sketch(top(22)).rect(s * 52.5, -32.5, s * 62.5, 32.5), (s * 57, 0), 13, union=[body])
+        extrude(Sketch(top(22)).circle((s * 62.5, 0), 10), (s * 62.5, 0), 13, cut=[body])
+    return body
+
+
+@problem("7.42", 200178, features=("Extrude Boss", "Extrude Cut", "Mirror Pattern"))
+def p7_42():
+    # Hook clip. Walls (9 thick, z ±10..±19) carry the hook outline: x 0..30
+    # up from a 30° chamfered foot (flat to 17.3, up to (30, 22)), R25 about
+    # (55, 75) over the top, leg 80..90 down to y 75, top at 125. The web
+    # between them is the outline offset in by 9 (x 21, R34, 81, roof 116).
+    # Top block x 25..90: 6 plate to |z| 29, 10-wide tabs to 140 (side
+    # view: 78 overall). Closed form 200 159 (−0.01 %).
+    t = 22 * math.tan(math.radians(30))
+    env = (Sketch(front(-19)).poly([(0, 0), (30 - t, 0), (30, 22), (30, 75)], close=False)
+           .arc((55, 75), 25, 0, 180)
+           .poly([(80, 75), (90, 75), (90, 125), (0, 125), (0, 0)], close=False))
+    body = extrude(env, (10, 60), 38)
+    a81 = math.degrees(math.atan2(math.sqrt(34 ** 2 - 26 ** 2), 26))
+    y81 = 75 + math.sqrt(34 ** 2 - 26 ** 2)
+    chan = (Sketch(front(-10)).poly([(21, -5), (21, 75)], close=False)
+            .arc((55, 75), 34, a81, 180)
+            .poly([(81, y81), (81, 116), (-5, 116), (-5, 130), (100, 130), (100, -5), (21, -5)], close=False))
+    extrude(chan, (60, 50), 20, cut=[body])
+    for s in (1, -1):
+        sk = Sketch(right(25)).poly([(s * 10, 119), (s * 39, 119), (s * 39, 140), (s * 29, 140),
+                                     (s * 29, 125), (s * 10, 125)])
+        extrude(sk, (s * 20, 122), 65, union=[body])
+    return body
+
+
+@problem("7.33", 209275, features=("Extrude Boss", "Extrude Cut", "Fillets and Chamfers", "Linear Pattern", "Mirror Pattern"))
+def p7_33():
+    # Plate 90 × 105 × 12 (origin at the tab step, bottom face) with an
+    # 85 × 75 tab (R6 concave corners), a 30-long channel end: floor 5
+    # thick, 12.5 × 24 lips over the last 15; 12 × Ø5 holes with Ø10 × 2
+    # counterbores on a 23 grid (x 28/51/74, z ±11.5/±34.5); tab holes Ø8
+    # with Ø10 × 2 cbores 20 from the end, 12 from the edges. Closed form
+    # 209 275.0 exactly.
+    outline = [(-85, -37.5), (0, -37.5), (0, -52.5), (120, -52.5), (120, 52.5), (0, 52.5), (0, 37.5), (-85, 37.5)]
+    body = extrude(Sketch(top(0)).rounded_poly(outline, [0, 6, 0, 0, 0, 0, 6, 0]), (45, 0), 12)
+    extrude(Sketch(top(5)).rect(90, -52.5, 120, 52.5), (105, 0), 8, cut=[body])
+    for s in (1, -1):
+        extrude(Sketch(top(5)).rect(105, s * 40, 120, s * 52.5), (112, s * 46), 24, union=[body])
+    for x in (28, 51, 74):
+        for v in (-34.5, -11.5, 11.5, 34.5):
+            extrude(Sketch(top(-1)).circle((x, v), 2.5), (x, v), 14, cut=[body])
+            extrude(Sketch(top(10)).circle((x, v), 5), (x, v), 3, cut=[body])
+    for v in (-25.5, 25.5):
+        extrude(Sketch(top(-1)).circle((-65, v), 4), (-65, v), 14, cut=[body])
+        extrude(Sketch(top(10)).circle((-65, v), 5), (-65, v), 3, cut=[body])
+    return body
+
+
+@problem("7.27", 13642, features=("Extrude Boss", "Mirror Pattern"))
+def p7_27():
+    # 4-thick bracket: triangular upright 65 wide (sides 53° from the base
+    # corners at y = 4, R11 lobe about a Ø10 hole, centre 28.84 up), a
+    # 65-wide floor plate 21 deep (to z = −25) with two 22-wide feet
+    # reaching z = −29 that carry 4-thick lips 13 tall. 6 138 + 6 164 +
+    # 1 584 = 13 886 (+1.8 % vs the sheet under this reading).
+    h = 4 + (32.5 * math.tan(math.radians(53))) - 11 / math.sin(math.radians(37))
+    d = math.hypot(32.5, h - 4); tl = math.sqrt(d * d - 121)
+    tx, ty = 32.5 - tl * math.cos(math.radians(53)), 4 + tl * math.sin(math.radians(53))
+    sk = (Sketch(back(0)).line((-32.5, 0), (32.5, 0)).line((32.5, 0), (32.5, 4)).line((32.5, 4), (tx, ty))
+          .arc((0, h), 11, 37, 143).line((-tx, ty), (-32.5, 4)).line((-32.5, 4), (-32.5, 0))
+          .circle((0, h), 5))
+    up = extrude(sk, (0, 10), 4)
+    plate = Sketch(top(0)).poly([(-32.5, 4), (32.5, 4), (32.5, 29), (10.5, 29), (10.5, 25),
+                                 (-10.5, 25), (-10.5, 29), (-32.5, 29)])
+    extrude(plate, (0, 15), 4, union=[up])
+    extrude(Sketch(top(4)).rect(10.5, 25, 32.5, 29), (20, 27), 9, union=[up])
+    extrude(Sketch(top(4)).rect(-32.5, 25, -10.5, 29), (-20, 27), 9, union=[up])
+    return up
+
+
+@problem("7.2", 334754, features=("Extrude Boss", "Revolve", "Linear Pattern", "Fillet", "Extrude Cut"))
+def p7_2():
+    # 246 x 246 x 5 tray, 3 x R18 corners and an R35 hook corner whose
+    # centre (88, 88) also centres the L slot (R26/R16 quarter, legs to 22
+    # and 18 with R5 ends); 8 x 8 grid of R15 spherical domes 4 tall at
+    # 30 pitch, three instances under the hook skipped (61); R1.5 on the
+    # tray's top and bottom outline edges. Hand 337 668 (+0.87 %).
+    from kit import edges_where
+    plate = extrude(Sketch(top(0)).rounded_poly([(-123, -123), (123, -123), (123, 123), (-123, 123)],
+                                                [18, 18, 35, 18]), (0, 0), 5)
+    # the fillet runs on the bare tray, so every edge lying in y = 0 or y = 5
+    # is an outline edge (8 lines + 8 corner arcs)
+    sel = edges_where(plate, lambda e: abs(e["midpoint"][1]) < 0.3 or abs(e["midpoint"][1] - 5) < 0.3)
+    assert len(sel) == 16, f"outline edges: {len(sel)}"
+    fillet(plate, 1.5, sel)
+    a0 = math.degrees(math.atan2(11, 10.198))
+    def dimple(x, z):
+        sk = (Sketch(front(z)).line((x, 4), (x + 10.198, 4)).line((x + 10.198, 4), (x + 10.198, 5))
+              .arc((x, -6), 15, a0, 90).line((x, 9), (x, 4)))
+        return revolve(sk, (x + 2, 6), (x, 4), (0, 1))
+    d = dimple(-105, 105)
+    pattern(d, "linear", 8, axis=(1, 0, 0), spacing=30)
+    row = [b["id"] for b in bodies() if b["id"] != plate]
+    assert len(row) == 8, f"row: {len(row)}"
+    for b in row:
+        pattern(b, "linear", 6, axis=(0, 0, -1), spacing=30)
+    pattern(dimple(-105, -75), "linear", 7, axis=(1, 0, 0), spacing=30)
+    pattern(dimple(-105, -105), "linear", 6, axis=(1, 0, 0), spacing=30)
+    tools = [b["id"] for b in bodies() if b["id"] != plate]
+    assert len(tools) == 61, f"domes: {len(tools)}"
+    union(plate, tools)
+    cx, cy = 88.0, 88.0
+    sk = (Sketch(top(-1)).arc((cx, cy), 26, 0, 90).line((cx, cy + 26), (cx - 17, cy + 26))
+          .arc((cx - 17, cy + 21), 5, 90, 270).line((cx - 17, cy + 16), (cx, cy + 16))
+          .arc((cx, cy), 16, 0, 90).line((cx + 16, cy), (cx + 16, cy - 13))
+          .arc((cx + 21, cy - 13), 5, 180, 360).line((cx + 26, cy - 13), (cx + 26, cy)))
+    extrude(sk, (cx + 14.85, cy + 14.85), 7, cut=[plate])
+    return plate
+
+
+@problem("7.47", 334529, features=("Extrude Boss", "Mirror Pattern", "Chamfer"))
+def p7_47():
+    # Rack: 180 x 80 x 12 base plate (x −30..150), 12-thick upright 150
+    # tall on it at x 0..12 with a 10 x 45° gusset chamfer at the front
+    # junction, two 12 x 12 arms along the z edges from the upright to 150
+    # whose ends slope 35° (top land 10) and carry three notches 20 wide
+    # (normal to their flanks) 10 deep, flanks at 15°/25°/35°, lands 15.
+    # 172 800 + 132 480 + 4 000 + 39 744 − 16 128 − 1 210 = 331 686
+    # (−0.85 %); reading the 15s as notch widths gives 335 720 (+0.36 %).
+    base = extrude(Sketch(top(0)).rect(-30, -80, 150, 0), (60, -40), 12)
+    extrude(Sketch(top(12)).rect(0, -80, 12, 0), (6, -40), 138, union=[base])
+    extrude(Sketch(front(0)).poly([(12, 12), (22, 12), (12, 22)]), (14, 14), 80, union=[base])
+    t35, t25, t15 = (math.tan(math.radians(a)) for a in (35, 25, 15))
+    w3, w2, w1 = (20 / math.cos(math.radians(a)) for a in (35, 25, 15))
+    xe = 150 - 12 * t35
+    r3 = xe - 10; r2 = r3 - w3 - 15; r1 = r2 - w2 - 15
+    pts = [(12, 12), (150, 12), (xe, 24), (r3, 24), (r3 - 10 * t35, 14), (r3 - 10 * t35 - w3, 14), (r3 - w3, 24),
+           (r2, 24), (r2 - 10 * t25, 14), (r2 - 10 * t25 - w2, 14), (r2 - w2, 24),
+           (r1, 24), (r1 - 10 * t15, 14), (r1 - 10 * t15 - w1, 14), (r1 - w1, 24), (12, 24)]
+    for z in (0, 68):
+        extrude(Sketch(front(z)).poly(pts), (20, 18), 12, union=[base])
+    return base

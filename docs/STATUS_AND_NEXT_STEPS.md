@@ -11,6 +11,61 @@ design), `FREECAD_PLAYBOOK.md` (the FreeCAD-derived hardening ledger),
 `TOPO_NAMING_HISTORY_DESIGN.md` (element-naming design, now complete), and
 `AGENT_CONTROL.md` (the `/v1/exec` scripting surface).
 
+## Mission log — 2026-09-04/05, fourth session (practice-problem retry round; four kernel/UI fixes; 1298/1298 unit tests green)
+
+- **Kernel crash guard (`OCCTBridge.mm`, "Crash guard").** Sheet 4.7's clevis
+  plate: an R2 fillet on the concave arcs where the lug cylinder meets the
+  plate's side faces segfaulted inside `ChFi3d_Builder::PerformOneCorner →
+  Extrema_ExtCC::Points` and took the app and its unsaved document down. The
+  OCCT archive was built with `OCC_CONVERT_SIGNALS`, so the bridge defines it,
+  arms `OSD::SetSignal` for the duration of each fillet/chamfer/draft build
+  inside `OCC_CATCH_SIGNALS`, and restores the previous signal actions after.
+  The fault becomes a `Standard_Failure` from a normal context; ChFi3d's own
+  try block catches it and the op reports `partialResult(failed: 2)`. A
+  home-made `sigsetjmp` guard was tried first and is the wrong tool: it
+  leaves OCCT's `Standard_ErrorHandler` chain dangling and the NEXT kernel
+  call dies in `FindHandler` (gotcha 55). Fixture:
+  `openshape3dTests/Fixtures/Captures/clevis-lug-junction-fillet-r2`.
+- **Cylindrical face draft reached the kernel only on paper.** The point that
+  identified the picked face to OCCT was the centroid of ALL side facets —
+  on a full cylinder that is on the axis, its radial push-out undefined —
+  so every cylindrical draft fell through to the mesh path's "declined"
+  error. One facet's centroid, pushed to the true radius, fixes it (Ø40×30
+  boss +10° → 28 607.139 mm³, the frustum to 1e-10, brep kept).
+- **Shell through a ring face refused.** The open face was handed over by its
+  outline centroid, which for an annulus lies in the hole ("no face within
+  tolerance of the pick", every Level 13 hub). `FeatureGraph.pointOnPlanarFace`
+  (largest facet's centroid) now serves both shell and planar draft; ring
+  Ø100/Ø40×20 shelled 3 mm through its top = 42 223.005 mm³ exactly.
+- **Touch-pass findings fixed:** edge snaps step 0.5 mm along the edge from
+  the nearer corner (`SnapEngine.gridAlongEdge`; a raw 10.025 slide made a
+  wall 0.25 % oversize); Top/Bottom views square the azimuth to the nearest
+  quadrant (near-vertical it IS the roll — a stray orbit left a plan view
+  36° tilted with no way back); the armed profile and every extra region
+  tapped into an extrude draw a stronger fill (a second region used to join
+  with no visible sign).
+- **UI tests re-laid out for full-length drags** (gotcha 54): Blend arrow
+  scrub measured from the handle, sweep path lines a grab tolerance clear of
+  the circle rim. Suite: 100 pass, 1 pre-existing fail (History drag-reorder).
+- **Practice-problem retry round** (`scripts/swpp`, `docs/SWPP_PRACTICE_PROBLEMS.md`):
+  eight bridge workers over the deferred list. Highlights: 4.4/4.5/4.7/4.9/
+  4.50/4.58/4.60 (all pass, several beating "structural" deferrals by
+  pixel-measuring the drawing), 4.11/4.12/4.33/4.36/4.64/4.67, 1.2/1.7/1.8/
+  1.10, 2.x, 3.4, 4.1, 7.33/7.42/7.44, 15.2B exact; 13.9A/B built and scored
+  as honest fails (the printed numbers sit between two readings). 111 sheets
+  had never been downloaded; fetched this session with the user's go-ahead
+  (HTTP/1.1 only — the CDN resets HTTP/2 streams) and dispatched.
+- **Open kernel findings from the round (not fixed):** (1) lateral profile-
+  wall edges (the prism corners parallel to the extrusion) list without a
+  mesh-side signature after `feature.extrude`, so `feature.fillet` answers
+  `unaddressable_edge` — every "R n TYP" on such a corner needs a sketch
+  fillet instead; (2) `feature.shell` on the 13.9 hub (`level13._p139_build(60,
+  5, do_shell="app")`) succeeds with brep true and a clean check but removes
+  517k mm³ where the offset cavity is 286k — the 25-deep front pockets'
+  offsets are not honoured; (3) a Level 10-13 worker's earlier note that
+  `/v1/faces` reports a meaningless normal for cylindrical faces (select by
+  `kind`) and `kind: "other"` for conical walls.
+
 ## Mission log — 2026-09-04, third session (textured mesh import; exact face draft; 1291/1291 unit tests green)
 
 - **Import OBJ (+MTL/textures), glTF/GLB and USDZ (2026-09-04).** New
@@ -1761,6 +1816,15 @@ first differing frame is the one you want.
     the whole 2.3 mm (`BlendUITests`). Measure test drags from the handle
     with `withOffset`, keep them short, and keep strokes a full grab
     tolerance apart.
+55. **Never `siglongjmp` out of OCCT.** A fault inside the kernel cannot be
+    caught in C++; a sigsetjmp guard that jumps back over OCCT frames leaves
+    the `Standard_ErrorHandler` chain (`OCC_CATCH_SIGNALS` objects on the
+    unwound stack) dangling, and the next kernel call segfaults in
+    `Standard_ErrorHandler::FindHandler`. Use OCCT's own conversion:
+    `#define OCC_CONVERT_SIGNALS`, `OSD::SetSignal`, `OCC_CATCH_SIGNALS`
+    inside the try — that is what `OS3D_GUARDED` in `OCCTBridge.mm` does,
+    and it restores the previous signal actions on the way out so Swift
+    traps elsewhere still crash the way they always did.
 
 
 ---
@@ -2386,14 +2450,14 @@ B-rep source, analytic holes, extrude-into-target boolean — see mission 2.
 STEP is no longer a build-flag question either: the bridge is compiled in and
 just needs UI (mission 1).
 
-### 4c. SOLIDWORKS practice-problem campaign — IN PROGRESS (2026-09-04)
+### 4c. SOLIDWORKS practice-problem campaign — IN PROGRESS (2026-09-05)
 
 The 365-sheet practice database at solidworks.com/solution/education/
 practice-problems, every sheet printing the finished part's volume, used as
 an outside-in parity harness: read the drawing, build it, score the body's
 volume against the printed number to 0.5 %.
 
-**Where it stands (2026-09-04, evening).** 115 sheets attempted, 102 pass, 13 fail (every fail a drawing that admits two readings whose printed volume picks the one not drawn, or a blend the kernel refuses — see the 4.57 note; none a wrong volume from a correct feature). A further 130 sheets were read and set aside with a written reason each, in `scripts/swpp/deferred.json`. Three sheets (1.1, 2.13, 4.38) were built entirely BY TOUCH on the simulator and score exactly like their bridge recipes; `docs/TOUCH_DRIVING_PLAYBOOK.md` is how.
+**Where it stands (2026-09-05, small hours).** 202 sheets attempted, 170 pass (114 within 0.01 %), 32 fail — every fail a drawing that admits two readings whose printed volume picks the one not drawn (the notes name the reading that WOULD hit the number and the view it contradicts), or a blend the kernel refuses (4.57; 4.7's lug arcs now a typed refusal via the crash guard); none a wrong volume from a correct feature. 155 sheets carry a written reason in `scripts/swpp/deferred.json`: 83 readable-but-not-reached (the best next picks are named), 22 undimensioned to 0.5 %, 31 packages the database no longer serves (404 — assembly / START-part exercises), 11 assemblies or centre-of-mass studies, 6 needing an unsupplied parent part, 2 needing a normal-to-profile loft. Four sheets (1.1, 1.9, 2.13, 4.38) were built entirely BY TOUCH; `docs/TOUCH_DRIVING_PLAYBOOK.md` is how. Resume by dispatching bridge workers over `deferred.json`'s "readable" entries with `scripts/swpp/run.py` (see the worker brief pattern in the 2026-09-04/05 mission log).
 
 | Level | Title | Sheets | Attempted | Pass |
 |---|---|---|---|---|
