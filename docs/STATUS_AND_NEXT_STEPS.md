@@ -1,6 +1,6 @@
 # Status & Next Steps — Handoff Notes
 
-Last updated: 2026-09-05 (Items Manager folders and project folders in the gallery — see the two newest mission log entries; before that: textured mesh import glTF/USDZ/OBJ + exact OCCT face draft; before that: SOLIDWORKS practice problems through the UI; 2026-09-03 SOLIDWORKS practice-problem campaign — extrude end
+Last updated: 2026-09-05 (in-app bug reporter, Items Manager folders, project folders in the gallery — see the three newest mission log entries; before that: textured mesh import glTF/USDZ/OBJ + exact OCCT face draft; before that: SOLIDWORKS practice problems through the UI; 2026-09-03 SOLIDWORKS practice-problem campaign — extrude end
 conditions, B-rep touch commits, draft of an existing face; see the mission
 log just below, and **§4c for the campaign's state and how to resume it**).
 This is the living handoff document: what is DONE, how the newest subsystems
@@ -10,6 +10,27 @@ Companions: `IMPLEMENTATION_PLAN.md` (original phase plan),
 design), `FREECAD_PLAYBOOK.md` (the FreeCAD-derived hardening ledger),
 `TOPO_NAMING_HISTORY_DESIGN.md` (element-naming design, now complete), and
 `AGENT_CONTROL.md` (the `/v1/exec` scripting surface).
+
+## Mission log — 2026-09-05, in-app bug reporter
+
+- **What landed.** A ladybug button at the right end of the editor toolbar
+  (`BugReportButton`; also "Report a Bug…" in the gallery's ⋯ menu) opens
+  `BugReportSheet`: summary, what happened, steps, optional email, and in
+  the editor a toggle to attach the open design as an `.os3d`. Send writes
+  one Firestore document to `bugReports` and the attachment to Cloud
+  Storage under `bugReports/<id>/` — through the REST APIs
+  (`BugReporting.swift`), **no Firebase SDK, no analytics, nothing sent
+  until Send**. The form's footer lists exactly what goes along (app
+  version, OS, device model, design name and counts, last undo title).
+- **Config is git-ignored.** `openshape3d/GoogleService-Info.plist`
+  (API key, project ID, bucket) is in `.gitignore`; copy
+  `docs/GoogleService-Info.example.plist` there. Without it the sheet
+  shows "not configured" and Send stays disabled. Rules the project needs
+  (create-only, size-capped) and the field table: `docs/BUG_REPORTS.md`.
+- **Tests.** `BugReportingTests` (4: config parsing incl. placeholder
+  rejection, Firestore field shape, attachment path sanitising, server
+  message extraction); `BugReportUITests` (opens, validates, cancels — never
+  sends).
 
 ## Mission log — 2026-09-05, Items Manager folders (spec §11)
 

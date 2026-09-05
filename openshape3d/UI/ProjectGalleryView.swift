@@ -31,6 +31,7 @@ struct ProjectGalleryView: View {
     @State private var moveRequest: MoveRequest?
     @State private var didHandleLaunchHooks = false
     @State private var showArchiveImporter = false
+    @State private var showBugReport = false
     @State private var importErrorMessage: String?
 
     /// Select mode (Photos-style): card taps toggle membership instead of
@@ -217,6 +218,12 @@ struct ProjectGalleryView: View {
             } message: {
                 Text(newFolderParent.flatMap { folder(withID: $0)?.name }
                     .map { "Inside “\($0)”." } ?? "At the top level.")
+            }
+            .sheet(isPresented: $showBugReport) {
+                BugReportSheet(
+                    context: .current(documentName: nil, bodyCount: 0, featureCount: 0,
+                                      lastAction: nil),
+                    attachmentProvider: nil)
             }
             .sheet(item: $moveRequest) { request in
                 FolderPickerSheet(
@@ -450,6 +457,14 @@ struct ProjectGalleryView: View {
                     Label("Import Project…", systemImage: "square.and.arrow.down")
                 }
                 .accessibilityIdentifier("ImportProjectButton")
+            }
+            ToolbarItem(placement: .secondaryAction) {
+                Button {
+                    showBugReport = true
+                } label: {
+                    Label("Report a Bug…", systemImage: "ladybug")
+                }
+                .accessibilityIdentifier("GalleryBugReportButton")
             }
             if !visibleProjects.isEmpty {
                 ToolbarItem(placement: .primaryAction) {

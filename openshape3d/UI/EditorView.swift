@@ -183,6 +183,7 @@ struct EditorView: View {
     @State private var viewModel: EditorViewModel?
     @State private var exportDocument: ExportDocument?
     @State private var showItemsPanel = false
+    @State private var showBugReport = false
     @State private var showSettings = false
     /// Measured height of the bottom bar stack, fed by `BottomBarHeightKey`.
     /// The palette and the corner chips inset above it — see `bottomBarInset`.
@@ -1541,6 +1542,15 @@ struct EditorView: View {
                     }
                     .accessibilityIdentifier("CommandSearchButton")
 
+                    // Report a Bug: form + optional .os3d attachment of this
+                    // design, sent to Firestore (`BugReporting.swift`).
+                    Button {
+                        showBugReport = true
+                    } label: {
+                        Label("Report a Bug", systemImage: "ladybug")
+                    }
+                    .accessibilityIdentifier("BugReportButton")
+
                     Button {
                         showSettings = true
                     } label: {
@@ -1551,6 +1561,20 @@ struct EditorView: View {
             }
             .sheet(isPresented: $showSettings) {
                 SettingsView(settings: AppSettings.shared)
+            }
+            .sheet(isPresented: $showBugReport) {
+                BugReportSheet(
+                    context: .current(
+                        documentName: project.name,
+                        bodyCount: viewModel.session.document.bodies.count,
+                        featureCount: viewModel.session.document.features.nodes.count,
+                        lastAction: viewModel.session.undoStack.undoTitle),
+                    attachmentProvider: {
+                        viewModel.session.save()   // rows must reflect live edits
+                        guard let data = ProjectArchive
+                            .archive(from: viewModel.session.project).encoded() else { return nil }
+                        return BugAttachment(fileName: "\(project.name).os3d", data: data)
+                    })
             }
     }
 
