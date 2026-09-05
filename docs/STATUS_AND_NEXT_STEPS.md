@@ -11,6 +11,13 @@ design), `FREECAD_PLAYBOOK.md` (the FreeCAD-derived hardening ledger),
 `TOPO_NAMING_HISTORY_DESIGN.md` (element-naming design, now complete), and
 `AGENT_CONTROL.md` (the `/v1/exec` scripting surface).
 
+## Mission log — 2026-09-05, full UI suite: green
+
+- After the reorder fix and the simulator reboot: **109 executed, 107
+  passed, 2 skipped, 0 failures** in 60 min on `os3d-test` (portrait,
+  freshly booted). No known UI-test failures remain on
+  `feat/textured-mesh-import`. Unit suite: 1334 green.
+
 ## Mission log — 2026-09-05, history drag-reorder fixed (two bugs behind one failing test)
 
 - **Symptom since 2026-09-03:** `HistoryReorderUITests/testDragReorderTwoExtrudes`
