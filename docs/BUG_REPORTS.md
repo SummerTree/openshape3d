@@ -47,18 +47,22 @@ the repository as asked.
 
 ## One-time Firebase setup (project owner)
 
-Probed on 2026-09-05 against project `openshape3d`: the Firestore API
-answered `SERVICE_DISABLED` and the bucket
-`openshape3d.firebasestorage.app` answered 404 — neither backend exists
-yet. Until they do, Send shows the server's message and nothing is stored.
+Done on 2026-09-05: Firestore and Storage are both provisioned for
+`openshape3d`, and a report sent from the simulator landed end to end
+(document `81c8c1d7-8d09-44ba-9ae3-2bb9247e3c41` with a 27 KB `.os3d` in
+the bucket). Two probe artifacts are labeled "safe to delete": Firestore
+document `curl-probe-safe-to-delete` and Storage object
+`bugReports/curl-probe/probe.txt`.
 
-1. Firebase console → **Firestore Database → Create database** (Native
-   mode, any region; production rules). This also enables the
-   `firestore.googleapis.com` API. Allow a few minutes to propagate.
-2. Firebase console → **Storage → Get started** (creates the default
-   bucket named in the plist). Storage needs the Blaze plan on new projects.
-3. Paste the rules below into each product's Rules tab and publish.
+**Open item — lock the rules down.** During that check an unauthenticated
+client could also *list* the `bugReports` collection and the bucket
+prefix, which means anyone holding the app's API key can read every
+report, including contact emails and attached designs. Publish the
+create-only rules below (Firestore → Rules, Storage → Rules) before the
+build reaches anyone else.
 
+For a fresh project the steps are: Firestore Database → Create database
+(Native mode), Storage → Get started (Blaze plan), then paste the rules.
 If only Firestore is set up, reports still arrive: a failed upload is
 recorded in the document's `attachmentError` and the sender is told the
 design was not attached.

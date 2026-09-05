@@ -27,6 +27,11 @@ design), `FREECAD_PLAYBOOK.md` (the FreeCAD-derived hardening ledger),
   `docs/GoogleService-Info.example.plist` there. Without it the sheet
   shows "not configured" and Send stays disabled. Rules the project needs
   (create-only, size-capped) and the field table: `docs/BUG_REPORTS.md`.
+- **Verified end to end** once the owner provisioned Firestore and Storage:
+  a report from the simulator landed as a document with context and a
+  27 KB `.os3d` in the bucket. **Rules are still wide open** (anonymous
+  list/read worked) — the create-only rules in `docs/BUG_REPORTS.md` need
+  publishing before anyone else runs the build.
 - **Tests.** `BugReportingTests` (4: config parsing incl. placeholder
   rejection, Firestore field shape, attachment path sanitising, server
   message extraction); `BugReportUITests` (opens, validates, cancels — never
