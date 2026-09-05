@@ -53,13 +53,16 @@ struct HistoryPanelView: View {
                     // onto another row moves it to that row's position. Replaying
                     // out of dependency order surfaces a broken-ref badge (handled
                     // by the feature graph), so the reorder is never forbidden.
-                    .draggable(row.id.raw.uuidString) {
+                    .draggable(AppDragPayload(kind: "feature", id: row.id.raw.uuidString)) {
                         Label(row.name, systemImage: "line.3.horizontal")
                             .font(.caption).padding(6)
                             .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
                     }
-                    .dropDestination(for: String.self) { items, _ in
-                        reorder(droppedIDs: items, onto: index)
+                    // Typed payload (`AppDragPayload`): a String here was
+                    // pasted into the row's Distance field by the text
+                    // field's own drop handling.
+                    .dropDestination(for: AppDragPayload.self) { items, _ in
+                        reorder(droppedIDs: items.filter { $0.kind == "feature" }.map(\.id), onto: index)
                     }
                 }
             }
@@ -191,7 +194,31 @@ private struct HistoryRowView: View {
     /// after the rollback marker (its bodies are absent either way).
     private var dimmed: Bool { row.suppressed || row.isRolledBack }
 
+    /// Drag-to-reorder handle: the one part of the row with no context
+    /// menu, so a press here always lifts a drag. Same payload as the
+    /// row-level draggable (the node's UUID); rows are the drop targets.
+    private var reorderGrip: some View {
+        Image(systemName: "line.3.horizontal")
+            .font(.system(size: 12, weight: .semibold))
+            .foregroundStyle(Color.barLabelDim)
+            .frame(width: 16, height: 30)
+            .contentShape(Rectangle())
+            .draggable(AppDragPayload(kind: "feature", id: row.id.raw.uuidString)) {
+                Label(row.name, systemImage: "line.3.horizontal")
+                    .font(.caption).padding(6)
+                    .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
+            }
+            .accessibilityLabel("Reorder")
+            .accessibilityIdentifier("HistoryDragHandle-\(row.name)")
+    }
+
     var body: some View {
+        // The reorder grip sits OUTSIDE the content that carries the context
+        // menu: on one view a long press opens the menu before a drag can
+        // lift, which is what made press-and-drag reordering unreliable
+        // (and left XCUITest facing a menu — "Not hittable", 2026-09-03).
+        HStack(alignment: .center, spacing: 6) {
+        reorderGrip
         VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 8) {
                 Image(systemName: icon)
@@ -437,8 +464,6 @@ private struct HistoryRowView: View {
                 .disabled(row.isRolledBack)
             }
         }
-        .padding(.vertical, 7)
-        .padding(.horizontal, 8)
         .contentShape(Rectangle())
         .onTapGesture(perform: onSelect)
         .contextMenu {
@@ -469,6 +494,9 @@ private struct HistoryRowView: View {
                 Label("Delete", systemImage: "trash")
             }
         }
+        }
+        .padding(.vertical, 7)
+        .padding(.horizontal, 8)
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("HistoryRow-\(row.name)")
         .onAppear {

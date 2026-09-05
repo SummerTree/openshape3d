@@ -314,7 +314,7 @@ struct ItemsPanelView: View {
     }
 
     /// A drop on a folder row (or `nil`: a section header = top level).
-    private func handleDrop(_ payloads: [String], into folder: ItemFolderID?) -> Bool {
+    private func handleDrop(_ payloads: [AppDragPayload], into folder: ItemFolderID?) -> Bool {
         let decoded = ItemsDragPayload.decode(payloads)
         guard !decoded.keys.isEmpty || !decoded.folders.isEmpty else { return false }
         if !decoded.keys.isEmpty { viewModel.moveItems(decoded.keys, toFolder: folder) }
@@ -348,41 +348,36 @@ struct ItemsPanelView: View {
 
 // MARK: - Drag payloads
 
-/// Rows drag plain strings: "os3d-item:<kind>:<uuid>" or "os3d-itemfolder:<uuid>".
+/// Rows drag an `AppDragPayload` (typed, so name text fields refuse it):
+/// kind "body"/"sketch"/"plane"/"axis"/"image" or "itemfolder", id = UUID.
 private enum ItemsDragPayload {
-    private static let itemPrefix = "os3d-item:"
-    private static let folderPrefix = "os3d-itemfolder:"
-
-    static func item(_ key: DocumentItemKey) -> String {
+    static func item(_ key: DocumentItemKey) -> AppDragPayload {
         switch key {
-        case .body(let id): return itemPrefix + "body:" + id.raw.uuidString
-        case .sketch(let id): return itemPrefix + "sketch:" + id.raw.uuidString
-        case .plane(let id): return itemPrefix + "plane:" + id.raw.uuidString
-        case .axis(let id): return itemPrefix + "axis:" + id.raw.uuidString
-        case .image(let id): return itemPrefix + "image:" + id.raw.uuidString
+        case .body(let id): return AppDragPayload(kind: "body", id: id.raw.uuidString)
+        case .sketch(let id): return AppDragPayload(kind: "sketch", id: id.raw.uuidString)
+        case .plane(let id): return AppDragPayload(kind: "plane", id: id.raw.uuidString)
+        case .axis(let id): return AppDragPayload(kind: "axis", id: id.raw.uuidString)
+        case .image(let id): return AppDragPayload(kind: "image", id: id.raw.uuidString)
         }
     }
 
-    static func folder(_ id: ItemFolderID) -> String { folderPrefix + id.raw.uuidString }
+    static func folder(_ id: ItemFolderID) -> AppDragPayload {
+        AppDragPayload(kind: "itemfolder", id: id.raw.uuidString)
+    }
 
-    static func decode(_ payloads: [String]) -> (keys: [DocumentItemKey], folders: [ItemFolderID]) {
+    static func decode(_ payloads: [AppDragPayload]) -> (keys: [DocumentItemKey], folders: [ItemFolderID]) {
         var keys: [DocumentItemKey] = []
         var folders: [ItemFolderID] = []
         for payload in payloads {
-            if payload.hasPrefix(folderPrefix),
-               let uuid = UUID(uuidString: String(payload.dropFirst(folderPrefix.count))) {
-                folders.append(ItemFolderID(raw: uuid))
-            } else if payload.hasPrefix(itemPrefix) {
-                let parts = payload.dropFirst(itemPrefix.count).split(separator: ":", maxSplits: 1)
-                guard parts.count == 2, let uuid = UUID(uuidString: String(parts[1])) else { continue }
-                switch parts[0] {
-                case "body": keys.append(.body(BodyID(raw: uuid)))
-                case "sketch": keys.append(.sketch(SketchID(raw: uuid)))
-                case "plane": keys.append(.plane(ConstructionPlaneID(raw: uuid)))
-                case "axis": keys.append(.axis(ConstructionAxisID(raw: uuid)))
-                case "image": keys.append(.image(InsertedImageID(raw: uuid)))
-                default: break
-                }
+            guard let uuid = UUID(uuidString: payload.id) else { continue }
+            switch payload.kind {
+            case "itemfolder": folders.append(ItemFolderID(raw: uuid))
+            case "body": keys.append(.body(BodyID(raw: uuid)))
+            case "sketch": keys.append(.sketch(SketchID(raw: uuid)))
+            case "plane": keys.append(.plane(ConstructionPlaneID(raw: uuid)))
+            case "axis": keys.append(.axis(ConstructionAxisID(raw: uuid)))
+            case "image": keys.append(.image(InsertedImageID(raw: uuid)))
+            default: break
             }
         }
         return (keys, folders)
@@ -395,7 +390,7 @@ private enum ItemsDragPayload {
 /// folder ("Bodies" header = back to the top level of the Bodies list).
 private struct SectionHeaderDropView: View {
     let title: String
-    let onDrop: ([String]) -> Bool
+    let onDrop: ([AppDragPayload]) -> Bool
     @State private var isTargeted = false
 
     var body: some View {
@@ -406,7 +401,7 @@ private struct SectionHeaderDropView: View {
             .padding(.bottom, 2)
             .frame(maxWidth: .infinity, alignment: .leading)
             .contentShape(Rectangle())
-            .dropDestination(for: String.self) { payloads, _ in
+            .dropDestination(for: AppDragPayload.self) { payloads, _ in
                 onDrop(payloads)
             } isTargeted: { isTargeted = $0 }
     }
@@ -422,7 +417,7 @@ private struct FolderRowView: View {
     let holdsItems: Bool
     let isCollapsed: Bool
     let hasContents: Bool
-    let dragPayload: String
+    let dragPayload: AppDragPayload
     let moveTargets: [ItemsMoveTarget]
     let onToggleCollapse: () -> Void
     let onToggleVisibility: () -> Void
@@ -431,7 +426,7 @@ private struct FolderRowView: View {
     let onMove: (ItemFolderID?) -> Void
     let onRemove: () -> Void
     let onDeleteAll: () -> Void
-    let onDrop: ([String]) -> Bool
+    let onDrop: ([AppDragPayload]) -> Bool
 
     @State private var draft = ""
     @State private var isTargeted = false
@@ -450,7 +445,7 @@ private struct FolderRowView: View {
                     .fill(isTargeted ? Color.accentColor.opacity(0.14) : Color.clear)
             )
             .contentShape(Rectangle())
-            .dropDestination(for: String.self) { payloads, _ in
+            .dropDestination(for: AppDragPayload.self) { payloads, _ in
                 onDrop(payloads)
             } isTargeted: { isTargeted = $0 }
             .contextMenu { menuItems }
@@ -585,7 +580,7 @@ private struct ItemRowView: View {
     var showsZoom = true
     /// Indent level (inside a folder).
     var depth = 0
-    var dragPayload: String? = nil
+    var dragPayload: AppDragPayload? = nil
     var moveTargets: [ItemsMoveTarget] = []
     var onMove: ((ItemFolderID?) -> Void)? = nil
     var onNewFolder: (() -> Void)? = nil
@@ -690,7 +685,7 @@ private struct ItemRowView: View {
 
 /// `.draggable` only when there is a payload (symbol rows have none).
 private struct OptionalDraggable: ViewModifier {
-    let payload: String?
+    let payload: AppDragPayload?
 
     func body(content: Content) -> some View {
         if let payload {

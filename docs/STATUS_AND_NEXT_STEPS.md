@@ -11,6 +11,30 @@ design), `FREECAD_PLAYBOOK.md` (the FreeCAD-derived hardening ledger),
 `TOPO_NAMING_HISTORY_DESIGN.md` (element-naming design, now complete), and
 `AGENT_CONTROL.md` (the `/v1/exec` scripting surface).
 
+## Mission log — 2026-09-05, history drag-reorder fixed (two bugs behind one failing test)
+
+- **Symptom since 2026-09-03:** `HistoryReorderUITests/testDragReorderTwoExtrudes`
+  failed at the press-and-drag with "Not hittable: HistoryRow-Extrude".
+- **Bug 1 — the long press opened the context menu.** History rows carry
+  both `.contextMenu` and `.draggable`; a 1 s press opens the menu before a
+  drag lifts, and the retry then found the rows covered. Fix: a reorder
+  grip (`line.3.horizontal`, `HistoryDragHandle-<name>`) on each row that
+  sits OUTSIDE the content carrying the context menu, so a press there
+  always lifts a drag. The row-level draggable stays for finger drags.
+- **Bug 2 — a String drop pasted into the Distance field.** With the grip,
+  the drag reached the target row, but XCUITest drops at the row's centre,
+  which is the Distance text field — and a text field accepts a String
+  drop. The feature's UUID was pasted into the field, the test read the
+  changed value as "reordered", and its Undo undid the extrude ("1 row").
+  A real bug for fingers too. Fix: `AppDragPayload` (typed Transferable,
+  custom UTType `com.laan.labs.openshape3d.drag-payload`) is now the
+  payload for history rows and Items rows/folders; text fields refuse it
+  and the row's `dropDestination` receives it. (Gallery cards still drag
+  Strings — no text fields there.)
+- Verified by touch (grip drag reorders, one "Reorder Feature" undo step,
+  Undo restores both) and by the suite: HistoryReorder, HistoryPanel and
+  ItemsFolder UI tests pass. No known UI-test failures remain on the branch.
+
 ## Mission log — 2026-09-05, full UI suite on the branch (and a stuck test simulator)
 
 - **Result:** 109 executed, 100 passed, 2 skipped, 7 failed in 65 min on
@@ -26,8 +50,9 @@ design), `FREECAD_PLAYBOOK.md` (the FreeCAD-derived hardening ledger),
   `.landscapeLeft` in `setUp` earlier that day; it is portrait now.
   (`CompactWidthBarUITests` also rotates to landscape, inside one test —
   the suite has survived that before; the reboot is the fix either way.)
-- **Still failing, genuinely:** `HistoryReorderUITests/testDragReorderTwoExtrudes`
-  (pre-existing since 2026-09-03; fails on both simulators).
+- **Still failing at that point:** `HistoryReorderUITests/testDragReorderTwoExtrudes`
+  (pre-existing since 2026-09-03; fails on both simulators) — fixed in the
+  entry above.
 - **Gotcha 56 added below.**
 
 ## Mission log — 2026-09-05, Import Units prompt (Shapr3D parity)
