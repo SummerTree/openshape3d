@@ -110,11 +110,13 @@ design), `FREECAD_PLAYBOOK.md` (the FreeCAD-derived hardening ledger),
   data: URI, zipped OBJ+MTL+PNG with a deflated entry, OBJ without MTL, zip
   without a model refused, usda + usdz through Model I/O, `metersPerUnit`
   parsing, MeshBlob v2). Full unit suite 1291/1291 on os3d-unit.
-- **Not done in this session:** the Sketchfab "Mechanical CAD Model
-  Showcase" download the goal named needs a Sketchfab login, which the
-  agent must not perform; the importer was verified on generated fixtures
-  instead. Once the zip is on disk, `document.import` (or the Import menu)
-  is the whole test.
+- **Verified on the real thing (2026-09-05):** the Sketchfab "Mechanical
+  CAD Model Showcase" (CC-BY, devkrsm; the user downloaded it, since the
+  site needs a login) imports from all three of its downloads — GLB, the
+  zipped glTF+BIN+PNG, and USDZ — as the same 7 parts, 11 166 triangles
+  (the published face count), 348.66 × 164.16 × 211.04 mm, 266 240 mm³,
+  with the SteelCast base-colour texture on the clamp frame ("Heavy Duty /
+  Steel Screw Clamp" lettering renders) and `/v1/check` clean on all 7.
 
 ## Mission log — 2026-09-04, second session (UI-driven practice-problem pass; 1279/1279 unit tests green)
 
