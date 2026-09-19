@@ -128,6 +128,21 @@ def pick_face(a, point, normal):
     a.look()
 
 
+def tile_samples(k=7):
+    """Points over the plane picker's three origin tiles (generously sized)."""
+    t = actions.tile_scale() * 1.4
+    g = [t * i / (k - 1) for i in range(k)]
+    return [(u, v, 0) for u in g for v in g] + [(0, v, -u) for u in g for v in g] + [(u, 0, -v) for u in g for v in g]
+
+
+def pick_clear(a, candidates, normal):
+    """Pick a face/plane at the candidate farthest on screen from the origin tiles."""
+    at, gap = clear_point(candidates, [tile_samples()])
+    log(f"plane pick at {tuple(round(c, 1) for c in at)}: {gap:.0f} pt from the tiles")
+    pick_face(a, at, normal)
+    return at
+
+
 def exit_iso(a):
     a.fit()
     a.exit_sketch()
@@ -499,12 +514,15 @@ def build_loft(a):
     a.field("OffsetPlaneDistanceField", 40, wait=2.0)
     a.fit()
     top = (cx, y1 + 40, cz)
+    # from above, the plane picker's front and right tiles are edge-on and the
+    # ground tile keeps to the origin corner: the new plane's far side is clear
+    yield "top_view"
+    a.view("Top")
     yield "ci_tool"
     a.palette_label("Sketch", "Circle", wait=1.4)
     yield "ci_plane"
-    actions.pick_face(a, top)
+    pick_clear(a, [(x, top[1], z) for x in (x0 + 5, cx, x1 - 5) for z in (z0 + 5, cz, z1 - 5)], (0, 1, 0))
     a.expect(near(sketch_last()["plane"]["origin"][1], top[1], 0.05), "that was not the new plane")
-    a.look()
     yield "ci_draw"
     W2, L2 = plane_fns(sketch_last())
     circle(a, L2(top))
@@ -515,13 +533,26 @@ def build_loft(a):
     exit_iso(a)
     yield "ci_iso"
     a.view("Isometric")
+    # both sections are thin on screen from here: zoom in, then tap each where
+    # it is clearest of its own outline
+    yield "zoom"
+    a.touch("pinch:2.0;1.2"); a.pause(1.0)
     yield "lo_square"
     vol = body_of(body)["volumeMM3"]
-    extrude_tap(a, (cx + 9, y1, cz + 9))
+    sq = [(cx + u, y1, cz + v) for u in (-9, -4.5, 0, 4.5, 9) for v in (-9, -4.5, 0, 4.5, 9)]
+    rim = (line_pts((cx - 15, y1, cz - 15), (cx + 15, y1, cz - 15)) + line_pts((cx + 15, y1, cz - 15), (cx + 15, y1, cz + 15))
+           + line_pts((cx + 15, y1, cz + 15), (cx - 15, y1, cz + 15)) + line_pts((cx - 15, y1, cz + 15), (cx - 15, y1, cz - 15)))
+    at, gap = clear_point(sq, [rim])
+    log(f"square tap {at}: {gap:.0f} pt clear")
+    extrude_tap(a, at)
     yield "loft"
     a.button("Loft", wait=1.4)
     yield "pick"
-    a.tap((cx + 5, top[1], cz + 5), wait=1.6)
+    flat = ((1, 0, 0), (0, 0, 1))
+    inside = [p for r in (0.0, 0.3, 0.5) for p in circle_pts(top, r * 12, flat, 12)]
+    at, gap = clear_point(inside, [circle_pts(top, 12, flat)])
+    log(f"circle tap {at}: {gap:.0f} pt clear")
+    a.tap(at, wait=1.6)
     a.expect(a.says("2 sections"), "the circle was not added to the loft")
     yield "commit"
     a.tap_id("LoftCommit", wait=2.8)
