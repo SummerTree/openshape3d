@@ -144,6 +144,47 @@ description with real keystrokes (script-set text does not register). An
 unverified channel cannot set custom thumbnails and has a daily upload cap
 (the 10th upload in a day was refused).
 
+## Shorts — "How do you model this?" on an iPhone
+
+Ten vertical Shorts (spring, twisted vase, donut, bowl, hex nut, square to
+round, bent pipe, gem, cube frame, ring) in the style of the "3D Modeling
+Tip" Shorts: the finished part first under "How do you model a …?", then
+every step of the build, then the part again and an end card. Shot UPRIGHT on
+an iPhone so the Shorts show the phone app itself.
+
+    python3 shorts.py spring                  # take + compose + metadata
+    ./batch_shorts.sh vase donut …             # several in a row (all ten by default)
+    python3 shorts.py spring --compose-only
+    python3 shorts_contact.py VIDEO.mp4 sheet.png 1.5   # review: a frame every 1.5 s
+    python3 shorts_probe.py OUTDIR             # explore by hand: one touch per curl (see its docstring)
+
+- Own simulator `os3d-shorts` (iPhone 17 Pro Max, 440 × 956 pt), bridge 8933,
+  control 8932 — `shorts.py` sets `OS3D_VIDEO_SIM / _POINTS / _ORIENTATION`
+  and the ports before importing `common`, and ActionTakeUITests turns the
+  phone to portrait when `OS3D_TAKE_ORIENTATION=portrait`.
+- Touches: the same ActionTakeUITests, the builders in `shorts_actions.py`
+  (class `P`: the phone's free viewport is right of the palette and above the
+  bars; `look()` taps Look at Sketch when picking a plane did not turn the
+  camera; drags are sized in screen points, then the typed dimension sets the
+  real size). `orbit:` is an unreported one-finger drag for the reveal.
+- Script: `shorts_text.py` — per step `(id, caption, say)`; `say` "" is a
+  silent step. The hook line is its own clip.
+- Edit (`shorts.py`): each step plays at the speed that fits its narration
+  (≤ 3×; silent steps ≤ 4.5×), the recording is cropped of the status bar and
+  home indicator and fitted to 1920 high on a blurred copy of itself; the hook
+  is the reveal's orbit zoomed on the part (`focus`, the bodies' projected
+  box). A caption goes in the top or lower band, whichever has less UI
+  under it (edge detail in the frame) and no touch.
+
+Phone facts learned (2026-09-19): the Helix sheet's fields are Form rows —
+their accessibility frame is the whole row, and only the value box on the
+right opens the keypad (`typeOnPad` taps 45 pt in from the row's right edge);
+the aligned sketch camera on a new design is ≈ 94 pt/mm but after other work
+it can be ≈ 5 pt/mm; Helix sweeps the circle round a coil that starts at the
+profile (radius 12, pitch 8, 5 turns from a 4 mm circle makes a spring); the
+mirror menu names the ground "Ground (ZX)"; the polygon's sides are
+`PolygonSidesField`; Material presets are `MaterialPreset<Name>`.
+
 ## Ten project tutorials
 
 Ten follow-along projects, the classics of CAD tutorials on YouTube: coffee

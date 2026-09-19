@@ -10,9 +10,7 @@ A builder is a generator that yields a step id (from action_text.py) and then
 performs that step; the runner holds each step until its narration is done.
 """
 import json, math, time
-from common import call, bodies, edges, faces, log, normalized, nstr
-
-POINTS = (1376, 1032)
+from common import call, bodies, edges, faces, log, normalized, nstr, POINTS
 
 
 class Missed(RuntimeError):

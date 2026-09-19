@@ -29,7 +29,8 @@ final class ActionTakeUITests: XCTestCase {
             control = URL(string: "http://127.0.0.1:\(port)")!
         }
         continueAfterFailure = true
-        XCUIDevice.shared.orientation = .landscapeLeft
+        // iPad takes are landscape; the Shorts are shot on an iPhone held upright
+        XCUIDevice.shared.orientation = env["OS3D_TAKE_ORIENTATION"] == "portrait" ? .portrait : .landscapeLeft
 
         app = XCUIApplication()
         app.launchEnvironment["OS3D_RESET_STORE"] = "1"
@@ -98,6 +99,17 @@ final class ActionTakeUITests: XCTestCase {
             let hold = s.count > 2 ? Double(s[2]) ?? 0.3 : 0.3
             post("vis:drag:\(f(x1)),\(f(y1));\(f(x2)),\(f(y2));\(hold)")
             p(x1, y1).press(forDuration: hold, thenDragTo: p(x2, y2), withVelocity: .slow, thenHoldForDuration: 0.2)
+            return "done"
+        case "orbit":                             // orbit:x,y;x,y;pointsPerSecond — NOT reported (no ring)
+            let s = arg.split(separator: ";")
+            let (x1, y1) = point(String(s[0])), (x2, y2) = point(String(s[1]))
+            let v = s.count > 2 ? Double(s[2]) ?? 120 : 120
+            p(x1, y1).press(forDuration: 0.05, thenDragTo: p(x2, y2),
+                            withVelocity: XCUIGestureVelocity(rawValue: CGFloat(v)), thenHoldForDuration: 0.3)
+            return "done"
+        case "pinch":                             // pinch:scale[;velocity] about the window centre — NOT reported
+            let s = arg.split(separator: ";").compactMap { Double($0) }
+            window.pinch(withScale: CGFloat(s.first ?? 1.3), velocity: CGFloat(s.count > 1 ? s[1] : 0.6))
             return "done"
         case "chain":                             // chain:x,y;x,y;… 0.7 s apart
             for (i, s) in arg.split(separator: ";").enumerated() {
@@ -206,7 +218,16 @@ final class ActionTakeUITests: XCTestCase {
     private func typeOnPad(_ field: XCUIElement, _ text: String, tapField: Bool = true) -> String {
         // A field that opened with its keypad already up (a gizmo ring tap)
         // must not be tapped again: that dismisses the pad and the tool.
-        if tapField && !app.buttons["KeypadDelete"].exists { tap(field) }
+        if tapField && !app.buttons["KeypadDelete"].exists {
+            // In a Form row (the Helix sheet) the field's frame is the whole
+            // row, and only the value box on its right opens the pad.
+            let wf = window.frame, ef = field.frame
+            if ef.width > 200 {
+                tapAt((ef.maxX - 45 - wf.minX) / wf.width, (ef.midY - wf.minY) / wf.height)
+            } else {
+                tap(field)
+            }
+        }
         let delete = app.buttons["KeypadDelete"]
         guard delete.waitForExistence(timeout: 3) else { return "done:no-keypad" }
         for _ in 0..<24 where !((field.value as? String) ?? "").isEmpty {

@@ -9,7 +9,7 @@ out at 1920×1080 beside a chapter panel with the narration (edge-tts neural
 voice) and a music bed, and writes the YouTube metadata (title, description
 with chapter timestamps, tags).
 """
-import asyncio, hashlib, json, os, re, signal, subprocess, sys, threading, time, urllib.request
+import asyncio, collections, hashlib, json, os, re, signal, subprocess, sys, threading, time, urllib.request
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 S = os.path.dirname(os.path.abspath(__file__))
@@ -22,7 +22,10 @@ CONTROL_PORT = int(os.environ.get("OS3D_TUTORIAL_CONTROL_PORT", "8930"))
 BASE = f"http://127.0.0.1:{BRIDGE_PORT}"
 DD = os.environ.get("OS3D_VIDEO_DD", os.path.join(S, "dd"))
 OUT_DIR = os.path.join(ROOT, "marketing", "youtube")
-POINTS = (1376, 1032)                 # landscape device points = touch space
+# the recorded window in points = touch space: the landscape iPad, or an
+# upright iPhone for the Shorts (OS3D_VIDEO_POINTS=440x956)
+POINTS = tuple(int(v) for v in os.environ.get("OS3D_VIDEO_POINTS", "1376x1032").split("x"))
+ORIENTATION = os.environ.get("OS3D_VIDEO_ORIENTATION", "landscape")
 VOICE = os.environ.get("OS3D_VOICE", "en-US-AndrewMultilingualNeural")
 RATE = os.environ.get("OS3D_VOICE_RATE", "-3%")
 ICON = os.path.join(ROOT, "openshape3d/Assets.xcassets/AppIcon.appiconset/icon-ios-1024x1024.png")
@@ -177,7 +180,8 @@ class Control:
 def start_test(udid, log_path, test="TutorialTakeUITests"):
     flag = "TEST_RUNNER_OS3D_ACTION_TAKE" if test == "ActionTakeUITests" else "TEST_RUNNER_OS3D_TUTORIAL_TAKE"
     env = dict(os.environ, TEST_RUNNER_OS3D_TUTORIAL_CONTROL_PORT=str(CONTROL_PORT),
-               TEST_RUNNER_OS3D_TUTORIAL_BRIDGE_PORT=BRIDGE_PORT, **{flag: "1"})
+               TEST_RUNNER_OS3D_TUTORIAL_BRIDGE_PORT=BRIDGE_PORT,
+               TEST_RUNNER_OS3D_TAKE_ORIENTATION=ORIENTATION, **{flag: "1"})
     cmdline = ["xcodebuild", "test", "-project", os.path.join(ROOT, "openshape3d.xcodeproj"),
                "-scheme", "openshape3d", "-destination", f"platform=iOS Simulator,id={udid}",
                "-derivedDataPath", DD, "-parallel-testing-enabled", "NO",
@@ -222,6 +226,8 @@ def synthesize(name, script):
     durations = {}
     from pronunciation import speakable
     for seg in script:
+        if not seg["say"]:
+            continue
         spoken = speakable(seg["say"])            # respellings: see pronunciation.py
         key = hashlib.sha1((VOICE + RATE + spoken).encode()).hexdigest()[:10]
         path = os.path.join(d, f"{seg['id']}-{key}.mp3")
@@ -306,7 +312,8 @@ def run_take(name, script, take_fn, out=None, test="TutorialTakeUITests"):
     time.sleep(3.0)
     rec = Recorder(udid)
     rec.start(os.path.join(out, "raw.mp4"))
-    tl = Timeline(durations)
+    # a step with no narration (a silent step in a Short) has no clip: 0 s
+    tl = Timeline(collections.defaultdict(float, durations))
     try:
         take_fn(Take(control, tl))
         tl.dump(os.path.join(out, "timeline.json"), control.touches)
