@@ -94,6 +94,56 @@ Oxford English Dictionary (involute, Lego), Wikipedia "IGES" and "Bézier
 curve". Re-voicing a recorded video is `project_tutorial.py <name>
 --compose-only`: the recording is reused and only the narration changes.
 
+## CAD basics — every tap shown
+
+Ten how-to videos (fillet, chamfer, extrude & cut, revolve, sweep, loft,
+twist, shell, pattern, mirror) where EVERY step is a real touch — nothing is
+built over the bridge; the bridge is only read (world → screen via
+`/v1/project`, and a check after each step that it did what it should).
+
+    python3 action_tutorial.py fillet            # take + compose + metadata + thumbnail
+    ./batch_actions.sh chamfer revolve …          # several in a row
+    python3 action_tutorial.py fillet --compose-only
+
+- `ActionTakeUITests` performs the touches and REPORTS each one
+  (`vis:tap|double|drag`, window-normalised) before it lands, including
+  palette buttons, keypad keys, menu items and bar buttons. `common.Control`
+  records them into `timeline.json`, and `action_compose.py` draws a touch
+  ring (a trail for drags) exactly where and when each finger landed.
+- A script (`action_text.py`) is chapters of steps; each step has `do` (the
+  caption top-left under the back button, and the panel's step list with
+  done / current / next) and `say` (its own narration clip). The builders in
+  `actions.py` yield the same step ids; a mismatch would desync narration and
+  picture, so check with a stub run before a take.
+- A step that does not land raises `Missed` and stops the take — no bridge
+  fallback, so a video can never silently skip a step.
+- Camera changes are taps too: `menu:ViewsMenu/<Isometric|Top|Front|…>` and
+  the toolbar's Fit View.
+
+Touch facts learned (2026-09-19):
+
+- Edge picks: tap 8 pt inside the face next to the edge (`A.tap_edge`); exactly
+  on a silhouette edge the tap can miss the body. A tap in a face's middle with
+  Fillet armed picks all its edges.
+- A body stays selected (blue) after Apply — tap empty grid before a view.
+- Twist = select a top face, Transform ▸ Rotate, tap `GizmoRing-Y` (the
+  angle field opens WITH its keypad — tapping the field again dismisses the
+  tool), type the angle. Beyond ~30° per step the twisted walls fold.
+- Loft needs its circle on another plane: Offset Plane from the top face
+  (tap the face beside, not on, the square sketch — the fill wins the tap).
+- A 5 mm path in an iso view can run off-screen: size the sweep path to what
+  is visible, and `A.tap` Fit-Views first when a target is off-screen.
+- Mirror is a menu under Transform (YZ Plane / XY Plane / Ground (ZX));
+  Pattern's bar has Linear/Circular, Count, Spacing, and X/Y/Z.
+
+Uploading to YouTube (Studio in Chrome): the file-upload tool caps 10 MB per
+call, so split the mp4 into 9 MB chunks, feed them one per call to an
+injected file input, join them into a `File` in the page (verify its SHA-256),
+and hand it to Studio's `input[name=Filedata]`. Type the title and
+description with real keystrokes (script-set text does not register). An
+unverified channel cannot set custom thumbnails and has a daily upload cap
+(the 10th upload in a day was refused).
+
 ## Ten project tutorials
 
 Ten follow-along projects, the classics of CAD tutorials on YouTube: coffee
@@ -169,3 +219,4 @@ never collide with the UI suite's builds on the shared simulators.
 - `probe*.py` — the touch-flow probes used while writing the takes
 - `project_tutorial.py`, `projects.py`, `projects_text.py`, `batch.sh`, `contact.py` — the ten project tutorials
 - `pronunciation.py` — the pronunciation guide the narration voice is given
+- `action_tutorial.py`, `actions.py`, `action_text.py`, `action_compose.py`, `batch_actions.sh` — the every-tap CAD-basics videos

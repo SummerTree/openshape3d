@@ -122,6 +122,7 @@ def nstr(xy):
 class Control:
     def __init__(self, port=CONTROL_PORT):
         self.pending, self.events, self.lock = "", [], threading.Lock()
+        self.touches = []          # (wall time, "tap:x,y" | "double:x,y" | "drag:…") reported by the test
         outer = self
 
         class H(BaseHTTPRequestHandler):
@@ -137,9 +138,12 @@ class Control:
                 n = int(self.headers.get("Content-Length", 0))
                 msg = self.rfile.read(n).decode()
                 with outer.lock:
-                    outer.events.append(msg)
-                    if msg.startswith("done"):
-                        outer.pending = ""
+                    if msg.startswith("vis:"):
+                        outer.touches.append((time.time(), msg[4:]))
+                    else:
+                        outer.events.append(msg)
+                        if msg.startswith("done"):
+                            outer.pending = ""
                 self.send_response(200); self.send_header("Content-Length", "0"); self.end_headers()
 
         self.server = HTTPServer(("127.0.0.1", port), H)
@@ -170,14 +174,14 @@ class Control:
             self.pending = "finish"
 
 
-def start_test(udid, log_path):
-    env = dict(os.environ, TEST_RUNNER_OS3D_TUTORIAL_TAKE="1",
-               TEST_RUNNER_OS3D_TUTORIAL_CONTROL_PORT=str(CONTROL_PORT),
-               TEST_RUNNER_OS3D_TUTORIAL_BRIDGE_PORT=BRIDGE_PORT)
+def start_test(udid, log_path, test="TutorialTakeUITests"):
+    flag = "TEST_RUNNER_OS3D_ACTION_TAKE" if test == "ActionTakeUITests" else "TEST_RUNNER_OS3D_TUTORIAL_TAKE"
+    env = dict(os.environ, TEST_RUNNER_OS3D_TUTORIAL_CONTROL_PORT=str(CONTROL_PORT),
+               TEST_RUNNER_OS3D_TUTORIAL_BRIDGE_PORT=BRIDGE_PORT, **{flag: "1"})
     cmdline = ["xcodebuild", "test", "-project", os.path.join(ROOT, "openshape3d.xcodeproj"),
                "-scheme", "openshape3d", "-destination", f"platform=iOS Simulator,id={udid}",
                "-derivedDataPath", DD, "-parallel-testing-enabled", "NO",
-               "-only-testing:openshape3dUITests/TutorialTakeUITests"]
+               f"-only-testing:openshape3dUITests/{test}"]
     return subprocess.Popen(cmdline, env=env, stdout=open(log_path, "w"), stderr=subprocess.STDOUT)
 
 
@@ -261,9 +265,11 @@ class Timeline:
     def remaining(self):
         return max(0.0, self.cur["start"] + self.dur[self.cur["id"]] + 0.35 - self.now())
 
-    def dump(self, path):
+    def dump(self, path, touches=()):
         self.end()
-        json.dump({"segments": self.segs, "total": self.now()}, open(path, "w"), indent=1)
+        json.dump({"segments": self.segs, "total": self.now(),
+                   "touches": [{"t": t - self.t0, "what": w} for t, w in touches if t >= self.t0]},
+                  open(path, "w"), indent=1)
 
 
 # ---- the take runner --------------------------------------------------------------
@@ -288,14 +294,14 @@ class Take:
         self.touch(f"drag:{nstr(p)};{nstr(q)};{hold}")
 
 
-def run_take(name, script, take_fn, out=None):
+def run_take(name, script, take_fn, out=None, test="TutorialTakeUITests"):
     out = out or os.path.join(S, "take-" + name)
     os.makedirs(out, exist_ok=True)
     durations = synthesize(name, script)
     udid = udid_for()
     simctl("terminate", udid, BUNDLE, check=False)
     control = Control()
-    test = start_test(udid, os.path.join(out, "xcodebuild.log"))
+    test = start_test(udid, os.path.join(out, "xcodebuild.log"), test)
     control.wait_event("ready", 900)
     time.sleep(3.0)
     rec = Recorder(udid)
@@ -303,7 +309,7 @@ def run_take(name, script, take_fn, out=None):
     tl = Timeline(durations)
     try:
         take_fn(Take(control, tl))
-        tl.dump(os.path.join(out, "timeline.json"))
+        tl.dump(os.path.join(out, "timeline.json"), control.touches)
     finally:
         # a failed take must not leave recordVideo or the test running: the
         # next take's recorder and test would fail to start on this device

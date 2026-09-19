@@ -9,9 +9,9 @@ times += [("end", TITLE_S + tl["total"] - 0.5), ("outro", TITLE_S + tl["total"] 
 tiles = []
 for label, t in times:
     p = os.path.join(os.environ.get('CS_TMP', '.'), f'cs-{name}-{label}.png')
-    subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-ss", f"{t:.2f}", "-i", video, "-frames:v", "1", "-vf", "scale=640:-1", p], check=True)
+    subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-ss", f"{t:.2f}", "-i", video, "-frames:v", "1", "-vf", "scale=480:-1", p], check=True)
     tiles.append((label, t, Image.open(p).convert('RGB')))
-cols = 3; w, h = 640, 360
+cols = 4; w, h = 480, 270
 sheet = Image.new("RGB", (cols * w, ((len(tiles) + cols - 1) // cols) * (h + 24)), (0, 0, 0))
 d = ImageDraw.Draw(sheet)
 for i, (label, t, im) in enumerate(tiles):
