@@ -1,5 +1,8 @@
 # YouTube tutorial series
 
+**Picking this up again? Start with `VIDEO_TODO.md` in this folder** — what is
+published, what is still open, and the commands to redo or extend a video.
+
 Three narrated tutorials — **sketching**, **shapes**, **materials** — recorded
 from the live app on a dedicated landscape iPad simulator and composed at
 1920×1080 with a chapter panel, a neural-voice narration and a music bed.
