@@ -2,6 +2,8 @@
 
 **Picking this up again? Start with `VIDEO_TODO.md` in this folder** — what is
 published, what is still open, and the commands to redo or extend a video.
+**Doing this on another project?** `MAKING_VIDEOS.md` is the portable playbook:
+the method, the five pieces, and what to adapt for a different stack.
 
 Three narrated tutorials — **sketching**, **shapes**, **materials** — recorded
 from the live app on a dedicated landscape iPad simulator and composed at
