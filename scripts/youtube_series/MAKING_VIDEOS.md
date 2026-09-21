@@ -139,9 +139,14 @@ memory note; the short version:
 6. **Publish**: three "Next" clicks, the Public radio, "Done", then read back
    the link.
 7. **Limits:** roughly 9–10 uploads and ~8 custom thumbnails a day until the
-   channel has YouTube's Advanced verification. When the cap hits, the form
-   silently refuses the title and description while tags still go in — always
-   re-check. A capped attempt closes without leaving a draft.
+   channel has YouTube's Advanced features (video/ID verification) — get that
+   first if a series runs to more than a handful of videos. When the cap hits,
+   the form silently refuses the title and description while tags still go in
+   — always re-check. A capped attempt closes without leaving a draft.
+8. **Let the content checks finish before publishing.** If they are still
+   running, Studio warns that publishing now risks a strike; wait for "Checks
+   complete. No issues found" (a few minutes) rather than "Publish anyway".
+   Watch the real dialog too — a link in the page is not proof it published.
 8. **Conventions worth keeping:** first line of every description is the app's
    store link; a consistent title pattern; the series number in the
    description; hashtags at the end.

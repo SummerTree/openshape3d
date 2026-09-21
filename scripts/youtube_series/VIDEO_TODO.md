@@ -1,32 +1,23 @@
 # YouTube video TODO — where we left off
 
-Last updated: 2026-09-20 (after publishing the mirror tutorial and nine Shorts).
+Last updated: 2026-09-21 — **all 20 videos are published**; the channel has
+YouTube's Advanced features, so the daily caps are gone.
 Channel: https://studio.youtube.com/channel/UCVXu7hwHDBfO_nC3YCT9eZA (hello@sagharborrum.com).
 How the pipeline works: `README.md` in this folder. How uploading works: the
 "YouTube Studio upload" memory note, plus **Upload route** below.
 
 ## Open items
 
-1. **Upload Short #10, the ring.** Everything else is done; it was refused with
-   "Daily upload limit reached" on the 11th upload of 2026-09-20. The cap
-   resets 24 h later. Nothing was left behind in Drafts.
-   - File: `marketing/youtube/shorts/openshape3d-short-10-ring.mp4` (46 s, 12 MB)
-   - Text: `…-10-ring-metadata.md` (title, description, tags)
-   - Title: `How do you model a ring? | CAD on iPhone #shorts`
-2. **Delete the stray draft "openshape3d how to chamfer"** (Studio ▸ Content ▸
+1. **Delete the stray draft "openshape3d how to chamfer"** (Studio ▸ Content ▸
    Drafts). It is a twin of the published chamfer tutorial, left from a failed
    first upload. Jason has to delete it — Claude does not delete published or
    stored content.
-3. **Optional: lift the daily caps.** Studio ▸ Settings ▸ Channel ▸ Feature
-   eligibility ▸ Advanced features needs video verification, a valid ID, or
-   channel history. Until then: ~9–10 uploads a day, ~8 custom thumbnails a
-   day. Phone verification (done) only buys custom thumbnails.
-4. **Branch `feat/youtube-shorts` is not pushed and has no PR.** It sits on top
-   of `feat/youtube-cad-actions` (also unpushed, commit f7ad4fa). Both only add
-   `scripts/youtube_series/*` and the take test; no app code. Ask before
-   pushing.
-5. **Shorts have no custom thumbnails.** Studio's upload dialog offers none for
+2. **Branch `feat/youtube-shorts` → PR #78**, open against `main`. It carries
+   both the CAD-basics tutorials and the Shorts pipeline; no app code.
+3. **Shorts have no custom thumbnails.** Studio's upload dialog offers none for
    vertical videos; YouTube picks a frame. Setting one needs the mobile app.
+
+Nothing else is pending. Ideas for more videos are at the foot of this file.
 
 ## What is published
 
@@ -34,11 +25,11 @@ How the pipeline works: `README.md` in this folder. How uploading works: the
   fillet, chamfer, extrude & cut, revolve, sweep, loft, twist, shell, pattern,
   mirror. All Public with descriptions, chapters, tags and custom thumbnails.
   Mirror went up 2026-09-20: https://youtu.be/iTM-gmAoxrg
-- **Nine of ten "How do you model this?" Shorts** (33–57 s, upright iPhone):
+- **Ten "How do you model this?" Shorts** (33–57 s, upright iPhone):
   1 spring VQgb-9BGZQ0 · 2 twisted vase eN47Sfq4z8A · 3 donut h2S-oBk-HQk ·
   4 bowl r4rD59uk3Nw · 5 hex nut zEhpWnHFIYw · 6 square-to-round h-7_fKS_9rk ·
-  7 bent pipe I8v6Yw6ukH4 · 8 gem FRZQn6MRxUA · 9 cube frame fP8600CmvsA
-  (all `https://youtube.com/shorts/<id>`). **#10 ring is the one still to go.**
+  7 bent pipe I8v6Yw6ukH4 · 8 gem FRZQn6MRxUA · 9 cube frame fP8600CmvsA ·
+  10 ring Q4g3OgoYUqE (all `https://youtube.com/shorts/<id>`).
 - Earlier: three tutorials (sketching, shapes, materials), ten project
   tutorials (mug, chess, LEGO brick, keychain, vase, bolt & nut, gear, fidget
   spinner, ice cube tray, hinged box), the AI/flowerpot video.
