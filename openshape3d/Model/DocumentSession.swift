@@ -871,11 +871,15 @@ final class DocumentSession {
                 nextRevision: { counter &+= 1; return counter },
                 cache: &scratch
             ).errors
-            await MainActor.run {
-                guard let self, self.changeCount == generation else { return }
-                self.lastEvalErrors = errors
-            }
+            await self?.adoptLoadEvalErrors(errors, generation: generation)
         }
+    }
+
+    /// The main-actor half of `scheduleLoadEvalRefresh`: keep the replay's
+    /// errors only if no edit has happened since it was scheduled.
+    private func adoptLoadEvalErrors(_ errors: [FeatureID: FeatureError], generation: Int) {
+        guard changeCount == generation else { return }
+        lastEvalErrors = errors
     }
 
     /// Recompute `lastEvalErrors` WITHOUT touching any body: replay the

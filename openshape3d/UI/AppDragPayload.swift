@@ -16,7 +16,7 @@ import UniformTypeIdentifiers
 
 extension UTType {
     /// In-app only; never written to disk, so no Info.plist declaration.
-    static let os3dDragPayload = UTType(exportedAs: "com.laan.labs.openshape3d.drag-payload")
+    nonisolated static let os3dDragPayload = UTType(exportedAs: "com.laan.labs.openshape3d.drag-payload")
 }
 
 nonisolated struct AppDragPayload: Codable, Hashable, Sendable, Transferable {

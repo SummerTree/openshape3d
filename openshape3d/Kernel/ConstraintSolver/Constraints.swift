@@ -455,7 +455,7 @@ nonisolated struct LineDirectionConstraint: ConstraintResidual {
 }
 
 /// Transient application preference, not a saved geometric relationship.
-struct PointProjectionConstraint: ConstraintResidual {
+nonisolated struct PointProjectionConstraint: ConstraintResidual {
     let p: Int
     let origin: SIMD2<Double>
     let direction: SIMD2<Double>

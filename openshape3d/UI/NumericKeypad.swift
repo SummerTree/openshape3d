@@ -30,7 +30,7 @@ struct NumericKeypad: View {
 
     /// Units the pad can append. The evaluator already tolerates a trailing
     /// unit, and `NumericKeypad.trailingUnit` reads it back for conversion.
-    static let units = ["mm", "cm", "m", "deg"]
+    nonisolated static let units = ["mm", "cm", "m", "deg"]
 
     private var visibleUnits: [String] {
         switch AppSettings.shared.unit {
@@ -231,7 +231,7 @@ struct NumericKeypad: View {
     /// The trailing unit token, if the text ends in one of `units`.
     /// Returns the matched token INCLUDING nothing else, so callers can both
     /// strip it and map it to a `DisplayUnit`.
-    static func trailingUnit(in text: String) -> String? {
+    nonisolated static func trailingUnit(in text: String) -> String? {
         let trimmed = text.trimmingCharacters(in: .whitespaces)
         // Longest first so "mm" is never mistaken for a trailing "m".
         // Recognition includes both families, regardless of the visible unit row.

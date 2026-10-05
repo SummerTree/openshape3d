@@ -975,7 +975,7 @@ final class EditorViewModel {
         if let context = toolContext, let sketchID = context.sketchID,
            let sketch = session.document.sketches.first(where: { $0.id == sketchID }) {
             let armedColor = SIMD4<Float>(0.16, 0.55, 1.0, 0.45)
-            for entry in [(context.profile, context.holes)] + context.extraProfiles.map { ($0.profile, $0.holes) } {
+            for entry in [(context.profile, context.holes)] + context.extraProfiles.map({ ($0.profile, $0.holes) }) {
                 let triangles = SketchTessellator.fillTriangles(
                     for: entry.0, holes: entry.1, on: sketch.plane)
                 if !triangles.isEmpty {
