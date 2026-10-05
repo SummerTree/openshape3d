@@ -56,7 +56,7 @@ nonisolated struct FirebaseConfig: Equatable, Sendable {
     }
 
     /// The app's config, read once. nil in builds without the plist.
-    nonisolated(unsafe) static let bundled: FirebaseConfig? = load()
+    nonisolated static let bundled: FirebaseConfig? = load()
 }
 
 // MARK: - Report

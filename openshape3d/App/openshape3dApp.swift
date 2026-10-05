@@ -140,7 +140,7 @@ enum OpenTiming {
     nonisolated(unsafe) static var t0: CFAbsoluteTime = 0
     /// Quiet unless OS3D_OPEN_TIMING is set, so ordinary Debug runs and the
     /// UI suite's logs stay as they were.
-    nonisolated(unsafe) static let enabled = ProcessInfo.processInfo.environment["OS3D_OPEN_TIMING"] != nil
+    nonisolated static let enabled = ProcessInfo.processInfo.environment["OS3D_OPEN_TIMING"] != nil
     static func reset(_ label: String) {
         guard enabled else { return }
         t0 = CFAbsoluteTimeGetCurrent()
