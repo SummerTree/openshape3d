@@ -1,5 +1,10 @@
 # YouTube tutorial series
 
+**Picking this up again? Start with `VIDEO_TODO.md` in this folder** — what is
+published, what is still open, and the commands to redo or extend a video.
+**Doing this on another project?** `MAKING_VIDEOS.md` is the portable playbook:
+the method, the five pieces, and what to adapt for a different stack.
+
 Three narrated tutorials — **sketching**, **shapes**, **materials** — recorded
 from the live app on a dedicated landscape iPad simulator and composed at
 1920×1080 with a chapter panel, a neural-voice narration and a music bed.
@@ -94,6 +99,97 @@ Oxford English Dictionary (involute, Lego), Wikipedia "IGES" and "Bézier
 curve". Re-voicing a recorded video is `project_tutorial.py <name>
 --compose-only`: the recording is reused and only the narration changes.
 
+## CAD basics — every tap shown
+
+Ten how-to videos (fillet, chamfer, extrude & cut, revolve, sweep, loft,
+twist, shell, pattern, mirror) where EVERY step is a real touch — nothing is
+built over the bridge; the bridge is only read (world → screen via
+`/v1/project`, and a check after each step that it did what it should).
+
+    python3 action_tutorial.py fillet            # take + compose + metadata + thumbnail
+    ./batch_actions.sh chamfer revolve …          # several in a row
+    python3 action_tutorial.py fillet --compose-only
+
+- `ActionTakeUITests` performs the touches and REPORTS each one
+  (`vis:tap|double|drag`, window-normalised) before it lands, including
+  palette buttons, keypad keys, menu items and bar buttons. `common.Control`
+  records them into `timeline.json`, and `action_compose.py` draws a touch
+  ring (a trail for drags) exactly where and when each finger landed.
+- A script (`action_text.py`) is chapters of steps; each step has `do` (the
+  caption top-left under the back button, and the panel's step list with
+  done / current / next) and `say` (its own narration clip). The builders in
+  `actions.py` yield the same step ids; a mismatch would desync narration and
+  picture, so check with a stub run before a take.
+- A step that does not land raises `Missed` and stops the take — no bridge
+  fallback, so a video can never silently skip a step.
+- Camera changes are taps too: `menu:ViewsMenu/<Isometric|Top|Front|…>` and
+  the toolbar's Fit View.
+
+Touch facts learned (2026-09-19):
+
+- Edge picks: tap 8 pt inside the face next to the edge (`A.tap_edge`); exactly
+  on a silhouette edge the tap can miss the body. A tap in a face's middle with
+  Fillet armed picks all its edges.
+- A body stays selected (blue) after Apply — tap empty grid before a view.
+- Twist = select a top face, Transform ▸ Rotate, tap `GizmoRing-Y` (the
+  angle field opens WITH its keypad — tapping the field again dismisses the
+  tool), type the angle. Beyond ~30° per step the twisted walls fold.
+- Loft needs its circle on another plane: Offset Plane from the top face
+  (tap the face beside, not on, the square sketch — the fill wins the tap).
+- A 5 mm path in an iso view can run off-screen: size the sweep path to what
+  is visible, and `A.tap` Fit-Views first when a target is off-screen.
+- Mirror is a menu under Transform (YZ Plane / XY Plane / Ground (ZX));
+  Pattern's bar has Linear/Circular, Count, Spacing, and X/Y/Z.
+
+Uploading to YouTube (Studio in Chrome): the file-upload tool caps 10 MB per
+call, so split the mp4 into 9 MB chunks, feed them one per call to an
+injected file input, join them into a `File` in the page (verify its SHA-256),
+and hand it to Studio's `input[name=Filedata]`. Type the title and
+description with real keystrokes (script-set text does not register). An
+unverified channel cannot set custom thumbnails and has a daily upload cap
+(the 10th upload in a day was refused).
+
+## Shorts — "How do you model this?" on an iPhone
+
+Ten vertical Shorts (spring, twisted vase, donut, bowl, hex nut, square to
+round, bent pipe, gem, cube frame, ring) in the style of the "3D Modeling
+Tip" Shorts: the finished part first under "How do you model a …?", then
+every step of the build, then the part again and an end card. Shot UPRIGHT on
+an iPhone so the Shorts show the phone app itself.
+
+    python3 shorts.py spring                  # take + compose + metadata
+    ./batch_shorts.sh vase donut …             # several in a row (all ten by default)
+    python3 shorts.py spring --compose-only
+    python3 shorts_contact.py VIDEO.mp4 sheet.png 1.5   # review: a frame every 1.5 s
+    python3 shorts_probe.py OUTDIR             # explore by hand: one touch per curl (see its docstring)
+
+- Own simulator `os3d-shorts` (iPhone 17 Pro Max, 440 × 956 pt), bridge 8933,
+  control 8932 — `shorts.py` sets `OS3D_VIDEO_SIM / _POINTS / _ORIENTATION`
+  and the ports before importing `common`, and ActionTakeUITests turns the
+  phone to portrait when `OS3D_TAKE_ORIENTATION=portrait`.
+- Touches: the same ActionTakeUITests, the builders in `shorts_actions.py`
+  (class `P`: the phone's free viewport is right of the palette and above the
+  bars; `look()` taps Look at Sketch when picking a plane did not turn the
+  camera; drags are sized in screen points, then the typed dimension sets the
+  real size). `orbit:` is an unreported one-finger drag for the reveal.
+- Script: `shorts_text.py` — per step `(id, caption, say)`; `say` "" is a
+  silent step. The hook line is its own clip.
+- Edit (`shorts.py`): each step plays at the speed that fits its narration
+  (≤ 3×; silent steps ≤ 4.5×), the recording is cropped of the status bar and
+  home indicator and fitted to 1920 high on a blurred copy of itself; the hook
+  is the reveal's orbit zoomed on the part (`focus`, the bodies' projected
+  box). A caption goes in the top or lower band, whichever has less UI
+  under it (edge detail in the frame) and no touch.
+
+Phone facts learned (2026-09-19): the Helix sheet's fields are Form rows —
+their accessibility frame is the whole row, and only the value box on the
+right opens the keypad (`typeOnPad` taps 45 pt in from the row's right edge);
+the aligned sketch camera on a new design is ≈ 94 pt/mm but after other work
+it can be ≈ 5 pt/mm; Helix sweeps the circle round a coil that starts at the
+profile (radius 12, pitch 8, 5 turns from a 4 mm circle makes a spring); the
+mirror menu names the ground "Ground (ZX)"; the polygon's sides are
+`PolygonSidesField`; Material presets are `MaterialPreset<Name>`.
+
 ## Ten project tutorials
 
 Ten follow-along projects, the classics of CAD tutorials on YouTube: coffee
@@ -169,3 +265,4 @@ never collide with the UI suite's builds on the shared simulators.
 - `probe*.py` — the touch-flow probes used while writing the takes
 - `project_tutorial.py`, `projects.py`, `projects_text.py`, `batch.sh`, `contact.py` — the ten project tutorials
 - `pronunciation.py` — the pronunciation guide the narration voice is given
+- `action_tutorial.py`, `actions.py`, `action_text.py`, `action_compose.py`, `batch_actions.sh` — the every-tap CAD-basics videos

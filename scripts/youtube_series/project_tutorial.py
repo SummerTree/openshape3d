@@ -103,8 +103,10 @@ def thumbnail(video, hero, path):
     for l in rest:
         f2 = fit_font(d, l, 450, 46)
         d.text((56, y), l, font=f2, fill=ACCENT); y += int(f2.size * 1.2)
-    d.rounded_rectangle([56, H_ - 116, 396, H_ - 56], radius=14, fill=ACCENT)
-    d.text((80, H_ - 106), "iPad CAD · free", font=font(36, True), fill=(255, 255, 255))
+    badge = video.get("badge", "iPad CAD · free")
+    bw = d.textlength(badge, font=font(36, True)) + 48
+    d.rounded_rectangle([56, H_ - 116, 56 + bw, H_ - 56], radius=14, fill=ACCENT)
+    d.text((80, H_ - 106), badge, font=font(36, True), fill=(255, 255, 255))
     bg.save(path)
 
 

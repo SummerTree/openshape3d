@@ -78,6 +78,24 @@ detail; this is the register to read first.
   marking a shape it placed inside another. No geometry changes, and the
   input-untouched test ignores the flag lines.
 
+## Mission log — 2026-09-19, ten YouTube Shorts shot on an iPhone
+
+- **Ten vertical "How do you model a …?" Shorts** (spring, twisted vase,
+  donut, bowl, hex nut, square-to-round adapter, bent pipe, gem, cube frame,
+  ring), 33–57 s each, 1080 × 1920, from `scripts/youtube_series/shorts.py`
+  (README: "Shorts"). Every step is a real touch on an upright iPhone 17 Pro
+  Max simulator (`os3d-shorts`), ringed where it lands, each step played just
+  fast enough to fit its narration. Videos (not in git): main checkout
+  `marketing/youtube/shorts/`.
+- **Phone-UI facts the takes turned up** (none is an app bug):
+  the plane picker's origin tiles are ~170 pt on the phone and win taps on
+  faces and planes near the origin (tap far from it, or from Views › Top);
+  a tap within ~18 pt of a sketch curve picks the curve, so thin regions
+  (a ring band, a circle seen at an angle) need a zoom or a computed clear
+  point; a sketched circle extrudes as ~158 edges; a square top turned 60°
+  folds its walls (a hexagon turned 30° does not); the Helix sheet's fields
+  open the keypad only from their value box.
+
 ## Mission log — 2026-09-19, face sketches read upright
 
 - **Bug:** a sketch started on a picked face took the face's mesh basis
