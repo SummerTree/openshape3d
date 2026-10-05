@@ -12,6 +12,7 @@ import simd
 import Euclid
 @testable import openshape3d
 
+@MainActor
 final class SplitPatternFlowTests: XCTestCase {
 
     // MARK: - composedPatternTransform

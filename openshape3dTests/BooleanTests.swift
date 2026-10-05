@@ -8,6 +8,7 @@ import simd
 import Euclid
 @testable import openshape3d
 
+@MainActor
 final class BooleanTests: XCTestCase {
 
     private func makeBody(_ spec: PrimitiveSpec, at translation: SIMD3<Double>) -> Body {
