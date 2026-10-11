@@ -78,6 +78,48 @@ detail; this is the register to read first.
   marking a shape it placed inside another. No geometry changes, and the
   input-untouched test ignores the flag lines.
 
+## Mission log — 2026-10-10, bug report a6fea315: a push/pull no longer drops the B-rep
+
+The one open in-app report ("Fillet breaks the mesh … there are some holes
+in it now", 1.3 build 3, iPad) reproduced from its attachment, committed as
+`openshape3dTests/Fixtures/bugreport-a6fea315-fillet.os3d` and replayed in
+`FilletHolesBugReportTests`. The design is Extrude (block with a Ø2 hole) →
+Push/Pull (a wall pushed 1.5 in, through the hole's centre) → Revolve →
+Union → Fillet R1.
+
+- **Root cause: every face push/pull made a mesh.** `evalPushPull` and the
+  live `commitFaceOperation` only ever ran `SplitKit`/Euclid, so the block
+  lost its B-rep at step 2 and the union and fillet after it ran on the
+  mesh path. The user's revolve profile is 84 short lines for the same
+  reason: a sketch drawn against the mesh body's tessellated groove.
+- **The holes:** the mesh fillet's swept tool met the faceted rim
+  near-tangentially and left 19 inside-out triangles and 3 open edges — a
+  long sliver hole in the rounded wall, byte-identical to the mesh the user
+  saved. Euclid's `isWatertight` cannot see this (it judges polygons before
+  triangulation, and passes or fails on harmless T-junction seams);
+  `openshape3dTests/RenderDefects.swift` counts open and flipped edges on the
+  triangles the app actually draws.
+- **Fix:** `OCCTKernel.pushPullResult` — the bridge builds the tool (the
+  B-rep face's own prism to pull; a box past the moved plane to push, the
+  mesh path's truncate semantics) and the existing hardened boolean fuses
+  or cuts. Replay and the live commit both use it on a B-rep body and fall
+  back to the mesh path on any refusal (non-planar face, nothing left).
+  The reported chain now stays analytic end to end and the fillet is a
+  valid OCCT solid with zero render defects; the push/pull volume matches
+  the mesh path's to 12 digits. Checked live through the agent bridge (a
+  wall pushed through a hole: `brep: true`, `/v1/check` valid, exact half
+  volume). `PushPullBRepTests` (6). Unit suite 1740, 1 skipped, 0 failures;
+  `FaceFlowUITests`, `ExtrudeFlowUITests`, `CylinderGrowShotUITests` pass.
+- **The mesh blend path is worse than its tests say.** Measured with
+  `RenderDefects` the rim fillets `BlendStressTests` requires to build
+  (Ø10 cylinder, r = 0.5 / 2 / 3) carry 12–63 open and 0–6 flipped edges.
+  Brep-less bodies (imports, Move/Scale/Rotate Face results) still use it.
+  A strict watertightness guard was tried and withdrawn: it refused those.
+- **Still mesh-only:** Move Face, Scale Face and Rotate Face drop the B-rep
+  the same way push/pull did — the next candidates for the same treatment.
+- The mesh blend bar now says why a refused blend failed instead of showing
+  the edge count.
+
 ## Mission log — 2026-09-19, ten YouTube Shorts shot on an iPhone
 
 - **Ten vertical "How do you model a …?" Shorts** (spring, twisted vase,

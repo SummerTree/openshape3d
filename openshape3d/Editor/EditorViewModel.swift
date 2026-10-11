@@ -3771,7 +3771,14 @@ final class EditorViewModel {
             }
         }
         let mesh = blendedMesh(kind, source: source)
-        guard !mesh.polygons.isEmpty else { return nil }
+        guard !mesh.polygons.isEmpty else {
+            // The mesh blend refuses (empty) rather than ship a broken solid:
+            // a size past the rim's curvature, or a result with holes in it.
+            blendPreviewFailure = "This \(kind.title.lowercased()) can't be built on "
+                + "these edges at this size — try a smaller value."
+            return nil
+        }
+        blendPreviewFailure = nil
         return Body(
             id: source.id, name: source.name, transform: source.transform,
             primitive: nil, euclidMesh: mesh, revision: revision)
@@ -7873,6 +7880,25 @@ final class EditorViewModel {
         )
     }
 
+    /// The committed push/pull of a PLANAR face on an analytic body, kept
+    /// analytic — the same kernel call history replay makes
+    /// (`FeatureGraph.evalPushPull`), in body-local space so the transform is
+    /// untouched. Nil (mesh fallback) for cylinder faces, brep-less bodies and
+    /// any kernel refusal.
+    private func analyticFaceOperation(_ context: ToolContext, source: Body,
+                                       distance: Double) -> Body? {
+        guard OCCTKernel.useOCCTAsSourceOfTruth, context.cylinderFace == nil,
+              let brep = source.brep, let seed = context.faceTriangles.first,
+              let face = FaceTopology.planarFace(in: source.render, seedTriangle: seed),
+              case let .success(handle) = OCCTKernel.pushPullResult(
+                  brep, face: face, render: source.render,
+                  distance: distance / max(source.transform.scale, 1e-6))
+        else { return nil }
+        var body = Body(id: source.id, name: source.name, transform: source.transform,
+                        primitive: nil, euclidMesh: source.euclidMesh(), revision: 0)
+        return body.adoptBRep(handle) ? body : nil
+    }
+
     /// Commit a face push/pull: replace the source body with its truncated or
     /// extended mesh, preserving the pivot (rotation/scale bake in).
     private func commitFaceOperation(_ context: ToolContext, distance: Double) {
@@ -7887,18 +7913,21 @@ final class EditorViewModel {
             cancelTool()
             return
         }
-        let pivot = source.transform.translation
-        var transform = Transform3D.identity
-        transform.translation = pivot
-        let localMesh = modified.translated(by: Vector(-pivot.x, -pivot.y, -pivot.z))
-        let after = Body(
-            id: source.id,
-            name: source.name,
-            transform: transform,
-            primitive: nil,
-            euclidMesh: localMesh,
-            revision: 0
-        )
+        let after = analyticFaceOperation(context, source: source, distance: distance)
+            ?? {
+                let pivot = source.transform.translation
+                var transform = Transform3D.identity
+                transform.translation = pivot
+                let localMesh = modified.translated(by: Vector(-pivot.x, -pivot.y, -pivot.z))
+                return Body(
+                    id: source.id,
+                    name: source.name,
+                    transform: transform,
+                    primitive: nil,
+                    euclidMesh: localMesh,
+                    revision: 0
+                )
+            }()
         let replace = ReplaceBodyCommand(title: "Push/Pull", before: source, after: after)
 
         // Phase D (Task C2): record a `.pushPull(.planarAxial)` feature node when

@@ -1145,15 +1145,29 @@ nonisolated extension FeatureGraph {
             return
         }
         proposeUpgrade(node, ref: face, resolved: resolved, into: &state)
-        let mesh = KernelOps.pushPullPlanarFace(
-            mesh: body.euclidMesh(), face: planar, distance: distance.value)
-        guard !mesh.polygons.isEmpty else {
-            state.errors[node.id] = .emptyGeometry
-            return
+        // An analytic body stays analytic. Any kernel refusal falls back to the
+        // mesh path below — exactly what every push/pull did before.
+        var result: Body?
+        if OCCTKernel.useOCCTAsSourceOfTruth, let brep = body.brep,
+           case let .success(handle) = OCCTKernel.pushPullResult(
+               brep, face: planar, render: body.render, distance: distance.value) {
+            var analytic = Body(
+                id: body.id, name: body.name, transform: body.transform, primitive: nil,
+                euclidMesh: body.euclidMesh(), revision: nextRevision())
+            if analytic.adoptBRep(handle) { result = analytic }
         }
-        let result = Body(
-            id: body.id, name: body.name, transform: body.transform, primitive: nil,
-            euclidMesh: mesh, revision: nextRevision())
+        if result == nil {
+            let mesh = KernelOps.pushPullPlanarFace(
+                mesh: body.euclidMesh(), face: planar, distance: distance.value)
+            guard !mesh.polygons.isEmpty else {
+                state.errors[node.id] = .emptyGeometry
+                return
+            }
+            result = Body(
+                id: body.id, name: body.name, transform: body.transform, primitive: nil,
+                euclidMesh: mesh, revision: nextRevision())
+        }
+        guard let result else { return }
         // Carry the old labels forward through the push/pull.
         let newTable: FaceTable
         if let table {
