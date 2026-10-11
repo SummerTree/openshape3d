@@ -78,6 +78,39 @@ detail; this is the register to read first.
   marking a shape it placed inside another. No geometry changes, and the
   input-untouched test ignores the flag lines.
 
+## Mission log — 2026-10-11, Export ▸ Open on the Web…
+
+The design can now be opened in the web app (app.openshape3d.com, repo
+laanlabs/openshape-cloud — the same Swift model/kernel compiled to
+WebAssembly). Same flow as OpenPlan3D's "Open in OpenPlan3D":
+
+- **Export ▸ Open on the Web…** (`OpenOnWebButton`) opens `WebHandoffSheet`:
+  it says what is sent and for how long, and uploads only on **Send**. Then a
+  QR code, the link (`https://app.openshape3d.com/?open=CODE`), Open in
+  Browser, Share Link, Copy Link, and when the link expires.
+- **`App/WebHandoff.swift`**: `WebHandoffService` (actor) POSTs the session's
+  `.os3d` (`ProjectArchive.encoded()`, after `session.save()`) to
+  `https://app.openshape3d.com/api/handoffs` as `application/octet-stream`.
+  201 → `{code, expiresAt}`, validated strictly (8 symbols from the server's
+  alphabet, expiry 1 min–24 h ahead). 413/429/503 map to messages pointing at
+  Export ▸ Project Archive (.os3d). No automatic retry (an uncertain failure
+  may already be charged to the server's quota). Over 25 MB is refused before
+  sending. The same unchanged design (SHA-256) reuses its link within a
+  session; concurrent sends share one upload. No account, device ID or
+  anything else is sent.
+- Server side, limits and privacy: openshape-cloud `docs/HANDOFF.md`
+  (24-hour links, enforced on read; global daily/minute quota; designs
+  readable only through the server, Storage rules stay closed).
+- The website's privacy policy now describes Open on the Web and bug reports
+  (it used to say designs are never uploaded). **The App Store privacy
+  answers need the same update**: "User Content — Other User Content",
+  not linked to the user, not used for tracking (sent only on request).
+- Tests: `WebHandoffTests` (8, stub transport — request shape, reuse and
+  dedupe, size/empty refused without sending, 413/429/503/500 mapping with no
+  retry, untrustworthy replies rejected, Node's fractional-second
+  timestamps, the QR code decodes back to the link) and
+  `WebHandoffUITests` (menu → sheet → nothing sent → close).
+
 ## Mission log — 2026-10-11, "Report This…" on failures
 
 Firestore had eight user reports (seven from the 1.0 build on the day the
