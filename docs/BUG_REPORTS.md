@@ -3,7 +3,11 @@
 The ladybug button at the right end of the editor toolbar (and "Report a
 Bug…" under the gallery's ⋯ menu) opens a form: summary, what happened,
 steps, optional email, and in the editor a toggle to attach the open design
-as an `.os3d` archive. Send writes one document to the Firestore collection
+as an `.os3d` archive. When an operation fails because of the app rather
+than the input (the kernel produced nothing, a rebuild or export broke —
+`EditorViewModel.reportFailure`), the error alert also offers **Report
+This…**, which opens the same form with the summary and details pre-filled
+from the failure message (`BugReportDraft`). Send writes one document to the Firestore collection
 `bugReports` and, when attached, one object to Cloud Storage under
 `bugReports/<reportID>/<name>.os3d`.
 

@@ -186,6 +186,8 @@ struct EditorView: View {
     @State private var exportDocument: ExportDocument?
     @State private var showItemsPanel = false
     @State private var showBugReport = false
+    /// Set by a failure alert's "Report This…"; nil from the toolbar button.
+    @State private var bugReportDraft: BugReportDraft?
     @State private var pendingMeshImport: MeshImportProbe?
     @State private var didHandleDebugImport = false
     @State private var showSettings = false
@@ -1703,6 +1705,7 @@ struct EditorView: View {
                     // Report a Bug: form + optional .os3d attachment of this
                     // design, sent to Firestore (`BugReporting.swift`).
                     Button {
+                        bugReportDraft = nil
                         showBugReport = true
                     } label: {
                         Label("Report a Bug", systemImage: "ladybug")
@@ -1754,7 +1757,8 @@ struct EditorView: View {
                         guard let data = ProjectArchive
                             .archive(from: viewModel.session.project).encoded() else { return nil }
                         return BugAttachment(fileName: "\(project.name).os3d", data: data)
-                    })
+                    },
+                    draft: bugReportDraft)
             }
     }
 
@@ -1816,6 +1820,12 @@ struct EditorView: View {
                 #if DEBUG
                 guard !didHandleDebugImport else { return }
                 didHandleDebugImport = true
+                // OS3D_DEBUG_REPORTABLE_FAILURE=<text> raises that failure
+                // alert, so the UI suite can reach "Report This…" without
+                // depending on which geometry happens to break the kernel.
+                if let failure = ProcessInfo.processInfo.environment["OS3D_DEBUG_REPORTABLE_FAILURE"] {
+                    viewModel.reportFailure(failure)
+                }
                 if let path = ProcessInfo.processInfo.environment["OS3D_DEBUG_IMPORT_MESH"],
                    let data = try? Data(contentsOf: URL(fileURLWithPath: path)) {
                     pendingMeshImport = viewModel.probeMesh(
@@ -1983,7 +1993,20 @@ struct EditorView: View {
                     set: { if !$0 { viewModel.errorMessage = nil } }
                 )
             ) {
-                Button("OK") { viewModel.errorMessage = nil }
+                // Failures of the app (not of the input) offer a report on
+                // the spot, pre-filled and with the design attachable — the
+                // toolbar's bug button alone was rarely found.
+                if viewModel.errorIsReportable, let message = viewModel.errorMessage {
+                    Button("Report This…") {
+                        bugReportDraft = .failure(message)
+                        viewModel.errorMessage = nil
+                        showBugReport = true
+                    }
+                    .accessibilityIdentifier("ReportFailureButton")
+                    Button("OK", role: .cancel) { viewModel.errorMessage = nil }
+                } else {
+                    Button("OK") { viewModel.errorMessage = nil }
+                }
             } message: {
                 Text(viewModel.errorMessage ?? "")
             }
@@ -1991,8 +2014,8 @@ struct EditorView: View {
                 // A failed SwiftData save means recent work isn't reaching
                 // disk — the one storage problem worth an alert mid-session.
                 if let saveError {
-                    viewModel.errorMessage =
-                        "Saving failed — recent changes may not be stored. (\(saveError))"
+                    viewModel.reportFailure(
+                        "Saving failed — recent changes may not be stored. (\(saveError))")
                 }
             }
     }

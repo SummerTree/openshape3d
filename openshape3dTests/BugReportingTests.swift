@@ -3,7 +3,8 @@
 //  openshape3dTests
 //
 //  The bug reporter's pure parts: config parsing, the Firestore REST
-//  document shape, attachment paths, and server error extraction. No
+//  document shape, attachment paths, server error extraction, and the
+//  draft a failure alert's "Report This…" pre-fills. No
 //  network — the service's two calls are exercised by hand against the
 //  real project (docs/BUG_REPORTS.md).
 //
@@ -149,5 +150,29 @@ final class BugReportingTests: XCTestCase {
         XCTAssertEqual(BugReportService.serverMessage(Data()), "no details")
         XCTAssertTrue(BugReportError.attachmentTooLarge(bytes: 50 * 1_048_576)
             .errorDescription?.contains("50.0 MB") == true)
+    }
+
+    func testFailureDraftQuotesTheMessageAndFitsTheRules() {
+        let draft = BugReportDraft.failure("  The fillet produced no geometry.\n")
+        XCTAssertEqual(draft.title, "The fillet produced no geometry.")
+        XCTAssertEqual(draft.details,
+                       "The app said: “The fillet produced no geometry.”\n\nWhat I was doing: ")
+
+        // A long kernel diagnostic is cut for the summary (the rules cap it
+        // at 200) but quoted whole in the details.
+        let long = "Couldn't replace that face — " + String(repeating: "the neighbouring faces don't meet ", count: 10)
+        let cut = BugReportDraft.failure(long)
+        XCTAssertEqual(cut.title.count, BugReportDraft.maxTitleLength)
+        XCTAssertTrue(cut.title.hasSuffix("…"))
+        XCTAssertTrue(cut.details.contains(long.trimmingCharacters(in: .whitespaces)))
+
+        // It goes out as the ordinary title/details strings, so a drafted
+        // report encodes exactly like a typed one.
+        let fields = FirestoreEncoding.fields(
+            for: BugReport(title: cut.title, details: cut.details, steps: "",
+                           contactEmail: "", context: context),
+            reportID: "r", createdAt: Date(), attachmentPath: nil,
+            attachmentBytes: nil, attachmentError: nil)
+        XCTAssertEqual((fields["title"] as? [String: Any])?["stringValue"] as? String, cut.title)
     }
 }

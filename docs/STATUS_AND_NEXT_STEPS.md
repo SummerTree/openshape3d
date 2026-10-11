@@ -78,6 +78,40 @@ detail; this is the register to read first.
   marking a shape it placed inside another. No geometry changes, and the
   input-untouched test ignores the flag lines.
 
+## Mission log — 2026-10-11, "Report This…" on failures
+
+Firestore had eight user reports (seven from the 1.0 build on the day the
+reporter shipped, one from 1.3) against a much larger user count: the
+ladybug at the end of the toolbar is rarely found. Now a failure of the
+app — not of the input — asks on the spot. All eight reports are closed
+(fixed or answered), and the seven setup probes are marked resolved.
+
+- **`EditorViewModel.reportFailure(_:)`** raises the usual "Something Went
+  Wrong" alert and remembers the message; `errorIsReportable` is true only
+  while `errorMessage` still equals it, so a later plain message never
+  inherits the button. The alert then shows **Report This…** (and OK as
+  cancel); it opens the bug sheet pre-filled from
+  `BugReportDraft.failure(_:)`: summary = the message (cut to 120
+  characters), details = "The app said: “…”" plus a "What I was doing:"
+  prompt. The design attachment toggle defaults on, as before.
+- **Which messages are reportable:** the kernel produced nothing (mirror,
+  fillet/chamfer, shell, loft, helix sweep, a pull), a feature couldn't
+  rebuild its source shape (blend, shell, delete, re-pick), heal / replace
+  face failed, a composed boolean failed, STEP or USDZ export failed,
+  imported solids couldn't be meshed or an import threw, and a SwiftData
+  save failed. Input refusals ("tap a flat face", "the push removed the
+  entire body", "the bodies don't overlap", loft sections coplanar, …) stay
+  plain alerts.
+- No new Firestore field: the draft travels as ordinary title/details text,
+  so the deployed rules are unchanged.
+- The blend bar's inline refusal ("can't be built on these edges at this
+  size") does not offer a report — it is a size the user can change.
+- DEBUG hook `OS3D_DEBUG_REPORTABLE_FAILURE=<text>` raises that failure at
+  editor launch, for the UI suite.
+- Tests: `BugReportingTests.testFailureDraftQuotesTheMessageAndFitsTheRules`,
+  `BugReportUITests.testFailureAlertOffersAPrefilledReport` (alert → Report
+  This… → pre-filled form → cancel; the toolbar button still starts blank).
+
 ## Mission log — 2026-10-10, bug report a6fea315: a push/pull no longer drops the B-rep
 
 The one open in-app report ("Fillet breaks the mesh … there are some holes
