@@ -19,14 +19,25 @@ struct BugReportSheet: View {
 
     @Environment(\.dismiss) private var dismiss
 
-    @State private var title = ""
-    @State private var details = ""
+    @State private var title: String
+    @State private var details: String
     @State private var steps = ""
     @State private var contactEmail = ""
     @State private var attachDesign = true
     @State private var isSending = false
     @State private var receipt: BugReportReceipt?
     @State private var errorMessage: String?
+
+    /// `draft` pre-fills the summary and details when the sheet opens from a
+    /// failure alert's "Report This…"; nil (the toolbar) starts empty.
+    init(context: BugReportContext,
+         attachmentProvider: (() -> BugAttachment?)?,
+         draft: BugReportDraft? = nil) {
+        self.context = context
+        self.attachmentProvider = attachmentProvider
+        _title = State(initialValue: draft?.title ?? "")
+        _details = State(initialValue: draft?.details ?? "")
+    }
 
     private var config: FirebaseConfig? { FirebaseConfig.bundled }
 

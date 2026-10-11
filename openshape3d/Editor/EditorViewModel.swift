@@ -132,6 +132,23 @@ final class EditorViewModel {
     /// User-facing error surfaced as an alert.
     var errorMessage: String?
 
+    /// The last message raised through `reportFailure`. The alert offers
+    /// "Report This…" only while `errorMessage` still equals it, so a later
+    /// plain message (bad input, "tap a flat face") never inherits the button.
+    private(set) var reportableFailure: String?
+
+    /// The alert is showing a failure of the app, not of the input.
+    var errorIsReportable: Bool { errorMessage != nil && errorMessage == reportableFailure }
+
+    /// Raise a failure the user can't fix by trying something different —
+    /// the kernel produced nothing, a rebuild or export broke — so the alert
+    /// offers to report it with the design attached. Most users never find
+    /// the toolbar's bug button; this asks at the moment something broke.
+    func reportFailure(_ message: String) {
+        reportableFailure = message
+        errorMessage = message
+    }
+
     /// Short, non-blocking explanation shown as a pill — e.g. why a tool is
     /// unavailable for the current selection. An alert would be too heavy for
     /// something the user can simply retry differently. Clears itself.
@@ -199,7 +216,7 @@ final class EditorViewModel {
     func exportUSDZ() -> Data? {
         guard let bodies = exportableBodies() else { return nil }
         guard let data = USDZExporter.usdz(bodies: bodies) else {
-            errorMessage = "Couldn't export USDZ on this device."
+            reportFailure("Couldn't export USDZ on this device.")
             return nil
         }
         return data
@@ -241,7 +258,7 @@ final class EditorViewModel {
                   + "nothing to write to STEP. Mesh bodies can be exported as STL, OBJ, GLB or 3MF."
             return nil
         case .failed:
-            errorMessage = "Couldn't write the STEP file — please try again."
+            reportFailure("Couldn't write the STEP file — please try again.")
             return nil
         }
     }
@@ -379,7 +396,7 @@ final class EditorViewModel {
             bodies.append(body)
         }
         guard !bodies.isEmpty else {
-            errorMessage = "Couldn't import “\(fileName)” — its solids could not be meshed."
+            reportFailure("Couldn't import “\(fileName)” — its solids could not be meshed.")
             return
         }
         cancelTransientPicks()
@@ -411,7 +428,7 @@ final class EditorViewModel {
         } catch MeshImportError.malformed(let what) {
             errorMessage = "Couldn't import “\(fileName)” — \(what)."
         } catch {
-            errorMessage = "Couldn't import “\(fileName)” — \(error)."
+            reportFailure("Couldn't import “\(fileName)” — \(error).")
         }
         return nil
     }
@@ -3508,7 +3525,7 @@ final class EditorViewModel {
             ids.insert(copy.id)
         }
         guard !commands.isEmpty else {
-            errorMessage = "Mirror produced no geometry."
+            reportFailure("Mirror produced no geometry.")
             return
         }
         session.perform(commands.count == 1
@@ -3623,7 +3640,7 @@ final class EditorViewModel {
             return false
         }
         guard let source = session.inputBody(for: id, bodyID: bodyRef.bodyID) else {
-            errorMessage = "Couldn't rebuild the shape this blend started from."
+            reportFailure("Couldn't rebuild the shape this blend started from.")
             return false
         }
 
@@ -4109,7 +4126,7 @@ final class EditorViewModel {
         } else if let computed = blendedBody(kind, source: source, revision: 0) {
             after = computed
         } else {
-            errorMessage = "The \(kind.title.lowercased()) produced no geometry."
+            reportFailure("The \(kind.title.lowercased()) produced no geometry.")
             cancelBlend()
             return
         }
@@ -4197,7 +4214,7 @@ final class EditorViewModel {
               case let .shell(bodyRef, openFaces, thickness) = node.kind
         else { return false }
         guard let source = session.inputBody(for: id, bodyID: bodyRef.bodyID) else {
-            errorMessage = "Couldn't rebuild the shape this shell started from."
+            reportFailure("Couldn't rebuild the shape this shell started from.")
             return false
         }
         cancelTransientPicks()
@@ -4408,7 +4425,7 @@ final class EditorViewModel {
         } else if let computed = shelledBody(source: source, revision: 0) {
             after = computed
         } else {
-            errorMessage = "The shell produced no geometry — try a thinner wall."
+            reportFailure("The shell produced no geometry — try a thinner wall.")
             cancelShell()
             return
         }
@@ -4483,7 +4500,7 @@ final class EditorViewModel {
               case let .deleteFace(bodyRef, faces) = node.kind
         else { return false }
         guard let source = session.inputBody(for: id, bodyID: bodyRef.bodyID) else {
-            errorMessage = "Couldn't rebuild the shape this delete started from."
+            reportFailure("Couldn't rebuild the shape this delete started from.")
             return false
         }
         cancelTransientPicks()
@@ -4653,8 +4670,8 @@ final class EditorViewModel {
         } else if let computed = healedBody(source: source, revision: 0) {
             after = computed
         } else {
-            errorMessage = "The surrounding faces could not heal — "
-                + "try deleting fewer faces, or a different one."
+            reportFailure("The surrounding faces could not heal — "
+                + "try deleting fewer faces, or a different one.")
             return
         }
         let replace = ReplaceBodyCommand(title: "Delete Face", before: source, after: after)
@@ -4896,8 +4913,8 @@ final class EditorViewModel {
         } else {
             let outcome = replacedBody(source: source, revision: 0)
             guard let computed = outcome.body else {
-                errorMessage = "Couldn't replace that face — "
-                    + (outcome.refusal ?? "the operation failed") + "."
+                reportFailure("Couldn't replace that face — "
+                    + (outcome.refusal ?? "the operation failed") + ".")
                 return
             }
             after = computed
@@ -6750,7 +6767,7 @@ final class EditorViewModel {
             return false
         }
         guard let source = session.inputBody(for: id, bodyID: face.body.bodyID) else {
-            errorMessage = "Couldn't rebuild the shape this \(node.name.lowercased()) started from."
+            reportFailure("Couldn't rebuild the shape this \(node.name.lowercased()) started from.")
             return false
         }
         cancelTransientPicks()
@@ -7069,7 +7086,7 @@ final class EditorViewModel {
             case let .success(outcome):
                 composed.adoptBRep(outcome.handle)
             case let .failure(error):
-                self.errorMessage = "The \(kind.rawValue) failed: \(error.message)"
+                self.reportFailure("The \(kind.rawValue) failed: \(error.message)")
                 return
             case nil:
                 break  // an operand is mesh-only — the mesh result stands
@@ -7907,9 +7924,13 @@ final class EditorViewModel {
               let modified = faceModifiedMesh(context, distance: distance),
               !modified.polygons.isEmpty
         else {
-            errorMessage = distance < 0
-                ? "The push removed the entire body."
-                : "The pull produced no geometry."
+            // A push through the whole body is the input's doing; a pull
+            // that yields nothing is the app's.
+            if distance < 0 {
+                errorMessage = "The push removed the entire body."
+            } else {
+                reportFailure("The pull produced no geometry.")
+            }
             cancelTool()
             return
         }
@@ -8588,7 +8609,7 @@ final class EditorViewModel {
             return
         }
         guard let preview = context.preview else {
-            errorMessage = "The loft produced no geometry."
+            reportFailure("The loft produced no geometry.")
             cancelTool()
             return
         }
@@ -8627,7 +8648,7 @@ final class EditorViewModel {
         context.sweepPathEntityIDs = []
         rebuildToolPreview(&context)
         guard context.preview != nil else {
-            errorMessage = "The helix sweep produced no geometry."
+            reportFailure("The helix sweep produced no geometry.")
             return
         }
         toolContext = context

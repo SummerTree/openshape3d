@@ -116,6 +116,31 @@ nonisolated struct BugReportContext: Equatable, Sendable {
     }
 }
 
+/// What the form starts with when it opens from a failure alert's "Report
+/// This…" rather than the toolbar: the summary names what failed and the
+/// details quote the app's message, both editable. It travels as ordinary
+/// title/details text, so the Firestore rules need no new field.
+nonisolated struct BugReportDraft: Equatable, Sendable {
+    var title: String
+    var details: String
+
+    /// Summaries are capped well under the rules' 200 characters.
+    static let maxTitleLength = 120
+
+    /// The last action already goes along in the context, so only the
+    /// message is quoted here.
+    static func failure(_ message: String) -> BugReportDraft {
+        let message = message.trimmingCharacters(in: .whitespacesAndNewlines)
+        var title = message
+        if title.count > maxTitleLength {
+            title = String(title.prefix(maxTitleLength - 1))
+                .trimmingCharacters(in: .whitespaces) + "…"
+        }
+        return BugReportDraft(title: title,
+                              details: "The app said: “\(message)”\n\nWhat I was doing: ")
+    }
+}
+
 nonisolated struct BugAttachment: Sendable {
     let fileName: String
     let data: Data
