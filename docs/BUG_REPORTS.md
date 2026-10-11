@@ -41,6 +41,20 @@ says reporting isn't configured and Send stays disabled
 are rejected on purpose, so a copied-but-unedited example also reads as
 "not configured".
 
+Because that failure is silent to the person shipping, the app target's
+first build phase, **Require Bug Reporting Config**, checks the plist in
+the Release configuration with the same rules as `FirebaseConfig(plist:)`:
+
+| Build | Plist missing or placeholder |
+|---|---|
+| Debug | not checked |
+| Release build / Profile | warning, build continues |
+| Archive (`ACTION = install`) | **error**, archive stops before compiling |
+
+To archive an unconfigured build on purpose (a fork, a test archive), pass
+`ALLOW_UNCONFIGURED_BUG_REPORTING=YES` to `xcodebuild` or set it in the
+environment; the archive then only warns.
+
 The web API key is not a secret in the usual sense (it identifies the
 project; Firebase security rules do the gating) but it is still kept out of
 the repository as asked.

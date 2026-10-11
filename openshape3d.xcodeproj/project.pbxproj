@@ -150,6 +150,7 @@
 			isa = PBXNativeTarget;
 			buildConfigurationList = 7F704336300C0ED7003471DC /* Build configuration list for PBXNativeTarget "openshape3d" */;
 			buildPhases = (
+				7F7046023010F00000347100 /* Require Bug Reporting Config */,
 				7F70430F300C0ED6003471DC /* Sources */,
 				7F704310300C0ED6003471DC /* Frameworks */,
 				7F704311300C0ED6003471DC /* Resources */,
@@ -286,6 +287,30 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXResourcesBuildPhase section */
+
+/* Begin PBXShellScriptBuildPhase section */
+		7F7046023010F00000347100 /* Require Bug Reporting Config */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+				"$(SRCROOT)/openshape3d/GoogleService-Info.plist",
+			);
+			name = "Require Bug Reporting Config";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "# An archive must ship with bug reporting configured: without\n# GoogleService-Info.plist (git-ignored, docs/BUG_REPORTS.md) the app builds\n# fine and the Report a Bug sheet silently cannot send. Same rules as\n# FirebaseConfig(plist:): the three keys present and not the example's\n# placeholders. Archives fail; other Release builds (Profile) only warn.\n# Set ALLOW_UNCONFIGURED_BUG_REPORTING=YES to archive without it on purpose.\n[ \"$CONFIGURATION\" = \"Release\" ] || exit 0\nplist=\"$SRCROOT/openshape3d/GoogleService-Info.plist\"\nproblem=\"\"\nif [ ! -f \"$plist\" ]; then\n  problem=\"openshape3d/GoogleService-Info.plist is missing\"\nelse\n  value() { /usr/libexec/PlistBuddy -c \"Print :$1\" \"$plist\" 2>/dev/null; }\n  api=$(value API_KEY); project=$(value PROJECT_ID); bucket=$(value STORAGE_BUCKET)\n  case \"$api\" in \"\"|YOUR-*) problem=\"API_KEY is missing or a placeholder\";; esac\n  case \"$project\" in \"\"|your-*) problem=\"PROJECT_ID is missing or a placeholder\";; esac\n  [ -n \"$bucket\" ] || problem=\"STORAGE_BUCKET is missing\"\n  [ -z \"$problem\" ] || problem=\"openshape3d/GoogleService-Info.plist: $problem\"\nfi\n[ -n \"$problem\" ] || exit 0\nmessage=\"$problem, so in-app bug reports cannot be sent from this build. Copy docs/GoogleService-Info.example.plist and fill it in (docs/BUG_REPORTS.md).\"\nif [ \"$ACTION\" = \"install\" ] && [ \"$ALLOW_UNCONFIGURED_BUG_REPORTING\" != \"YES\" ]; then\n  echo \"error: $message Set ALLOW_UNCONFIGURED_BUG_REPORTING=YES to archive anyway.\"\n  exit 1\nfi\necho \"warning: $message\"\n";
+			showEnvVarsInLog = 0;
+		};
+/* End PBXShellScriptBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
 		7F70430F300C0ED6003471DC /* Sources */ = {
