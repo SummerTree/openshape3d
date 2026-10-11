@@ -943,6 +943,60 @@ nonisolated enum OCCTKernel {
         return .success(BRepHandle(shape))
     }
 
+    /// Push/pull one PLANAR face of an analytic body by `distance` along its
+    /// outward normal and stay analytic. Pull fuses the face's own prism; push
+    /// cuts away everything past the moved plane — the semantics of the mesh
+    /// path (`KernelOps.pushPullPlanarFace`), so a design that used to replay
+    /// through the mesh keeps its shape. `face` is body-local, from the render
+    /// mesh; the kernel face is found by a point inside its largest triangle.
+    ///
+    /// Before this, every face push/pull dropped the body to a mesh for good,
+    /// and everything after it — booleans, fillets, sketches projected from
+    /// its now-faceted edges — inherited the mesh path's defects (bug report
+    /// a6fea315: a fillet downstream of a push/pull left holes).
+    static func pushPullResult(_ handle: BRepHandle, face: PlanarFace,
+                               render: RenderMesh, distance: Double)
+        -> Result<BRepHandle, OCCTOpError> {
+        guard abs(distance) > 1e-9,
+              let point = interiorPoint(of: face.triangles, in: render) else {
+            return .failure(.kernelRefused("nothing to push or pull"))
+        }
+        let n = simd_normalize(SIMD3<Double>(
+            Double(face.normal.x), Double(face.normal.y), Double(face.normal.z)))
+        let tolerance = matchTolerance(for: handle)
+        let status = OCCTOpStatus()
+        guard let tool = OCCTBridge.pushPullTool(
+            for: handle.shape, pointX: point.x, pointY: point.y, pointZ: point.z,
+            normalX: n.x, normalY: n.y, normalZ: n.z,
+            distance: distance, tolerance: tolerance, status: status) else {
+            let error = OCCTOpError(status)
+            KernelCapture.recordFailure(
+                op: "pushPull", inputs: [("shape", handle)],
+                params: ["distance": distance, "tolerance": tolerance,
+                         "point": [point.x, point.y, point.z],
+                         "normal": [n.x, n.y, n.z]],
+                error: error)
+            return .failure(error)
+        }
+        return booleanResult(handle, BRepHandle(tool), op: distance > 0 ? 0 : 1)
+            .map(\.handle)
+    }
+
+    /// The centroid of the largest of `triangles` — a point strictly inside
+    /// the face, unlike the face's centroid, which a ring face has in its hole.
+    private static func interiorPoint(of triangles: [Int], in render: RenderMesh)
+        -> SIMD3<Double>? {
+        var best: (area: Float, point: SIMD3<Float>)?
+        for t in triangles where t >= 0 && t < render.triangleCount {
+            let a = render.positions[Int(render.indices[3 * t])]
+            let b = render.positions[Int(render.indices[3 * t + 1])]
+            let c = render.positions[Int(render.indices[3 * t + 2])]
+            let area = simd_length(simd_cross(b - a, c - a))
+            if area > (best?.area ?? 0) { best = (area, (a + b + c) / 3) }
+        }
+        return best.map { SIMD3(Double($0.point.x), Double($0.point.y), Double($0.point.z)) }
+    }
+
     static func shell(_ handle: BRepHandle, openingAt points: [SIMD3<Double>],
                       thickness: Double, tolerance: Double) -> BRepHandle? {
         try? shellResult(handle, openingAt: points, thickness: thickness,

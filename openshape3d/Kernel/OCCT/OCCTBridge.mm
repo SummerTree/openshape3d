@@ -3121,6 +3121,95 @@ static double OS3DVolume(const TopoDS_Shape &shape) {
 }
 
 
++ (nullable OCCTShape *)pushPullToolForShape:(OCCTShape *)shape
+                                      pointX:(double)px pointY:(double)py pointZ:(double)pz
+                                     normalX:(double)nx normalY:(double)ny normalZ:(double)nz
+                                    distance:(double)distance
+                                   tolerance:(double)tolerance
+                                      status:(nullable OCCTOpStatus *)status {
+    OS3DSetStatus(status, OCCTOpCodeKernelRefused, @"no input");
+    const double normalLength = sqrt(nx * nx + ny * ny + nz * nz);
+    if (shape == nil || fabs(distance) < 1e-9 || normalLength < 1e-9) return nil;
+
+    try {
+        if (!OS3DFiniteBounds(shape->_shape)) {
+            OS3DSetStatus(status, OCCTOpCodeKernelRefused,
+                          @"the body has empty or non-finite geometry");
+            return nil;
+        }
+        TopTools_IndexedMapOfShape faceMap;
+        TopExp::MapShapes(shape->_shape, TopAbs_FACE, faceMap);
+        const double point[3] = {px, py, pz};
+        const std::set<Standard_Integer> chosen =
+            OS3DNearestFaces(faceMap, point, 1, tolerance);
+        if (chosen.empty()) {
+            OS3DSetStatus(status, OCCTOpCodeNoTargetMatched,
+                          @"push/pull: no face within tolerance of the pick");
+            return nil;
+        }
+        const TopoDS_Face face = TopoDS::Face(faceMap(*chosen.begin()));
+        BRepAdaptor_Surface surface(face, Standard_False);
+        if (surface.GetType() != GeomAbs_Plane) {
+            OS3DSetStatus(status, OCCTOpCodeKernelRefused,
+                          @"push/pull: the picked face is not planar");
+            return nil;
+        }
+        gp_Dir outward = surface.Plane().Axis().Direction();
+        if (face.Orientation() == TopAbs_REVERSED) outward.Reverse();
+        const gp_Dir asked(nx / normalLength, ny / normalLength, nz / normalLength);
+        // The pick's normal comes from the render mesh, so it agrees with the
+        // kernel face to tessellation noise. Anything less means the point
+        // landed on a different face than the one the user dragged.
+        if (outward.Dot(asked) < 0.999) {
+            OS3DSetStatus(status, OCCTOpCodeNoTargetMatched,
+                          @"push/pull: the face under the pick faces another way");
+            return nil;
+        }
+
+        TopoDS_Shape tool;
+        if (distance > 0) {
+            BRepPrimAPI_MakePrism prism(face, gp_Vec(outward) * distance);
+            OS3D_GUARDED(status, "push/pull prism", prism.Build());
+            if (!prism.IsDone()) {
+                OS3DSetStatus(status, OCCTOpCodeKernelRefused,
+                              @"push/pull: the face could not be extruded");
+                return nil;
+            }
+            tool = prism.Shape();
+        } else {
+            // A box from the moved plane outward, comfortably larger than the
+            // body in every direction, so the cut is a pure half-space cut.
+            Bnd_Box bounds;
+            BRepBndLib::Add(shape->_shape, bounds);
+            const double reach = sqrt(bounds.SquareExtent()) * 2.0 + fabs(distance) + 1.0;
+            const gp_Pln plane(gp_Pnt(px, py, pz), outward);
+            const gp_Dir u = plane.Position().XDirection();
+            const gp_Dir v = plane.Position().YDirection();
+            const gp_Pnt cut = gp_Pnt(px, py, pz).Translated(gp_Vec(outward) * distance);
+            const gp_Pnt corner = cut.Translated(gp_Vec(u) * -reach + gp_Vec(v) * -reach);
+            BRepPrimAPI_MakeBox box(gp_Ax2(corner, outward, u), 2 * reach, 2 * reach, reach);
+            OS3D_GUARDED(status, "push/pull box", box.Build());
+            if (!box.IsDone()) {
+                OS3DSetStatus(status, OCCTOpCodeKernelRefused,
+                              @"push/pull: the cutting box could not be built");
+                return nil;
+            }
+            tool = box.Shape();
+        }
+        OS3DSetStatus(status, OCCTOpCodeOK, nil);
+        OCCTShape *out = [OCCTShape new];
+        out->_shape = tool;
+        return out;
+    } catch (Standard_Failure &e) {
+        OS3DSetStatus(status, OCCTOpCodeKernelRefused,
+                      [NSString stringWithFormat:@"%s", e.GetMessageString()]);
+        return nil;
+    } catch (...) {
+        OS3DSetStatus(status, OCCTOpCodeKernelRefused, @"kernel exception");
+        return nil;
+    }
+}
+
 + (nullable OCCTShape *)draftedShape:(OCCTShape *)shape
                        atWorldPoints:(NSData *)worldPoints
                         angleRadians:(double)angleRadians

@@ -426,6 +426,21 @@ typedef NS_ENUM(NSInteger, OCCTOpCode) {
                            tolerance:(double)tolerance
                               status:(nullable OCCTOpStatus *)status;
 
+/// The tool solid of a planar-face push/pull, for the caller to fuse or cut
+/// with the existing boolean (`FeatureGraph.evalPushPull`). `distance > 0`:
+/// the picked face's own prism along its outward normal — exact, so a face
+/// bounded by arcs pulls out a true cylinder wall, not facets. `distance < 0`:
+/// a box covering everything on the outward side of the face's plane moved
+/// by `distance` — the same "truncate at the moved plane" the mesh path
+/// (`SplitKit`) does, so replays keep their shape. `point` must lie on the
+/// face. Nil when no PLANAR face with this outward normal is under the point.
++ (nullable OCCTShape *)pushPullToolForShape:(OCCTShape *)shape
+                                      pointX:(double)px pointY:(double)py pointZ:(double)pz
+                                     normalX:(double)nx normalY:(double)ny normalZ:(double)nz
+                                    distance:(double)distance
+                                   tolerance:(double)tolerance
+                                      status:(nullable OCCTOpStatus *)status;
+
 /// Exact face draft (`BRepOffsetAPI_DraftAngle`): every face with a sample
 /// within `tolerance` of a picked point is tilted by `angleRadians` about its
 /// intersection with the neutral plane, pulled along `direction` — a casting's
