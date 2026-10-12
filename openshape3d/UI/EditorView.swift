@@ -1065,6 +1065,12 @@ struct EditorView: View {
                 }
             }
             .accessibilityIdentifier("ExportIGES")
+            Button("SVG from Sketch") {
+                if let data = viewModel.exportSVG() {
+                    exportDocument = ExportDocument(data: data, contentType: .svg, fileExtension: "svg")
+                }
+            }
+            .accessibilityIdentifier("ExportSVG")
             Divider()
             // Full-fidelity project archive: sketches, features, variables —
             // everything (Phase F, spec §13). Mesh exports above are geometry-

@@ -302,6 +302,18 @@ final class EditorViewModel {
         return Data(DXFKit.exportSketch(entities: sketch.entities, plane: sketch.plane).utf8)
     }
 
+    /// File ▸ Export ▸ SVG from Sketch: the same sketch DXF exports, as an SVG
+    /// drawing in millimetres.
+    func exportSVG() -> Data? {
+        let sketch = activeSketch
+            ?? session.document.sketches.first { $0.plane.isCoincident(with: .ground) }
+        guard let sketch, !sketch.entities.isEmpty else {
+            errorMessage = "Nothing to export — open a sketch, or draw one on the ground plane first."
+            return nil
+        }
+        return Data(SVGKit.exportSketch(entities: sketch.entities).utf8)
+    }
+
     /// DXF import (plan §B14, spec §12.1): parsed entities land in the
     /// ground-plane sketch — reused when one exists (unhiding it if an
     /// extrude auto-hid it), created otherwise — as ONE CompositeCommand so

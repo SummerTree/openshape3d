@@ -1875,6 +1875,9 @@ the native one. Screenshot tool: grid on/off, transparency, body edges, item cho
 resolution Actual/Double/FullHD/4K/8K, remembers settings, clipboard shortcut.
 **IGES (2026-10-12):** Export ▸ IGES writes the exact B-rep (IGES 5.3, solids
 as MSBO, mm) — same analytic-bodies-only rule as STEP (`STEPKitTests`).
+**SVG from Sketch (2026-10-12):** the open (or ground-plane) sketch as an SVG
+drawing in millimetres, Y flipped to read head-on; lines, circles, arcs and
+ellipses exact, splines tessellated (`SVGKitTests`).
 **Status:** 🟡 partial. **STEP (AP214) export now ships** via OCCT
 DataExchange (`OCCTKernel.writeSTEP`) — unlike every mesh format below it
 carries the EXACT B-rep, so analytic surfaces survive into other CAD
