@@ -160,8 +160,10 @@ nonisolated struct SignatureNaming: TopoNaming {
         // 2026-09-01, found by sampling the spin). Past the budget every
         // face takes the area-rank fallback role: roles are a resolve
         // TIEBREAK, honest degradation is bounded time, and element names
-        // (attached separately) are unaffected.
-        if faces.count * max(inputEntries.count, 1) > Self.propagateBudget {
+        // (attached separately) are unaffected. The product is Int64: on
+        // 32-bit Int (the WebAssembly build) the motorcycle-wheel sample's
+        // 73,612 × 68,865 overflows and traps (openshape-cloud, 2026-10-11).
+        if Int64(faces.count) * Int64(max(inputEntries.count, 1)) > Int64(Self.propagateBudget) {
             return FaceTable(entries: faces.enumerated().map { i, face in
                 .init(role: .derived(index: rankOf[i] ?? i),
                       signature: face.signature, triangles: face.triangles)
@@ -225,7 +227,8 @@ nonisolated struct SignatureNaming: TopoNaming {
         // O(faces × entries): a revolved spline bottle (tens of thousands of
         // facet faces) sat in here for minutes resolving a shell's one open
         // face (2026-09-02).
-        let scanAllowed = faces.count * (table?.entries.count ?? 0) <= Self.propagateBudget
+        let scanAllowed = Int64(faces.count) * Int64(table?.entries.count ?? 0)
+            <= Int64(Self.propagateBudget)   // Int64: see `propagate`
         for (index, face) in faces.enumerated() {
             // The ref knows what KIND of surface it referenced, and until now
             // nothing read it (review R4-N4): a cylindrical ref could bind a
