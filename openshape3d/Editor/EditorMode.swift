@@ -7,6 +7,7 @@ import Foundation
 
 enum SketchTool: String, CaseIterable {
     case line
+    case spline
     case rect
     case circle
     case arc

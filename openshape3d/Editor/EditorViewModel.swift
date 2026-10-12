@@ -1003,6 +1003,7 @@ final class EditorViewModel {
         if case .sketching(let activeID, _) = mode,
            let sketch = session.document.sketches.first(where: { $0.id == activeID }) {
             let pendings = [pendingEntity, pendingArcEntity].compactMap { $0 } + rectanglePreview
+                + splinePolygonPreview
             if !pendings.isEmpty {
                 // A released three-point baseline is the active construction
                 // edge (native orange), not a new blue stroke or committed edge.
@@ -5740,6 +5741,7 @@ final class EditorViewModel {
         resetSketchOffsetState()
         resetAxisState()
         resetPlaneState()
+        clearSplinePlacement()
         axisEntryPart = nil
         scaleEntryActive = false
         // Pending sketch state may reference entities that no longer exist.
@@ -6149,6 +6151,11 @@ final class EditorViewModel {
             // polyline without closing it), matching the Shapr3D line tool.
             if tapChainActive {
                 clearChain()
+                return
+            }
+            // The same for a spline being placed: double-tap finishes it open.
+            if mode.sketchTool == .spline, hasPendingSpline {
+                finishSplineInput()
                 return
             }
             guard let sketch = activeSketch,
@@ -8773,6 +8780,114 @@ final class EditorViewModel {
 
     // MARK: - Sketch mode
 
+    // MARK: - Spline tool (spec §1.4)
+
+    /// Fit Point (the curve runs through each tap) or Control Point (the taps
+    /// are a control polygon). See `SplineConstruction`.
+    private(set) var splineType: SplineType = .fit
+    /// Points placed so far, in sketch-plane coordinates.
+    private(set) var splinePlacedPoints: [SIMD2<Double>] = []
+    private var splineHoverPoint: SIMD2<Double>?
+    private let splinePreviewID = UUID()
+    /// Control Point mode's polygon, drawn as thin preview lines.
+    private var splinePolygonPreview: [SketchEntity] = []
+    var hasPendingSpline: Bool { !splinePlacedPoints.isEmpty }
+    var canFinishSpline: Bool { splinePlacedPoints.count >= 2 }
+
+    var splineInstruction: String {
+        switch splinePlacedPoints.count {
+        case 0: return "Tap to place the first point"
+        case 1, 2: return "Tap to add points"
+        default: return "Tap to add points, or the first point to close"
+        }
+    }
+
+    func setSplineType(_ type: SplineType) {
+        guard splineType != type else { return }
+        splineType = type
+        refreshSplinePreview()
+    }
+
+    /// Return / double-tap / Finish: commit the open spline placed so far.
+    func finishSplineInput() {
+        guard mode.sketchTool == .spline, editingDimension == nil else { return }
+        finishSpline(closed: false)
+    }
+
+    /// Escape: drop the unfinished spline; with none in progress, disarm.
+    func cancelSplineInput() {
+        guard mode.sketchTool == .spline, editingDimension == nil else { return }
+        if hasPendingSpline {
+            clearSplinePlacement()
+        } else {
+            deselectSketchTool()
+        }
+    }
+
+    /// Delete: take back the last placed point.
+    func deleteSplinePoint() {
+        guard mode.sketchTool == .spline, !splinePlacedPoints.isEmpty else { return }
+        splinePlacedPoints.removeLast()
+        refreshSplinePreview()
+    }
+
+    func clearSplinePlacement() {
+        splinePlacedPoints = []
+        splineHoverPoint = nil
+        splinePolygonPreview = []
+        if case let .spline(id, _, _)? = pendingEntity, id == splinePreviewID { pendingEntity = nil }
+        if case let .line(id, _, _)? = pendingEntity, id == splinePreviewID { pendingEntity = nil }
+    }
+
+    private func handleSplineTap(ray: Ray) {
+        guard let sketch = activeSketch, let raw = rawSketchPoint(from: ray) else { return }
+        let point = SnapEngine.snap(raw, in: sketch, faceLoops: activeFaceSnapLoops(),
+                                    options: AppSettings.shared.snapOptions,
+                                    tolerance: sketchSnapTolerance).point
+        if splinePlacedPoints.count >= 3,
+           simd_length(point - splinePlacedPoints[0]) <= Self.lineCloseTolerance {
+            finishSpline(closed: true)
+            return
+        }
+        // A second tap on the same spot (the first half of a double-tap) adds
+        // nothing; the double-tap then finishes.
+        if let last = splinePlacedPoints.last, simd_length(point - last) < 1e-9 { return }
+        if splinePlacedPoints.isEmpty {
+            selectedSketchEntityIDs.removeAll()
+            selectedSketchPoints.removeAll()
+        }
+        splinePlacedPoints.append(point)
+        splineHoverPoint = nil
+        refreshSplinePreview()
+    }
+
+    private func finishSpline(closed: Bool) {
+        guard case .sketching(let sketchID, _) = mode, let sketch = activeSketch,
+              let entity = SplineConstruction.entity(
+                  id: UUID(), type: splineType, points: splinePlacedPoints, closed: closed)
+        else {
+            clearSplinePlacement()
+            return
+        }
+        clearSplinePlacement()
+        commitDrawnEntity(entity, sketchID: sketchID, in: sketch)
+    }
+
+    private func refreshSplinePreview() {
+        var points = splinePlacedPoints
+        if let hover = splineHoverPoint { points.append(hover) }
+        let preview = SplineConstruction.entity(
+            id: splinePreviewID, type: splineType, points: points, closed: false)
+        pendingEntity = preview
+        if splineType == .control, points.count >= 3 {
+            splinePolygonPreview = zip(points, points.dropFirst()).map { a, b in
+                .line(id: UUID(), a: a, b: b)
+            }
+        } else {
+            splinePolygonPreview = []
+        }
+    }
+
     private(set) var rectangleType: RectangleType = .diagonal
     private var rectangleAnchor: SIMD2<Double>?
     private var rectangleBaseline: (a: SIMD2<Double>, b: SIMD2<Double>)?
@@ -10003,6 +10118,10 @@ final class EditorViewModel {
         }
         if tool == .rect {
             handleRectangleTap(ray: ray)
+            return
+        }
+        if tool == .spline {
+            handleSplineTap(ray: ray)
             return
         }
         if tool == .trim {
@@ -11289,6 +11408,21 @@ final class EditorViewModel {
             pendingEntity = nil
             arcEndpointHoverPreviewActive = false
         }
+        if mode.sketchTool == .spline {
+            guard hasPendingSpline else { return false }
+            let previous = pendingEntity
+            if let ray, let sketch = activeSketch, let raw = rawSketchPoint(from: ray) {
+                let snap = SnapEngine.snap(raw, in: sketch, faceLoops: activeFaceSnapLoops(),
+                                           options: AppSettings.shared.snapOptions,
+                                           tolerance: sketchSnapTolerance)
+                splineHoverPoint = snap.point
+                activeSnap = snap.snappedToPoint ? (snap.kind, snap.point) : nil
+            } else {
+                splineHoverPoint = nil
+            }
+            refreshSplinePreview()
+            return previous != pendingEntity
+        }
         // Before the first click, identify the point the line would start on.
         // This is feedback only: do not create an anchor, segment or undo entry.
         if mode.sketchTool == .line, !tapChainActive, sketchStrokeStart == nil {
@@ -11520,6 +11654,7 @@ final class EditorViewModel {
     func startSketch(tool: SketchTool) {
         cancelSymmetryAxisPick()
         clearRectanglePlacement()
+        clearSplinePlacement()
         if case .sketching(let id, _) = mode {
             commitPendingArc()
             clearChain()
@@ -11565,6 +11700,7 @@ final class EditorViewModel {
         cancelSymmetryAxisPick()
         guard case .sketching(let id, _) = mode else { return }
         clearRectanglePlacement()
+        clearSplinePlacement()
         editingDimension = nil
         commitPendingArc()
         clearChain()
@@ -12296,6 +12432,9 @@ final class EditorViewModel {
         case .line:
             guard simd_length(b - a) > minimum else { return nil }
             return .line(id: UUID(), a: a, b: b)
+        case .spline:
+            // Splines are placed point by point (`handleSplineTap`).
+            return nil
         case .rect:
             return RectangleConstruction.axisAligned(from: a, to: b, centered: rectangleType == .center)
         case .circle:

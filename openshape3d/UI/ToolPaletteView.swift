@@ -238,6 +238,7 @@ struct ToolPaletteView: View {
 
     private var drawItems: [ToolItem] {
         [sketchTool("Line", "line.diagonal", .line),
+         sketchTool("Spline", "point.bottomleft.forward.to.point.topright.scurvepath", .spline),
          sketchTool("Rectangle", "rectangle", .rect),
          sketchTool("Circle", "circle", .circle),
          sketchTool("Arc", "point.topleft.down.to.point.bottomright.curvepath", .arc),

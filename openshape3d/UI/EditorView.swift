@@ -1375,6 +1375,33 @@ struct EditorView: View {
                     }
                 } else if viewModel.mode.isSketching {
                     VStack(spacing: 8) {
+                        if viewModel.mode.sketchTool == .spline {
+                            HStack(spacing: 12) {
+                                Picker("Spline", selection: Binding(
+                                    get: { viewModel.splineType },
+                                    set: { viewModel.setSplineType($0) })) {
+                                    ForEach(SplineType.allCases, id: \.self) { type in
+                                        Text(type.title).tag(type)
+                                    }
+                                }
+                                .pickerStyle(.segmented)
+                                .fixedSize()
+                                .accessibilityIdentifier("SplineTypePicker")
+                                Text(viewModel.splineInstruction).font(.caption)
+                                    .accessibilityIdentifier("SplineInstruction")
+                                if viewModel.hasPendingSpline {
+                                    Button("Cancel") { viewModel.clearSplinePlacement() }
+                                        .accessibilityIdentifier("CancelSpline")
+                                    Button("Finish") { viewModel.finishSplineInput() }
+                                        .buttonStyle(.borderedProminent)
+                                        .controlSize(.small)
+                                        .disabled(!viewModel.canFinishSpline)
+                                        .accessibilityIdentifier("FinishSpline")
+                                }
+                            }
+                            .padding(10)
+                            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
+                        }
                         if viewModel.mode.sketchTool == .rect {
                             HStack(spacing: 12) {
                                 Menu {

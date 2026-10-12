@@ -65,6 +65,12 @@ struct CommandShortcutsView: View {
                     .keyboardShortcut(.defaultAction)
                     .accessibilityHidden(true)
             }
+            if viewModel.mode.sketchTool == .spline, viewModel.canFinishSpline,
+               viewModel.editingDimension == nil {
+                Button { viewModel.finishSplineInput() } label: { EmptyView() }
+                    .keyboardShortcut(.defaultAction)
+                    .accessibilityHidden(true)
+            }
             if viewModel.mode.sketchTool == .line,
                viewModel.editingDimension == nil {
                 Button { viewModel.finishLineInput() } label: { EmptyView() }
@@ -91,6 +97,13 @@ struct CommandShortcutsView: View {
                     .keyboardShortcut(.cancelAction)
                     .accessibilityHidden(true)
                 Button { viewModel.deleteLineInput() } label: { EmptyView() }
+                    .keyboardShortcut(.delete, modifiers: [])
+                    .accessibilityHidden(true)
+            } else if viewModel.mode.sketchTool == .spline {
+                Button { viewModel.cancelSplineInput() } label: { EmptyView() }
+                    .keyboardShortcut(.cancelAction)
+                    .accessibilityHidden(true)
+                Button { viewModel.deleteSplinePoint() } label: { EmptyView() }
                     .keyboardShortcut(.delete, modifiers: [])
                     .accessibilityHidden(true)
             } else if viewModel.mode.sketchTool == .rect {

@@ -170,10 +170,21 @@ entity), profile chaining through an open spline's ends, and **use as a sweep
 spine** (§4.11). Open splines expose their endpoints to the solver and
 auto-constrainer so they weld to neighbouring geometry. Covered by
 `SplineTests`.
-**Missing:** the DRAWING tool + UI (placing/dragging fit points, the
-Fit/Control mode switch), control-point (non-interpolating) splines, interior
-points as solver variables, tangent constraints at the ends, and spline trim/
-offset (both would have to re-fit the curve).
+**Drawing tool (2026-10-12):** Sketch ▸ Spline in the palette (and Command
+Search). A Fit Point / Control Point switch sits over the sketch; taps place
+points with a live preview (Control Point also draws its control polygon);
+Finish, Return or a double-tap ends it open, tapping the first point again
+closes it into a profile, Escape drops it, Delete takes back the last point.
+Control Point is a cubic B-spline (clamped open, periodic closed) and is
+stored as the fit points that reproduce it within 0.1 mm
+(`SplineConstruction`, `SplineConstructionTests`, `SplineUITests`).
+**Missing:** editing a committed spline by its control polygon (it is edited
+through its fit points), per-point tangent handles, sharp/smooth points and
+Break/Join, interior points as solver variables, tangent constraints at the
+ends, spline trim/offset, and curved END spans — an open fit spline's first
+and last spans are straight because `splinePoints`, `CatmullRomBezier` and the
+OCCT bridge all clamp the end neighbours (changing it needs the C++ bridge
+too).
 **Feasibility:** drawing/editing [mesh-kernel OK]; tangent constraints
 [needs constraint solver]
 
@@ -184,12 +195,10 @@ anchor (anchor marked with an X); drag outward. **Diagonal**: two opposite
 corners, drag the diagonal from the anchor. **Three-point**: baseline first
 (click, move, click), then height perpendicular to it; remaining sides
 auto-created. Hotkey R. Numeric entry before placing fixes dimensions.
-**Status:** 🟡 partial — Diagonal only, as a drag from corner to corner
-(`SketchEntity.rect(min:max:)` — axis-aligned only). Trimming a rect now
-explodes it into its four lines first (`SketchTrimmer`), so sides become
-individually editable after a trim. Missing: Center and Three-point types,
-anchor-point X-mark, rotated rectangles, numeric entry.
-**Feasibility:** [mesh-kernel OK]
+**Status:** ✅ implemented — Diagonal, Center and Three-Point, switched from
+the type menu over the sketch (`RectangleType`, `RectangleConstruction`);
+rotated rectangles are four constrained lines so dimensions, trim, projection
+and profiles work on them.
 
 ### 1.6 Circle
 

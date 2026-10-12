@@ -140,6 +140,7 @@ extension EditorViewModel {
         case "sketch.circle":       return armSketchTool(.circle)
         case "sketch.arc":          return armSketchTool(.arc)
         case "sketch.ellipse":      return armSketchTool(.ellipse)
+        case "sketch.spline":       return armSketchTool(.spline)
         case "sketch.polygon":      return armSketchTool(.polygon)
         case "sketch.text":         return armSketchTool(.text)
         case "sketch.trim":         return armSketchTool(.trim)
