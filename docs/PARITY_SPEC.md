@@ -2129,6 +2129,11 @@ geometry that moves.
 shadows). Surface Analysis: Zebra (continuity, Direction H/V, Scale),
 Curvature Map (color gradient, Scale). Options: Show Edges, Show Hidden Edges
 (see and select occluded edges).
+**Surface Analysis (2026-10-12):** Display ▸ Surface Analysis ▸ Zebra
+(reflection stripes, a break in a stripe's flow = a break in tangency) and
+Curvature Map (normal change per unit surface from screen-space derivatives,
+coloured by radius on a log scale: blue flat, green, yellow, red tight), in
+the Metal and WebGL lit shaders alike; also in Command Search.
 **Status:** 🟡 partial — a Views → Display submenu (labeled with the active
 shader) switches between **Shaded** (lit fill + feature edges, the
 default), **Shaded (No Edges)**, **Wireframe** (feature edges over a

@@ -1790,6 +1790,15 @@ struct EditorView: View {
                                 }
                             }
                             Divider()
+                            Picker("Surface Analysis", selection: Binding(
+                                get: { viewModel.surfaceAnalysis },
+                                set: { viewModel.surfaceAnalysis = $0 }
+                            )) {
+                                ForEach(SurfaceAnalysis.allCases, id: \.self) { analysis in
+                                    Text(analysis.title).tag(analysis)
+                                }
+                            }
+                            Divider()
                             Toggle("Show Hidden Edges", isOn: Binding(
                                 get: { viewModel.showHiddenEdges },
                                 set: { viewModel.showHiddenEdges = $0 }

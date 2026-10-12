@@ -36,7 +36,8 @@ typedef struct {
     vector_float4 backgroundTop;
     vector_float4 backgroundBottom;
     vector_float4 accentColor;         // selection highlight
-    vector_float4 gridParams;          // x: minor spacing, y: major every N, z: fade distance, w: unused
+    vector_float4 gridParams;          // x: minor spacing, y: major every N, z: fade distance,
+                                       // w: surface analysis (0 none, 1 zebra, 2 curvature)
     vector_float4 gridCenter;          // xyz: world position the grid quad is centered on
     vector_float4 gridOrigin;          // sketch coordinate origin in world space
     vector_float4 gridXAxis;           // orthonormal in-plane basis

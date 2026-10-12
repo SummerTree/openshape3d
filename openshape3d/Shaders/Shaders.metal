@@ -46,6 +46,28 @@ fragment float4 fragment_backgroundGradient(
     return float4(color.rgb * vignette, 1.0);
 }
 
+// MARK: - Surface analysis (Display Modes ▸ Zebra / Curvature Map)
+
+/// Zebra (1): black and white bands of the reflected view direction — a
+/// break in a band's flow is a break in tangency or curvature. Curvature
+/// (2): the normal's change per unit of surface, from screen-space
+/// derivatives, as a log-scaled ramp by radius: blue flat (r ≥ 1 m), green
+/// gentle, yellow, red tight (r ≤ 1 mm).
+static float3 surfaceAnalysisColor(float mode, float3 N, float3 V, float3 worldPosition, float ndl) {
+    if (mode < 1.5) {
+        float3 R = reflect(-V, N);
+        float band = step(0.5, fract(atan2(R.z, R.x) * 1.9098593 + R.y * 3.0));
+        return mix(float3(0.06), float3(0.97), band) * (0.88 + 0.12 * ndl);
+    }
+    float dp = length(fwidth(worldPosition));
+    float k = dp > 1e-7 ? length(fwidth(N)) / dp : 0.0;
+    float t = k < 1e-4 ? 0.0 : saturate((log10(k) + 3.0) / 3.0);
+    float3 ramp = t < 0.5
+        ? mix(float3(0.15, 0.40, 0.95), float3(0.25, 0.85, 0.35), t * 2.0)
+        : mix(float3(0.95, 0.85, 0.20), float3(0.95, 0.20, 0.15), (t - 0.5) * 2.0);
+    return ramp * (0.6 + 0.4 * ndl);
+}
+
 // MARK: - Lit solid bodies
 
 struct LitOut {
@@ -117,6 +139,13 @@ fragment float4 fragment_lit(
 
     float3 diffuse = albedo * (hemi * 0.45 + ndl * 0.70) * (1.0 - body.metallic * 0.55);
     float3 color = diffuse + spec + rim * rimColor;
+    float analysis = frame.gridParams.w;
+    if (analysis > 0.5 && body.selectionState != SelectionStatePreview) {
+        color = surfaceAnalysisColor(analysis, N, V, in.worldPosition, ndl);
+        if (body.selectionState == SelectionStateSelected) {
+            color = mix(color, frame.accentColor.rgb, 0.25);
+        }
+    }
     return float4(color, alpha);
 }
 

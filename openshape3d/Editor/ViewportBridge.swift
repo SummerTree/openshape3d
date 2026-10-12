@@ -75,6 +75,29 @@ struct SketchFillBatch {
 
 /// Viewport display mode (spec §16.4). `.shaded` is the pre-mode renderer
 /// exactly: lit fill + feature edges.
+/// Display Modes ▸ Surface Analysis (spec §16.4): a false-colour overlay on
+/// the shaded bodies — reflection stripes, or curvature as a colour ramp.
+enum SurfaceAnalysis: String, CaseIterable, Equatable {
+    case none, zebra, curvature
+
+    var title: String {
+        switch self {
+        case .none: return "None"
+        case .zebra: return "Zebra"
+        case .curvature: return "Curvature Map"
+        }
+    }
+
+    /// The value the lit shaders read from `gridParams.w`.
+    var shaderValue: Float {
+        switch self {
+        case .none: return 0
+        case .zebra: return 1
+        case .curvature: return 2
+        }
+    }
+}
+
 enum DisplayMode: String, CaseIterable, Equatable {
     /// Lit fill + feature edges (default).
     case shaded
@@ -139,6 +162,8 @@ struct ViewportScene {
     /// View ▸ Lock Grid Size: the minor spacing frozen at lock time; nil
     /// follows the zoom.
     var lockedGridSpacing: Double?
+    /// Display Modes ▸ Surface Analysis.
+    var surfaceAnalysis: SurfaceAnalysis = .none
     /// Move gizmo, when a body is selected. `scale` is finalized by the
     /// renderer each frame for constant screen size.
     var gizmo: GizmoState?

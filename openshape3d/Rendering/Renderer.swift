@@ -628,7 +628,8 @@ final class Renderer: NSObject, MTKViewDelegate {
         // under a large model. Majors stay every tenth minor.
         let minorSpacing = Float(scene.lockedGridSpacing ?? camera.gridMinorSpacing)
         let fadeRadius = max(120, camera.distance * 10)
-        frame.gridParams = SIMD4(minorSpacing, 10, fadeRadius, 0)
+        // w: Surface Analysis for the lit shaders (the grid ignores it).
+        frame.gridParams = SIMD4(minorSpacing, 10, fadeRadius, scene.surfaceAnalysis.shaderValue)
         let gridPlane = scene.gridPlane ?? .ground
         let gridCenter = gridPlane.toWorld(gridPlane.toLocal(SIMD3<Double>(camera.target)))
         frame.gridCenter = SIMD4(SIMD3<Float>(gridCenter), 0)

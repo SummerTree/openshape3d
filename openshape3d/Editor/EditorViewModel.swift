@@ -651,6 +651,7 @@ final class EditorViewModel {
         var scene = ViewportScene(bodies: drawables)
         scene.gridPlane = activeSketch?.plane ?? (gridPosition == .zx ? nil : gridPosition.plane)
         scene.lockedGridSpacing = lockedGridSpacing
+        scene.surfaceAnalysis = surfaceAnalysis
 
         // Tool preview (extrude/revolve): translucent accent body — except a
         // face push/pull preview replaces the source body, so it renders as a
@@ -5975,6 +5976,9 @@ final class EditorViewModel {
 
     /// Extra low-alpha edge pass with a reversed depth test (spec §16.4).
     var showHiddenEdges = false
+
+    /// Display Modes ▸ Surface Analysis (spec §16.4). Not persisted.
+    var surfaceAnalysis: SurfaceAnalysis = .none
 
     /// Ground blob shadows (plan §B15); mirrored into the scene every
     /// rebuild. Not persisted, like the display mode.
