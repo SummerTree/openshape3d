@@ -52,6 +52,23 @@ final class ClipboardUITests: XCTestCase {
         XCTAssertTrue(waitFor { self.bodyRows(app) == before }, "…and it is still on the clipboard")
     }
 
+    /// Tutorial Mode: with "Display Keyboard Shortcuts" on, ⌘C shows its keys.
+    func testTutorialModeEchoesShortcuts() throws {
+        let app = XCUIApplication()
+        app.launchEnvironment["OS3D_FRESH"] = "1"
+        app.launchEnvironment["OS3D_RESET_STORE"] = "1"
+        app.launchEnvironment["OS3D_DEBUG_SEED"] = "1"
+        app.launchArguments += ["-os3d.tutorialShowKeyPresses", "YES"]
+        app.launch()
+        XCTAssertTrue(app.staticTexts["Volume"].waitForExistence(timeout: 10))
+        // Keys reach the app once it has taken a touch (as in the test above).
+        app.buttons["ItemsButton"].tap()
+        app.typeKey("c", modifierFlags: .command)
+        let echo = app.descendants(matching: .any)["TutorialKeyEcho"]
+        XCTAssertTrue(echo.waitForExistence(timeout: 2), "the shortcut's keys show")
+        XCTAssertTrue(echo.label.contains("C"), echo.label)
+    }
+
     private func waitFor(_ condition: @escaping () -> Bool, timeout: TimeInterval = 3) -> Bool {
         let deadline = Date().addingTimeInterval(timeout)
         while Date() < deadline {

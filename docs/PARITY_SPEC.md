@@ -2169,6 +2169,14 @@ Navigation: presets, 2-Finger Rotation, zoom direction, start screen
 mode (show touches/keys); Sync status + manual sync; About (version, terms,
 usage-data opt-out); Account deletion. Units: mm/cm/m/in/ft; angle decimal or
 fractional.
+**Added (2026-10-12):** Mouse Navigation ▸ Navigation Preset (OpenShape3D,
+SOLIDWORKS, Fusion, Onshape — what right / middle drags do, with Shift /
+Control) and Reverse Scroll Direction; the mouse wheel now zooms and a
+trackpad's two-finger scroll pans on iPad and Mac. Graphics ▸ Tessellation
+Quality (applies at the next launch). Tutorial Mode ▸ Display Touches and
+Clicks / Display Keyboard Shortcuts. All but Tessellation Quality on the web
+too. Still missing: interface language, customizable shortcuts, start-with,
+menu button labels, selection extension.
 **Status:** 🟡 partial — a Settings surface ships (`AppSettings`, Phase F
 tranche 1): display Units (mm/cm/m/in/ft), Theme System/Light/Dark, Interface
 Left/Right, and Anti-Aliasing (Disabled | 2x | 4x MSAA), persisted across

@@ -1183,6 +1183,7 @@ struct EditorView: View {
                     ExtrudeGizmoOverlay(viewModel: viewModel)
                     MoveDistanceOverlay(viewModel: viewModel)
                     PinnedMeasurementsOverlay(viewModel: viewModel)
+                    TutorialOverlay(viewModel: viewModel)
                     RotationOrbitOverlay(viewModel: viewModel)
                 }
             }

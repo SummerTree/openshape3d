@@ -17130,6 +17130,21 @@ final class EditorViewModel {
         session.save()
     }
 
+    /// Tutorial Mode's echo of the last keyboard shortcut ("⌘C"); `id`
+    /// changes on every press so a repeat re-animates.
+    private(set) var keyEcho: (text: String, id: Int)?
+    private var keyEchoCounter = 0
+
+    func echoKeys(_ text: String) {
+        keyEchoCounter += 1
+        keyEcho = (text, keyEchoCounter)
+    }
+
+    /// The overlay clears an echo once it has shown for a moment.
+    func clearKeyEcho(_ id: Int) {
+        if keyEcho?.id == id { keyEcho = nil }
+    }
+
     /// Bumped by Reveal in Items Sidebar; the Items sidebar (view state)
     /// opens when it changes.
     var itemsRevealRequest = 0

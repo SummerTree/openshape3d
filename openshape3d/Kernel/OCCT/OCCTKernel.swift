@@ -83,8 +83,9 @@ nonisolated enum OCCTKernel {
 
     /// Tessellation quality for B-rep render meshes. Angular deflection (radians)
     /// governs facets-around-a-curve → roundness; it's size-independent.
-    static let renderAngularDeflection = 0.08
-    static let renderLinearDeflection = 0.1
+    /// Settings ▸ Tessellation Quality as of this launch (High = 0.08 / 0.1).
+    static let renderAngularDeflection = TessellationQuality.launch.deflection.angular
+    static let renderLinearDeflection = TessellationQuality.launch.deflection.linear
 
     /// Master switch for the B-rep path. When true, solids that OCCT can build
     /// (extrudes, primitives, and booleans between them) carry an analytic

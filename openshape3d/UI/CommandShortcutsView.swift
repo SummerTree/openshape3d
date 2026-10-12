@@ -126,7 +126,10 @@ struct CommandShortcutsView: View {
             ForEach(CommandRegistry.routableChordedCommands) { command in
                 if let chord = command.chord, let key = chord.keyEquivalent,
                    !(launcherOwnsBareKeys && chord.isBareKey) {
-                    Button { viewModel.runCommand(command.id) } label: { EmptyView() }
+                    Button {
+                        if AppSettings.shared.showKeyPresses { viewModel.echoKeys(chord.label) }
+                        viewModel.runCommand(command.id)
+                    } label: { EmptyView() }
                         .keyboardShortcut(key, modifiers: chord.eventModifiers)
                         .accessibilityHidden(true)
                 }
