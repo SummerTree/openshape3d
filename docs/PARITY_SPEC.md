@@ -1606,6 +1606,11 @@ Duplicate, Delete. **Command Search:** X or Cmd+F opens a
 fuzzy launcher ("p3" → "Add Plane - 3 Points", "snu" → "Scale - Non-uniform");
 arrows cycle, Enter runs, recents shown when empty; pre-selection scopes
 results.
+**Cut / Copy / Paste (2026-10-12):** ⌘X / ⌘C / ⌘V (and Command Search)
+copy the selected bodies — or, while sketching, the selected sketch items —
+to the app's clipboard (`EditorClipboard`); Paste drops copies in place,
+selected, as one undo step, and works across designs. Bodies keep their exact
+solid. `ClipboardUITests`.
 **Status:** 🟡 partial — `CommandRegistry` is the single catalog both paths
 resolve against, which is what makes Single Key Action possible at all: a bare
 letter is EITHER a hotkey or the first character of a Command Search query,

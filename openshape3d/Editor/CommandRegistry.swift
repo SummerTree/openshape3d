@@ -225,6 +225,9 @@ nonisolated struct CommandRegistry: Sendable {
         AppCommand(id: "edit.redo", title: "Redo", category: .edit, chord: KeyChord("z", [.command, .shift])),
         AppCommand(id: "edit.selectAll", title: "Select All", category: .edit, chord: KeyChord("a", .command)),
         AppCommand(id: "edit.delete", title: "Delete", category: .edit, chord: nil),
+        AppCommand(id: "edit.cut", title: "Cut", category: .edit, chord: KeyChord("x", .command)),
+        AppCommand(id: "edit.copy", title: "Copy", category: .edit, chord: KeyChord("c", .command)),
+        AppCommand(id: "edit.paste", title: "Paste", category: .edit, chord: KeyChord("v", .command)),
 
         // View (Cmd+1…7, plus Space)
         AppCommand(id: "view.front", title: "View - Front", category: .view, chord: KeyChord("1", .command)),

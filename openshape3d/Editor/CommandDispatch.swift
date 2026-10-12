@@ -38,7 +38,13 @@ extension CommandRegistry {
         // Sketch tools — the tutorial's C / A / L / R / T / G.
         "sketch.line", "sketch.rectangle", "sketch.circle", "sketch.arc",
         "sketch.ellipse", "sketch.polygon", "sketch.text", "sketch.trim",
-        "sketch.offset", "sketch.construction", "sketch.onHoveredPlane",
+        "sketch.offset", "sketch.construction", "sketch.onHoveredPlane", "sketch.spline",
+
+        // Construct ▸ Plane / Axis.
+        "plane.offset", "plane.midplane", "plane.threePoints", "plane.onCurve",
+        "plane.perpendicular", "plane.angle", "plane.parallel",
+        "axis.auto", "axis.twoPoints", "axis.twoPlanes", "axis.cylinder", "axis.edge",
+        "axis.perpendicular",
 
         // Modeling.
         "model.extrude", "model.revolve", "model.sweep", "model.loft",
@@ -57,7 +63,7 @@ extension CommandRegistry {
         "app.commandSearch", "app.commandSearchAlt",
 
         // Edit.
-        "edit.undo", "edit.redo", "edit.delete",
+        "edit.undo", "edit.redo", "edit.delete", "edit.cut", "edit.copy", "edit.paste",
 
         // View.
         "view.front", "view.back", "view.left", "view.right",
@@ -213,6 +219,9 @@ extension EditorViewModel {
             guard !selection.isEmpty || !selectedSketchEntityIDs.isEmpty else { return false }
             deleteSelection()
             return true
+        case "edit.cut":            return cutSelection()
+        case "edit.copy":           return copySelection()
+        case "edit.paste":          return paste()
 
         // MARK: View
         case "plane.offset":        beginPlaneTool(.offset); return true
