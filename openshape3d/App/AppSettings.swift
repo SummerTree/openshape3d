@@ -108,6 +108,55 @@ nonisolated enum DisplayUnit: String, CaseIterable, Codable, Sendable {
     }
 }
 
+/// View ▸ Foot & Inch Format (feet/inch units only).
+nonisolated enum FootInchFormat: String, CaseIterable, Codable, Sendable {
+    case decimal, architectural
+    var title: String {
+        self == .architectural ? "Architectural (e.g. 1' - 4 1/2\")" : "Decimal (e.g. 1.375')"
+    }
+}
+
+/// View ▸ Degree Format.
+nonisolated enum DegreeFormat: String, CaseIterable, Codable, Sendable {
+    case decimal, fractional
+    var title: String {
+        self == .fractional ? "Fractional (e.g. 27°15')" : "Decimal (e.g. 27.25°)"
+    }
+
+    func string(_ degrees: Double) -> String {
+        switch self {
+        case .decimal:
+            return DisplayUnit.groupedNumber(degrees, maxFractionDigits: 2) + "°"
+        case .fractional:
+            let sign = degrees < 0 ? "-" : ""
+            var whole = floor(abs(degrees))
+            var minutes = ((abs(degrees) - whole) * 60).rounded()
+            if minutes >= 60 { whole += 1; minutes = 0 }
+            return minutes == 0 ? "\(sign)\(Int(whole))°" : "\(sign)\(Int(whole))°\(Int(minutes))'"
+        }
+    }
+}
+
+extension DisplayUnit {
+    /// Architectural feet-inch text to the nearest 1/16": 1' - 4 1/2".
+    /// Inches unit drops the feet part: 16 1/2".
+    nonisolated func architecturalString(fromMM value: Double) -> String {
+        let sixteenths = (abs(value) / 25.4 * 16).rounded()
+        let sign = value < 0 ? "-" : ""
+        var inches = Int(sixteenths) / 16
+        var fraction = Int(sixteenths) % 16
+        var denominator = 16
+        while fraction > 0, fraction % 2 == 0 { fraction /= 2; denominator /= 2 }
+        let fractionText = fraction == 0 ? "" : " \(fraction)/\(denominator)"
+        if self == .feet {
+            let feet = inches / 12
+            inches %= 12
+            return "\(sign)\(feet)' - \(inches)\(fractionText)\""
+        }
+        return "\(sign)\(inches)\(fractionText)\""
+    }
+}
+
 nonisolated enum CircularAnnotations: String, CaseIterable, Codable, Sendable {
     case radiusAndDiameter, alwaysRadius
     var title: String {
@@ -184,6 +233,8 @@ final class AppSettings {
         static let snapToFaceGuidepoints = "os3d.snapToFaceGuidepoints"
         static let showSnapHints = "os3d.showSnapHints"
         static let hasSeenWelcome = "os3d.hasSeenWelcome"
+        static let footInchFormat = "os3d.footInchFormat"
+        static let degreeFormat = "os3d.degreeFormat"
     }
 
     /// The welcome screen has been dismissed once. Stored as soon as it is
@@ -197,6 +248,14 @@ final class AppSettings {
     }
     var unit: DisplayUnit {
         didSet { defaults.set(unit.rawValue, forKey: Key.unit) }
+    }
+    /// View ▸ Foot & Inch Format; only read for feet and inches.
+    var footInchFormat: FootInchFormat {
+        didSet { defaults.set(footInchFormat.rawValue, forKey: Key.footInchFormat) }
+    }
+    /// View ▸ Degree Format.
+    var degreeFormat: DegreeFormat {
+        didSet { defaults.set(degreeFormat.rawValue, forKey: Key.degreeFormat) }
     }
     var theme: AppTheme {
         didSet { defaults.set(theme.rawValue, forKey: Key.theme) }
@@ -286,6 +345,8 @@ final class AppSettings {
         showSnapHints = Self.storedBool(defaults, Key.showSnapHints) ?? true
         hasSeenWelcome = Self.storedBool(defaults, Key.hasSeenWelcome) ?? false
         unit = defaults.string(forKey: Key.unit).flatMap(DisplayUnit.init) ?? .millimeters
+        footInchFormat = defaults.string(forKey: Key.footInchFormat).flatMap(FootInchFormat.init) ?? .decimal
+        degreeFormat = defaults.string(forKey: Key.degreeFormat).flatMap(DegreeFormat.init) ?? .decimal
         theme = defaults.string(forKey: Key.theme).flatMap(AppTheme.init) ?? .system
         paletteOnRight = defaults.bool(forKey: Key.paletteOnRight)
         antiAliasing = Self.launchSampleCount(defaults: defaults)

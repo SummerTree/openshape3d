@@ -136,6 +136,9 @@ struct ViewportScene {
     var bodies: [BodyDrawable] = []
     /// Active sketch grid; nil keeps the modeling view's ground grid.
     var gridPlane: SketchPlane?
+    /// View ▸ Lock Grid Size: the minor spacing frozen at lock time; nil
+    /// follows the zoom.
+    var lockedGridSpacing: Double?
     /// Move gizmo, when a body is selected. `scale` is finalized by the
     /// renderer each frame for constant screen size.
     var gizmo: GizmoState?

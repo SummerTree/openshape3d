@@ -399,7 +399,7 @@ struct EditorView: View {
                 .monospacedDigit()
                 .foregroundStyle(.secondary)
             } else if let angle = viewModel.measureAngle {
-                Text(String(format: "%.2f°", angle))
+                Text(EditorViewModel.formattedAngle(angle))
                     .font(.subheadline.weight(.semibold))
                     .monospacedDigit()
                     .accessibilityIdentifier("MeasureAngleValue")
@@ -1803,6 +1803,45 @@ struct EditorView: View {
                                 systemImage: "cube.transparent"
                             )
                         }
+                        // View ▸ Nearest Ortho, Rotate View, Field of View,
+                        // grid and number formats (spec §7.3–7.4).
+                        Button("Nearest Ortho View") { viewModel.nearestOrthoView() }
+                            .accessibilityIdentifier("NearestOrthoView")
+                        Menu("Rotate View") {
+                            ForEach([15.0, 45.0], id: \.self) { step in
+                                Button("Rotate Left by \(Int(step))°") { viewModel.rotateView(yaw: -step) }
+                                Button("Rotate Right by \(Int(step))°") { viewModel.rotateView(yaw: step) }
+                                Button("Rotate Up by \(Int(step))°") { viewModel.rotateView(pitch: step) }
+                                Button("Rotate Down by \(Int(step))°") { viewModel.rotateView(pitch: -step) }
+                            }
+                        }
+                        Button("Field of View…") { viewModel.showFieldOfViewSheet = true }
+                            .accessibilityIdentifier("FieldOfViewButton")
+                        Menu("Grid") {
+                            Picker("Grid Position", selection: Binding(
+                                get: { viewModel.gridPosition },
+                                set: { viewModel.gridPosition = $0 })) {
+                                ForEach(EditorViewModel.GridPosition.allCases, id: \.self) { position in
+                                    Text(position.title).tag(position)
+                                }
+                            }
+                            Toggle(viewModel.lockGridSizeTitle, isOn: Binding(
+                                get: { viewModel.lockedGridSpacing != nil },
+                                set: { _ in viewModel.toggleLockGridSize() }))
+                        }
+                        Menu("Number Format") {
+                            Picker("Foot & Inch Format", selection: Binding(
+                                get: { settings.footInchFormat },
+                                set: { settings.footInchFormat = $0 })) {
+                                ForEach(FootInchFormat.allCases, id: \.self) { Text($0.title).tag($0) }
+                            }
+                            .disabled(settings.unit != .feet && settings.unit != .inches)
+                            Picker("Degree Format", selection: Binding(
+                                get: { settings.degreeFormat },
+                                set: { settings.degreeFormat = $0 })) {
+                                ForEach(DegreeFormat.allCases, id: \.self) { Text($0.title).tag($0) }
+                            }
+                        }
                         // Ground blob shadows (visualization v1, plan §B15).
                         Toggle("Ground Shadow", isOn: Binding(
                             get: { viewModel.groundShadowEnabled },
@@ -2102,6 +2141,13 @@ struct EditorView: View {
                 MaterialSheet(initial: viewModel.materialForSelection) { spec in
                     viewModel.applyMaterial(spec)
                 }
+            }
+            .sheet(isPresented: Binding(
+                get: { viewModel.showFieldOfViewSheet },
+                set: { viewModel.showFieldOfViewSheet = $0 }
+            )) {
+                FieldOfViewSheet(viewModel: viewModel)
+                    .presentationDetents([.height(220)])
             }
             .sheet(isPresented: Binding(
                 get: { viewModel.showConstraintSettings },

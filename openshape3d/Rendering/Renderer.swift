@@ -626,9 +626,7 @@ final class Renderer: NSObject, MTKViewDelegate {
         // holds on the order of ten to a hundred minor lines, and the fade
         // radius grows with the camera distance so the plane never runs out
         // under a large model. Majors stay every tenth minor.
-        let viewHeightMM = 2 * Double(camera.distance) * tan(Double(camera.fovY) * 0.5)
-        let decade = floor(log10(max(viewHeightMM / 8, 1e-6)))
-        let minorSpacing = Float(min(max(pow(10, decade), 1e-3), 1e6))
+        let minorSpacing = Float(scene.lockedGridSpacing ?? camera.gridMinorSpacing)
         let fadeRadius = max(120, camera.distance * 10)
         frame.gridParams = SIMD4(minorSpacing, 10, fadeRadius, 0)
         let gridPlane = scene.gridPlane ?? .ground

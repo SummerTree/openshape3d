@@ -56,7 +56,7 @@ struct PinnedMeasurementsOverlay: View {
     static func text(for pin: PinnedMeasurement) -> String {
         switch pin.kind {
         case .distance: return EditorViewModel.formattedLength(pin.value)
-        case .angle: return String(format: "%.2f°", pin.value)
+        case .angle: return EditorViewModel.formattedAngle(pin.value)
         }
     }
 }

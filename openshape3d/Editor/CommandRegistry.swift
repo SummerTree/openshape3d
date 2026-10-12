@@ -242,6 +242,17 @@ nonisolated struct CommandRegistry: Sendable {
         AppCommand(id: "view.zoomToSelection", title: "Zoom to Selection", category: .view,
                    chord: nil),
         AppCommand(id: "view.fit", title: "Zoom to Fit", category: .view, chord: nil),
+        AppCommand(id: "view.nearestOrtho", title: "Nearest Ortho View", category: .view, chord: KeyChord("8", .command)),
+        AppCommand(id: "view.rotateLeft15", title: "Rotate View Left by 15°", category: .view, chord: nil),
+        AppCommand(id: "view.rotateRight15", title: "Rotate View Right by 15°", category: .view, chord: nil),
+        AppCommand(id: "view.rotateUp15", title: "Rotate View Up by 15°", category: .view, chord: nil),
+        AppCommand(id: "view.rotateDown15", title: "Rotate View Down by 15°", category: .view, chord: nil),
+        AppCommand(id: "view.rotateLeft45", title: "Rotate View Left by 45°", category: .view, chord: nil),
+        AppCommand(id: "view.rotateRight45", title: "Rotate View Right by 45°", category: .view, chord: nil),
+        AppCommand(id: "view.rotateUp45", title: "Rotate View Up by 45°", category: .view, chord: nil),
+        AppCommand(id: "view.rotateDown45", title: "Rotate View Down by 45°", category: .view, chord: nil),
+        AppCommand(id: "view.fieldOfView", title: "Field of View", category: .view, chord: nil),
+        AppCommand(id: "view.lockGrid", title: "Lock Grid Size", category: .view, chord: nil),
 
         // Command Search itself (X or Cmd+F).
         AppCommand(id: "app.commandSearch", title: "Command Search", category: .edit,

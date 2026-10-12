@@ -1505,6 +1505,12 @@ Measurements; Shaders = Shaded | Visualized; Surface Analysis = Zebra
 Desktop View-menu extras: Rotate View (fixed-angle camera increments),
 Collapse All, Show Properties Sidebar, Enter Full Screen, and a "keep
 horizon level" navigation toggle (Staircase tutorial).
+**View menu additions (2026-10-12):** Nearest Ortho View (⌘8), Rotate View
+left/right/up/down by 15° or 45°, Field of View… (a 0–100° slider; 0° is
+orthographic), Grid ▸ XY / YZ / ZX plane and Lock Grid Size (freezes the
+zoom-stepped spacing, named in the item), Number Format ▸ Foot & Inch
+(architectural to 1/16″) and Degree Format (fractional degrees-minutes) —
+all also in Command Search (`ViewMenuFormatTests`, `ViewsUITests`).
 **Status:** 🟡 partial — a Views toolbar menu offers the six standard views
 (Top/Bottom/Front/Back/Right/Left) plus Isometric (`StandardView`,
 `applyStandardView`, animated through `CameraAnimator`) and an

@@ -68,6 +68,9 @@ extension CommandRegistry {
         // View.
         "view.front", "view.back", "view.left", "view.right",
         "view.top", "view.bottom", "view.isometric", "view.fit",
+        "view.nearestOrtho", "view.rotateLeft15", "view.rotateRight15", "view.rotateUp15",
+        "view.rotateDown15", "view.rotateLeft45", "view.rotateRight45", "view.rotateUp45",
+        "view.rotateDown45", "view.fieldOfView", "view.lockGrid",
     ]
 
     /// Catalog entries that advertise a chord but have no editor entry point
@@ -245,6 +248,17 @@ extension EditorViewModel {
         case "view.bottom":     applyStandardView(.bottom);     return true
         case "view.isometric":  applyStandardView(.isometric);  return true
         case "view.fit":        fitView();                      return true
+        case "view.nearestOrtho": nearestOrthoView();           return true
+        case "view.rotateLeft15":  rotateView(yaw: -15);        return true
+        case "view.rotateRight15": rotateView(yaw: 15);         return true
+        case "view.rotateUp15":    rotateView(pitch: 15);       return true
+        case "view.rotateDown15":  rotateView(pitch: -15);      return true
+        case "view.rotateLeft45":  rotateView(yaw: -45);        return true
+        case "view.rotateRight45": rotateView(yaw: 45);         return true
+        case "view.rotateUp45":    rotateView(pitch: 45);       return true
+        case "view.rotateDown45":  rotateView(pitch: -45);      return true
+        case "view.fieldOfView":   showFieldOfViewSheet = true; return true
+        case "view.lockGrid":      toggleLockGridSize();        return true
 
         default:
             return false

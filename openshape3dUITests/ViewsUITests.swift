@@ -58,4 +58,30 @@ final class ViewsUITests: XCTestCase {
 
         app.buttons["Exit Sketching"].firstMatch.tap()
     }
+
+    /// View ▸ Field of View…: dragging the slider to 0 reads Orthographic,
+    /// and Nearest Ortho View runs from the same menu.
+    func testFieldOfViewReachesOrthographic() throws {
+        let app = XCUIApplication()
+        app.launchEnvironment["OS3D_FRESH"] = "1"
+        app.launchEnvironment["OS3D_RESET_STORE"] = "1"
+        app.launchEnvironment["OS3D_DEBUG_SEED"] = "1"
+        app.launch()
+        let viewsButton = app.buttons["ViewsMenu"]
+        XCTAssertTrue(viewsButton.waitForExistence(timeout: 10))
+
+        viewsButton.tap()
+        XCTAssertTrue(app.buttons["Nearest Ortho View"].waitForExistence(timeout: 3))
+        app.buttons["Nearest Ortho View"].tap()
+
+        viewsButton.tap()
+        app.buttons["Field of View…"].tap()
+        let value = app.staticTexts["FieldOfViewValue"]
+        XCTAssertTrue(value.waitForExistence(timeout: 3))
+        XCTAssertEqual(value.label, "40°", "Starts at the default perspective")
+        app.sliders["FieldOfViewSlider"].adjust(toNormalizedSliderPosition: 0)
+        XCTAssertTrue(app.staticTexts["Orthographic"].waitForExistence(timeout: 3),
+                      "0° is orthographic")
+        app.buttons["Done"].firstMatch.tap()
+    }
 }

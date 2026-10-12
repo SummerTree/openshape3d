@@ -22,12 +22,28 @@ enum ViewportEvent {
 
 /// Camera operations the view model can request from the viewport.
 @MainActor
+extension ViewportCameraControl {
+    func rotateView(yawDegrees: Double, pitchDegrees: Double) {}
+    func animateToNearestOrthoView() {}
+    func setFieldOfView(degrees: Double) {}
+    var currentGridSpacing: Double { 1 }
+}
+
 protocol ViewportCameraControl: AnyObject {
     func fitScene()
     /// Animate to look head-on at a sketch plane.
     func moveCameraHeadOn(to plane: SketchPlane)
     /// Animate to a standard view (Views popover, spec §7.3).
     func animateToStandardView(_ view: StandardView)
+    /// View ▸ Rotate View: turn the camera by these angles (degrees).
+    func rotateView(yawDegrees: Double, pitchDegrees: Double)
+    /// View ▸ Nearest Ortho View.
+    func animateToNearestOrthoView()
+    /// View ▸ Field of View: perspective field of view in degrees; 0 is
+    /// orthographic.
+    func setFieldOfView(degrees: Double)
+    /// The grid's minor spacing at the current zoom (Lock Grid Size).
+    var currentGridSpacing: Double { get }
     /// Switch between perspective and orthographic projection.
     func setProjection(orthographic: Bool)
     /// Animate to frame a world-space AABB (Items Manager "Zoom to").
@@ -633,7 +649,8 @@ final class EditorViewModel {
             ))
         }
         var scene = ViewportScene(bodies: drawables)
-        scene.gridPlane = activeSketch?.plane
+        scene.gridPlane = activeSketch?.plane ?? (gridPosition == .zx ? nil : gridPosition.plane)
+        scene.lockedGridSpacing = lockedGridSpacing
 
         // Tool preview (extrude/revolve): translucent accent body — except a
         // face push/pull preview replaces the source body, so it renders as a
@@ -5882,6 +5899,66 @@ final class EditorViewModel {
     func setOrthographic(_ enabled: Bool) {
         orthographicEnabled = enabled
         cameraControl?.setProjection(orthographic: enabled)
+        if !enabled, fieldOfViewDegrees != 40 { cameraControl?.setFieldOfView(degrees: fieldOfViewDegrees) }
+    }
+
+    // MARK: - View menu (spec §7.3–7.4)
+
+    /// Perspective field of view (View ▸ Field of View…); 0 is orthographic.
+    private(set) var fieldOfViewDegrees: Double = 40
+    var showFieldOfViewSheet = false
+
+    func setFieldOfView(_ degrees: Double) {
+        let clamped = min(max(degrees, 0), 100)
+        fieldOfViewDegrees = clamped
+        orthographicEnabled = clamped < 1
+        cameraControl?.setFieldOfView(degrees: clamped)
+    }
+
+    /// View ▸ Rotate View ▸ Left/Right/Up/Down by 15° or 45°.
+    func rotateView(yaw: Double = 0, pitch: Double = 0) {
+        cameraControl?.rotateView(yawDegrees: yaw, pitchDegrees: pitch)
+    }
+
+    /// View ▸ Nearest Ortho View: square up to the closest of the six views.
+    func nearestOrthoView() {
+        if case .sketching = mode { finishSketch() }
+        cameraControl?.animateToNearestOrthoView()
+    }
+
+    /// View ▸ Grid Position: which world plane the grid lies in outside a
+    /// sketch (a sketch always shows its own plane's grid).
+    nonisolated enum GridPosition: String, CaseIterable, Sendable {
+        case xy, yz, zx
+        var title: String {
+            switch self {
+            case .xy: return "XY Plane"
+            case .yz: return "YZ Plane"
+            case .zx: return "ZX Plane"
+            }
+        }
+        var plane: SketchPlane {
+            switch self {
+            case .xy: return .worldXY
+            case .yz: return .worldYZ
+            case .zx: return .ground
+            }
+        }
+    }
+
+    var gridPosition: GridPosition = .zx
+
+    /// View ▸ Lock Grid Size: the spacing the grid froze at, nil = follows zoom.
+    private(set) var lockedGridSpacing: Double?
+
+    func toggleLockGridSize() {
+        lockedGridSpacing = lockedGridSpacing == nil ? cameraControl?.currentGridSpacing : nil
+    }
+
+    /// The menu label: "Lock Grid Size (5 mm)".
+    var lockGridSizeTitle: String {
+        let spacing = lockedGridSpacing ?? cameraControl?.currentGridSpacing ?? 1
+        return "Lock Grid Size (\(AppSettings.shared.unit.compactLengthString(fromMM: spacing)))"
     }
 
     /// Re-aim the camera head-on at the active sketch plane.
@@ -15518,7 +15595,15 @@ final class EditorViewModel {
     }
 
     static func formattedLength(_ mm: Double) -> String {
-        AppSettings.shared.unit.lengthString(fromMM: mm)
+        let settings = AppSettings.shared
+        if (settings.unit == .feet || settings.unit == .inches), settings.footInchFormat == .architectural {
+            return settings.unit.architecturalString(fromMM: mm)
+        }
+        return settings.unit.lengthString(fromMM: mm)
+    }
+    /// An angle readout in View ▸ Degree Format.
+    static func formattedAngle(_ degrees: Double) -> String {
+        AppSettings.shared.degreeFormat.string(degrees)
     }
     static func formattedArea(_ mm2: Double) -> String {
         AppSettings.shared.unit.areaString(fromMM2: mm2)

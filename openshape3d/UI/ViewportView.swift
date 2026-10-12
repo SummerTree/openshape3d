@@ -912,6 +912,44 @@ final class ViewportCoordinator: NSObject, ViewportGestureDelegate, ViewportCame
         cameraAnimator?.animate(to: standard.applied(to: renderer.camera), duration: 0.4)
     }
 
+    /// View ▸ Rotate View: turn the turntable by these angles. Elevation
+    /// stays inside the turntable's ±89° (its fixed Y-up degenerates at 90°).
+    func rotateView(yawDegrees: Double, pitchDegrees: Double) {
+        guard let renderer else { return }
+        var target = renderer.camera
+        target.azimuth += Float(yawDegrees * .pi / 180)
+        target.elevation = min(max(target.elevation + Float(pitchDegrees * .pi / 180),
+                                   -TurntableCamera.elevationLimit), TurntableCamera.elevationLimit)
+        cameraAnimator?.animate(to: target, duration: 0.3)
+    }
+
+    /// View ▸ Nearest Ortho View: the standard view whose eye direction is
+    /// closest to the current one.
+    func animateToNearestOrthoView() {
+        guard let renderer else { return }
+        let camera = renderer.camera
+        let eye = simd_normalize(camera.position - camera.target)
+        let views = StandardView.allCases.filter { $0 != .isometric }
+        guard let best = views.max(by: { a, b in
+            let pa = a.applied(to: camera), pb = b.applied(to: camera)
+            return simd_dot(simd_normalize(pa.position - pa.target), eye)
+                < simd_dot(simd_normalize(pb.position - pb.target), eye)
+        }) else { return }
+        cameraAnimator?.animate(to: best.applied(to: camera), duration: 0.4)
+    }
+
+    /// View ▸ Field of View: a perspective angle, or orthographic at 0.
+    func setFieldOfView(degrees: Double) {
+        guard let renderer else { return }
+        renderer.camera.projection = degrees < 1
+            ? .orthographic
+            : .perspective(fovY: Float(degrees * .pi / 180))
+        view?.setNeedsDisplay()
+        cameraDidMove()
+    }
+
+    var currentGridSpacing: Double { renderer?.camera.gridMinorSpacing ?? 1 }
+
     func setProjection(orthographic: Bool) {
         guard let renderer else { return }
         renderer.camera.projection = orthographic
