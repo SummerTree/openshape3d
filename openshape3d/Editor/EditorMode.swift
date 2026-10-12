@@ -129,6 +129,10 @@ enum EditorMode: Equatable {
     /// derived from — a linear edge, a cylindrical face, or one or two planar
     /// faces. See `EditorViewModel.axisPicks`.
     case pickingAxisReferences
+    /// Construct ▸ Plane armed (spec §6.1): taps fill the slots the chosen
+    /// `PlaneConstruction` needs — points, faces, edges or a curve. See
+    /// `EditorViewModel.planePicks`.
+    case pickingPlaneReferences
 
     var isSketching: Bool {
         if case .sketching = self { return true }

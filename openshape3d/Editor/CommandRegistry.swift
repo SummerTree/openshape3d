@@ -207,9 +207,18 @@ nonisolated struct CommandRegistry: Sendable {
 
         // Construction geometry — the spec's "p3" example lives here.
         AppCommand(id: "plane.offset", title: "Add Plane - Offset", category: .modeling, chord: nil),
+        AppCommand(id: "plane.midplane", title: "Add Plane - Midplane", category: .modeling, chord: nil),
         AppCommand(id: "plane.threePoints", title: "Add Plane - 3 Points", category: .modeling, chord: nil),
+        AppCommand(id: "plane.onCurve", title: "Add Plane - On Curve at Point", category: .modeling, chord: nil),
+        AppCommand(id: "plane.perpendicular", title: "Add Plane - Perpendicular to Edge at Point", category: .modeling, chord: nil),
         AppCommand(id: "plane.angle", title: "Add Plane - Angle", category: .modeling, chord: nil),
+        AppCommand(id: "plane.parallel", title: "Add Plane - Parallel to Face at Point", category: .modeling, chord: nil),
+        AppCommand(id: "axis.auto", title: "Add Axis", category: .modeling, chord: nil),
         AppCommand(id: "axis.twoPoints", title: "Add Axis - 2 Points", category: .modeling, chord: nil),
+        AppCommand(id: "axis.twoPlanes", title: "Add Axis - 2 Planes", category: .modeling, chord: nil),
+        AppCommand(id: "axis.cylinder", title: "Add Axis - Cylinder/Cone", category: .modeling, chord: nil),
+        AppCommand(id: "axis.edge", title: "Add Axis - Along Edge", category: .modeling, chord: nil),
+        AppCommand(id: "axis.perpendicular", title: "Add Axis - Perpendicular to Face at Point", category: .modeling, chord: nil),
 
         // Edit
         AppCommand(id: "edit.undo", title: "Undo", category: .edit, chord: KeyChord("z", .command)),

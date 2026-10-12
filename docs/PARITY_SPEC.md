@@ -1269,14 +1269,27 @@ has an editable **Size** parameter; per-type History params: Face,
 Point #1–3, Edge, Angle (plus Offset distance where applicable). Plane
 icons can be visually scaled down. Sketches attached to a plane follow it
 parametrically (offset edit moves plane + sketch).
-**Status:** 🟡 partial — the **Offset** tool only: with a face selected,
-"Offset Plane" pulls a construction plane off it along the normal (drag the
-arrow or type the distance, extrude-style preview); committed as an
-undoable `AddConstructionPlaneCommand`, persisted (`PersistedPlane`),
-rendered as a tile, usable as a sketch plane and a mirror plane. Missing:
-the other six plane tools (Midplane, Perpendicular to Edge, Through Edge at
-Angle, Parallel to Face at Point, 3 Points, Along Spline, Mirrored), the
-Size parameter, construction axes (§6.2), parametric following.
+**Status:** 🟡 partial — **all seven plane tools ship (2026-10-12).**
+Construct ▸ Plane in the palette lists Offset Plane, Midplane, Plane Through
+3 Points, Plane on Curve at Point, Plane Perpendicular to Edge at Point,
+Plane Through Edge at Angle and Plane Parallel to Face at Point (also in
+Command Search as "Add Plane - …"). Each construction declares typed pick
+slots (`PlaneConstruction.slots`: point / face / edge / curve) and the bar
+prompts for the next one ("Tap a point (2 of 3)"), switches construction from
+its menu, and carries the one parameter that construction has — Offset's
+distance, Through Edge's angle, On Curve's position along the curve (set from
+the tap, adjustable in %). Faces include existing construction planes;
+points snap to corners and sketch points, else land on the tapped surface or
+grid; edges and curves take the tapped edge's smooth chain, so a tessellated
+arc comes back whole. A face selected beforehand seeds face-first
+constructions. Midplane of two parallel faces sits halfway; of two meeting
+faces it is their mirror plane. The geometry is pure
+(`ConstructionPlaneKit`, `ConstructionPlaneKitTests`); end-to-end in
+`ConstructionPlaneUITests`. The face-pull "Offset Plane" in the face bar
+still works as before. Committed as an undoable `AddConstructionPlaneCommand`
+titled with the construction, persisted, usable as a sketch and mirror plane.
+**Missing:** the Size parameter, Mirrored planes, and parametric following
+(planes don't yet re-derive when their references move).
 **Feasibility:** planes themselves [mesh-kernel OK]; parametric following
 [needs history engine]
 
@@ -1308,11 +1321,17 @@ edge → Along Edge. The bar names the derived construction, which is what
 makes the inference legible. `EditorViewModel.deriveAxis` is a pure static so
 it is unit-tested without a view model (`ConstructionAxisDeriveTests`);
 end-to-end coverage in `ConstructionAxisUITests`.
-**Missing:** **Axis Through 2 Points** (needs the snap-point pick path, not
-the face/edge one everything else uses); the edge-pick route is wired
-(`pickAxisEdge`) but not yet reachable from the viewport's edge hit-test;
-Length is editable at creation but is not yet a History parameter (that is
-G8); and axes are not yet operands for circular pattern / rotate.
+**Construct ▸ Axis menu (2026-10-12).** The palette's Axis entry is now a
+menu: **Automatic** (the derivation above) plus all five constructions by
+name — Through 2 Points (snap-point picks), Through 2 Planes, Cylinder/Cone,
+Along Edge, and Perpendicular to Face **at the tapped point** (snapping to a
+corner under the finger). An explicit entry reads taps only as its own
+references and counts them in the bar ("Tap a flat face or plane (1 of 2)");
+the bar's menu switches construction. Also in Command Search as
+"Add Axis - …".
+**Missing:** Length is editable at creation but is not yet a History
+parameter (that is G8); axes are not yet operands for circular pattern /
+rotate.
 **Feasibility:** [mesh-kernel OK] — remaining work is app/UI, not geometry.
 
 ### 6.3 Insert Image (reference images)

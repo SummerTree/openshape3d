@@ -214,6 +214,19 @@ extension EditorViewModel {
             return true
 
         // MARK: View
+        case "plane.offset":        beginPlaneTool(.offset); return true
+        case "plane.midplane":      beginPlaneTool(.midplane); return true
+        case "plane.threePoints":   beginPlaneTool(.threePoints); return true
+        case "plane.onCurve":       beginPlaneTool(.onCurveAtPoint); return true
+        case "plane.perpendicular": beginPlaneTool(.perpendicularToEdgeAtPoint); return true
+        case "plane.angle":         beginPlaneTool(.throughEdgeAtAngle); return true
+        case "plane.parallel":      beginPlaneTool(.parallelToFaceAtPoint); return true
+        case "axis.auto":           beginAxisTool(.automatic); return true
+        case "axis.twoPoints":      beginAxisTool(.twoPoints); return true
+        case "axis.twoPlanes":      beginAxisTool(.twoPlanes); return true
+        case "axis.cylinder":       beginAxisTool(.cylinder); return true
+        case "axis.edge":           beginAxisTool(.alongEdge); return true
+        case "axis.perpendicular":  beginAxisTool(.perpendicularToFaceAtPoint); return true
         case "view.front":      applyStandardView(.front);      return true
         case "view.back":       applyStandardView(.back);       return true
         case "view.left":       applyStandardView(.left);       return true

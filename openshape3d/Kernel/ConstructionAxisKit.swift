@@ -223,3 +223,48 @@ nonisolated enum ConstructionAxisKit {
         return simd_normalize(simd_cross(d, a))
     }
 }
+
+/// Construct ▸ Axis (spec §6.2), in menu order. `.automatic` derives the
+/// construction from whatever is tapped (an edge, a round face, one or two
+/// flat faces); the others ask for exactly their own references.
+nonisolated enum AxisConstruction: String, CaseIterable, Codable, Sendable {
+    case automatic
+    case twoPoints
+    case twoPlanes
+    case cylinder
+    case alongEdge
+    case perpendicularToFaceAtPoint
+
+    var title: String {
+        switch self {
+        case .automatic: return "Axis"
+        case .twoPoints: return "Axis Through 2 Points"
+        case .twoPlanes: return "Axis Through 2 Planes"
+        case .cylinder: return "Axis of Cylinder/Cone"
+        case .alongEdge: return "Axis Along Edge"
+        case .perpendicularToFaceAtPoint: return "Axis Perpendicular to Face at Point"
+        }
+    }
+
+    /// Menu label: the automatic entry reads as a choice, not a bare noun.
+    var menuTitle: String { self == .automatic ? "Automatic" : title }
+
+    var symbol: String {
+        switch self {
+        case .automatic: return "wand.and.stars"
+        case .twoPoints: return "point.topleft.down.to.point.bottomright.filled.curvepath"
+        case .twoPlanes: return "square.3.layers.3d"
+        case .cylinder: return "cylinder"
+        case .alongEdge: return "line.diagonal"
+        case .perpendicularToFaceAtPoint: return "arrow.up.square"
+        }
+    }
+
+    /// References the construction needs (automatic takes up to two).
+    var pickCount: Int {
+        switch self {
+        case .automatic, .twoPoints, .twoPlanes: return 2
+        case .cylinder, .alongEdge, .perpendicularToFaceAtPoint: return 1
+        }
+    }
+}

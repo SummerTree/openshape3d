@@ -585,7 +585,18 @@ struct EditorView: View {
             get: { viewModel.axisLength },
             set: { viewModel.axisLength = max(0.001, $0) }))
         return AdaptiveBar(style: .capsule, spacing: 12) {
-            Image(systemName: "line.diagonal.arrow")
+            Menu {
+                ForEach(AxisConstruction.allCases, id: \.self) { construction in
+                    Button {
+                        viewModel.axisConstruction = construction
+                    } label: {
+                        Label(construction.menuTitle, systemImage: construction.symbol)
+                    }
+                }
+            } label: {
+                Image(systemName: viewModel.axisConstruction.symbol)
+            }
+            .accessibilityIdentifier("AxisConstructionMenu")
             Text(viewModel.axisConstructionLabel)
                 .font(.subheadline)
                 .fixedSize()
@@ -610,6 +621,90 @@ struct EditorView: View {
                 .controlSize(.small)
                 .disabled(!viewModel.canCommitAxis)
                 .accessibilityIdentifier("AxisApply")
+        }
+    }
+
+    /// Construct ▸ Plane bar (spec §6.1): the construction (switchable), what
+    /// to tap next, the one parameter the construction has — Offset's
+    /// distance, Through Edge's angle, On Curve's position — and Apply.
+    private func planeBar(_ viewModel: EditorViewModel) -> some View {
+        let construction = viewModel.planeConstruction
+        return AdaptiveBar(style: .capsule, spacing: 12) {
+            Menu {
+                ForEach(PlaneConstruction.allCases, id: \.self) { option in
+                    Button {
+                        viewModel.planeConstruction = option
+                    } label: {
+                        Label(option.title, systemImage: option.symbol)
+                    }
+                }
+            } label: {
+                Image(systemName: construction.symbol)
+            }
+            .accessibilityIdentifier("PlaneConstructionMenu")
+            Text(viewModel.planeToolPrompt)
+                .font(.subheadline)
+                .fixedSize()
+                .accessibilityIdentifier("PlaneToolPrompt")
+            if construction.usesOffset {
+                Divider().frame(height: 20)
+                Text("Offset").font(.caption).foregroundStyle(.barLabel).fixedSize()
+                TextField(settings.unit.symbol, value: settings.unit.binding(Binding(
+                    get: { viewModel.planeOffsetDistance },
+                    set: { viewModel.planeOffsetDistance = $0 })),
+                          format: .number.precision(.fractionLength(0...3)))
+                    .textFieldStyle(.roundedBorder)
+                    .frame(width: 64)
+                    .multilineTextAlignment(.trailing)
+                    .keyboardType(.numbersAndPunctuation)
+                    .accessibilityIdentifier("PlaneOffsetField")
+                Text(settings.unit.symbol).font(.caption).foregroundStyle(.barLabel).fixedSize()
+            }
+            if construction.usesAngle {
+                Divider().frame(height: 20)
+                Text("Angle").font(.caption).foregroundStyle(.barLabel).fixedSize()
+                TextField("°", value: Binding(
+                    get: { viewModel.planeAngleDegrees },
+                    set: { viewModel.planeAngleDegrees = $0 }),
+                          format: .number.precision(.fractionLength(0...2)))
+                    .textFieldStyle(.roundedBorder)
+                    .frame(width: 56)
+                    .multilineTextAlignment(.trailing)
+                    .keyboardType(.numbersAndPunctuation)
+                    .accessibilityIdentifier("PlaneAngleField")
+                Text("°").font(.caption).foregroundStyle(.barLabel).fixedSize()
+            }
+            if construction.usesCurvePosition {
+                Divider().frame(height: 20)
+                Text("Position").font(.caption).foregroundStyle(.barLabel).fixedSize()
+                TextField("%", value: Binding(
+                    get: { viewModel.planeCurveFraction * 100 },
+                    set: { viewModel.planeCurveFraction = min(max($0, 0), 100) / 100 }),
+                          format: .number.precision(.fractionLength(0...1)))
+                    .textFieldStyle(.roundedBorder)
+                    .frame(width: 56)
+                    .multilineTextAlignment(.trailing)
+                    .keyboardType(.decimalPad)
+                    .accessibilityIdentifier("PlaneCurvePositionField")
+                Text("%").font(.caption).foregroundStyle(.barLabel).fixedSize()
+            }
+        } actions: {
+            if !viewModel.planePicks.isEmpty {
+                Button("Clear") { viewModel.clearPlanePicks() }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .accessibilityIdentifier("PlaneClear")
+            }
+            Button("Cancel") { viewModel.cancelPlaneTool() }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .keyboardShortcut(.cancelAction)
+                .accessibilityIdentifier("PlaneCancel")
+            Button("Apply") { viewModel.commitPlane() }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+                .disabled(!viewModel.canCommitPlane)
+                .accessibilityIdentifier("PlaneApply")
         }
     }
 
@@ -1071,6 +1166,8 @@ struct EditorView: View {
                         replaceFaceBar(viewModel)
                     } else if case .pickingAxisReferences = viewModel.mode {
                         axisBar(viewModel)
+                    } else if case .pickingPlaneReferences = viewModel.mode {
+                        planeBar(viewModel)
                     } else if viewModel.mode.sketchTool == .offset {
                         sketchOffsetBar(viewModel)
                     } else {

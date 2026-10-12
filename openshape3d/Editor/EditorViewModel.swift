@@ -1143,6 +1143,34 @@ final class EditorViewModel {
                 color: SIMD4(0.0, 0.52, 1.0, 0.95)))
         }
 
+        // Construct ▸ Plane preview, plus the picked edges and curves.
+        if let pending = pendingPlanePreview {
+            appendPlaneQuad(
+                pending.plane, size: pending.size,
+                fill: SIMD4(0.0, 0.52, 1.0, 0.20),
+                border: SIMD4(0.0, 0.52, 1.0, 0.9),
+                into: &scene
+            )
+        }
+        if case .pickingPlaneReferences = mode {
+            var segments: [SIMD3<Float>] = []
+            for pick in planePicks {
+                let line: [SIMD3<Double>]
+                switch pick {
+                case let .edge(start, end, _): line = [start, end]
+                case let .curve(points, _): line = points
+                default: continue
+                }
+                for i in 1..<line.count {
+                    segments.append(SIMD3<Float>(line[i - 1]))
+                    segments.append(SIMD3<Float>(line[i]))
+                }
+            }
+            if !segments.isEmpty {
+                scene.sketchLines.append(SketchLineBatch(segments: segments, color: SIMD4(0.0, 0.52, 1.0, 1)))
+            }
+        }
+
         // Pending offset plane: accent quad tracking the pull.
         if let context = toolContext, case .offsetPlane(let distance) = context.kind {
             let pending = offsetPlanePreview(context, distance: distance)
@@ -1231,6 +1259,9 @@ final class EditorViewModel {
             switch mode {
             case .measuring: return measurePoints
             case .translating, .aligning: return transformPickPoints
+            case .pickingPlaneReferences: return planePickMarkers
+            case .pickingAxisReferences:
+                return axisPicks.compactMap { if case let .point(p) = $0 { return p }; return nil }
             default: return []
             }
         }()
@@ -3334,6 +3365,7 @@ final class EditorViewModel {
         resetReplaceFaceState()
         resetSketchOffsetState()
         resetAxisState()
+        resetPlaneState()
         pendingCreateTool = nil
         // Numeric-entry armed state must die with the mode that armed it: a
         // stale `scaleEntryActive` would make the next empty-space tap commit
@@ -5707,6 +5739,7 @@ final class EditorViewModel {
         resetReplaceFaceState()
         resetSketchOffsetState()
         resetAxisState()
+        resetPlaneState()
         axisEntryPart = nil
         scaleEntryActive = false
         // Pending sketch state may reference entities that no longer exist.
@@ -6102,6 +6135,8 @@ final class EditorViewModel {
             handleReplaceFaceTap(ray: ray)
         case .pickingAxisReferences:
             handleAxisReferenceTap(ray: ray)
+        case .pickingPlaneReferences:
+            handlePlaneReferenceTap(ray: ray)
         }
     }
 
@@ -10156,9 +10191,22 @@ final class EditorViewModel {
         case edge(start: SIMD3<Double>, end: SIMD3<Double>)
         case planarFace(origin: SIMD3<Double>, normal: SIMD3<Double>)
         case cylindrical(origin: SIMD3<Double>, direction: SIMD3<Double>, length: Double)
+        /// A point (a notable point, or where the tap met a surface) — only
+        /// the explicit Through 2 Points construction asks for these.
+        case point(SIMD3<Double>)
     }
 
     private(set) var axisPicks: [AxisPick] = []
+
+    /// Which Construct ▸ Axis entry is armed. Switching it clears the picks:
+    /// a tap means something different under each construction.
+    var axisConstruction: AxisConstruction = .automatic {
+        didSet {
+            guard oldValue != axisConstruction else { return }
+            axisPicks = []
+            recomputeAxisPreview()
+        }
+    }
 
     /// Display extent of the axis being defined — the spec's Length parameter.
     /// Never affects the math, only how long the drawn line is.
@@ -10170,6 +10218,20 @@ final class EditorViewModel {
 
     /// Names the construction the current picks resolve to, for the bar.
     var axisConstructionLabel: String {
+        if axisConstruction != .automatic {
+            let needed = axisConstruction.pickCount
+            if axisPicks.count >= needed { return axisConstruction.title }
+            let what: String
+            switch axisConstruction {
+            case .twoPoints: what = "Tap a point"
+            case .twoPlanes: what = "Tap a flat face or plane"
+            case .cylinder: what = "Tap a round face"
+            case .alongEdge: what = "Tap a straight edge"
+            case .perpendicularToFaceAtPoint: what = "Tap a flat face where the axis goes"
+            case .automatic: what = ""
+            }
+            return needed > 1 ? "\(what) (\(axisPicks.count + 1) of \(needed))" : what
+        }
         switch axisPicks.count {
         case 0: return "Tap an edge or face"
         case 1:
@@ -10177,6 +10239,7 @@ final class EditorViewModel {
             case .edge: return "Along Edge"
             case .cylindrical: return "Axis of Cylinder/Cone"
             case .planarFace: return "Perpendicular to Face"
+            case .point: return "Tap a second point"
             }
         default:
             if case .planarFace = axisPicks[0], case .planarFace = axisPicks[1] {
@@ -10188,8 +10251,9 @@ final class EditorViewModel {
 
     var canCommitAxis: Bool { pendingAxisPreview != nil }
 
-    func beginAxisTool() {
+    func beginAxisTool(_ construction: AxisConstruction = .automatic) {
         cancelTransientPicks()
+        axisConstruction = construction
         axisPicks = []
         pendingAxisPreview = nil
         axisLength = Self.defaultAxisLength(for: session.document)
@@ -10219,6 +10283,10 @@ final class EditorViewModel {
 
     /// Tap while Add Axis is armed: pick an edge or a face off the tapped body.
     private func handleAxisReferenceTap(ray: Ray) {
+        if axisConstruction != .automatic {
+            handleExplicitAxisTap(ray: ray)
+            return
+        }
         guard let hit = HitTester.pickBody(ray: ray, in: scene),
               let body = session.document.body(with: hit.bodyID)
         else { return }
@@ -10264,6 +10332,59 @@ final class EditorViewModel {
             return
         }
         errorMessage = "Tap a flat face, a round face, or an edge to define an axis."
+    }
+
+    /// A tap under an explicit Construct ▸ Axis entry: read the tap as the one
+    /// kind of reference that construction asks for, and say so when it isn't.
+    private func handleExplicitAxisTap(ray: Ray) {
+        switch axisConstruction {
+        case .automatic:
+            return
+        case .twoPoints:
+            guard case let .point(p)? = constructionPick(.point, ray: ray) else { return }
+            appendAxisPick(.point(p))
+        case .twoPlanes:
+            guard case let .face(origin, normal)? = constructionPick(.face, ray: ray) else {
+                showNotice("Tap a flat face or a construction plane")
+                return
+            }
+            appendAxisPick(.planarFace(origin: origin, normal: normal))
+        case .alongEdge:
+            guard case let .edge(start, end, _)? = constructionPick(.edge, ray: ray) else {
+                showNotice("Tap a straight edge")
+                return
+            }
+            appendAxisPick(.edge(start: start, end: end))
+        case .perpendicularToFaceAtPoint:
+            guard case let .face(origin, normal)? = constructionPick(.face, ray: ray) else {
+                showNotice("Tap a flat face or a construction plane")
+                return
+            }
+            // A notable point under the finger (a corner, a sketch point)
+            // places the axis exactly; otherwise it goes where the tap landed.
+            let at = nearestNotablePoint(to: ray).map { p -> SIMD3<Double> in
+                // Keep it on the face's plane so the axis starts on the face.
+                let n = simd_normalize(normal)
+                return p - n * simd_dot(p - origin, n)
+            } ?? origin
+            appendAxisPick(.planarFace(origin: at, normal: normal))
+        case .cylinder:
+            guard let hit = HitTester.pickBody(ray: ray, in: scene),
+                  let body = session.document.body(with: hit.bodyID),
+                  let cylinder = FaceTopology.cylindricalFace(
+                      in: body.render, seedTriangle: hit.triangleIndex)
+            else {
+                showNotice("Tap a round face — a cylinder or cone")
+                return
+            }
+            let matrix = body.transform.matrixFloat
+            let p = matrix * SIMD4(SIMD3<Float>(cylinder.axisPoint), 1)
+            let d = matrix * SIMD4(SIMD3<Float>(cylinder.axisDir), 0)
+            appendAxisPick(.cylindrical(
+                origin: SIMD3(Double(p.x), Double(p.y), Double(p.z)),
+                direction: SIMD3(Double(d.x), Double(d.y), Double(d.z)),
+                length: max(cylinder.height, 1e-6)))
+        }
     }
 
     /// The straight edge near a tap on `body`, in the body's LOCAL space, or
@@ -10314,7 +10435,7 @@ final class EditorViewModel {
     private func appendAxisPick(_ pick: AxisPick) {
         if axisPicks.contains(pick) {
             axisPicks.removeAll { $0 == pick }
-        } else if axisPicks.count >= 2 {
+        } else if axisPicks.count >= axisConstruction.pickCount {
             axisPicks = [pick]
         } else {
             axisPicks.append(pick)
@@ -10323,19 +10444,27 @@ final class EditorViewModel {
     }
 
     private func recomputeAxisPreview() {
-        pendingAxisPreview = Self.deriveAxis(from: axisPicks, length: axisLength)
+        pendingAxisPreview = Self.deriveAxis(
+            from: axisPicks, construction: axisConstruction, length: axisLength)
     }
 
     /// Pure derivation, so it is unit-testable without an `EditorViewModel`
     /// (gotcha 1: an in-process `ModelContainer` crashes XCTest).
     nonisolated static func deriveAxis(
-        from picks: [AxisPick], length: Double
+        from picks: [AxisPick], construction: AxisConstruction = .automatic, length: Double
     ) -> ConstructionAxis? {
         func sized(_ axis: ConstructionAxis?) -> ConstructionAxis? {
             guard var axis else { return nil }
             axis.length = length
             return axis
         }
+        if construction == .twoPoints {
+            guard picks.count == 2, case let .point(a) = picks[0], case let .point(b) = picks[1]
+            else { return nil }
+            // Centred on the two points, like Along Edge, so it straddles them.
+            return sized(ConstructionAxisKit.alongEdge(start: a, end: b))
+        }
+        guard picks.count == construction.pickCount || construction == .automatic else { return nil }
         switch picks.count {
         case 1:
             switch picks[0] {
@@ -10345,6 +10474,8 @@ final class EditorViewModel {
                 return sized(ConstructionAxisKit.perpendicular(toFaceNormal: normal, at: origin))
             case let .cylindrical(origin, direction, _):
                 return sized(ConstructionAxis(origin: origin, direction: direction))
+            case .point:
+                return nil
             }
         case 2:
             guard case let .planarFace(originA, normalA) = picks[0],
@@ -10362,7 +10493,9 @@ final class EditorViewModel {
     func commitAxis() {
         guard case .pickingAxisReferences = mode, var axis = pendingAxisPreview else { return }
         axis.name = "Axis \(session.document.axes.count + 1)"
-        session.perform(AddConstructionAxisCommand(axis: axis))
+        session.perform(AddConstructionAxisCommand(
+            axis: axis,
+            title: axisConstruction == .automatic ? "Add Axis" : axisConstruction.title))
         resetAxisState()
         mode = .idle
     }
@@ -10380,6 +10513,242 @@ final class EditorViewModel {
             out.append(SIMD3<Float>(simd_mix(start, end, SIMD3(repeating: t1))))
         }
         return out
+    }
+
+    // MARK: - Construction planes (spec §6.1)
+
+    /// Which Construct ▸ Plane entry is armed. Switching clears the picks.
+    var planeConstruction: PlaneConstruction = .offset {
+        didSet {
+            guard oldValue != planeConstruction else { return }
+            planePicks = []
+            recomputePlanePreview()
+        }
+    }
+
+    /// The references picked so far, in slot order.
+    private(set) var planePicks: [ConstructionPick] = []
+
+    /// Offset Plane's distance along the face normal (signed).
+    var planeOffsetDistance: Double = 10 {
+        didSet { if oldValue != planeOffsetDistance { recomputePlanePreview() } }
+    }
+
+    /// Plane Through Edge at Angle's turn about the edge, in degrees.
+    var planeAngleDegrees: Double = 45 {
+        didSet { if oldValue != planeAngleDegrees { recomputePlanePreview() } }
+    }
+
+    /// Plane on Curve at Point's position along the curve, 0…1 by length.
+    /// Set from the tap, then adjustable in the bar.
+    var planeCurveFraction: Double = 0.5 {
+        didSet { if oldValue != planeCurveFraction { recomputePlanePreview() } }
+    }
+
+    private(set) var pendingPlanePreview: ConstructionPlane?
+
+    /// Edge of the drawn tile; scaled to the model like the axis length.
+    private var planeDisplaySize: Double = 100
+
+    /// The slot the next tap fills, or nil when every slot is filled.
+    var planeNextSlot: ConstructionPickKind? {
+        let slots = planeConstruction.slots
+        return planePicks.count < slots.count ? slots[planePicks.count] : nil
+    }
+
+    /// What the bar says: the next thing to tap (with a count when the
+    /// construction needs several), or — once filled — whether it worked.
+    var planeToolPrompt: String {
+        let slots = planeConstruction.slots
+        if let next = planeNextSlot {
+            return slots.count > 1
+                ? "\(next.prompt) (\(planePicks.count + 1) of \(slots.count))"
+                : next.prompt
+        }
+        return pendingPlanePreview == nil
+            ? "These references don't define a plane"
+            : planeConstruction.title
+    }
+
+    var canCommitPlane: Bool { pendingPlanePreview != nil }
+
+    func beginPlaneTool(_ construction: PlaneConstruction) {
+        // A face already selected seeds a face-first construction, the
+        // manual's "select, then choose the tool" route.
+        var seed: ConstructionPick?
+        if construction.slots.first == .face, case .faceSelected = mode, let context = toolContext,
+           context.sourceBody != nil {
+            let n = simd_normalize(context.plane.normal)
+            seed = .face(origin: context.plane.toWorld(context.profile.centroid), normal: n)
+        }
+        cancelTool()
+        cancelTransientPicks()
+        planeConstruction = construction
+        planePicks = seed.map { [$0] } ?? []
+        planeDisplaySize = Self.defaultAxisLength(for: session.document) / 1.5 * 0.8
+        if planeDisplaySize < 1e-6 || session.document.bodies.isEmpty { planeDisplaySize = 80 }
+        selection.removeAll()
+        mode = .pickingPlaneReferences
+        recomputePlanePreview()
+    }
+
+    func cancelPlaneTool() {
+        resetPlaneState()
+        if case .pickingPlaneReferences = mode { mode = .idle }
+    }
+
+    /// Start the picks over without leaving the tool.
+    func clearPlanePicks() {
+        planePicks = []
+        recomputePlanePreview()
+    }
+
+    /// State only — never writes `selection` (gotcha 7).
+    func resetPlaneState() {
+        planePicks = []
+        pendingPlanePreview = nil
+    }
+
+    private func handlePlaneReferenceTap(ray: Ray) {
+        // Every slot filled: a further tap starts a fresh set rather than
+        // being ignored (the same rule as Add Axis).
+        if planeNextSlot == nil { planePicks = [] }
+        guard let kind = planeNextSlot else { return }
+        guard let pick = constructionPick(kind, ray: ray) else {
+            switch kind {
+            // A hint, not an alert: a near miss is part of picking.
+            case .point: showNotice("Tap a corner, a sketch point, or a surface")
+            case .face: showNotice("Tap a flat face or a construction plane")
+            case .edge: showNotice("Tap a straight edge")
+            case .curve: showNotice("Tap an edge or a curve on a body")
+            }
+            return
+        }
+        planePicks.append(pick)
+        if case let .curve(points, at) = pick {
+            planeCurveFraction = ConstructionPlaneKit.fraction(of: at, along: points)
+        }
+        recomputePlanePreview()
+    }
+
+    private func recomputePlanePreview() {
+        guard let plane = ConstructionPlaneKit.derive(
+            planeConstruction, picks: planePicks,
+            offset: planeOffsetDistance, degrees: planeAngleDegrees,
+            curveFraction: planeCurveFraction
+        ) else {
+            pendingPlanePreview = nil
+            return
+        }
+        pendingPlanePreview = ConstructionPlane(plane: plane, size: planeDisplaySize)
+    }
+
+    func commitPlane() {
+        guard case .pickingPlaneReferences = mode, let plane = pendingPlanePreview else { return }
+        session.perform(AddConstructionPlaneCommand(plane: plane, title: planeConstruction.title))
+        resetPlaneState()
+        mode = .idle
+        session.save()
+    }
+
+    /// Reads a tap as one kind of construction reference, in world space, or
+    /// nil when nothing of that kind is under the finger. Shared by
+    /// Construct ▸ Plane and the explicit Construct ▸ Axis entries.
+    func constructionPick(_ kind: ConstructionPickKind, ray: Ray) -> ConstructionPick? {
+        let bodyHit = HitTester.pickBody(ray: ray, in: scene)
+        let tileHit = PlanePicking.pick(ray: ray, tiles: constructionPlaneTiles)
+        let tileFirst = tileHit != nil && (bodyHit == nil || tileHit!.distance <= bodyHit!.distance + 1e-3)
+        func double(_ p: SIMD3<Float>) -> SIMD3<Double> { SIMD3(Double(p.x), Double(p.y), Double(p.z)) }
+
+        switch kind {
+        case .point:
+            if let notable = nearestNotablePoint(to: ray) { return .point(notable) }
+            if let tileHit, tileFirst { return .point(double(ray.point(at: Float(tileHit.distance)))) }
+            if let bodyHit { return .point(double(bodyHit.worldPoint)) }
+            // The grid: snapped to its spacing, like Translate's free point.
+            return translateSnapPoint(to: ray).map(ConstructionPick.point)
+        case .face:
+            if let tileHit, tileFirst {
+                return .face(origin: double(ray.point(at: Float(tileHit.distance))),
+                             normal: tileHit.tile.plane.normal)
+            }
+            guard let bodyHit,
+                  let plane = worldFacePlane(bodyID: bodyHit.bodyID, triangleIndex: bodyHit.triangleIndex)
+            else { return nil }
+            return .face(origin: double(bodyHit.worldPoint), normal: plane.normal)
+        case .edge, .curve:
+            guard let bodyHit, let body = session.document.body(with: bodyHit.bodyID),
+                  let chain = edgeChain(on: body, worldHit: bodyHit.worldPoint,
+                                        maxTurnDegrees: kind == .edge ? 1 : 20)
+            else { return nil }
+            let hit = double(bodyHit.worldPoint)
+            if kind == .curve {
+                return .curve(points: chain, at: hit)
+            }
+            // Straight: every chain point on the line through its ends.
+            guard let start = chain.first, let end = chain.last, chain.count >= 2 else { return nil }
+            let dir = end - start
+            let len = simd_length(dir)
+            guard len > 1e-9 else { return nil }
+            let u = dir / len
+            let tolerance = max(1e-6, len * 1e-3)
+            for p in chain {
+                let off = (p - start) - u * simd_dot(p - start, u)
+                if simd_length(off) > tolerance { return nil }
+            }
+            let t = min(max(simd_dot(hit - start, u), 0), len)
+            return .edge(start: start, end: end, at: start + u * t)
+        }
+    }
+
+    /// The edge chain nearest a tap on `body`, as an ordered WORLD polyline:
+    /// the tapped edge plus its smooth continuation (so a tessellated arc or
+    /// a split straight edge comes back whole). Nil when the tap is out in
+    /// the middle of a face, away from every edge.
+    private func edgeChain(
+        on body: Body, worldHit: SIMD3<Float>, maxTurnDegrees: Float
+    ) -> [SIMD3<Double>]? {
+        let inverse = simd_inverse(body.transform.matrixFloat)
+        let local4 = inverse * SIMD4(worldHit, 1)
+        let localPoint = SIMD3<Float>(local4.x, local4.y, local4.z)
+        let aabb = body.render.localAABB
+        let diagonal = Double(simd_length(aabb.max - aabb.min))
+        guard diagonal > 1e-9 else { return nil }
+        let edges = EdgeTopology.selectableEdges(from: body.render)
+        guard let nearest = edges.min(by: {
+            Self.pointSegmentDistance(localPoint, $0.start, $0.end)
+                < Self.pointSegmentDistance(localPoint, $1.start, $1.end)
+        }) else { return nil }
+        // Generous next to Add Axis's band: here the slot already says
+        // "an edge", so there's no face to confuse it with.
+        guard Self.pointSegmentDistance(localPoint, nearest.start, nearest.end)
+                <= Float(diagonal * Self.axisEdgePickFraction * 2.5)
+        else { return nil }
+        // A straight pick follows only collinear pieces (so the flat run of a
+        // rounded-rectangle outline stays a straight edge); a curve pick
+        // follows the smooth continuation round the bends.
+        let chain = EdgeTopology.smoothChain(containing: nearest, in: edges, maxTurnDegrees: maxTurnDegrees)
+        let matrix = body.transform.matrixFloat
+        func world(_ p: SIMD3<Float>) -> SIMD3<Double> {
+            let w = matrix * SIMD4(p, 1)
+            return SIMD3(Double(w.x), Double(w.y), Double(w.z))
+        }
+        let scale = max(diagonal, 1)
+        return ConstructionPlaneKit.polyline(
+            from: chain.map { (world($0.start), world($0.end)) }, tolerance: scale * 1e-6)
+    }
+
+    /// World points the plane tool draws a marker at: point picks, and the
+    /// tapped spot on faces, edges and curves.
+    var planePickMarkers: [SIMD3<Double>] {
+        planePicks.map {
+            switch $0 {
+            case let .point(p): return p
+            case let .face(origin, _): return origin
+            case let .edge(_, _, at): return at
+            case let .curve(_, at): return at
+            }
+        }
     }
 
     // MARK: - Offset Edge (sketch, spec §1.9)
