@@ -1213,6 +1213,7 @@ struct EditorView: View {
             .onPreferenceChange(BottomBarHeightKey.self) { height in
                 bottomBarHeight = height
             }
+            .onChange(of: viewModel.itemsRevealRequest) { _, _ in showItemsPanel = true }
             .overlay(alignment: .topTrailing) {
                 // Items Manager sidebar (spec §11).
                 if showItemsPanel {

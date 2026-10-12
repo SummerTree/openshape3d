@@ -16715,6 +16715,9 @@ final class EditorViewModel {
         /// True when this node sits at/after the rollback marker, so it is not
         /// evaluated (its bodies are absent). The History panel dims these rows.
         var isRolledBack: Bool = false
+        /// False when a History filter (Variables, Isolated Items, Related to
+        /// Selection) excludes the row; the panel skips it but keeps indices.
+        var matchesFilter: Bool = true
         /// The node's `PatternSpec` when this is a `.pattern` row, else nil.
         /// The panel keys off this to show pattern-specific fields (count,
         /// spacing for linear, angle for circular). `angleDegrees` re-exposes
@@ -17022,11 +17025,101 @@ final class EditorViewModel {
                 hasError: error != nil,
                 errorText: error.map(Self.errorText),
                 isRolledBack: index >= cut,
+                matchesFilter: historyFilterMatches(node),
                 patternSpec: patternSpec,
                 scalars: Self.scalars(of: node.kind),
                 options: Self.options(of: node.kind)
             )
         }
+    }
+
+    // MARK: - History filters (spec §10.1)
+
+    /// History ▸ Filter by: Variables, Isolated Items, Related to Selection.
+    /// Several filters combine (a row must match every one that is on).
+    nonisolated enum HistoryFilter: String, CaseIterable, Sendable {
+        case variables, isolatedItems, relatedToSelection
+        var title: String {
+            switch self {
+            case .variables: return "Variables"
+            case .isolatedItems: return "Isolated Items"
+            case .relatedToSelection: return "Related to Selection"
+            }
+        }
+    }
+
+    var historyFilters: Set<HistoryFilter> = []
+
+    func toggleHistoryFilter(_ filter: HistoryFilter) {
+        if historyFilters.contains(filter) { historyFilters.remove(filter) } else { historyFilters.insert(filter) }
+    }
+
+    /// Whether a filter can apply right now (Isolated Items needs an isolate,
+    /// Related to Selection a selection).
+    func historyFilterAvailable(_ filter: HistoryFilter) -> Bool {
+        switch filter {
+        case .variables: return true
+        case .isolatedItems: return isolatedBodyIDs != nil
+        case .relatedToSelection: return !selection.isEmpty
+        }
+    }
+
+    private func historyFilterMatches(_ node: FeatureNode) -> Bool {
+        for filter in historyFilters where historyFilterAvailable(filter) {
+            switch filter {
+            case .variables:
+                if DocumentSession.formulas(of: node.kind).isEmpty { return false }
+            case .isolatedItems:
+                if let isolated = isolatedBodyIDs, isolated.isDisjoint(with: node.outputBodyIDs) { return false }
+            case .relatedToSelection:
+                if selection.isDisjoint(with: node.outputBodyIDs) { return false }
+            }
+        }
+        return true
+    }
+
+    // MARK: - Items visibility (Item menu)
+
+    /// Item ▸ Show Hidden Bodies: one undo step.
+    func showHiddenBodies() {
+        let hidden = session.document.bodies.filter(\.isHidden)
+        guard !hidden.isEmpty else { return }
+        session.perform(CompositeCommand(title: "Show Hidden Bodies", commands: hidden.map {
+            SetItemVisibilityCommand(item: .body($0.id), isHidden: false)
+        }))
+        session.save()
+    }
+
+    /// Item ▸ Invert Body Visibility: shown bodies hide, hidden ones show.
+    func invertBodyVisibility() {
+        let bodies = session.document.bodies
+        guard !bodies.isEmpty else { return }
+        // A body that hides leaves the selection, and an edit on it ends.
+        let hiding = Set(bodies.filter { !$0.isHidden }.map(\.id))
+        if !hiding.isDisjoint(with: selection) || toolContext.map({ $0.sourceBody.map(hiding.contains) ?? false }) == true {
+            cancelTool()
+            selection.subtract(hiding)
+            let editedBody: BodyID? = {
+                switch mode {
+                case .selected(let id), .editingPrimitive(let id), .faceSelected(let id): return id
+                default: return nil
+                }
+            }()
+            if let editedBody, hiding.contains(editedBody) { mode = .idle }
+        }
+        session.perform(CompositeCommand(title: "Invert Body Visibility", commands: bodies.map {
+            SetItemVisibilityCommand(item: .body($0.id), isHidden: !$0.isHidden)
+        }))
+        session.save()
+    }
+
+    /// Bumped by Reveal in Items Sidebar; the Items sidebar (view state)
+    /// opens when it changes.
+    var itemsRevealRequest = 0
+
+    /// Item ▸ Reveal in Items Sidebar: open Items on the selection.
+    func revealInItems() {
+        itemsRevealRequest += 1
     }
 
     /// The graph's rollback marker: the number of leading (active) nodes, or

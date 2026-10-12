@@ -71,6 +71,7 @@ extension CommandRegistry {
         "view.nearestOrtho", "view.rotateLeft15", "view.rotateRight15", "view.rotateUp15",
         "view.rotateDown15", "view.rotateLeft45", "view.rotateRight45", "view.rotateUp45",
         "view.rotateDown45", "view.fieldOfView", "view.lockGrid",
+        "items.showHidden", "items.invert", "items.reveal",
     ]
 
     /// Catalog entries that advertise a chord but have no editor entry point
@@ -259,6 +260,9 @@ extension EditorViewModel {
         case "view.rotateDown45":  rotateView(pitch: -45);      return true
         case "view.fieldOfView":   showFieldOfViewSheet = true; return true
         case "view.lockGrid":      toggleLockGridSize();        return true
+        case "items.showHidden":   showHiddenBodies();          return true
+        case "items.invert":       invertBodyVisibility();      return true
+        case "items.reveal":       revealInItems();             return true
 
         default:
             return false

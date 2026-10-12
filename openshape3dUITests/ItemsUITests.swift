@@ -140,4 +140,29 @@ final class ItemsUITests: XCTestCase {
         XCTAssertTrue(app.descendants(matching: .any)["ItemName-MyPart"].firstMatch.waitForExistence(timeout: 3),
                       "Undo should restore the deleted body")
     }
+
+    /// Items ▸ eye menu: Invert Body Visibility hides the shown box (so Show
+    /// Hidden Bodies becomes available), and Show Hidden Bodies brings it back.
+    func testInvertAndShowHiddenBodies() throws {
+        let app = XCUIApplication()
+        app.launchEnvironment["OS3D_FRESH"] = "1"
+        app.launchEnvironment["OS3D_RESET_STORE"] = "1"
+        app.launchEnvironment["OS3D_DEBUG_SEED"] = "1"
+        app.launch()
+        XCTAssertTrue(app.buttons["ItemsButton"].waitForExistence(timeout: 10))
+        app.buttons["ItemsButton"].tap()
+
+        let menu = app.buttons["ItemsVisibilityMenu"]
+        XCTAssertTrue(menu.waitForExistence(timeout: 3))
+        menu.tap()
+        XCTAssertFalse(app.buttons["Show Hidden Bodies"].isEnabled, "Nothing is hidden yet")
+        app.buttons["Invert Body Visibility"].tap()
+        XCTAssertFalse(app.staticTexts["Volume"].exists, "The box hid and left the selection")
+
+        menu.tap()
+        XCTAssertTrue(app.buttons["Show Hidden Bodies"].isEnabled)
+        app.buttons["Show Hidden Bodies"].tap()
+        menu.tap()
+        XCTAssertFalse(app.buttons["Show Hidden Bodies"].isEnabled, "Everything is shown again")
+    }
 }

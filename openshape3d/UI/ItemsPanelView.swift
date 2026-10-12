@@ -154,6 +154,15 @@ struct ItemsPanelView: View {
             Text("Items")
                 .font(.subheadline.weight(.semibold))
             Spacer()
+            Menu {
+                Button("Show Hidden Bodies") { viewModel.showHiddenBodies() }
+                    .disabled(!viewModel.session.document.bodies.contains(where: \.isHidden))
+                Button("Invert Body Visibility") { viewModel.invertBodyVisibility() }
+                    .disabled(viewModel.session.document.bodies.isEmpty)
+            } label: {
+                Image(systemName: "eye")
+            }
+            .accessibilityIdentifier("ItemsVisibilityMenu")
             Button {
                 viewModel.createItemFolder()
             } label: {

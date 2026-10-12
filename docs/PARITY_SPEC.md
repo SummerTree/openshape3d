@@ -1720,6 +1720,11 @@ steps. Documented repair flows: remove the missing face from a Face Offset
 selection; re-project a lost face, then re-reference the extrusion profile;
 re-select the original face to fix a broken Shell (Action camera pts 2–3;
 Floor fan).
+**Filter by (2026-10-12):** the History header's filter menu narrows the
+list to Variables (features driven by a variable formula), Isolated Items
+(features of the isolated bodies) and Related to Selection (features that
+produced a selected body); filters combine, and one that can't apply right
+now is disabled.
 **Status:** ✅ implemented (Phase D). A real parametric feature graph
 (`FeatureGraph`/`FeatureNode`) with a History sidebar: editable parameters that
 rebuild everything downstream, topological naming so a `FaceRef`/`EdgeRef`
@@ -1779,6 +1784,10 @@ Folders: create from selection (button bottom-left), drag-and-drop to
 organize, nested folders. "Reveal in Items" from the modeling space highlights
 the item's row. Three-dots menu: Show Hidden Items, Invert All Item
 Visibility. Names are shared with History (rename in one place updates both).
+**Visibility menu (2026-10-12):** the Items header's eye menu has Show
+Hidden Bodies and Invert Body Visibility (each one undo step); Reveal in
+Items Sidebar opens Items on the selection; all three in Command Search
+(`ItemsUITests`).
 **Status:** 🟡 partial — an Items panel (toolbar "Items" button,
 `ItemsPanelView`) lists bodies, sketches, construction planes, **images**,
 and **symbols** with type icons; per row: visibility eye

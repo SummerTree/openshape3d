@@ -569,6 +569,21 @@ final class DocumentSession {
         }
     }
 
+    /// The variable formulas a node's parameters are driven by (empty when
+    /// every value was typed). The same parameters `reevaluatedKind` revisits.
+    static func formulas(of kind: FeatureKind) -> [String] {
+        let exprs: [Expr]
+        switch kind {
+        case let .extrude(_, _, distance, _, _, _): exprs = [distance]
+        case let .revolve(_, _, _, angle, _): exprs = [angle]
+        case let .pushPull(_, distance, _): exprs = [distance]
+        case let .scaleFace(_, factor): exprs = [factor]
+        case let .rotateFace(_, angle, _): exprs = [angle]
+        default: exprs = []
+        }
+        return exprs.compactMap(\.formula)
+    }
+
     /// Pre-resolve feature `Expr` formulas against the current variable values,
     /// writing the fresh `.value` into `document.features` IN PLACE. Optional hook
     /// for a rebuild triggered by means OTHER than a variable edit (so it still
