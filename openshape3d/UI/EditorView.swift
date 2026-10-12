@@ -186,6 +186,8 @@ struct EditorView: View {
     @State private var exportDocument: ExportDocument?
     @State private var showItemsPanel = false
     @State private var showBugReport = false
+    /// Export ▸ Open on the Web… (WebHandoffSheet).
+    @State private var showWebHandoff = false
     /// Set by a failure alert's "Report This…"; nil from the toolbar button.
     @State private var bugReportDraft: BugReportDraft?
     @State private var pendingMeshImport: MeshImportProbe?
@@ -846,6 +848,15 @@ struct EditorView: View {
     /// screenshot, and — where ModelIO can write USDZ — USDZ + AR Preview.
     private func exportMenu(_ viewModel: EditorViewModel) -> some View {
         Menu {
+            // Send the design to app.openshape3d.com and get a link / QR code
+            // (WebHandoff.swift). Uploads only after the sheet's Send.
+            Button {
+                showWebHandoff = true
+            } label: {
+                Label("Open on the Web…", systemImage: "globe")
+            }
+            .accessibilityIdentifier("OpenOnWebButton")
+            Divider()
             Button("STL") {
                 if let data = viewModel.exportSTL() {
                     exportDocument = ExportDocument(
@@ -1744,6 +1755,12 @@ struct EditorView: View {
             }
             .sheet(isPresented: $showSettings) {
                 SettingsView(settings: AppSettings.shared)
+            }
+            .sheet(isPresented: $showWebHandoff) {
+                WebHandoffSheet(designName: project.name) {
+                    viewModel.session.save()   // rows must reflect live edits
+                    return ProjectArchive.archive(from: viewModel.session.project).encoded()
+                }
             }
             .sheet(isPresented: $showBugReport) {
                 BugReportSheet(
