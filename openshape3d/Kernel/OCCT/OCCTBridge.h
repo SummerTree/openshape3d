@@ -573,6 +573,17 @@ typedef NS_ENUM(NSInteger, OCCTOpCode) {
 /// caller reports an unreadable/unsupported file rather than crashing.
 + (NSArray<OCCTShape *> *)readSTEPFromPath:(NSString *)path;
 
+// MARK: - IGES interchange (File ▸ Export to ▸ IGES, Import)
+
+/// Write `shapes` to an IGES 5.3 file at `path`, solids as B-rep (MSBO), in
+/// millimetres. NO on failure.
++ (BOOL)writeIGESShapes:(NSArray<OCCTShape *> *)shapes toPath:(NSString *)path NS_SWIFT_NAME(writeIGES(_:toPath:));
+
+/// Read the solids from the IGES file at `path`. IGES often carries trimmed
+/// SURFACES rather than solids: those are sewn and closed into solids where
+/// they form closed shells. Healed and validated like STEP; empty on failure.
++ (NSArray<OCCTShape *> *)readIGESFromPath:(NSString *)path NS_SWIFT_NAME(readIGES(fromPath:));
+
 // MARK: - Geometry health + capture replay (docs/FREECAD_PLAYBOOK.md D1/D2)
 
 /// Deep validity report over a shape — the "Check Geometry" pipeline every

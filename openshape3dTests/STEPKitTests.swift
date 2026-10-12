@@ -65,6 +65,22 @@ final class STEPKitTests: XCTestCase {
         XCTAssertEqual(counts.planar, 2, "both caps survive")
     }
 
+    /// IGES carries the exact B-rep too: the cylinder comes back as one
+    /// cylindrical surface and two planar caps, and two bodies as two solids.
+    func testIGESRoundTripStaysAnalytic() throws {
+        guard case let .success(data, skipped) = STEPKit.export(
+            bodies: [cylinderBody(name: "A"), cylinderBody(name: "B", radius: 3)], format: .iges)
+        else { return XCTFail("bodies with a brep must export to IGES") }
+        XCTAssertTrue(skipped.isEmpty)
+        XCTAssertFalse(data.isEmpty)
+        let solids = STEPKit.solids(from: data, format: .iges)
+        XCTAssertEqual(solids.count, 2, "one solid per body")
+        let counts = OCCTKernel.faceTypeCounts(try XCTUnwrap(solids.first))
+        XCTAssertEqual(counts.cylindrical, 1, "the analytic wall survives")
+        XCTAssertEqual(counts.planar, 2)
+        XCTAssertTrue(STEPKit.solids(from: Data("not an iges file".utf8), format: .iges).isEmpty)
+    }
+
     /// Each solid in the file is a separate body, so a two-body design
     /// round-trips as two bodies rather than one merged compound.
     func testEveryBodyBecomesItsOwnSolid() {

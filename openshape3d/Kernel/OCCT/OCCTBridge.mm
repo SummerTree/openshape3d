@@ -41,6 +41,11 @@
 #include <BRepFilletAPI_LocalOperation.hxx>
 #include <STEPControl_Writer.hxx>
 #include <STEPControl_Reader.hxx>
+#include <IGESControl_Writer.hxx>
+#include <IGESControl_Reader.hxx>
+#include <IGESControl_Controller.hxx>
+#include <BRepBuilderAPI_Sewing.hxx>
+#include <BRepBuilderAPI_MakeSolid.hxx>
 #include <IFSelect_ReturnStatus.hxx>
 #include <BRepOffsetAPI_MakeThickSolid.hxx>
 #include <ShapeUpgrade_ShapeDivideContinuity.hxx>
@@ -3720,6 +3725,68 @@ static void OS3DCollectMakerHistoryThrough(BRepBuilderAPI_MakeShape &builder,
             } else {
                 append(shape);
             }
+        }
+    } catch (...) {
+        return [NSMutableArray array];
+    }
+    return out;
+}
+
+// MARK: - IGES interchange
+
++ (BOOL)writeIGESShapes:(NSArray<OCCTShape *> *)shapes toPath:(NSString *)path {
+    if (shapes.count == 0 || path.length == 0) return NO;
+    try {
+        IGESControl_Controller::Init();
+        // Unit "MM"; write mode 1 = solids as B-rep (MSBO entities).
+        IGESControl_Writer writer("MM", 1);
+        bool any = false;
+        for (OCCTShape *s in shapes) {
+            if (s == nil || s->_shape.IsNull()) continue;
+            if (!writer.AddShape(s->_shape)) return NO;
+            any = true;
+        }
+        if (!any) return NO;
+        writer.ComputeModel();
+        return writer.Write(path.fileSystemRepresentation) ? YES : NO;
+    } catch (...) {
+        return NO;
+    }
+}
+
++ (NSArray<OCCTShape *> *)readIGESFromPath:(NSString *)path {
+    NSMutableArray<OCCTShape *> *out = [NSMutableArray array];
+    if (path.length == 0) return out;
+    try {
+        IGESControl_Controller::Init();
+        IGESControl_Reader reader;
+        if (reader.ReadFile(path.fileSystemRepresentation) != IFSelect_RetDone) return out;
+        reader.TransferRoots();
+        const TopoDS_Shape shape = reader.OneShape();
+        if (shape.IsNull()) return out;
+        const auto append = [out](const TopoDS_Shape &candidate) {
+            if (!OS3DFiniteBounds(candidate)) return;
+            const TopoDS_Shape valid = OS3DHealAndValidate(candidate);
+            if (valid.IsNull()) return;
+            OCCTShape *w = [OCCTShape new];
+            w->_shape = valid;
+            [out addObject:w];
+        };
+        TopExp_Explorer solids(shape, TopAbs_SOLID);
+        if (solids.More()) {
+            for (; solids.More(); solids.Next()) append(solids.Current());
+            return out;
+        }
+        // Surfaces only: sew them, and close each closed shell into a solid.
+        BRepBuilderAPI_Sewing sewing(1e-3);
+        sewing.Add(shape);
+        sewing.Perform();
+        const TopoDS_Shape sewn = sewing.SewedShape();
+        for (TopExp_Explorer shells(sewn, TopAbs_SHELL); shells.More(); shells.Next()) {
+            const TopoDS_Shell &shell = TopoDS::Shell(shells.Current());
+            if (!BRep_Tool::IsClosed(shell)) continue;
+            BRepBuilderAPI_MakeSolid makeSolid(shell);
+            if (makeSolid.IsDone()) append(makeSolid.Solid());
         }
     } catch (...) {
         return [NSMutableArray array];

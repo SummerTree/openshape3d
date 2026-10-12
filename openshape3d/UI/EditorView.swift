@@ -30,11 +30,13 @@ struct ExportDocument: FileDocument {
     /// makes Xcode ignore `INFOPLIST_FILE` outright) — its own change.
     static let stepType = UTType("org.iso.step")
         ?? UTType(filenameExtension: "step") ?? .data
+    /// IGES 5.3: like STEP, no system UTI (dynamic, paired with `.data`).
+    static let igesType = UTType(filenameExtension: "igs") ?? .data
     static let usdzType = UTType.usdz
     /// The .os3d project archive (Phase F, spec §13).
     static let os3dType = UTType(filenameExtension: "os3d") ?? .data
     static var readableContentTypes: [UTType] {
-        [stlType, objType, threeMFType, glbType, dxfType, stepType,
+        [stlType, objType, threeMFType, glbType, dxfType, stepType, igesType,
          usdzType, os3dType, .png, .data]
     }
 
@@ -216,7 +218,7 @@ struct EditorView: View {
     /// one in the chain (found 2026-08-29 while wiring STEP: "Image from
     /// Files…" presented, the three above it did not).
     private enum ImportRequest: Equatable {
-        case stl, dxf, step, mesh, image
+        case stl, dxf, step, iges, mesh, image
 
         var contentTypes: [UTType] {
             switch self {
@@ -227,6 +229,7 @@ struct EditorView: View {
             // hatch the `.os3d` archive importer already uses.
             case .dxf: [ExportDocument.dxfType, .data]
             case .step: [ExportDocument.stepType, .data]
+            case .iges: [ExportDocument.igesType, .data]
             // glTF/GLB, USDZ, OBJ (+MTL/textures) and zips of them. `.data`
             // again: .glb/.gltf/.obj have no system UTI worth trusting.
             case .mesh: [ExportDocument.usdzType, .zip, .data]
@@ -945,6 +948,11 @@ struct EditorView: View {
                 showImporter = true
             }
             .accessibilityIdentifier("ImportSTEP")
+            Button("IGES File…") {
+                importRequest = .iges
+                showImporter = true
+            }
+            .accessibilityIdentifier("ImportIGES")
             // Textured meshes: glTF/GLB, USDZ, OBJ with its MTL and images, .blend,
             // or a zip holding any of them. Parts become mesh bodies.
             Button("OBJ / glTF / USDZ / Blender…") {
@@ -1045,6 +1053,18 @@ struct EditorView: View {
                 }
             }
             .accessibilityIdentifier("ExportSTEP")
+            // IGES: the other exact-geometry exchange format older CAD and CAM
+            // tools still ask for. Same rule as STEP: analytic bodies only.
+            Button("IGES") {
+                if let data = viewModel.exportSTEP(format: .iges) {
+                    exportDocument = ExportDocument(
+                        data: data,
+                        contentType: ExportDocument.igesType,
+                        fileExtension: "igs"
+                    )
+                }
+            }
+            .accessibilityIdentifier("ExportIGES")
             Divider()
             // Full-fidelity project archive: sketches, features, variables —
             // everything (Phase F, spec §13). Mesh exports above are geometry-
@@ -2018,6 +2038,7 @@ struct EditorView: View {
             }
         case .dxf: viewModel.importDXF(data: data, fileName: name)
         case .step: viewModel.importSTEP(data: data, fileName: name)
+        case .iges: viewModel.importSTEP(data: data, fileName: name, format: .iges)
         case .image: viewModel.beginInsertImage(data: data)
         }
     }

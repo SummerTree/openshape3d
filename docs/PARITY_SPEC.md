@@ -1831,6 +1831,8 @@ Import Planar Curves as Sketches. Native-format imports keep editable per-featur
 history; all other formats arrive as a single Import history step. STEP
 assembly hierarchy → nested folders. Mesh rules: booleans work only on closed
 mesh bodies; any boolean involving a mesh yields a mesh.
+**IGES (2026-10-12):** Import ▸ IGES File… reads solids (and sews IGES surface
+models into solids where they close), healed and validated like STEP.
 **Status:** 🟡 partial. **STEP import now ships** (`OCCTKernel.readSTEP`,
 OCCT DataExchange) — each solid in the file becomes a body carrying its
 analytic B-rep, so imported geometry is exact rather than tessellated. Also
@@ -1871,6 +1873,8 @@ unitless so the unit is declared at export). Favorite formats (star) persist;
 batch export multiple formats; isolated parts exportable in any type except
 the native one. Screenshot tool: grid on/off, transparency, body edges, item chooser,
 resolution Actual/Double/FullHD/4K/8K, remembers settings, clipboard shortcut.
+**IGES (2026-10-12):** Export ▸ IGES writes the exact B-rep (IGES 5.3, solids
+as MSBO, mm) — same analytic-bodies-only rule as STEP (`STEPKitTests`).
 **Status:** 🟡 partial. **STEP (AP214) export now ships** via OCCT
 DataExchange (`OCCTKernel.writeSTEP`) — unlike every mesh format below it
 carries the EXACT B-rep, so analytic surfaces survive into other CAD

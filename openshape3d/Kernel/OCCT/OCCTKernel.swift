@@ -1061,6 +1061,18 @@ nonisolated enum OCCTKernel {
         OCCTBridge.readSTEP(fromPath: url.path).map(BRepHandle.init)
     }
 
+    /// Write analytic solids to an IGES file (B-rep, millimetres).
+    static func writeIGES(_ handles: [BRepHandle], to url: URL) -> Bool {
+        guard !handles.isEmpty else { return false }
+        return OCCTBridge.writeIGES(handles.map(\.shape), toPath: url.path)
+    }
+
+    /// Read the solids from an IGES file (surfaces are sewn into solids where
+    /// they close); empty when unreadable or there are none.
+    static func readIGES(from url: URL) -> [BRepHandle] {
+        OCCTBridge.readIGES(fromPath: url.path).map(BRepHandle.init)
+    }
+
     /// Serialize a solid so the analytic geometry survives a document reload.
     static func serialize(_ handle: BRepHandle) -> Data? {
         OCCTBridge.serializedShape(handle.shape)

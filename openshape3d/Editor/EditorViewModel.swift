@@ -258,34 +258,35 @@ final class EditorViewModel {
     /// exact B-rep, so a cylinder arrives in the other CAD tool as a cylinder
     /// — which is also why mesh-only bodies can't ride along: they are named
     /// in a notice instead of being quietly triangulated.
-    func exportSTEP() -> Data? {
+    func exportSTEP(format: ExchangeFormat = .step) -> Data? {
         guard let bodies = exportableBodies() else { return nil }
-        switch STEPKit.export(bodies: bodies) {
+        let name = format.title
+        switch STEPKit.export(bodies: bodies, format: format) {
         case let .success(data, skipped):
             if !skipped.isEmpty {
-                showNotice(skippedNotice(skipped))
+                showNotice(skippedNotice(skipped, format: name))
             }
             return data
         case let .nothingAnalytic(skipped):
             errorMessage = skipped.count == 1
                 ? "“\(skipped[0])” has no analytic B-rep, so there is nothing to write "
-                  + "to STEP. Bodies imported as meshes can be exported as STL, OBJ, GLB or 3MF."
+                  + "to \(name). Bodies imported as meshes can be exported as STL, OBJ, GLB or 3MF."
                 : "None of these \(skipped.count) bodies has an analytic B-rep, so there is "
-                  + "nothing to write to STEP. Mesh bodies can be exported as STL, OBJ, GLB or 3MF."
+                  + "nothing to write to \(name). Mesh bodies can be exported as STL, OBJ, GLB or 3MF."
             return nil
         case .failed:
-            reportFailure("Couldn't write the STEP file — please try again.")
+            reportFailure("Couldn't write the \(name) file — please try again.")
             return nil
         }
     }
 
     /// "2 mesh-only bodies were skipped (Imported, Imported 2)" — the names
     /// matter, because a partial export otherwise looks like a complete one.
-    private func skippedNotice(_ skipped: [String]) -> String {
+    private func skippedNotice(_ skipped: [String], format: String = "STEP") -> String {
         let names = skipped.prefix(3).joined(separator: ", ")
         let more = skipped.count > 3 ? ", +\(skipped.count - 3) more" : ""
         let noun = skipped.count == 1 ? "body" : "bodies"
-        return "STEP skipped \(skipped.count) mesh-only \(noun) (\(names)\(more))."
+        return "\(format) skipped \(skipped.count) mesh-only \(noun) (\(names)\(more))."
     }
 
     /// DXF of the active sketch while sketching, else of the ground-plane
@@ -391,10 +392,10 @@ final class EditorViewModel {
     /// carrying its analytic `brep` — so an imported part can be filleted,
     /// shelled and booleaned on the OCCT path exactly like one modelled here.
     /// All of them land as ONE undo step.
-    func importSTEP(data: Data, fileName: String) {
-        let solids = STEPKit.solids(from: data)
+    func importSTEP(data: Data, fileName: String, format: ExchangeFormat = .step) {
+        let solids = STEPKit.solids(from: data, format: format)
         guard !solids.isEmpty else {
-            errorMessage = "Couldn't import “\(fileName)” — no solids found in the STEP file."
+            errorMessage = "Couldn't import “\(fileName)” — no solids found in the \(format.title) file."
             return
         }
         let stem = (fileName as NSString).deletingPathExtension
@@ -417,7 +418,7 @@ final class EditorViewModel {
         }
         cancelTransientPicks()
         session.perform(CompositeCommand(
-            title: "Import STEP",
+            title: "Import \(format.title)",
             commands: bodies.map { AddBodyCommand(body: $0, title: "Import \($0.name)") }))
         selection = Set(bodies.map(\.id))
         mode = .idle
