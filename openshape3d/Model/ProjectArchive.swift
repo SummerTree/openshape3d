@@ -33,6 +33,8 @@ nonisolated struct ProjectArchive: Codable, Sendable {
     var rollbackIndex: Int?
     /// Items Manager folders (`[ItemFolder]` JSON); absent in older archives.
     var itemFolders: Data?
+    /// Pinned measurements (`[PinnedMeasurement]` JSON); absent in older archives.
+    var pinnedMeasurements: Data?
 
     struct BodyRecord: Codable, Sendable {
         var id: UUID
@@ -205,6 +207,7 @@ extension ProjectArchive {
         archive.thumbnail = project.thumbnail
         archive.rollbackIndex = project.rollbackIndex
         archive.itemFolders = project.itemFoldersData
+        archive.pinnedMeasurements = project.pinnedMeasurementsData
         archive.bodies = project.bodies.map {
             BodyRecord(
                 id: $0.bodyID, name: $0.name, transform: $0.transformData,
@@ -252,6 +255,7 @@ extension ProjectArchive {
         project.thumbnail = thumbnail
         project.rollbackIndex = rollbackIndex
         project.itemFoldersData = itemFolders
+        project.pinnedMeasurementsData = pinnedMeasurements
         context.insert(project)
 
         for record in bodies {

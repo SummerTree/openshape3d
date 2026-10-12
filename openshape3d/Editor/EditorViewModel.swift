@@ -1129,6 +1129,13 @@ final class EditorViewModel {
                 into: &scene
             )
         }
+        // Pinned measurements (spec §16.3): their spans and angle arms, in
+        // the measure accent, unless View ▸ Show Pinned Measurements is off.
+        if showPinnedMeasurements, !session.document.pinnedMeasurements.isEmpty {
+            let segments = session.document.pinnedMeasurements.flatMap { $0.segments }
+                .map { SIMD3<Float>(Float($0.x), Float($0.y), Float($0.z)) }
+            scene.sketchLines.append(SketchLineBatch(segments: segments, color: SIMD4(0.0, 0.52, 1.0, 0.85)))
+        }
         // Construction axes (spec §6.2): a dashed reference line, drawn in the
         // same muted blue as the plane tiles so construction geometry reads as
         // one family and stays distinct from sketch geometry.
@@ -1276,6 +1283,14 @@ final class EditorViewModel {
                     c - SIMD3(0, r, 0), c + SIMD3(0, r, 0),
                     c - SIMD3(0, 0, r), c + SIMD3(0, 0, r),
                 ]
+            }
+            if measurePoints.count == 3 {
+                // 3-Point Angle: the two arms meeting at the middle pick.
+                for i in [0, 2] {
+                    let a = measurePoints[i], v = measurePoints[1]
+                    segments += [SIMD3(Float(a.x), Float(a.y), Float(a.z)),
+                                 SIMD3(Float(v.x), Float(v.y), Float(v.z))]
+                }
             }
             if measurePoints.count == 2 {
                 let a = measurePoints[0]
@@ -15215,8 +15230,63 @@ final class EditorViewModel {
 
     // MARK: - Measure tool (spec §16.3 v1: point-to-point)
 
-    /// Notable points picked so far (0–2, world space). A third tap restarts.
+    /// Measure's types (spec §16.3): a distance between two points, or the
+    /// angle at the middle of three.
+    nonisolated enum MeasureType: String, CaseIterable, Sendable {
+        case pointToPoint, threePointAngle
+        var title: String {
+            switch self {
+            case .pointToPoint: return "Point-to-Point Distance"
+            case .threePointAngle: return "3-Point Angle"
+            }
+        }
+        var pointCount: Int { self == .pointToPoint ? 2 : 3 }
+    }
+
+    /// Switching type starts the picks over.
+    var measureType: MeasureType = .pointToPoint {
+        didSet { if oldValue != measureType { measurePoints.removeAll() } }
+    }
+
+    /// View ▸ Show Pinned Measurements. Not persisted, like the display mode.
+    var showPinnedMeasurements = true
+
+    /// Notable points picked so far (world space). A tap past the type's
+    /// count restarts.
     var measurePoints: [SIMD3<Double>] = []
+
+    /// The 3-Point Angle reading in degrees, once three points are picked.
+    var measureAngle: Double? {
+        guard measureType == .threePointAngle, measurePoints.count == 3 else { return nil }
+        return MeasureKit.angleDegrees(measurePoints[0], vertex: measurePoints[1], measurePoints[2])
+    }
+
+    /// The finished measurement as a pin, or nil while picks are missing.
+    var measurementToPin: PinnedMeasurement? {
+        switch measureType {
+        case .pointToPoint:
+            guard measurePoints.count == 2 else { return nil }
+            return PinnedMeasurement(kind: .distance, points: measurePoints)
+        case .threePointAngle:
+            guard measureAngle != nil else { return nil }
+            return PinnedMeasurement(kind: .angle, points: measurePoints)
+        }
+    }
+
+    /// Measure ▸ Pin to Always Show: keep the current reading in the model.
+    func pinCurrentMeasurement() {
+        guard let pin = measurementToPin else { return }
+        session.perform(PinMeasurementCommand(measurement: pin))
+        measurePoints.removeAll()
+        session.save()
+    }
+
+    func unpinMeasurement(_ id: UUID) {
+        guard let index = session.document.pinnedMeasurements.firstIndex(where: { $0.id == id }) else { return }
+        session.perform(UnpinMeasurementCommand(
+            measurement: session.document.pinnedMeasurements[index], index: index))
+        session.save()
+    }
 
     var measureResult: (distance: Double, deltas: SIMD3<Double>)? {
         guard measurePoints.count == 2 else { return nil }
@@ -15245,7 +15315,7 @@ final class EditorViewModel {
 
     private func handleMeasureTap(ray: Ray) {
         guard let point = nearestNotablePoint(to: ray) else { return }
-        if measurePoints.count >= 2 {
+        if measurePoints.count >= measureType.pointCount {
             measurePoints.removeAll() // next tap restarts the measurement
         }
         measurePoints.append(point)

@@ -36,6 +36,8 @@ nonisolated struct DesignDocument: Sendable {
     /// pre-Phase-D projects. Serialized per-row into `PersistedVariable` by
     /// `DocumentSession.save` (wired in task B1), mirroring the feature path.
     var variables: [Variable] = []
+    /// Measurements pinned to always show (spec §16.3).
+    var pinnedMeasurements: [PinnedMeasurement] = []
 
     /// Monotonic revision source for mesh changes (GPU cache invalidation).
     private var revisionCounter: UInt64 = 0

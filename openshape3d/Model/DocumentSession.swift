@@ -85,6 +85,8 @@ final class DocumentSession {
         var bodyBrep: Set<UUID> = []
         /// The Items-folder blob failed to decode — leave the column alone.
         var itemFolders = false
+        /// The pinned-measurements blob failed to decode — leave the column alone.
+        var pinnedMeasurements = false
         /// Whole rows that could not be decoded (absent from the document).
         var rowCount: Int {
             bodies.count + sketches.count + planes.count + axes.count
@@ -766,6 +768,13 @@ final class DocumentSession {
                 unreadableRows.itemFolders = true
             }
         }
+        if let data = project.pinnedMeasurementsData {
+            if let pins = try? JSONDecoder().decode([PinnedMeasurement].self, from: data) {
+                loaded.pinnedMeasurements = pins
+            } else {
+                unreadableRows.pinnedMeasurements = true
+            }
+        }
         // Phase D feature graph: replay order is `orderIndex` (SwiftData
         // relationships are unordered). A node whose kind blob won't decode is
         // skipped (decodeFeature -> nil), not fatal. Pre-Phase-D projects have no
@@ -1193,6 +1202,11 @@ final class DocumentSession {
             let folders = ItemFolderTree(document.itemFolders).pruned(to: document.itemKeys)
             let data = folders.isEmpty ? nil : try? JSONEncoder().encode(folders)
             if project.itemFoldersData != data { project.itemFoldersData = data }
+        }
+        if !unreadableRows.pinnedMeasurements {
+            let pins = document.pinnedMeasurements
+            let data = pins.isEmpty ? nil : try? JSONEncoder().encode(pins)
+            if project.pinnedMeasurementsData != data { project.pinnedMeasurementsData = data }
         }
 
         project.modifiedAt = Date()

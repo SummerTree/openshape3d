@@ -375,8 +375,16 @@ struct EditorView: View {
     /// Measure tool pill: prompts for picks, then shows distance + deltas.
     private func measurePill(_ viewModel: EditorViewModel) -> some View {
         HStack(spacing: 12) {
-            Image(systemName: "ruler")
-            if let result = viewModel.measureResult {
+            Menu {
+                ForEach(EditorViewModel.MeasureType.allCases, id: \.self) { type in
+                    Button(type.title) { viewModel.measureType = type }
+                        .accessibilityIdentifier("MeasureType-" + type.rawValue)
+                }
+            } label: {
+                Image(systemName: viewModel.measureType == .pointToPoint ? "ruler" : "angle")
+            }
+            .accessibilityIdentifier("MeasureTypeMenu")
+            if let result = viewModel.measureResult, viewModel.measureType == .pointToPoint {
                 Text(EditorViewModel.formattedLength(result.distance))
                     .font(.subheadline.weight(.semibold))
                     .monospacedDigit()
@@ -390,11 +398,24 @@ struct EditorView: View {
                 .font(.caption)
                 .monospacedDigit()
                 .foregroundStyle(.secondary)
+            } else if let angle = viewModel.measureAngle {
+                Text(String(format: "%.2f°", angle))
+                    .font(.subheadline.weight(.semibold))
+                    .monospacedDigit()
+                    .accessibilityIdentifier("MeasureAngleValue")
             } else {
-                Text(viewModel.measurePoints.isEmpty
-                    ? "Tap two points to measure"
-                    : "Tap the second point")
+                Text(measurePrompt(viewModel))
                     .font(.subheadline)
+                    .accessibilityIdentifier("MeasurePrompt")
+            }
+            if viewModel.measurementToPin != nil {
+                Button {
+                    viewModel.pinCurrentMeasurement()
+                } label: {
+                    Label("Pin", systemImage: "pin")
+                }
+                .controlSize(.small)
+                .accessibilityIdentifier("PinMeasurement")
             }
             Button("Done") {
                 viewModel.exitMeasure()
@@ -408,6 +429,16 @@ struct EditorView: View {
         .background(.regularMaterial, in: Capsule())
         .shadow(color: .black.opacity(0.15), radius: 8, y: 2)
         .padding(.top, 8)
+    }
+
+    private func measurePrompt(_ viewModel: EditorViewModel) -> String {
+        let picked = viewModel.measurePoints.count
+        switch viewModel.measureType {
+        case .pointToPoint:
+            return picked == 0 ? "Tap two points to measure" : "Tap the second point"
+        case .threePointAngle:
+            return ["Tap the first arm's point", "Tap the corner", "Tap the second arm's point"][min(picked, 2)]
+        }
     }
 
     /// Chamfer/Fillet bar (Phase E, spec §4.3): shows the pick prompt, the
@@ -1125,6 +1156,7 @@ struct EditorView: View {
                 ZStack {
                     ExtrudeGizmoOverlay(viewModel: viewModel)
                     MoveDistanceOverlay(viewModel: viewModel)
+                    PinnedMeasurementsOverlay(viewModel: viewModel)
                     RotationOrbitOverlay(viewModel: viewModel)
                 }
             }
@@ -1760,6 +1792,10 @@ struct EditorView: View {
                             Toggle("Show Hidden Edges", isOn: Binding(
                                 get: { viewModel.showHiddenEdges },
                                 set: { viewModel.showHiddenEdges = $0 }
+                            ))
+                            Toggle("Show Pinned Measurements", isOn: Binding(
+                                get: { viewModel.showPinnedMeasurements },
+                                set: { viewModel.showPinnedMeasurements = $0 }
                             ))
                         } label: {
                             Label(

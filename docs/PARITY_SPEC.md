@@ -2090,9 +2090,16 @@ for a quick face-to-face distance.
 (signed-tetrahedron sum) + bounding box, sketch-entity length and
 radius/diameter; and a palette Measure mode measures point-to-point
 distance with X/Y/Z deltas over notable points (sketch snap points + body
-vertices, cross markers + span line rendered in the overlay). Missing: the
-movable panel, angle/min-distance/central-distance types, pinned
-measurements, row-hover highlighting.
+vertices, cross markers + span line rendered in the overlay). **3-Point
+Angle and Pin (2026-10-12):** the pill's type menu switches to 3-Point Angle
+(first arm, corner, second arm → degrees, both arms drawn); **Pin** keeps the
+current reading in the model as a labelled annotation
+(`PinnedMeasurement`, undoable, saved in the project and the .os3d archive),
+View ▸ Show Pinned Measurements hides them, and in Measure mode each label's
+✕ unpins it (`PinnedMeasurementTests`, `MeasureUITests`). Missing: the
+movable panel, Object Measurements as a type (the info bar covers it),
+min-distance/central-distance, row-hover highlighting, and pins following
+geometry that moves.
 **Feasibility:** [mesh-kernel OK]
 
 ### 16.4 Display Modes

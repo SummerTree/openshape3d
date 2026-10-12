@@ -76,6 +76,10 @@ final class Project {
     /// `nil` = none. A defaulted scalar so old stores migrate lightly.
     var itemFoldersData: Data? = nil
 
+    /// Pinned measurements (spec §16.3) as one JSON blob
+    /// (`[PinnedMeasurement]`); `nil` = none. Defaulted, so stores migrate lightly.
+    var pinnedMeasurementsData: Data? = nil
+
     init(name: String) {
         self.name = name
         self.createdAt = Date()
