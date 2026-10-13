@@ -334,7 +334,11 @@ final class AppSettings {
         #endif
     }()
 
-    static let shared = AppSettings()
+    static let shared: AppSettings = {
+        let settings = AppSettings()
+        CommandRegistry.customization = settings.shortcuts
+        return settings
+    }()
 
     private enum Key {
         static let unit = "os3d.displayUnit"
@@ -366,6 +370,16 @@ final class AppSettings {
         static let lastOpenedDesign = "os3d.lastOpenedDesign"
         static let defaultSplineType = "os3d.defaultSplineType"
         static let spaceMouse = "os3d.spaceMouse"
+        static let shortcuts = "os3d.keyboardShortcuts"
+    }
+
+    /// Settings ▸ Keyboard Shortcuts: the changes from the default keys.
+    /// The app's own settings (not a test's) drive the live catalog.
+    var shortcuts: ShortcutCustomization {
+        didSet {
+            defaults.set(try? JSONEncoder().encode(shortcuts), forKey: Key.shortcuts)
+            if self === AppSettings.shared { CommandRegistry.customization = shortcuts }
+        }
     }
 
     /// Settings ▸ SpaceMouse (spec §7.5), stored as one JSON value.
@@ -571,6 +585,8 @@ final class AppSettings {
         startWith = defaults.string(forKey: Key.startWith).flatMap(StartWith.init) ?? .gallery
         lastOpenedDesign = defaults.object(forKey: Key.lastOpenedDesign) as? Date
         defaultSplineType = defaults.string(forKey: Key.defaultSplineType).flatMap(SplineType.init) ?? .fit
+        shortcuts = defaults.data(forKey: Key.shortcuts)
+            .flatMap { try? JSONDecoder().decode(ShortcutCustomization.self, from: $0) } ?? ShortcutCustomization()
         spaceMouse = defaults.data(forKey: Key.spaceMouse)
             .flatMap { try? JSONDecoder().decode(SpaceMouseSettings.self, from: $0) } ?? SpaceMouseSettings()
     }

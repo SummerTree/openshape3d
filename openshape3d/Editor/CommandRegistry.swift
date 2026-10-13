@@ -152,8 +152,18 @@ nonisolated struct CommandRegistry: Sendable {
 
     // MARK: - The catalog
 
-    /// Titles are the search corpus, so they read as the user would say them.
-    static let all: [AppCommand] = [
+    /// Settings ▸ Keyboard Shortcuts, laid over the defaults. Written only by
+    /// `AppSettings.shared`; read on every lookup.
+    nonisolated(unsafe) static var customization = ShortcutCustomization() {
+        didSet { all = customization.applied(to: defaults) }
+    }
+
+    /// The catalog as the person has it: the defaults with their shortcuts.
+    nonisolated(unsafe) private(set) static var all: [AppCommand] = defaults
+
+    /// The catalog as it ships. Titles are the search corpus, so they read
+    /// as the user would say them.
+    static let defaults: [AppCommand] = [
         // Sketch (spec §8.4: A/C/G/I/L/O/R/T)
         AppCommand(id: "sketch.arc", title: "Arc", category: .sketch, chord: KeyChord("a")),
         AppCommand(id: "sketch.circle", title: "Circle", category: .sketch, chord: KeyChord("c")),

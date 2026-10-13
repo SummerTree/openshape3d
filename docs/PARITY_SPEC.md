@@ -1687,7 +1687,16 @@ what makes the spec's own examples work: "p3" → "Add Plane - 3 Points" and
 "pre-selection scopes results". `cheatSheet` groups the bound commands for the
 long-press-⌘ sheet. Covered by `CommandRegistryTests`.
 **Missing:** the UIKit key-command wiring and the launcher/cheat-sheet UI,
-user-customizable shortcuts, and the three-finger undo/redo swipe.
+and the three-finger undo/redo swipe.
+**Customizable shortcuts (built 2026-10-13):** Settings ▸ Interface ▸ Keyboard Shortcuts lists
+every command a key can run, by category, with search. Tap one and press the new keys (Delete
+removes, Escape cancels); a chord another command had moves over and the page names the command
+that lost it; Reset to Default / Reset All. The system's chords (⌘Q ⌘W ⌘H ⌘M ⌘, ⌘T ⌘R ⌘L) and
+bare digits (they type values) are refused. Stored as the difference from the shipped keys
+(`ShortcutCustomization`), so later default changes still arrive; `CommandRegistry.all` is the
+customized catalog every path reads — key commands, Command Search, the web. Web: the same sheet;
+the page records keys and takes only the ⌘ keys the catalog uses. Tests: `KeyboardShortcutsTests`,
+`KeyboardShortcutsUITests`, web `shortcuts-smoke.mjs`.
 **Feasibility:** [mesh-kernel OK]
 
 ---
@@ -2316,7 +2325,7 @@ Gallery, Last Opened Design, New Design — the first-run welcome and test
 hooks come first; a deleted last design falls back to the gallery), and
 Sketch Annotations ▸ **Default Spline Type** (Fit Point / Control Point).
 All four on the web too (Start With remembers the last design in the
-browser). Still missing: interface language, customizable shortcuts.
+browser). Keyboard Shortcuts built 2026-10-13 (§8.4). Still missing: interface language.
 **Status:** 🟡 partial — a Settings surface ships (`AppSettings`, Phase F
 tranche 1): display Units (mm/cm/m/in/ft), Theme System/Light/Dark, Interface
 Left/Right, and Anti-Aliasing (Disabled | 2x | 4x MSAA), persisted across

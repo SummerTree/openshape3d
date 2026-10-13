@@ -106,6 +106,9 @@ struct SettingsView: View {
                         ForEach(StartWith.allCases, id: \.self) { Text($0.title).tag($0) }
                     }
                     .accessibilityIdentifier("SettingsStartWith")
+
+                    NavigationLink("Keyboard Shortcuts") { KeyboardShortcutsView(settings: settings) }
+                        .accessibilityIdentifier("SettingsKeyboardShortcuts")
                 }
 
                 Section("Graphics") {
