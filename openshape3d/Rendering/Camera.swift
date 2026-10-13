@@ -18,6 +18,15 @@ nonisolated enum CameraProjection: Sendable, Equatable {
 }
 
 nonisolated struct TurntableCamera: Sendable, Equatable {
+    /// The grid's minor spacing for this view (bug report abb6ea37): the
+    /// pitch steps by decades so the view always holds on the order of ten to
+    /// a hundred minor lines. View ▸ Lock Grid Size freezes it.
+    var gridMinorSpacing: Double {
+        let viewHeightMM = 2 * Double(distance) * tan(Double(fovY) * 0.5)
+        let decade = floor(log10(max(viewHeightMM / 8, 1e-6)))
+        return min(max(pow(10, decade), 1e-3), 1e6)
+    }
+
     var target: SIMD3<Float> = .zero
     var distance: Float = 12
     var azimuth: Float = .pi / 5      // radians around +Y, 0 looks down -Z

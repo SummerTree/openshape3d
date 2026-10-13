@@ -24,6 +24,15 @@
 
 import Foundation
 
+/// The exact-geometry interchange formats: STEP AP214 and IGES 5.3. Both
+/// carry the analytic B-rep, so everything below applies to either.
+nonisolated enum ExchangeFormat: String, Sendable {
+    case step, iges
+
+    var title: String { self == .step ? "STEP" : "IGES" }
+    var fileExtension: String { self == .step ? "step" : "igs" }
+}
+
 nonisolated enum STEPKit {
 
     /// What `export(bodies:)` managed to do. `skipped` names the mesh-only
@@ -44,7 +53,7 @@ nonisolated enum STEPKit {
     /// body-local space as its render mesh, and the flat STEP we write has no
     /// per-solid placement to carry it, so a body that was moved must be
     /// written where the user actually sees it.
-    static func export(bodies: [Body]) -> ExportOutcome {
+    static func export(bodies: [Body], format: ExchangeFormat = .step) -> ExportOutcome {
         var solids: [BRepHandle] = []
         var skipped: [String] = []
         for body in bodies {
@@ -59,10 +68,11 @@ nonisolated enum STEPKit {
 
         // OCCT writes to a path, so stage a temp file and read it back.
         let url = FileManager.default.temporaryDirectory
-            .appendingPathComponent("os3d-step-\(UUID().uuidString)")
-            .appendingPathExtension("step")
+            .appendingPathComponent("os3d-\(format.rawValue)-\(UUID().uuidString)")
+            .appendingPathExtension(format.fileExtension)
         defer { try? FileManager.default.removeItem(at: url) }
-        guard OCCTKernel.writeSTEP(solids, to: url),
+        let written = format == .step ? OCCTKernel.writeSTEP(solids, to: url) : OCCTKernel.writeIGES(solids, to: url)
+        guard written,
               let data = try? Data(contentsOf: url) else { return .failed }
         return .success(data, skipped: skipped)
     }
@@ -70,13 +80,13 @@ nonisolated enum STEPKit {
     /// Solids in a STEP payload. Empty when the bytes are not a readable STEP
     /// file or carry no solid — the caller reports that as one recoverable
     /// import error either way, since neither gives us anything to place.
-    static func solids(from data: Data) -> [BRepHandle] {
+    static func solids(from data: Data, format: ExchangeFormat = .step) -> [BRepHandle] {
         let url = FileManager.default.temporaryDirectory
-            .appendingPathComponent("os3d-step-in-\(UUID().uuidString)")
-            .appendingPathExtension("step")
+            .appendingPathComponent("os3d-\(format.rawValue)-in-\(UUID().uuidString)")
+            .appendingPathExtension(format.fileExtension)
         defer { try? FileManager.default.removeItem(at: url) }
         guard (try? data.write(to: url)) != nil else { return [] }
-        return OCCTKernel.readSTEP(from: url)
+        return format == .step ? OCCTKernel.readSTEP(from: url) : OCCTKernel.readIGES(from: url)
     }
 
     /// Turn one imported solid into a body. Identity transform with the solid

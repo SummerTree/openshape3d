@@ -36,7 +36,8 @@ typedef struct {
     vector_float4 backgroundTop;
     vector_float4 backgroundBottom;
     vector_float4 accentColor;         // selection highlight
-    vector_float4 gridParams;          // x: minor spacing, y: major every N, z: fade distance, w: unused
+    vector_float4 gridParams;          // x: minor spacing, y: major every N, z: fade distance,
+                                       // w: surface analysis (0 none, 1 zebra, 2 curvature)
     vector_float4 gridCenter;          // xyz: world position the grid quad is centered on
     vector_float4 gridOrigin;          // sketch coordinate origin in world space
     vector_float4 gridXAxis;           // orthonormal in-plane basis
@@ -47,6 +48,8 @@ typedef struct {
     float clipEnabled;                 // 0 = section view off (default)
     float viewportWidth;               // drawable pixels — thick lines expand in
     float viewportHeight;              // screen space, so they need the size
+    vector_float4 keyLightColor;       // Visualization (spec §14): rgb sun colour × intensity,
+                                       // w 1 = world-fixed sun lighting; w 0 = modelling headlight
 } FrameUniforms;
 
 typedef struct {
@@ -56,6 +59,7 @@ typedef struct {
     float metallic;                    // 0 (default) = dielectric, white highlight
     float roughness;                   // 0 (default) = legacy fixed highlight; >0 mapped
     float lineHalfWidthPx;             // thick-line pipeline: half stroke width
+    float emission;                    // Glow (spec §14): 0 lit, 1 self-lit and brightened
 } BodyUniforms;
 
 #endif /* ShaderTypes_h */

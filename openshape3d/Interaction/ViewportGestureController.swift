@@ -99,6 +99,25 @@ final class ViewportGestureController: NSObject {
         let hover = UIHoverGestureRecognizer(target: self, action: #selector(handleHover(_:)))
         view.addGestureRecognizer(hover)
 
+        // Mouse wheel (discrete scroll) zooms, honouring Settings ▸ Reverse
+        // Scroll Direction; a trackpad's two-finger scroll (continuous) pans,
+        // like two fingers on the glass. Neither takes touches.
+        let wheel = UIPanGestureRecognizer(target: self, action: #selector(handleWheel(_:)))
+        wheel.allowedScrollTypesMask = .discrete
+        wheel.maximumNumberOfTouches = 0
+        view.addGestureRecognizer(wheel)
+        let scrollPan = UIPanGestureRecognizer(target: self, action: #selector(handleScrollPan(_:)))
+        scrollPan.allowedScrollTypesMask = .continuous
+        scrollPan.maximumNumberOfTouches = 0
+        view.addGestureRecognizer(scrollPan)
+
+        // Right / middle mouse drags navigate per Settings ▸ Navigation Preset.
+        // Pan recognizers can't require a button, so this one reads the
+        // buttons as it begins and steps aside for a primary-button drag.
+        let mouseDrag = UIPanGestureRecognizer(target: self, action: #selector(handleMouseNavigation(_:)))
+        mouseDrag.allowedTouchTypes = [NSNumber(value: UITouch.TouchType.indirectPointer.rawValue)]
+        view.addGestureRecognizer(mouseDrag)
+
         // Apple Pencil double-tap / squeeze (Pencil 2 / Pro): a quick undo, the
         // Shapr3D-style "fix that" shortcut without reaching for the toolbar.
         let pencil = UIPencilInteraction()
@@ -210,6 +229,95 @@ final class ViewportGestureController: NSObject {
             redraw()
             cameraChanged?()
         case .ended, .cancelled, .failed:
+            endInteractive()
+        default:
+            break
+        }
+    }
+
+    // MARK: Mouse wheel, trackpad scroll, mouse-button navigation
+
+    private var lastScrollTranslation: CGPoint = .zero
+    private var mouseNavigationAction: NavigationPreset.Action = .pan
+    private var mouseNavigating = false
+
+    @objc private func handleWheel(_ gesture: UIPanGestureRecognizer) {
+        guard let view, let renderer else { return }
+        let translation = gesture.translation(in: view)
+        switch gesture.state {
+        case .began:
+            lastScrollTranslation = translation
+        case .changed:
+            let dy = translation.y - lastScrollTranslation.y
+            lastScrollTranslation = translation
+            let direction: CGFloat = AppSettings.shared.reverseZoom ? -1 : 1
+            renderer.camera.zoom(scale: Float(exp(dy * 0.01 * direction)))
+            redraw()
+            cameraChanged?()
+        default:
+            break
+        }
+    }
+
+    @objc private func handleScrollPan(_ gesture: UIPanGestureRecognizer) {
+        guard let view, let renderer else { return }
+        let translation = gesture.translation(in: view)
+        switch gesture.state {
+        case .began:
+            beginInteractive()
+            lastScrollTranslation = translation
+        case .changed:
+            let delta = CGSize(width: translation.x - lastScrollTranslation.x,
+                               height: translation.y - lastScrollTranslation.y)
+            lastScrollTranslation = translation
+            renderer.camera.pan(deltaPixels: delta, viewportSize: view.bounds.size)
+            redraw()
+            cameraChanged?()
+        case .ended, .cancelled, .failed:
+            endInteractive()
+        default:
+            break
+        }
+    }
+
+    @objc private func handleMouseNavigation(_ gesture: UIPanGestureRecognizer) {
+        guard let view, let renderer else { return }
+        let location = gesture.location(in: view)
+        switch gesture.state {
+        case .began:
+            let mask = gesture.buttonMask
+            let button: NavigationPreset.Button
+            if mask.contains(.secondary) {
+                button = .secondary
+            } else if mask.contains(.button(3)) {
+                button = .middle
+            } else {
+                // A primary-button drag draws, picks or orbits elsewhere.
+                gesture.isEnabled = false
+                gesture.isEnabled = true
+                return
+            }
+            beginInteractive()
+            mouseNavigating = true
+            lastTwoFingerLocation = location
+            mouseNavigationAction = AppSettings.shared.navigationPreset.action(
+                for: button,
+                shift: gesture.modifierFlags.contains(.shift),
+                control: gesture.modifierFlags.contains(.control))
+        case .changed:
+            guard mouseNavigating else { return }
+            let delta = CGSize(width: location.x - lastTwoFingerLocation.x,
+                               height: location.y - lastTwoFingerLocation.y)
+            lastTwoFingerLocation = location
+            switch mouseNavigationAction {
+            case .orbit: renderer.camera.orbit(deltaPixels: delta, viewportSize: view.bounds.size)
+            case .pan: renderer.camera.pan(deltaPixels: delta, viewportSize: view.bounds.size)
+            }
+            redraw()
+            cameraChanged?()
+        case .ended, .cancelled, .failed:
+            guard mouseNavigating else { return }
+            mouseNavigating = false
             endInteractive()
         default:
             break

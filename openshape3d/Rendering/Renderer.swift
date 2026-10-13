@@ -208,20 +208,21 @@ final class Renderer: NSObject, MTKViewDelegate {
         switch mode {
         case .shaded, .shadedNoEdges:
             encoder.setDepthStencilState(pipelines.depthReadWrite)
-            for drawable in scene.bodies where !drawable.isTranslucent {
+            for drawable in scene.bodies where !drawable.isSeeThrough {
                 drawBody(drawable, encoder: encoder, pipeline: pipelines.lit)
             }
         case .wireframe:
             encoder.setDepthStencilState(pipelines.depthReadWrite)
-            for drawable in scene.bodies where !drawable.isTranslucent {
+            for drawable in scene.bodies where !drawable.isSeeThrough {
                 drawBody(drawable, encoder: encoder, pipeline: pipelines.depthOnly)
             }
         case .xray:
             break
         }
 
-        // 3. Feature edges (+ optional hidden-edge pass, reversed depth test)
-        if mode != .shadedNoEdges {
+        // 3. Feature edges (+ optional hidden-edge pass, reversed depth test).
+        // Visualization shows the surfaces alone.
+        if mode != .shadedNoEdges, scene.visualization == nil {
             encoder.setRenderPipelineState(pipelines.edge)
             encoder.setDepthStencilState(pipelines.depthReadOnly)
             for drawable in scene.bodies where !drawable.isTranslucent {
@@ -236,7 +237,7 @@ final class Renderer: NSObject, MTKViewDelegate {
         }
 
         // 4. Active sketch grid, or ground in modeling (blended, depth read only)
-        if drawGrid {
+        if drawGrid, scene.visualization == nil {
             encoder.setRenderPipelineState(pipelines.grid)
             encoder.setDepthStencilState(pipelines.depthReadOnly)
             encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
@@ -301,11 +302,14 @@ final class Renderer: NSObject, MTKViewDelegate {
 
         // 6. Translucent bodies (previews) last; in x-ray every body renders
         // here at a fixed low alpha (depth read, no write).
-        for drawable in scene.bodies where drawable.isTranslucent || mode == .xray {
+        for drawable in scene.bodies where drawable.isSeeThrough || mode == .xray {
             encoder.setDepthStencilState(pipelines.depthReadOnly)
-            let xrayAlpha: Float? = (mode == .xray && !drawable.isTranslucent) ? 0.35 : nil
+            // Previews take the Tool Preview Opacity setting; a glass-like
+            // material keeps its own opacity.
+            let alpha: Float? = drawable.isTranslucent ? scene.toolPreviewOpacity
+                : mode == .xray ? 0.35 : nil
             drawBody(drawable, encoder: encoder, pipeline: pipelines.litBlended,
-                     alphaOverride: xrayAlpha)
+                     alphaOverride: alpha)
         }
     }
 
@@ -619,6 +623,15 @@ final class Renderer: NSObject, MTKViewDelegate {
         frame.groundColor = SIMD4(0.62, 0.60, 0.58, 1)
         frame.backgroundTop = SIMD4(0.94, 0.95, 0.97, 1)
         frame.backgroundBottom = SIMD4(0.82, 0.84, 0.88, 1)
+        if let lighting = scene.visualization {
+            // Visualization: a world-fixed sun and the environment's colours.
+            frame.keyLightDirection = SIMD4(lighting.lightDirection, 0)
+            frame.keyLightColor = SIMD4(lighting.lightColor, 1)
+            frame.skyColor = SIMD4(lighting.sky, 1)
+            frame.groundColor = SIMD4(lighting.ground, 1)
+            frame.backgroundTop = SIMD4(lighting.backgroundTop, 1)
+            frame.backgroundBottom = SIMD4(lighting.backgroundBottom, 1)
+        }
         frame.accentColor = SIMD4(0.0, 0.52, 1.0, 1) // Shapr3D selection blue
         // The grid follows the zoom (bug report abb6ea37): at a fixed 1 mm
         // pitch and 120 mm fade radius it vanished as soon as the view pulled
@@ -626,11 +639,10 @@ final class Renderer: NSObject, MTKViewDelegate {
         // holds on the order of ten to a hundred minor lines, and the fade
         // radius grows with the camera distance so the plane never runs out
         // under a large model. Majors stay every tenth minor.
-        let viewHeightMM = 2 * Double(camera.distance) * tan(Double(camera.fovY) * 0.5)
-        let decade = floor(log10(max(viewHeightMM / 8, 1e-6)))
-        let minorSpacing = Float(min(max(pow(10, decade), 1e-3), 1e6))
+        let minorSpacing = Float(scene.lockedGridSpacing ?? camera.gridMinorSpacing)
         let fadeRadius = max(120, camera.distance * 10)
-        frame.gridParams = SIMD4(minorSpacing, 10, fadeRadius, 0)
+        // w: Surface Analysis for the lit shaders (the grid ignores it).
+        frame.gridParams = SIMD4(minorSpacing, 10, fadeRadius, scene.surfaceAnalysis.shaderValue)
         let gridPlane = scene.gridPlane ?? .ground
         let gridCenter = gridPlane.toWorld(gridPlane.toLocal(SIMD3<Double>(camera.target)))
         frame.gridCenter = SIMD4(SIMD3<Float>(gridCenter), 0)
@@ -663,6 +675,7 @@ final class Renderer: NSObject, MTKViewDelegate {
             body.baseColor = material.baseColor
             body.metallic = material.metallic
             body.roughness = material.roughness
+            body.emission = material.emission
         }
         return body
     }

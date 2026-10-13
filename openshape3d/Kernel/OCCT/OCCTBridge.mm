@@ -35,12 +35,18 @@
 #include <BRep_Builder.hxx>
 #include <BRepFilletAPI_MakeFillet.hxx>
 #include <BRepAlgoAPI_Defeaturing.hxx>
+#include <BRepAlgoAPI_Splitter.hxx>
 #include <ShapeUpgrade_UnifySameDomain.hxx>
 #include <TopTools_ListOfShape.hxx>
 #include <BRepFilletAPI_MakeChamfer.hxx>
 #include <BRepFilletAPI_LocalOperation.hxx>
 #include <STEPControl_Writer.hxx>
 #include <STEPControl_Reader.hxx>
+#include <IGESControl_Writer.hxx>
+#include <IGESControl_Reader.hxx>
+#include <IGESControl_Controller.hxx>
+#include <BRepBuilderAPI_Sewing.hxx>
+#include <BRepBuilderAPI_MakeSolid.hxx>
 #include <IFSelect_ReturnStatus.hxx>
 #include <BRepOffsetAPI_MakeThickSolid.hxx>
 #include <ShapeUpgrade_ShapeDivideContinuity.hxx>
@@ -405,10 +411,12 @@ static const double kOS3DOpDeadlineSeconds = 30.0;
 // NOT merge B-spline geometry: that would change analytic surfaces into
 // something else. Returns the input on any failure — the un-unified shape is
 // still valid.
-static TopoDS_Shape OS3DUnified(const TopoDS_Shape &shape) {
+static TopoDS_Shape OS3DUnified(const TopoDS_Shape &shape,
+                                const TopTools_MapOfShape *keep = nullptr) {
     try {
         ShapeUpgrade_UnifySameDomain unifier(
             shape, Standard_True, Standard_True, Standard_False);
+        if (keep != nullptr && !keep->IsEmpty()) unifier.KeepShapes(*keep);
         unifier.Build();
         const TopoDS_Shape result = unifier.Shape();
         return result.IsNull() ? shape : result;
@@ -1826,10 +1834,12 @@ static void OS3DFillModifierHistory(OCCTShapeHistory *history,
 // ancestry composition above. Mirrors OS3DUnified (which stays the plain
 // path); returns the input on any failure, with a null history.
 static TopoDS_Shape OS3DUnifiedWithHistory(const TopoDS_Shape &shape,
-                                           Handle(BRepTools_History) &outHistory) {
+                                           Handle(BRepTools_History) &outHistory,
+                                           const TopTools_MapOfShape *keep = nullptr) {
     try {
         ShapeUpgrade_UnifySameDomain unifier(
             shape, Standard_True, Standard_True, Standard_False);
+        if (keep != nullptr && !keep->IsEmpty()) unifier.KeepShapes(*keep);
         unifier.Build();
         const TopoDS_Shape result = unifier.Shape();
         if (result.IsNull()) return shape;
@@ -1838,6 +1848,32 @@ static TopoDS_Shape OS3DUnifiedWithHistory(const TopoDS_Shape &shape,
     } catch (...) {
         return shape;
     }
+}
+
+// Edges of `shape` where two faces in the same plane meet: the seams an
+// Imprint Edge leaves (spec §4.17), which nothing but an imprint creates on
+// a unified solid. The same-domain merge after a boolean would erase every
+// one of them as a side effect — pulling one imprinted region up must not
+// un-imprint the rest — so the boolean keeps the target's seams.
+static std::vector<TopoDS_Shape> OS3DCoplanarSeams(const TopoDS_Shape &shape) {
+    std::vector<TopoDS_Shape> seams;
+    TopTools_IndexedDataMapOfShapeListOfShape edgeFaces;
+    TopExp::MapShapesAndAncestors(shape, TopAbs_EDGE, TopAbs_FACE, edgeFaces);
+    for (Standard_Integer i = 1; i <= edgeFaces.Extent(); ++i) {
+        const TopTools_ListOfShape &faces = edgeFaces(i);
+        if (faces.Extent() != 2) continue;
+        const TopoDS_Face a = TopoDS::Face(faces.First()), b = TopoDS::Face(faces.Last());
+        if (a.IsSame(b)) continue;  // a periodic face's own seam
+        BRepAdaptor_Surface sa(a, Standard_False), sb(b, Standard_False);
+        if (sa.GetType() != GeomAbs_Plane || sb.GetType() != GeomAbs_Plane) continue;
+        const gp_Pln pa = sa.Plane(), pb = sb.Plane();
+        gp_Dir na = pa.Axis().Direction(), nb = pb.Axis().Direction();
+        if (a.Orientation() == TopAbs_REVERSED) na.Reverse();
+        if (b.Orientation() == TopAbs_REVERSED) nb.Reverse();
+        if (na.Dot(nb) < 1.0 - 1e-9 || pb.Distance(pa.Location()) > 1e-6) continue;
+        seams.push_back(edgeFaces.FindKey(i));
+    }
+    return seams;
 }
 
 #if DEBUG
@@ -1909,6 +1945,8 @@ static bool gOS3DBooleanUnmergedFallback = true;
         std::string errorDump;
         std::vector<OS3DHistEdge> histEdges;
         const std::vector<TopoDS_Shape> historyInputs = {sa, sb};
+        const std::vector<TopoDS_Shape> seams = OS3DCoplanarSeams(sa);
+        std::vector<TopoDS_Shape> seamImages;
         for (const double fuzzy : {baseFuzzy, baseFuzzy * 10.0}) {
             BRepAlgoAPI_BooleanOperation builder;
             builder.SetArguments(args);
@@ -1929,6 +1967,14 @@ static bool gOS3DBooleanUnmergedFallback = true;
             }
             if (builder.IsDone() && !builder.HasErrors()) {
                 result = builder.Shape();
+                for (const TopoDS_Shape &seam : seams) {
+                    if (builder.IsDeleted(seam)) continue;
+                    const TopTools_ListOfShape &images = builder.Modified(seam);
+                    if (images.IsEmpty()) { seamImages.push_back(seam); continue; }
+                    for (TopTools_ListIteratorOfListOfShape it(images); it.More(); it.Next()) {
+                        seamImages.push_back(it.Value());
+                    }
+                }
                 // Harvest ancestry NOW — the builder owns its history and
                 // dies with this scope.
                 if (history != nil) {
@@ -1974,8 +2020,17 @@ static bool gOS3DBooleanUnmergedFallback = true;
         TopoDS_Shape unified;
         BRepBuilderAPI_Copy copier(built, Standard_False, Standard_True);
         if (copier.IsDone() && !copier.Shape().IsNull()) {
-            unified = history != nil ? OS3DUnifiedWithHistory(copier.Shape(), unifyHistory)
-                                     : OS3DUnified(copier.Shape());
+            TopTools_MapOfShape keep;
+            for (const TopoDS_Shape &seam : seamImages) {
+                try {
+                    const TopoDS_Shape copy = copier.ModifiedShape(seam);
+                    if (!copy.IsNull()) keep.Add(copy);
+                } catch (...) {
+                    // Not a sub-shape of the copied result: nothing to keep.
+                }
+            }
+            unified = history != nil ? OS3DUnifiedWithHistory(copier.Shape(), unifyHistory, &keep)
+                                     : OS3DUnified(copier.Shape(), &keep);
             if (history != nil) {
                 for (TopExp_Explorer ex(built, TopAbs_FACE); ex.More(); ex.Next()) {
                     if (!copied.IsBound(ex.Current())) {
@@ -2179,6 +2234,129 @@ static std::set<Standard_Integer> OS3DNearestFaces(
         }
         OCCTShape *out = [OCCTShape new];
         out->_shape = valid;
+        return out;
+    } catch (Standard_Failure &e) {
+        OS3DSetStatus(status, OCCTOpCodeKernelRefused,
+                      [NSString stringWithFormat:@"%s", e.GetMessageString()]);
+        return nil;
+    } catch (...) {
+        OS3DSetStatus(status, OCCTOpCodeKernelRefused, @"kernel exception");
+        return nil;
+    }
+}
+
+/// Every record of a packed segment list (`SegWire`'s format) as its own
+/// edge in the plane z = 0 — unlike `SegWire`, the curves need not connect:
+/// an imprint's sketch is any set of lines, arcs and splines.
+static bool OS3DSegEdges(NSData *segs, std::vector<TopoDS_Edge> &out) {
+    const double *p = (const double *)segs.bytes;
+    const NSUInteger total = segs.length / sizeof(double);
+    NSUInteger i = 0;
+    while (i < total) {
+        const double kind = p[i];
+        if (kind < 1.5) {
+            if (i + 7 > total) return false;
+            const double *e = p + i;
+            i += 7;
+            gp_Pnt a(e[1], e[2], 0), b(e[3], e[4], 0);
+            if (a.IsEqual(b, 1e-9)) continue;
+            if (e[0] > 0.5) {
+                GC_MakeArcOfCircle mk(a, gp_Pnt(e[5], e[6], 0), b);
+                if (mk.IsDone()) {
+                    BRepBuilderAPI_MakeEdge me(mk.Value());
+                    if (me.IsDone()) { out.push_back(me.Edge()); continue; }
+                }
+            }
+            BRepBuilderAPI_MakeEdge me(a, b);
+            if (me.IsDone()) out.push_back(me.Edge());
+        } else {
+            if (i + 2 > total) return false;
+            const NSUInteger count = (NSUInteger)p[i + 1];
+            if (i + 2 + 2 * count > total) return false;
+            TopoDS_Edge edge;
+            if (OS3DSplineEdge(p + i + 2, count, kind > 2.5, 0.0, edge)) out.push_back(edge);
+            i += 2 + 2 * count;
+        }
+    }
+    return true;
+}
+
++ (nullable OCCTShape *)imprintedShape:(OCCTShape *)shape
+                              segments:(NSData *)segments
+                                 basis:(OCCTPlaneBasis *)basis
+                             tolerance:(double)tolerance
+                                status:(nullable OCCTOpStatus *)status
+                               history:(nullable OCCTShapeHistory *)history {
+    OS3DSetStatus(status, OCCTOpCodeKernelRefused, @"no input");
+    if (shape == nil || segments.length == 0 || basis == nil) return nil;
+    try {
+        if (!OS3DFiniteBounds(shape->_shape)) {
+            OS3DSetStatus(status, OCCTOpCodeKernelRefused,
+                          @"the body has empty or non-finite geometry");
+            return nil;
+        }
+        std::vector<TopoDS_Edge> local;
+        if (!OS3DSegEdges(segments, local) || local.empty()) {
+            OS3DSetStatus(status, OCCTOpCodeKernelRefused, @"imprint: no usable curves");
+            return nil;
+        }
+        const gp_Trsf toWorld = OS3DBasisTransform(basis);
+        TopTools_ListOfShape tools;
+        for (const TopoDS_Edge &edge : local) {
+            BRepBuilderAPI_Transform moved(edge, toWorld, Standard_True);
+            if (moved.IsDone()) tools.Append(moved.Shape());
+        }
+        TopTools_ListOfShape args;
+        args.Append(shape->_shape);
+
+        // General Fuse splits every face an edge lies IN along that edge; a
+        // curve that only touches or misses a face leaves it alone. The tool
+        // edges themselves are not part of a Splitter's result.
+        BRepAlgoAPI_Splitter splitter;
+        splitter.SetArguments(args);
+        splitter.SetTools(tools);
+        splitter.SetNonDestructive(Standard_True);
+        splitter.SetFuzzyValue(std::max(tolerance, Precision::Confusion()));
+        OS3DDeadlineProgress *deadline = new OS3DDeadlineProgress(kOS3DOpDeadlineSeconds);
+        Handle(Message_ProgressIndicator) progress(deadline);
+        splitter.Build(progress->Start());
+        if (deadline->Fired()) {
+            OS3DSetStatus(status, OCCTOpCodeKernelRefused,
+                          @"the operation exceeded the kernel deadline");
+            return nil;
+        }
+        if (!splitter.IsDone() || splitter.HasErrors()) {
+            std::ostringstream os;
+            splitter.DumpErrors(os);
+            OS3DSetStatus(status, OCCTOpCodeKernelRefused,
+                          [NSString stringWithFormat:@"imprint failed: %s", os.str().c_str()]);
+            return nil;
+        }
+        int solidCount = 0;
+        const TopoDS_Shape single = OS3DExtractSingleSolid(splitter.Shape(), solidCount);
+        if (solidCount != 1) {
+            OS3DSetStatus(status, OCCTOpCodeKernelRefused, @"imprint: the result is not one solid");
+            return nil;
+        }
+        TopTools_IndexedMapOfShape before, after;
+        TopExp::MapShapes(shape->_shape, TopAbs_FACE, before);
+        TopExp::MapShapes(single, TopAbs_FACE, after);
+        if (after.Extent() <= before.Extent()) {
+            OS3DSetStatus(status, OCCTOpCodeNoTargetMatched,
+                          @"imprint: no curve divides a face of the body");
+            return nil;
+        }
+        if (!OS3DIsValid(single)) {
+            OS3DSetStatus(status, OCCTOpCodeInvalidResult,
+                          @"imprint: the split solid failed validity checking");
+            return nil;
+        }
+        OS3DSetStatus(status, OCCTOpCodeOK, nil);
+        if (history != nil) {
+            OS3DFillModifierHistory(history, splitter, shape->_shape, single);
+        }
+        OCCTShape *out = [OCCTShape new];
+        out->_shape = single;
         return out;
     } catch (Standard_Failure &e) {
         OS3DSetStatus(status, OCCTOpCodeKernelRefused,
@@ -3166,36 +3344,18 @@ static double OS3DVolume(const TopoDS_Shape &shape) {
             return nil;
         }
 
-        TopoDS_Shape tool;
-        if (distance > 0) {
-            BRepPrimAPI_MakePrism prism(face, gp_Vec(outward) * distance);
-            OS3D_GUARDED(status, "push/pull prism", prism.Build());
-            if (!prism.IsDone()) {
-                OS3DSetStatus(status, OCCTOpCodeKernelRefused,
-                              @"push/pull: the face could not be extruded");
-                return nil;
-            }
-            tool = prism.Shape();
-        } else {
-            // A box from the moved plane outward, comfortably larger than the
-            // body in every direction, so the cut is a pure half-space cut.
-            Bnd_Box bounds;
-            BRepBndLib::Add(shape->_shape, bounds);
-            const double reach = sqrt(bounds.SquareExtent()) * 2.0 + fabs(distance) + 1.0;
-            const gp_Pln plane(gp_Pnt(px, py, pz), outward);
-            const gp_Dir u = plane.Position().XDirection();
-            const gp_Dir v = plane.Position().YDirection();
-            const gp_Pnt cut = gp_Pnt(px, py, pz).Translated(gp_Vec(outward) * distance);
-            const gp_Pnt corner = cut.Translated(gp_Vec(u) * -reach + gp_Vec(v) * -reach);
-            BRepPrimAPI_MakeBox box(gp_Ax2(corner, outward, u), 2 * reach, 2 * reach, reach);
-            OS3D_GUARDED(status, "push/pull box", box.Build());
-            if (!box.IsDone()) {
-                OS3DSetStatus(status, OCCTOpCodeKernelRefused,
-                              @"push/pull: the cutting box could not be built");
-                return nil;
-            }
-            tool = box.Shape();
+        // The face's own prism, out along the normal to add or in to remove.
+        // Inward it used to be a half-space cut at the moved plane, which also
+        // sliced off anything else standing above it — a boss beside the
+        // face, or the rest of a face an imprint split (spec §4.17).
+        BRepPrimAPI_MakePrism prism(face, gp_Vec(outward) * distance);
+        OS3D_GUARDED(status, "push/pull prism", prism.Build());
+        if (!prism.IsDone()) {
+            OS3DSetStatus(status, OCCTOpCodeKernelRefused,
+                          @"push/pull: the face could not be extruded");
+            return nil;
         }
+        const TopoDS_Shape tool = prism.Shape();
         OS3DSetStatus(status, OCCTOpCodeOK, nil);
         OCCTShape *out = [OCCTShape new];
         out->_shape = tool;
@@ -3720,6 +3880,68 @@ static void OS3DCollectMakerHistoryThrough(BRepBuilderAPI_MakeShape &builder,
             } else {
                 append(shape);
             }
+        }
+    } catch (...) {
+        return [NSMutableArray array];
+    }
+    return out;
+}
+
+// MARK: - IGES interchange
+
++ (BOOL)writeIGESShapes:(NSArray<OCCTShape *> *)shapes toPath:(NSString *)path {
+    if (shapes.count == 0 || path.length == 0) return NO;
+    try {
+        IGESControl_Controller::Init();
+        // Unit "MM"; write mode 1 = solids as B-rep (MSBO entities).
+        IGESControl_Writer writer("MM", 1);
+        bool any = false;
+        for (OCCTShape *s in shapes) {
+            if (s == nil || s->_shape.IsNull()) continue;
+            if (!writer.AddShape(s->_shape)) return NO;
+            any = true;
+        }
+        if (!any) return NO;
+        writer.ComputeModel();
+        return writer.Write(path.fileSystemRepresentation) ? YES : NO;
+    } catch (...) {
+        return NO;
+    }
+}
+
++ (NSArray<OCCTShape *> *)readIGESFromPath:(NSString *)path {
+    NSMutableArray<OCCTShape *> *out = [NSMutableArray array];
+    if (path.length == 0) return out;
+    try {
+        IGESControl_Controller::Init();
+        IGESControl_Reader reader;
+        if (reader.ReadFile(path.fileSystemRepresentation) != IFSelect_RetDone) return out;
+        reader.TransferRoots();
+        const TopoDS_Shape shape = reader.OneShape();
+        if (shape.IsNull()) return out;
+        const auto append = [out](const TopoDS_Shape &candidate) {
+            if (!OS3DFiniteBounds(candidate)) return;
+            const TopoDS_Shape valid = OS3DHealAndValidate(candidate);
+            if (valid.IsNull()) return;
+            OCCTShape *w = [OCCTShape new];
+            w->_shape = valid;
+            [out addObject:w];
+        };
+        TopExp_Explorer solids(shape, TopAbs_SOLID);
+        if (solids.More()) {
+            for (; solids.More(); solids.Next()) append(solids.Current());
+            return out;
+        }
+        // Surfaces only: sew them, and close each closed shell into a solid.
+        BRepBuilderAPI_Sewing sewing(1e-3);
+        sewing.Add(shape);
+        sewing.Perform();
+        const TopoDS_Shape sewn = sewing.SewedShape();
+        for (TopExp_Explorer shells(sewn, TopAbs_SHELL); shells.More(); shells.Next()) {
+            const TopoDS_Shell &shell = TopoDS::Shell(shells.Current());
+            if (!BRep_Tool::IsClosed(shell)) continue;
+            BRepBuilderAPI_MakeSolid makeSolid(shell);
+            if (makeSolid.IsDone()) append(makeSolid.Solid());
         }
     } catch (...) {
         return [NSMutableArray array];

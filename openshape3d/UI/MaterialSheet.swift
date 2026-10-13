@@ -3,7 +3,7 @@
 //  openshape3d
 //
 //  Body material dialog (plan §B15): preset grid + custom color picker +
-//  metallic/roughness sliders. Apply commits one SetMaterialCommand over the
+//  metallic/roughness/opacity/glow sliders. Apply commits one SetMaterialCommand over the
 //  whole selection (EditorViewModel.applyMaterial).
 //
 
@@ -13,6 +13,8 @@ struct MaterialSheet: View {
     @State private var color: Color
     @State private var metallic: Double
     @State private var roughness: Double
+    @State private var opacity: Double
+    @State private var emission: Double
 
     @Environment(\.dismiss) private var dismiss
     let onApply: (BodyMaterialSpec) -> Void
@@ -24,6 +26,8 @@ struct MaterialSheet: View {
         ))
         _metallic = State(initialValue: spec.metallic)
         _roughness = State(initialValue: spec.roughness)
+        _opacity = State(initialValue: spec.baseColor.w)
+        _emission = State(initialValue: spec.emission)
         self.onApply = onApply
     }
 
@@ -52,6 +56,16 @@ struct MaterialSheet: View {
                         "Roughness", value: $roughness,
                         sliderID: "MaterialRoughnessSlider",
                         valueID: "MaterialRoughnessValue"
+                    )
+                    sliderRow(
+                        "Opacity", value: $opacity,
+                        sliderID: "MaterialOpacitySlider",
+                        valueID: "MaterialOpacityValue"
+                    )
+                    sliderRow(
+                        "Glow", value: $emission,
+                        sliderID: "MaterialGlowSlider",
+                        valueID: "MaterialGlowValue"
                     )
                 }
             }
@@ -83,6 +97,8 @@ struct MaterialSheet: View {
             )
             metallic = spec.metallic
             roughness = spec.roughness
+            opacity = spec.baseColor.w
+            emission = spec.emission
         } label: {
             VStack(spacing: 4) {
                 RoundedRectangle(cornerRadius: 8)
@@ -130,9 +146,10 @@ struct MaterialSheet: View {
         var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 1
         UIColor(color).getRed(&r, green: &g, blue: &b, alpha: &a)
         return BodyMaterialSpec(
-            baseColor: SIMD4(Double(r), Double(g), Double(b), 1),
+            baseColor: SIMD4(Double(r), Double(g), Double(b), max(opacity, 0.05)),
             metallic: metallic,
-            roughness: roughness
+            roughness: roughness,
+            emission: emission
         ).clamped
     }
 }

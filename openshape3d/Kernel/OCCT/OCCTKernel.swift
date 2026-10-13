@@ -83,8 +83,9 @@ nonisolated enum OCCTKernel {
 
     /// Tessellation quality for B-rep render meshes. Angular deflection (radians)
     /// governs facets-around-a-curve → roundness; it's size-independent.
-    static let renderAngularDeflection = 0.08
-    static let renderLinearDeflection = 0.1
+    /// Settings ▸ Tessellation Quality as of this launch (High = 0.08 / 0.1).
+    static let renderAngularDeflection = TessellationQuality.launch.deflection.angular
+    static let renderLinearDeflection = TessellationQuality.launch.deflection.linear
 
     /// Master switch for the B-rep path. When true, solids that OCCT can build
     /// (extrudes, primitives, and booleans between them) carry an analytic
@@ -982,6 +983,32 @@ nonisolated enum OCCTKernel {
             .map(\.handle)
     }
 
+    /// Imprint Edge (spec §4.17): split the faces of `handle` along
+    /// `segments`, plane-local to `plane` — both already in the body's own
+    /// frame (`ImprintKit.bodyLocal`). Fails with `noTargetMatched` when no
+    /// curve lies in a face, which is what drawing on the wrong plane gives.
+    static func imprintResultWithAncestry(_ handle: BRepHandle, segments: [Profile.Segment],
+                                          plane: SketchPlane)
+        -> Result<(handle: BRepHandle, ancestry: ShapeAncestry), OCCTOpError> {
+        let packed = packSegments(segments)
+        guard !packed.isEmpty else { return .failure(.kernelRefused("nothing to imprint")) }
+        let tolerance = matchTolerance(for: handle)
+        let status = OCCTOpStatus()
+        let history = OCCTShapeHistory()
+        guard let shape = OCCTBridge.imprintedShape(
+            handle.shape, segments: packed, basis: planeBasis(plane),
+            tolerance: tolerance, status: status, history: history) else {
+            let error = OCCTOpError(status)
+            KernelCapture.recordFailure(
+                op: "imprint", inputs: [("shape", handle)],
+                params: ["tolerance": tolerance, "segments": segments.count,
+                         "origin": [plane.origin.x, plane.origin.y, plane.origin.z]],
+                error: error)
+            return .failure(error)
+        }
+        return .success((BRepHandle(shape), ShapeAncestry(history)))
+    }
+
     /// The centroid of the largest of `triangles` — a point strictly inside
     /// the face, unlike the face's centroid, which a ring face has in its hole.
     private static func interiorPoint(of triangles: [Int], in render: RenderMesh)
@@ -1059,6 +1086,18 @@ nonisolated enum OCCTKernel {
     /// holds no solids, so the caller surfaces a recoverable import error.
     static func readSTEP(from url: URL) -> [BRepHandle] {
         OCCTBridge.readSTEP(fromPath: url.path).map(BRepHandle.init)
+    }
+
+    /// Write analytic solids to an IGES file (B-rep, millimetres).
+    static func writeIGES(_ handles: [BRepHandle], to url: URL) -> Bool {
+        guard !handles.isEmpty else { return false }
+        return OCCTBridge.writeIGES(handles.map(\.shape), toPath: url.path)
+    }
+
+    /// Read the solids from an IGES file (surfaces are sewn into solids where
+    /// they close); empty when unreadable or there are none.
+    static func readIGES(from url: URL) -> [BRepHandle] {
+        OCCTBridge.readIGES(fromPath: url.path).map(BRepHandle.init)
     }
 
     /// Serialize a solid so the analytic geometry survives a document reload.
@@ -1178,11 +1217,19 @@ nonisolated extension Body {
     /// operate on the accurate tessellation of the analytic solid instead of a
     /// coarse 48-gon. Returns false (leaving the body untouched) if the solid
     /// fails to tessellate, so callers fall back to the Euclid path.
+    ///
+    /// `keepingFaceRegions` (Imprint Edge, spec §4.17) also records which
+    /// kernel face each triangle belongs to, so picking honours faces the
+    /// solid's geometry alone cannot show — coplanar pieces of a split face.
     @discardableResult
-    mutating func adoptBRep(_ handle: BRepHandle) -> Bool {
+    mutating func adoptBRep(_ handle: BRepHandle, keepingFaceRegions: Bool = false) -> Bool {
         let m = OCCTKernel.renderMesh(from: handle)
         guard !m.positions.isEmpty, !m.indices.isEmpty else { return false }
-        let mesh = RenderMesh(positions: m.positions, normals: m.normals, indices: m.indices)
+        var mesh = RenderMesh(positions: m.positions, normals: m.normals, indices: m.indices)
+        if keepingFaceRegions {
+            let regions = OCCTKernel.renderMeshFaceChannel(from: handle)
+            if regions.count == mesh.triangleCount { mesh.faceRegions = regions }
+        }
         brep = handle
         render = mesh
         edges = FeatureEdgeExtractor.edges(from: mesh)

@@ -170,10 +170,21 @@ entity), profile chaining through an open spline's ends, and **use as a sweep
 spine** (§4.11). Open splines expose their endpoints to the solver and
 auto-constrainer so they weld to neighbouring geometry. Covered by
 `SplineTests`.
-**Missing:** the DRAWING tool + UI (placing/dragging fit points, the
-Fit/Control mode switch), control-point (non-interpolating) splines, interior
-points as solver variables, tangent constraints at the ends, and spline trim/
-offset (both would have to re-fit the curve).
+**Drawing tool (2026-10-12):** Sketch ▸ Spline in the palette (and Command
+Search). A Fit Point / Control Point switch sits over the sketch; taps place
+points with a live preview (Control Point also draws its control polygon);
+Finish, Return or a double-tap ends it open, tapping the first point again
+closes it into a profile, Escape drops it, Delete takes back the last point.
+Control Point is a cubic B-spline (clamped open, periodic closed) and is
+stored as the fit points that reproduce it within 0.1 mm
+(`SplineConstruction`, `SplineConstructionTests`, `SplineUITests`).
+**Missing:** editing a committed spline by its control polygon (it is edited
+through its fit points), per-point tangent handles, sharp/smooth points and
+Break/Join, interior points as solver variables, tangent constraints at the
+ends, spline trim/offset, and curved END spans — an open fit spline's first
+and last spans are straight because `splinePoints`, `CatmullRomBezier` and the
+OCCT bridge all clamp the end neighbours (changing it needs the C++ bridge
+too).
 **Feasibility:** drawing/editing [mesh-kernel OK]; tangent constraints
 [needs constraint solver]
 
@@ -184,12 +195,10 @@ anchor (anchor marked with an X); drag outward. **Diagonal**: two opposite
 corners, drag the diagonal from the anchor. **Three-point**: baseline first
 (click, move, click), then height perpendicular to it; remaining sides
 auto-created. Hotkey R. Numeric entry before placing fixes dimensions.
-**Status:** 🟡 partial — Diagonal only, as a drag from corner to corner
-(`SketchEntity.rect(min:max:)` — axis-aligned only). Trimming a rect now
-explodes it into its four lines first (`SketchTrimmer`), so sides become
-individually editable after a trim. Missing: Center and Three-point types,
-anchor-point X-mark, rotated rectangles, numeric entry.
-**Feasibility:** [mesh-kernel OK]
+**Status:** ✅ implemented — Diagonal, Center and Three-Point, switched from
+the type menu over the sketch (`RectangleType`, `RectangleConstruction`);
+rotated rectangles are four constrained lines so dimensions, trim, projection
+and profiles work on them.
 
 ### 1.6 Circle
 
@@ -570,9 +579,16 @@ visibility and Snapping Hints (text next to pointer, e.g. "endpoint",
 "midpoint", "sketch center"). Snap points are suggestions only.
 **Status:** 🟡 partial — `SnapEngine` snaps to sketch endpoints, line
 midpoints, rect corners, circle/ellipse/arc centers, arc endpoints, and
-polygon vertices (0.35 tolerance), then to a fixed 0.5 grid. Missing:
-guidelines, entity–entity intersection points, 3D guide points, distant
-edges, hints UI, enable/disable toggles, dynamic grid resolution.
+polygon vertices; to the corners, edge midpoints, centers and edges of the
+face being sketched on; and, with **Distant Edges** (`DistantSnapGeometry`),
+to every visible body's edges projected onto the sketch plane — corners,
+midpoints and runs of straight edges, and the centers of closed curves (a
+hole's rim offers its center, not its facets) — then to the grid. The
+Snapping settings toggle Grid, Sketch Guide Lines, Sketch Guidepoints, Face
+Guidepoints and Distant Edges, and Snapping Hints name the snap. Distant
+edges apply in any view, not only orthogonal ones. Missing: entity–entity
+intersection points, the Show Guide Points toggle, guideline memory,
+dynamic grid resolution.
 **Feasibility:** snapping [mesh-kernel OK]; guide-created constraints
 [needs constraint solver]
 
@@ -1079,6 +1095,33 @@ heal (today those simply error).
 purpose, since healing means EXTENDING adjacent surfaces and a mesh has no
 surfaces to extend.
 
+### 4.17 Imprint Edge
+
+**Spec:** Imprint a sketch's edges onto the faces of a body: each face the
+sketch lies on is split along its curves, so a region of a face becomes a
+face of its own — push/pull it into a boss or a pocket, offset it, or give it
+its own appearance — without first building and subtracting a cutter body.
+**Status:** 🟡 partial — Modify ▸ Imprint Edge (and the `model.imprint`
+command): select one body, choose the tool, tap the sketch (a fill or any of
+its curves). The kernel splits the faces with `BRepAlgoAPI_Splitter`, keeping
+lines, arcs and fit splines exact (`ImprintKit`, `OCCTKernel.imprintResult…`),
+and records an `.imprint(body:sketches:)` history node that replays when the
+sketch or anything upstream changes. The render mesh carries a per-triangle
+face channel (`RenderMesh.faceRegions`, saved as a trailer on the mesh blob),
+so picking stops at the imprinted line and the line draws as an edge. Pushing
+a region in cuts a pocket the shape of the region: an inward push/pull now
+subtracts the face's own prism instead of slicing the body at the moved plane
+(which also fixes pushing one face of a stepped part down). A boolean keeps
+the target's coplanar seams, so pulling one imprinted region leaves the
+others in place. The sketch auto-hides once used. Agent op `feature.imprint`.
+Covered by `ImprintTests`, `ImprintUITests`; on the web by
+`scripts/imprint-smoke.mjs`.
+**Missing:** imprinting body edges (not only sketches); projecting a sketch
+that is not on the face (the curves must lie in the face); curved faces are
+split but only planar regions push/pull; an imprinted face is a mesh-path
+face for ops that have no B-rep route (move/scale/rotate face).
+**Feasibility:** [needs B-rep kernel] — done on OCCT.
+
 ---
 
 # 5. Transform menu
@@ -1114,9 +1157,14 @@ rotationDelta`, quaternion-multiplying `updateTransform`); tapping an arrow
 (`beginAxisDistanceEntry` → "Move X/Y/Z" field); the **Copy badge** chip
 duplicates the selection in place before the next drag (`copyOnDrag`,
 `AddBodyCommand` clones); undoable via `TransformBodiesCommand`. Highlight
-is drag-time only (no hover recognizer). Missing: center
-re-anchoring/snapping, dimension labels during drag, Link badge,
-auto-orientation, model-aware totals.
+is drag-time only (no hover recognizer). **Auto-Orient:** an Orient badge
+(shown when the selection has a frame of its own — a turned body, a face
+picked for Move, an image or a sketch selection) lines the gizmo's arrows,
+tiles and rings up with that frame (`GizmoBasis`); hit tests, drags, typed
+distances and angles then run along those axes, and the frame holds still
+for the length of a drag. The Reposition badge moves the gizmo's centre.
+Missing: center snapping to geometry (re-anchoring is a free drop), Link
+badge, model-aware totals, auto-centering on circular faces.
 **Feasibility:** [mesh-kernel OK]; history integration [needs history engine]
 
 ### 5.2 Translate
@@ -1269,14 +1317,27 @@ has an editable **Size** parameter; per-type History params: Face,
 Point #1–3, Edge, Angle (plus Offset distance where applicable). Plane
 icons can be visually scaled down. Sketches attached to a plane follow it
 parametrically (offset edit moves plane + sketch).
-**Status:** 🟡 partial — the **Offset** tool only: with a face selected,
-"Offset Plane" pulls a construction plane off it along the normal (drag the
-arrow or type the distance, extrude-style preview); committed as an
-undoable `AddConstructionPlaneCommand`, persisted (`PersistedPlane`),
-rendered as a tile, usable as a sketch plane and a mirror plane. Missing:
-the other six plane tools (Midplane, Perpendicular to Edge, Through Edge at
-Angle, Parallel to Face at Point, 3 Points, Along Spline, Mirrored), the
-Size parameter, construction axes (§6.2), parametric following.
+**Status:** 🟡 partial — **all seven plane tools ship (2026-10-12).**
+Construct ▸ Plane in the palette lists Offset Plane, Midplane, Plane Through
+3 Points, Plane on Curve at Point, Plane Perpendicular to Edge at Point,
+Plane Through Edge at Angle and Plane Parallel to Face at Point (also in
+Command Search as "Add Plane - …"). Each construction declares typed pick
+slots (`PlaneConstruction.slots`: point / face / edge / curve) and the bar
+prompts for the next one ("Tap a point (2 of 3)"), switches construction from
+its menu, and carries the one parameter that construction has — Offset's
+distance, Through Edge's angle, On Curve's position along the curve (set from
+the tap, adjustable in %). Faces include existing construction planes;
+points snap to corners and sketch points, else land on the tapped surface or
+grid; edges and curves take the tapped edge's smooth chain, so a tessellated
+arc comes back whole. A face selected beforehand seeds face-first
+constructions. Midplane of two parallel faces sits halfway; of two meeting
+faces it is their mirror plane. The geometry is pure
+(`ConstructionPlaneKit`, `ConstructionPlaneKitTests`); end-to-end in
+`ConstructionPlaneUITests`. The face-pull "Offset Plane" in the face bar
+still works as before. Committed as an undoable `AddConstructionPlaneCommand`
+titled with the construction, persisted, usable as a sketch and mirror plane.
+**Missing:** the Size parameter, Mirrored planes, and parametric following
+(planes don't yet re-derive when their references move).
 **Feasibility:** planes themselves [mesh-kernel OK]; parametric following
 [needs history engine]
 
@@ -1308,11 +1369,17 @@ edge → Along Edge. The bar names the derived construction, which is what
 makes the inference legible. `EditorViewModel.deriveAxis` is a pure static so
 it is unit-tested without a view model (`ConstructionAxisDeriveTests`);
 end-to-end coverage in `ConstructionAxisUITests`.
-**Missing:** **Axis Through 2 Points** (needs the snap-point pick path, not
-the face/edge one everything else uses); the edge-pick route is wired
-(`pickAxisEdge`) but not yet reachable from the viewport's edge hit-test;
-Length is editable at creation but is not yet a History parameter (that is
-G8); and axes are not yet operands for circular pattern / rotate.
+**Construct ▸ Axis menu (2026-10-12).** The palette's Axis entry is now a
+menu: **Automatic** (the derivation above) plus all five constructions by
+name — Through 2 Points (snap-point picks), Through 2 Planes, Cylinder/Cone,
+Along Edge, and Perpendicular to Face **at the tapped point** (snapping to a
+corner under the finger). An explicit entry reads taps only as its own
+references and counts them in the bar ("Tap a flat face or plane (1 of 2)");
+the bar's menu switches construction. Also in Command Search as
+"Add Axis - …".
+**Missing:** Length is editable at creation but is not yet a History
+parameter (that is G8); axes are not yet operands for circular pattern /
+rotate.
 **Feasibility:** [mesh-kernel OK] — remaining work is app/UI, not geometry.
 
 ### 6.3 Insert Image (reference images)
@@ -1477,6 +1544,12 @@ Measurements; Shaders = Shaded | Visualized; Surface Analysis = Zebra
 Desktop View-menu extras: Rotate View (fixed-angle camera increments),
 Collapse All, Show Properties Sidebar, Enter Full Screen, and a "keep
 horizon level" navigation toggle (Staircase tutorial).
+**View menu additions (2026-10-12):** Nearest Ortho View (⌘8), Rotate View
+left/right/up/down by 15° or 45°, Field of View… (a 0–100° slider; 0° is
+orthographic), Grid ▸ XY / YZ / ZX plane and Lock Grid Size (freezes the
+zoom-stepped spacing, named in the item), Number Format ▸ Foot & Inch
+(architectural to 1/16″) and Degree Format (fractional degrees-minutes) —
+all also in Command Search (`ViewMenuFormatTests`, `ViewsUITests`).
 **Status:** 🟡 partial — a Views toolbar menu offers the six standard views
 (Top/Bottom/Front/Back/Right/Left) plus Isometric (`StandardView`,
 `applyStandardView`, animated through `CameraAnimator`) and an
@@ -1578,6 +1651,11 @@ Duplicate, Delete. **Command Search:** X or Cmd+F opens a
 fuzzy launcher ("p3" → "Add Plane - 3 Points", "snu" → "Scale - Non-uniform");
 arrows cycle, Enter runs, recents shown when empty; pre-selection scopes
 results.
+**Cut / Copy / Paste (2026-10-12):** ⌘X / ⌘C / ⌘V (and Command Search)
+copy the selected bodies — or, while sketching, the selected sketch items —
+to the app's clipboard (`EditorClipboard`); Paste drops copies in place,
+selected, as one undo step, and works across designs. Bodies keep their exact
+solid. `ClipboardUITests`.
 **Status:** 🟡 partial — `CommandRegistry` is the single catalog both paths
 resolve against, which is what makes Single Key Action possible at all: a bare
 letter is EITHER a hotkey or the first character of a Command Search query,
@@ -1681,6 +1759,11 @@ steps. Documented repair flows: remove the missing face from a Face Offset
 selection; re-project a lost face, then re-reference the extrusion profile;
 re-select the original face to fix a broken Shell (Action camera pts 2–3;
 Floor fan).
+**Filter by (2026-10-12):** the History header's filter menu narrows the
+list to Variables (features driven by a variable formula), Isolated Items
+(features of the isolated bodies) and Related to Selection (features that
+produced a selected body); filters combine, and one that can't apply right
+now is disabled.
 **Status:** ✅ implemented (Phase D). A real parametric feature graph
 (`FeatureGraph`/`FeatureNode`) with a History sidebar: editable parameters that
 rebuild everything downstream, topological naming so a `FaceRef`/`EdgeRef`
@@ -1740,6 +1823,10 @@ Folders: create from selection (button bottom-left), drag-and-drop to
 organize, nested folders. "Reveal in Items" from the modeling space highlights
 the item's row. Three-dots menu: Show Hidden Items, Invert All Item
 Visibility. Names are shared with History (rename in one place updates both).
+**Visibility menu (2026-10-12):** the Items header's eye menu has Show
+Hidden Bodies and Invert Body Visibility (each one undo step); Reveal in
+Items Sidebar opens Items on the selection; all three in Command Search
+(`ItemsUITests`).
 **Status:** 🟡 partial — an Items panel (toolbar "Items" button,
 `ItemsPanelView`) lists bodies, sketches, construction planes, **images**,
 and **symbols** with type icons; per row: visibility eye
@@ -1783,6 +1870,8 @@ Import Planar Curves as Sketches. Native-format imports keep editable per-featur
 history; all other formats arrive as a single Import history step. STEP
 assembly hierarchy → nested folders. Mesh rules: booleans work only on closed
 mesh bodies; any boolean involving a mesh yields a mesh.
+**IGES (2026-10-12):** Import ▸ IGES File… reads solids (and sews IGES surface
+models into solids where they close), healed and validated like STEP.
 **Status:** 🟡 partial. **STEP import now ships** (`OCCTKernel.readSTEP`,
 OCCT DataExchange) — each solid in the file becomes a body carrying its
 analytic B-rep, so imported geometry is exact rather than tessellated. Also
@@ -1823,6 +1912,17 @@ unitless so the unit is declared at export). Favorite formats (star) persist;
 batch export multiple formats; isolated parts exportable in any type except
 the native one. Screenshot tool: grid on/off, transparency, body edges, item chooser,
 resolution Actual/Double/FullHD/4K/8K, remembers settings, clipboard shortcut.
+**IGES (2026-10-12):** Export ▸ IGES writes the exact B-rep (IGES 5.3, solids
+as MSBO, mm) — same analytic-bodies-only rule as STEP (`STEPKitTests`).
+**SVG from Sketch (2026-10-12):** the open (or ground-plane) sketch as an SVG
+drawing in millimetres, Y flipped to read head-on; lines, circles, arcs and
+ellipses exact, splines tessellated (`SVGKitTests`).
+**Export to Slicer (2026-10-12):** the visible bodies as a print-ready 3MF
+(`SlicerExport`): turned Z-up, lowest point on the bed, centred in x/y, the
+arrangement kept, named after the design. The Mac opens it in the app that
+handles .3mf (the installed slicer), falling back to a save panel; the iPad
+hands it to the share sheet, where slicer apps take it; the web downloads it
+(`SlicerExportTests`). No per-slicer picker or resolution options.
 **Status:** 🟡 partial. **STEP (AP214) export now ships** via OCCT
 DataExchange (`OCCTKernel.writeSTEP`) — unlike every mesh format below it
 carries the EXACT B-rep, so analytic surfaces survive into other CAD
@@ -1837,8 +1937,7 @@ is hidden elsewhere, never faked), and **DXF** of the active/ground sketch
 File per Body" split (per-item files). Plus a **PNG screenshot** entry with
 an options sheet: resolution multiplier, transparent background, and grid
 on/off (offscreen renderer capture). Missing: native/X_T/STEP/IGES, DWG/SVG/
-PDF, unit options, hidden-item filtering, vertex colors, favorites/batch,
-slicer hand-off.
+PDF, unit options, hidden-item filtering, vertex colors, favorites/batch.
 **Feasibility:** OBJ/3MF/GLB/USDZ/PNG [mesh-kernel OK]; STEP/IGES
 [needs B-rep kernel]; X_T/X_B commercial; DWG via licensed libs (DXF/SVG
 [mesh-kernel OK])
@@ -1956,16 +2055,35 @@ View, Aperture, Blur Intensity (depth of field). **Sharing:** Capture tool
 (clean high-res image, no grid/UI), textured USDZ export, AR button,
 Generative Render (AI enhancement of a capture; prompt → Generate → Save;
 plan-gated, daily limit, requires Sync).
-**Status:** 🟡 partial (visualization-lite, no separate space) — a palette
-Material button on the selected body/multi-selection opens a Material sheet:
-a small preset library (Steel, Aluminum, Brass, Plastic Matte/Gloss, Rubber,
-Wood) plus a custom color picker and metallic/roughness sliders, applied per
-body as one undoable `SetMaterialCommand` and persisted
-(`BodyMaterialSpec`); the renderer blends the metallic/roughness factors
-into its Blinn-Phong shading, and a Views-menu **Ground Shadow** toggle
-draws cheap planar blob shadows. Missing: a real PBR/IBL pipeline,
-environments, per-FACE materials, decals, emission/glow, DoF, Capture,
-material search/library breadth, Generative Render.
+**Status:** 🟡 partial (Visualization workspace v1, 2026-10-13) — Tools ▸
+**Visualize** (toolbar palette button, Command Search "Visualize", agent
+`view.visualize`) turns the editor into a space of its own: the grid,
+edges, tool palette, bottom bars and move gizmo step aside, a tap selects
+whole bodies (Shift/⌘ adds), and the **Visualization panel** takes the
+Items panel's place. **Materials:** a 48-entry library in ten categories
+(Metal, Plastic, Rubber, Wood, Glass, Stone, Ceramic, Fabric, Paint,
+Emissive) with instant search and a category filter, a **Used Materials**
+row (most used first), tap-to-apply over the selection (one undo step),
+Edit… (the Material sheet, now with Opacity and **Glow**) and Reset to
+Default. Glass is see-through (drawn in the blended pass). **Glow**
+(`BodyMaterialSpec.emission`, optional in the record) shows the surface's
+own colour, brightened, whatever the light — no bloom. **Environment**
+(`VisualizationEnvironment`, saved with the design: `Project.visualizationData`
+and the `.os3d` archive): six presets (Studio, Daylight, Sunset, Overcast,
+Warm Interior, Night) with their sky/ground light, sun colour and
+background, plus Light Rotation, Sun Elevation and Light Intensity
+(sliders preview live, save as one undo step on release), background
+Environment / Color / Transparent, and Ground Shadow. While visualizing the
+renderer swaps the camera headlight for the world-fixed sun
+(`VisualizationLighting`, one pure function shared by iPad, Mac and web),
+with a firmer terminator and a sky/ground reflection on polished and metal
+surfaces. **Capture** opens the Screenshot sheet with the grid off and a
+transparent background when the environment asks for one. The web app
+mirrors all of it (panel, lighting in the WebGL shaders). Missing: real
+PBR/IBL and HDR environments, transmission/IOR, per-FACE materials,
+decals, texture mapping controls (scale, rotation, auto-match), custom
+.GLB materials, emission bloom, depth of field and focus point, textured
+USDZ / AR, Generative Render.
 **Feasibility:** PBR space, materials, decals, environments, DoF, capture
 [mesh-kernel OK] (pure Metal renderer work); the material *library content*
 itself is an asset-sourcing problem; Generative Render [platform/service]
@@ -1997,7 +2115,46 @@ Center Mark, Intersection Mark. Notes (leader or
 free, 1200 chars), images. Per-sheet properties: projection angle first/third,
 units/precision/decimal separator, line widths per class. Hidden-line toggle
 per view; Cmd+R updates the drawing from the model.
-**Status:** ❌ not implemented.
+**Status:** 🟡 partial (v2, 2026-10-13) — drawings are saved in the design
+(`SavedDrawing`, `DesignDocument.drawings`, the `Project.drawingsData` JSON
+column and the `.os3d` archive, UUIDs remapped on import). Export ▸
+Drawing… reopens the last drawing (or makes one); File ▸ New Drawing
+(Command Search) always makes a new one of the selected bodies (every
+visible body when none is selected). The sheet's title menu switches
+drawings, adds and deletes them; its edits are one undo step ("Edit
+Drawing") when the sheet closes. Each drawing has: Front as the base view,
+Top and Right placed by the standard (ANSI third angle: Top above, Right to
+the right; ISO first angle: Top below, Right to the left), an optional
+isometric, hidden lines dashed (`DrawingProjection`: feature edges plus
+silhouettes, sampled and tested against the tessellation; seams a mesh
+boolean leaves across flat faces and duplicate pieces are dropped), overall
+width/height/depth dimensions in the display unit, a border and a title
+block (title, scale, sheet, projection, date). **Bodies:** all visible, or
+a chosen list. **Section views** (`DrawingViewKit`): a cutting line on
+Front, Top or Right, vertical or horizontal, at any position, either way of
+looking; the bodies are clipped by the plane, the cut faces closed with
+`SectionCapKit` caps and hatched at 45°, and the view drawn like the
+standard view that looks the same way (upright, unmirrored), titled
+"SECTION A-A". The base view shows the cutting plane as a chain line with
+thick ends, arrows in the direction of sight and the letter at each end.
+**Detail views:** a circle on Front, Top, Right or the isometric (centre
+and size), magnified 2×/4×/5×/10× the sheet scale, titled "DETAIL B (4:1)",
+with the circle and letter on the base view. Section and detail views stack
+in a column to the right; the automatic scale makes room for them. Letters
+skip I, O and Q. **Moving views:** drag a view on the preview; Top and the
+side view follow Front and move on their own only along their shared axis;
+"Reset View Positions". Options: title, sheet size (A4, A3, Letter,
+Tabloid; landscape), standard, scale (automatic = largest standard scale
+that fits, or fixed), isometric / hidden lines / dimensions. Exports PDF,
+SVG and DXF (layers VISIBLE, HIDDEN with a HIDDEN linetype, CUTTING with a
+CENTER linetype, HATCH, DIMENSIONS, BORDER, TEXT) written by the app itself
+(`DrawingExport`), so iPad, Mac and web files match. Drawings are
+regenerated from the model whenever shown; projections are cached between
+option changes and drags. Missing: free placement of new views from any
+angle (custom projection angles, extra projected views), cutting lines
+through picked points / stepped sections, interactive dimensions and
+annotations, centerlines and marks, title-block layouts, multiple sheets,
+DWG.
 **Feasibility:** [mesh-kernel OK] for a first version (orthographic
 projection + silhouette/hidden-line from meshes; associativity with the model
 [needs history engine]; production-grade HLR quality benefits from a B-rep
@@ -2024,14 +2181,25 @@ overlapping/interpenetrating bodies render RED while sectioned, and
 scrubbing the plane across the model serves as a collision-verification
 pass — the red disappears once clearance is achieved (Interference
 analysis; Wall Clock pt 2). Saved Views can store a section.
-**Status:** 🟡 partial — Views → Section arms a plane pick (world +
-construction plane tiles); the chosen plane clips the lit, edge, fill, and
-sketch-line shaders (`SectionPlaneState` → per-fragment discard), with a
-drag arrow to move the plane along its normal and Flip / Section Off
-badges (also mirrored in the Views menu). Cut faces are left OPEN (no cap
-fills), interior back faces render shaded. Missing: caps with per-body
-section colors, rotate/tilt handles, 2D Section View, Section Only,
-interference highlighting, sketch-on-datum while sectioned, Saved Views.
+**Status:** 🟡 partial — Views → Section (also Command Search "Section
+View") arms a plane pick (world + construction plane tiles, or a planar
+face); the chosen plane clips the lit, edge, fill, and sketch-line shaders
+(`SectionPlaneState` → per-fragment discard), with a drag arrow to move the
+plane along its normal. **Caps:** each body's mesh is sliced by the plane
+(`SectionCapKit`: crossing segments chained into loops, nested into regions
+with holes, triangulated) and the cut drawn solid with a dark outline — a
+distinct hue per body while it has the default color, its own color when
+custom-colored. **Interference:** bodies whose cuts overlap (positive area —
+touching bodies don't count) both turn red, so dragging the plane through an
+assembly checks clearance. Badges and Views-menu entries: Flip, **2D**
+(2D Section View: orthographic, camera head-on to the cut from the removed
+side; again returns to the previous projection), **Section Only** (hides
+the bodies, keeps the cuts), **Edit** (Edit Section View: pick a new plane,
+keeping the options) and Section Off. The agent bridge's `view.section` exec
+sets a section by origin/normal and reports the interfering body ids.
+Missing: rotate/tilt handles, fill patterns (hatching), background edges
+only in 2D (bodies stay shaded behind the cut), sketch-on-datum while
+sectioned, Saved Views.
 **Feasibility:** [mesh-kernel OK] (clip plane + cap rendering in the Metal
 renderer)
 
@@ -2062,9 +2230,16 @@ for a quick face-to-face distance.
 (signed-tetrahedron sum) + bounding box, sketch-entity length and
 radius/diameter; and a palette Measure mode measures point-to-point
 distance with X/Y/Z deltas over notable points (sketch snap points + body
-vertices, cross markers + span line rendered in the overlay). Missing: the
-movable panel, angle/min-distance/central-distance types, pinned
-measurements, row-hover highlighting.
+vertices, cross markers + span line rendered in the overlay). **3-Point
+Angle and Pin (2026-10-12):** the pill's type menu switches to 3-Point Angle
+(first arm, corner, second arm → degrees, both arms drawn); **Pin** keeps the
+current reading in the model as a labelled annotation
+(`PinnedMeasurement`, undoable, saved in the project and the .os3d archive),
+View ▸ Show Pinned Measurements hides them, and in Measure mode each label's
+✕ unpins it (`PinnedMeasurementTests`, `MeasureUITests`). Missing: the
+movable panel, Object Measurements as a type (the info bar covers it),
+min-distance/central-distance, row-hover highlighting, and pins following
+geometry that moves.
 **Feasibility:** [mesh-kernel OK]
 
 ### 16.4 Display Modes
@@ -2074,14 +2249,21 @@ measurements, row-hover highlighting.
 shadows). Surface Analysis: Zebra (continuity, Direction H/V, Scale),
 Curvature Map (color gradient, Scale). Options: Show Edges, Show Hidden Edges
 (see and select occluded edges).
+**Surface Analysis (2026-10-12):** Display ▸ Surface Analysis ▸ Zebra
+(reflection stripes, a break in a stripe's flow = a break in tangency) and
+Curvature Map (normal change per unit surface from screen-space derivatives,
+coloured by radius on a log scale: blue flat, green, yellow, red tight), in
+the Metal and WebGL lit shaders alike; also in Command Search.
 **Status:** 🟡 partial — a Views → Display submenu (labeled with the active
 shader) switches between **Shaded** (lit fill + feature edges, the
 default), **Shaded (No Edges)**, **Wireframe** (feature edges over a
 depth-only prepass so hidden lines stay hidden), and **X-Ray** (translucent
 fill, depth-read/no-write), plus a **Show Hidden Edges** toggle (extra
 low-alpha edge pass with a reversed depth test — occluded edges render
-faintly). Bodies stay selectable in every mode. Missing: Visualized mode,
-Zebra/Curvature surface analysis.
+faintly). Bodies stay selectable in every mode. **Tool Preview Opacity**
+(Settings ▸ Graphics, 10–100 %, default 55 %) sets how solid a tool's
+translucent preview draws. Zebra and Curvature Map are in Surface Analysis
+(above). Missing: Visualized mode, Show Decals.
 **Feasibility:** [mesh-kernel OK]
 
 ---
@@ -2102,6 +2284,14 @@ Navigation: presets, 2-Finger Rotation, zoom direction, start screen
 mode (show touches/keys); Sync status + manual sync; About (version, terms,
 usage-data opt-out); Account deletion. Units: mm/cm/m/in/ft; angle decimal or
 fractional.
+**Added (2026-10-12):** Mouse Navigation ▸ Navigation Preset (OpenShape3D,
+SOLIDWORKS, Fusion, Onshape — what right / middle drags do, with Shift /
+Control) and Reverse Scroll Direction; the mouse wheel now zooms and a
+trackpad's two-finger scroll pans on iPad and Mac. Graphics ▸ Tessellation
+Quality (applies at the next launch). Tutorial Mode ▸ Display Touches and
+Clicks / Display Keyboard Shortcuts. All but Tessellation Quality on the web
+too. Still missing: interface language, customizable shortcuts, start-with,
+menu button labels, selection extension.
 **Status:** 🟡 partial — a Settings surface ships (`AppSettings`, Phase F
 tranche 1): display Units (mm/cm/m/in/ft), Theme System/Light/Dark, Interface
 Left/Right, and Anti-Aliasing (Disabled | 2x | 4x MSAA), persisted across

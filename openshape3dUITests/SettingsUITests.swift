@@ -276,12 +276,21 @@ final class SettingsUITests: XCTestCase {
         app.buttons["SettingsButton"].tap()
         let identifiers = ["SnapToGridToggle", "SnapToSketchGuidelinesToggle",
                            "SnapToSketchGuidepointsToggle",
-                           "SnapToFaceGuidepointsToggle", "ShowSnapHintsToggle"]
+                           "SnapToFaceGuidepointsToggle", "SnapToDistantEdgesToggle", "ShowSnapHintsToggle"]
         func reveal(_ identifier: String) -> XCUIElement {
             for _ in 0..<10 {
                 let toggle = app.switches[identifier].firstMatch
-                if toggle.exists && toggle.isHittable { return toggle }
-                app.swipeUp(velocity: .slow)
+                if toggle.exists && toggle.isHittable {
+                    // The list may still be gliding from the last swipe;
+                    // only trust a row that is still there once it stops.
+                    sleep(1)
+                    if toggle.exists && toggle.isHittable { return toggle }
+                    continue
+                }
+                // Short drags, so a row near the edge isn't flung past.
+                let start = app.windows.firstMatch.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.70))
+                start.press(forDuration: 0.05,
+                            thenDragTo: app.windows.firstMatch.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.45)))
                 sleep(1)
             }
             return app.switches[identifier].firstMatch
@@ -289,7 +298,8 @@ final class SettingsUITests: XCTestCase {
         func expectValue(_ value: String, on toggle: XCUIElement) {
             let changed = XCTNSPredicateExpectation(
                 predicate: NSPredicate(format: "value == %@", value), object: toggle)
-            XCTAssertEqual(XCTWaiter.wait(for: [changed], timeout: 3), .completed)
+            XCTAssertEqual(XCTWaiter.wait(for: [changed], timeout: 3), .completed,
+                           "\(toggle.identifier) should read \(value), reads \(toggle.value ?? "nil")")
         }
         func activate(_ toggle: XCUIElement, identifier: String) {
             if identifier == "ShowSnapHintsToggle" {

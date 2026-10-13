@@ -97,6 +97,48 @@ struct SettingsView: View {
                             .font(.caption)
                             .foregroundStyle(.orange)
                     }
+                    Picker("Tessellation Quality", selection: $settings.tessellationQuality) {
+                        ForEach(TessellationQuality.allCases, id: \.self) { Text($0.title).tag($0) }
+                    }
+                    .accessibilityIdentifier("SettingsTessellation")
+                    VStack(alignment: .leading) {
+                        LabeledContent("Tool Preview Opacity",
+                                       value: "\(Int((settings.toolPreviewOpacity * 100).rounded()))%")
+                        Slider(value: $settings.toolPreviewOpacity, in: 0.1...1, step: 0.05)
+                            .accessibilityIdentifier("SettingsToolPreviewOpacity")
+                        Text("How solid a tool's preview draws while editing.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    if settings.tessellationQuality != TessellationQuality.launch {
+                        Text("Takes effect the next time the app launches, for curved faces built after it.")
+                            .font(.caption)
+                            .foregroundStyle(.orange)
+                    }
+                }
+
+                Section {
+                    Picker("Navigation Preset", selection: $settings.navigationPreset) {
+                        ForEach(NavigationPreset.allCases, id: \.self) { Text($0.title).tag($0) }
+                    }
+                    .accessibilityIdentifier("SettingsNavigationPreset")
+                    Toggle("Reverse Scroll Direction", isOn: $settings.reverseZoom)
+                        .accessibilityIdentifier("SettingsReverseZoom")
+                } header: {
+                    Text("Mouse Navigation")
+                } footer: {
+                    Text(settings.navigationPreset.summary + " The mouse wheel zooms; a trackpad pans with two fingers and pinches to zoom.")
+                }
+
+                Section {
+                    Toggle("Display Touches and Clicks", isOn: $settings.showTouches)
+                        .accessibilityIdentifier("SettingsShowTouches")
+                    Toggle("Display Keyboard Shortcuts", isOn: $settings.showKeyPresses)
+                        .accessibilityIdentifier("SettingsShowKeys")
+                } header: {
+                    Text("Tutorial Mode")
+                } footer: {
+                    Text("For recording tutorials: each touch shows a ring, and each keyboard shortcut its keys.")
                 }
             }
             .navigationTitle("Settings")

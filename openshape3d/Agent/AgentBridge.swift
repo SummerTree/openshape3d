@@ -477,6 +477,16 @@ final class AgentBridge {
                                    targetOrigin: origin, targetNormal: normal,
                                    flip: flip, on: viewModel)
 
+        case let .imprint(bodyID, sketchIDs):
+            if let bad = missingBody([bodyID], session) { return bad }
+            if let missing = sketchIDs.first(where: { id in !session.document.sketches.contains { $0.id == id } }) {
+                return execMissing("sketch", missing.raw.uuidString)
+            }
+            return record(FeatureNode(
+                name: "Imprint Edge",
+                kind: .imprint(body: bodyRef(bodyID, session), sketches: sketchIDs),
+                outputBodyIDs: [bodyID]), on: viewModel)
+
         case let .setMaterial(bodies, material):
             if let bad = missingBody(bodies, session) { return bad }
             session.perform(SetMaterialCommand(bodyIDs: Set(bodies), material: material.clamped,
@@ -499,6 +509,33 @@ final class AgentBridge {
             }
             for item in items { session.perform(SetItemVisibilityCommand(item: item, isHidden: hidden)) }
             return execOK(viewModel, ["count": items.count, "undoSteps": items.count])
+
+        case let .section(origin, normal, sectionOnly, twoD):
+            guard let normal else {
+                viewModel.endSection()
+                return execOK(viewModel, ["section": false, "undoSteps": 0])
+            }
+            viewModel.endSection()
+            viewModel.applySectionPlane(SketchPlane.readable(origin: origin, normal: normal))
+            if sectionOnly { viewModel.toggleSectionOnly() }
+            if twoD { viewModel.toggle2DSectionView() }
+            let interfering = viewModel.sectionInterferingBodyIDs.map(\.raw.uuidString).sorted()
+            return execOK(viewModel, ["section": true, "interferingBodyIDs": interfering, "undoSteps": 0])
+
+        case let .visualize(on, args):
+            guard on else {
+                viewModel.exitVisualize()
+                return execOK(viewModel, ["visualize": false, "undoSteps": 0])
+            }
+            viewModel.enterVisualize()
+            let environment = args.applied(to: viewModel.visualizationEnvironment)
+            let before = viewModel.session.document.visualization
+            viewModel.setEnvironment(environment)
+            let saved = viewModel.session.document.visualization
+            return execOK(viewModel, ["visualize": true, "preset": saved.preset,
+                                      "lightRotation": saved.lightRotation, "sunElevation": saved.sunElevation,
+                                      "lightIntensity": saved.lightIntensity, "background": saved.background.rawValue,
+                                      "groundShadow": saved.groundShadow, "undoSteps": saved == before ? 0 : 1])
         }
     }
 

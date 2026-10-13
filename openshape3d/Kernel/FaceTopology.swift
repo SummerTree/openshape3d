@@ -120,7 +120,13 @@ nonisolated enum FaceTopology {
         let (s0, _, _) = triangleVertices(seedTriangle)
         let planeOffset = simd_dot(seedNormal, s0)
 
+        // An imprinted body (spec §4.17) names each triangle's kernel face;
+        // the face ends where that changes, coplanar or not.
+        let regions = mesh.validFaceRegions
+        let seedRegion = regions?[seedTriangle]
+
         func isCoplanar(_ t: Int) -> Bool {
+            if let regions, regions[t] != seedRegion { return false }
             guard let n = triangleNormal(t), simd_dot(n, seedNormal) > normalTolerance else {
                 return false
             }

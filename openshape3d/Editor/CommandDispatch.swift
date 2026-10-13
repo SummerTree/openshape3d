@@ -38,7 +38,13 @@ extension CommandRegistry {
         // Sketch tools — the tutorial's C / A / L / R / T / G.
         "sketch.line", "sketch.rectangle", "sketch.circle", "sketch.arc",
         "sketch.ellipse", "sketch.polygon", "sketch.text", "sketch.trim",
-        "sketch.offset", "sketch.construction", "sketch.onHoveredPlane",
+        "sketch.offset", "sketch.construction", "sketch.onHoveredPlane", "sketch.spline",
+
+        // Construct ▸ Plane / Axis.
+        "plane.offset", "plane.midplane", "plane.threePoints", "plane.onCurve",
+        "plane.perpendicular", "plane.angle", "plane.parallel",
+        "axis.auto", "axis.twoPoints", "axis.twoPlanes", "axis.cylinder", "axis.edge",
+        "axis.perpendicular",
 
         // Modeling.
         "model.extrude", "model.revolve", "model.sweep", "model.loft",
@@ -51,17 +57,22 @@ extension CommandRegistry {
         "model.move", "transform.scaleUniform", "transform.pattern",
 
         // Direct modeling — the face tools shipped 2026-08-29.
-        "model.deleteFace", "model.replaceFace",
+        "model.deleteFace", "model.replaceFace", "model.imprint",
 
         // The launcher itself: X and Cmd+F open Command Search.
         "app.commandSearch", "app.commandSearchAlt",
 
         // Edit.
-        "edit.undo", "edit.redo", "edit.delete",
+        "edit.undo", "edit.redo", "edit.delete", "edit.cut", "edit.copy", "edit.paste",
 
         // View.
         "view.front", "view.back", "view.left", "view.right",
         "view.top", "view.bottom", "view.isometric", "view.fit",
+        "view.nearestOrtho", "view.rotateLeft15", "view.rotateRight15", "view.rotateUp15",
+        "view.rotateDown15", "view.rotateLeft45", "view.rotateRight45", "view.rotateUp45",
+        "view.rotateDown45", "view.fieldOfView", "view.lockGrid",
+        "items.showHidden", "items.invert", "items.reveal", "view.zebra", "view.curvature",
+        "file.newDrawing", "view.visualize", "view.section", "view.editSection", "view.section2D", "view.sectionOnly", "view.sectionFlip",
     ]
 
     /// Catalog entries that advertise a chord but have no editor entry point
@@ -140,6 +151,7 @@ extension EditorViewModel {
         case "sketch.circle":       return armSketchTool(.circle)
         case "sketch.arc":          return armSketchTool(.arc)
         case "sketch.ellipse":      return armSketchTool(.ellipse)
+        case "sketch.spline":       return armSketchTool(.spline)
         case "sketch.polygon":      return armSketchTool(.polygon)
         case "sketch.text":         return armSketchTool(.text)
         case "sketch.trim":         return armSketchTool(.trim)
@@ -173,6 +185,10 @@ extension EditorViewModel {
         case "model.replaceFace":
             guard !session.document.bodies.isEmpty else { return false }
             beginReplaceFace()
+            return true
+        case "model.imprint":
+            guard selection.count == 1 else { return false }
+            beginImprint()
             return true
 
         // MARK: The launcher itself
@@ -212,8 +228,24 @@ extension EditorViewModel {
             guard !selection.isEmpty || !selectedSketchEntityIDs.isEmpty else { return false }
             deleteSelection()
             return true
+        case "edit.cut":            return cutSelection()
+        case "edit.copy":           return copySelection()
+        case "edit.paste":          return paste()
 
         // MARK: View
+        case "plane.offset":        beginPlaneTool(.offset); return true
+        case "plane.midplane":      beginPlaneTool(.midplane); return true
+        case "plane.threePoints":   beginPlaneTool(.threePoints); return true
+        case "plane.onCurve":       beginPlaneTool(.onCurveAtPoint); return true
+        case "plane.perpendicular": beginPlaneTool(.perpendicularToEdgeAtPoint); return true
+        case "plane.angle":         beginPlaneTool(.throughEdgeAtAngle); return true
+        case "plane.parallel":      beginPlaneTool(.parallelToFaceAtPoint); return true
+        case "axis.auto":           beginAxisTool(.automatic); return true
+        case "axis.twoPoints":      beginAxisTool(.twoPoints); return true
+        case "axis.twoPlanes":      beginAxisTool(.twoPlanes); return true
+        case "axis.cylinder":       beginAxisTool(.cylinder); return true
+        case "axis.edge":           beginAxisTool(.alongEdge); return true
+        case "axis.perpendicular":  beginAxisTool(.perpendicularToFaceAtPoint); return true
         case "view.front":      applyStandardView(.front);      return true
         case "view.back":       applyStandardView(.back);       return true
         case "view.left":       applyStandardView(.left);       return true
@@ -222,6 +254,42 @@ extension EditorViewModel {
         case "view.bottom":     applyStandardView(.bottom);     return true
         case "view.isometric":  applyStandardView(.isometric);  return true
         case "view.fit":        fitView();                      return true
+        case "view.nearestOrtho": nearestOrthoView();           return true
+        case "view.rotateLeft15":  rotateView(yaw: -15);        return true
+        case "view.rotateRight15": rotateView(yaw: 15);         return true
+        case "view.rotateUp15":    rotateView(pitch: 15);       return true
+        case "view.rotateDown15":  rotateView(pitch: -15);      return true
+        case "view.rotateLeft45":  rotateView(yaw: -45);        return true
+        case "view.rotateRight45": rotateView(yaw: 45);         return true
+        case "view.rotateUp45":    rotateView(pitch: 45);       return true
+        case "view.rotateDown45":  rotateView(pitch: -45);      return true
+        case "view.fieldOfView":   showFieldOfViewSheet = true; return true
+        case "view.lockGrid":      toggleLockGridSize();        return true
+        case "view.zebra":
+            surfaceAnalysis = surfaceAnalysis == .zebra ? .none : .zebra; return true
+        case "view.curvature":
+            surfaceAnalysis = surfaceAnalysis == .curvature ? .none : .curvature; return true
+        case "items.showHidden":   showHiddenBodies();          return true
+        case "items.invert":       invertBodyVisibility();      return true
+        case "items.reveal":       revealInItems();             return true
+        case "file.newDrawing":
+            newDrawing(designName: session.project.name); return true
+        case "view.visualize":
+            if visualizeActive { exitVisualize() } else { enterVisualize() }
+            return true
+        case "view.section":       toggleSectionView();         return true
+        case "view.editSection":
+            guard sectionState != nil else { return false }
+            editSectionView(); return true
+        case "view.section2D":
+            guard sectionState != nil else { return false }
+            toggle2DSectionView(); return true
+        case "view.sectionOnly":
+            guard sectionState != nil else { return false }
+            toggleSectionOnly(); return true
+        case "view.sectionFlip":
+            guard sectionState != nil else { return false }
+            flipSection(); return true
 
         default:
             return false

@@ -16,6 +16,8 @@ struct BodyMaterial: Equatable {
     var baseColor: SIMD4<Float>
     var metallic: Float = 0
     var roughness: Float = 0
+    /// Glow, 0…1.
+    var emission: Float = 0
     /// Encoded image bytes sampled as the albedo when the mesh has texcoords.
     /// Decoded into an MTLTexture keyed by (body id, textureRevision).
     var textureData: Data? = nil
@@ -34,6 +36,7 @@ extension BodyMaterial {
             baseColor: SIMD4<Float>(spec.baseColor),
             metallic: Float(spec.metallic),
             roughness: Float(spec.roughness),
+            emission: Float(spec.emission),
             textureData: meshHasTexcoords ? spec.baseColorTexture : nil,
             textureRevision: revision
         )
@@ -54,6 +57,10 @@ struct BodyDrawable: Identifiable {
     /// Optional appearance override; when set its baseColor/metallic/roughness
     /// replace `baseColor` and the default shading response.
     var material: BodyMaterial?
+
+    /// Drawn in the blended pass: a tool preview, or a body whose material
+    /// is see-through (glass, acrylic).
+    var isSeeThrough: Bool { isTranslucent || (material?.baseColor.w ?? 1) < 0.999 }
 }
 
 /// A snapshot of what the viewport should draw. Value type, rebuilt cheaply
@@ -75,6 +82,29 @@ struct SketchFillBatch {
 
 /// Viewport display mode (spec §16.4). `.shaded` is the pre-mode renderer
 /// exactly: lit fill + feature edges.
+/// Display Modes ▸ Surface Analysis (spec §16.4): a false-colour overlay on
+/// the shaded bodies — reflection stripes, or curvature as a colour ramp.
+enum SurfaceAnalysis: String, CaseIterable, Equatable {
+    case none, zebra, curvature
+
+    var title: String {
+        switch self {
+        case .none: return "None"
+        case .zebra: return "Zebra"
+        case .curvature: return "Curvature Map"
+        }
+    }
+
+    /// The value the lit shaders read from `gridParams.w`.
+    var shaderValue: Float {
+        switch self {
+        case .none: return 0
+        case .zebra: return 1
+        case .curvature: return 2
+        }
+    }
+}
+
 enum DisplayMode: String, CaseIterable, Equatable {
     /// Lit fill + feature edges (default).
     case shaded
@@ -136,6 +166,11 @@ struct ViewportScene {
     var bodies: [BodyDrawable] = []
     /// Active sketch grid; nil keeps the modeling view's ground grid.
     var gridPlane: SketchPlane?
+    /// View ▸ Lock Grid Size: the minor spacing frozen at lock time; nil
+    /// follows the zoom.
+    var lockedGridSpacing: Double?
+    /// Display Modes ▸ Surface Analysis.
+    var surfaceAnalysis: SurfaceAnalysis = .none
     /// Move gizmo, when a body is selected. `scale` is finalized by the
     /// renderer each frame for constant screen size.
     var gizmo: GizmoState?
@@ -159,6 +194,11 @@ struct ViewportScene {
     var imageQuads: [ImageQuadDrawable] = []
     /// Cheap planar blob shadows under body AABBs (visualization v1).
     var groundShadow: Bool = false
+    /// The Visualization workspace (spec §14): its sun and colours light the
+    /// scene, and the grid and edges are left out. Nil while modelling.
+    var visualization: VisualizationLighting?
+    /// Alpha of translucent tool previews (Tool Preview Opacity).
+    var toolPreviewOpacity: Float = 0.55
 
     /// World-space AABB of everything drawn — bodies AND sketches — for
     /// fit-view. Nil when empty.

@@ -76,6 +76,19 @@ final class Project {
     /// `nil` = none. A defaulted scalar so old stores migrate lightly.
     var itemFoldersData: Data? = nil
 
+    /// Pinned measurements (spec §16.3) as one JSON blob
+    /// (`[PinnedMeasurement]`); `nil` = none. Defaulted, so stores migrate lightly.
+    var pinnedMeasurementsData: Data? = nil
+
+    /// Saved drawings (spec §15) as one JSON blob (`[SavedDrawing]`);
+    /// `nil` = none. Defaulted, so stores migrate lightly.
+    var drawingsData: Data? = nil
+
+    /// The Visualization environment (spec §14) as JSON
+    /// (`VisualizationEnvironment`); `nil` = the default. Defaulted, so
+    /// stores migrate lightly.
+    var visualizationData: Data? = nil
+
     init(name: String) {
         self.name = name
         self.createdAt = Date()

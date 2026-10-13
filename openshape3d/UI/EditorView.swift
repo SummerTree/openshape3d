@@ -30,11 +30,13 @@ struct ExportDocument: FileDocument {
     /// makes Xcode ignore `INFOPLIST_FILE` outright) — its own change.
     static let stepType = UTType("org.iso.step")
         ?? UTType(filenameExtension: "step") ?? .data
+    /// IGES 5.3: like STEP, no system UTI (dynamic, paired with `.data`).
+    static let igesType = UTType(filenameExtension: "igs") ?? .data
     static let usdzType = UTType.usdz
     /// The .os3d project archive (Phase F, spec §13).
     static let os3dType = UTType(filenameExtension: "os3d") ?? .data
     static var readableContentTypes: [UTType] {
-        [stlType, objType, threeMFType, glbType, dxfType, stepType,
+        [stlType, objType, threeMFType, glbType, dxfType, stepType, igesType,
          usdzType, os3dType, .png, .data]
     }
 
@@ -114,11 +116,20 @@ struct MeshExportOptionsSheet: View {
 struct ScreenshotOptionsSheet: View {
     /// Multiplier of the 1024×768 base size (1x / 2x / 4x).
     @State private var resolutionScale = 1
-    @State private var transparentBackground = false
-    @State private var showGrid = true
+    @State private var transparentBackground: Bool
+    @State private var showGrid: Bool
 
     @Environment(\.dismiss) private var dismiss
     let onExport: (Int, Int, Bool, Bool) -> Void
+
+    /// `visualizing`: Capture from the Visualization workspace — no grid,
+    /// and a transparent background when the environment asks for one.
+    init(visualizing: Bool = false, transparent: Bool = false,
+         onExport: @escaping (Int, Int, Bool, Bool) -> Void) {
+        _transparentBackground = State(initialValue: transparent)
+        _showGrid = State(initialValue: !visualizing)
+        self.onExport = onExport
+    }
 
     private static let baseSize = (width: 1024, height: 768)
 
@@ -188,6 +199,8 @@ struct EditorView: View {
     @State private var showBugReport = false
     /// Export ▸ Open on the Web… (WebHandoffSheet).
     @State private var showWebHandoff = false
+    /// Export to Slicer on iPad: the 3MF waiting in the share sheet.
+    @State private var slicerShare: SlicerShare?
     /// Set by a failure alert's "Report This…"; nil from the toolbar button.
     @State private var bugReportDraft: BugReportDraft?
     @State private var pendingMeshImport: MeshImportProbe?
@@ -216,7 +229,7 @@ struct EditorView: View {
     /// one in the chain (found 2026-08-29 while wiring STEP: "Image from
     /// Files…" presented, the three above it did not).
     private enum ImportRequest: Equatable {
-        case stl, dxf, step, mesh, image
+        case stl, dxf, step, iges, mesh, image
 
         var contentTypes: [UTType] {
             switch self {
@@ -227,6 +240,7 @@ struct EditorView: View {
             // hatch the `.os3d` archive importer already uses.
             case .dxf: [ExportDocument.dxfType, .data]
             case .step: [ExportDocument.stepType, .data]
+            case .iges: [ExportDocument.igesType, .data]
             // glTF/GLB, USDZ, OBJ (+MTL/textures) and zips of them. `.data`
             // again: .glb/.gltf/.obj have no system UTI worth trusting.
             case .mesh: [ExportDocument.usdzType, .zip, .data]
@@ -375,8 +389,16 @@ struct EditorView: View {
     /// Measure tool pill: prompts for picks, then shows distance + deltas.
     private func measurePill(_ viewModel: EditorViewModel) -> some View {
         HStack(spacing: 12) {
-            Image(systemName: "ruler")
-            if let result = viewModel.measureResult {
+            Menu {
+                ForEach(EditorViewModel.MeasureType.allCases, id: \.self) { type in
+                    Button(type.title) { viewModel.measureType = type }
+                        .accessibilityIdentifier("MeasureType-" + type.rawValue)
+                }
+            } label: {
+                Image(systemName: viewModel.measureType == .pointToPoint ? "ruler" : "angle")
+            }
+            .accessibilityIdentifier("MeasureTypeMenu")
+            if let result = viewModel.measureResult, viewModel.measureType == .pointToPoint {
                 Text(EditorViewModel.formattedLength(result.distance))
                     .font(.subheadline.weight(.semibold))
                     .monospacedDigit()
@@ -390,11 +412,24 @@ struct EditorView: View {
                 .font(.caption)
                 .monospacedDigit()
                 .foregroundStyle(.secondary)
+            } else if let angle = viewModel.measureAngle {
+                Text(EditorViewModel.formattedAngle(angle))
+                    .font(.subheadline.weight(.semibold))
+                    .monospacedDigit()
+                    .accessibilityIdentifier("MeasureAngleValue")
             } else {
-                Text(viewModel.measurePoints.isEmpty
-                    ? "Tap two points to measure"
-                    : "Tap the second point")
+                Text(measurePrompt(viewModel))
                     .font(.subheadline)
+                    .accessibilityIdentifier("MeasurePrompt")
+            }
+            if viewModel.measurementToPin != nil {
+                Button {
+                    viewModel.pinCurrentMeasurement()
+                } label: {
+                    Label("Pin", systemImage: "pin")
+                }
+                .controlSize(.small)
+                .accessibilityIdentifier("PinMeasurement")
             }
             Button("Done") {
                 viewModel.exitMeasure()
@@ -408,6 +443,16 @@ struct EditorView: View {
         .background(.regularMaterial, in: Capsule())
         .shadow(color: .black.opacity(0.15), radius: 8, y: 2)
         .padding(.top, 8)
+    }
+
+    private func measurePrompt(_ viewModel: EditorViewModel) -> String {
+        let picked = viewModel.measurePoints.count
+        switch viewModel.measureType {
+        case .pointToPoint:
+            return picked == 0 ? "Tap two points to measure" : "Tap the second point"
+        case .threePointAngle:
+            return ["Tap the first arm's point", "Tap the corner", "Tap the second arm's point"][min(picked, 2)]
+        }
     }
 
     /// Chamfer/Fillet bar (Phase E, spec §4.3): shows the pick prompt, the
@@ -585,7 +630,18 @@ struct EditorView: View {
             get: { viewModel.axisLength },
             set: { viewModel.axisLength = max(0.001, $0) }))
         return AdaptiveBar(style: .capsule, spacing: 12) {
-            Image(systemName: "line.diagonal.arrow")
+            Menu {
+                ForEach(AxisConstruction.allCases, id: \.self) { construction in
+                    Button {
+                        viewModel.axisConstruction = construction
+                    } label: {
+                        Label(construction.menuTitle, systemImage: construction.symbol)
+                    }
+                }
+            } label: {
+                Image(systemName: viewModel.axisConstruction.symbol)
+            }
+            .accessibilityIdentifier("AxisConstructionMenu")
             Text(viewModel.axisConstructionLabel)
                 .font(.subheadline)
                 .fixedSize()
@@ -610,6 +666,90 @@ struct EditorView: View {
                 .controlSize(.small)
                 .disabled(!viewModel.canCommitAxis)
                 .accessibilityIdentifier("AxisApply")
+        }
+    }
+
+    /// Construct ▸ Plane bar (spec §6.1): the construction (switchable), what
+    /// to tap next, the one parameter the construction has — Offset's
+    /// distance, Through Edge's angle, On Curve's position — and Apply.
+    private func planeBar(_ viewModel: EditorViewModel) -> some View {
+        let construction = viewModel.planeConstruction
+        return AdaptiveBar(style: .capsule, spacing: 12) {
+            Menu {
+                ForEach(PlaneConstruction.allCases, id: \.self) { option in
+                    Button {
+                        viewModel.planeConstruction = option
+                    } label: {
+                        Label(option.title, systemImage: option.symbol)
+                    }
+                }
+            } label: {
+                Image(systemName: construction.symbol)
+            }
+            .accessibilityIdentifier("PlaneConstructionMenu")
+            Text(viewModel.planeToolPrompt)
+                .font(.subheadline)
+                .fixedSize()
+                .accessibilityIdentifier("PlaneToolPrompt")
+            if construction.usesOffset {
+                Divider().frame(height: 20)
+                Text("Offset").font(.caption).foregroundStyle(.barLabel).fixedSize()
+                TextField(settings.unit.symbol, value: settings.unit.binding(Binding(
+                    get: { viewModel.planeOffsetDistance },
+                    set: { viewModel.planeOffsetDistance = $0 })),
+                          format: .number.precision(.fractionLength(0...3)))
+                    .textFieldStyle(.roundedBorder)
+                    .frame(width: 64)
+                    .multilineTextAlignment(.trailing)
+                    .keyboardType(.numbersAndPunctuation)
+                    .accessibilityIdentifier("PlaneOffsetField")
+                Text(settings.unit.symbol).font(.caption).foregroundStyle(.barLabel).fixedSize()
+            }
+            if construction.usesAngle {
+                Divider().frame(height: 20)
+                Text("Angle").font(.caption).foregroundStyle(.barLabel).fixedSize()
+                TextField("°", value: Binding(
+                    get: { viewModel.planeAngleDegrees },
+                    set: { viewModel.planeAngleDegrees = $0 }),
+                          format: .number.precision(.fractionLength(0...2)))
+                    .textFieldStyle(.roundedBorder)
+                    .frame(width: 56)
+                    .multilineTextAlignment(.trailing)
+                    .keyboardType(.numbersAndPunctuation)
+                    .accessibilityIdentifier("PlaneAngleField")
+                Text("°").font(.caption).foregroundStyle(.barLabel).fixedSize()
+            }
+            if construction.usesCurvePosition {
+                Divider().frame(height: 20)
+                Text("Position").font(.caption).foregroundStyle(.barLabel).fixedSize()
+                TextField("%", value: Binding(
+                    get: { viewModel.planeCurveFraction * 100 },
+                    set: { viewModel.planeCurveFraction = min(max($0, 0), 100) / 100 }),
+                          format: .number.precision(.fractionLength(0...1)))
+                    .textFieldStyle(.roundedBorder)
+                    .frame(width: 56)
+                    .multilineTextAlignment(.trailing)
+                    .keyboardType(.decimalPad)
+                    .accessibilityIdentifier("PlaneCurvePositionField")
+                Text("%").font(.caption).foregroundStyle(.barLabel).fixedSize()
+            }
+        } actions: {
+            if !viewModel.planePicks.isEmpty {
+                Button("Clear") { viewModel.clearPlanePicks() }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .accessibilityIdentifier("PlaneClear")
+            }
+            Button("Cancel") { viewModel.cancelPlaneTool() }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .keyboardShortcut(.cancelAction)
+                .accessibilityIdentifier("PlaneCancel")
+            Button("Apply") { viewModel.commitPlane() }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+                .disabled(!viewModel.canCommitPlane)
+                .accessibilityIdentifier("PlaneApply")
         }
     }
 
@@ -819,6 +959,11 @@ struct EditorView: View {
                 showImporter = true
             }
             .accessibilityIdentifier("ImportSTEP")
+            Button("IGES File…") {
+                importRequest = .iges
+                showImporter = true
+            }
+            .accessibilityIdentifier("ImportIGES")
             // Textured meshes: glTF/GLB, USDZ, OBJ with its MTL and images, .blend,
             // or a zip holding any of them. Parts become mesh bodies.
             Button("OBJ / glTF / USDZ / Blender…") {
@@ -844,6 +989,31 @@ struct EditorView: View {
         .accessibilityIdentifier("ImportMenu")
     }
 
+    /// Write the slicer 3MF to a temporary file and hand it on.
+    private func exportToSlicer(_ viewModel: EditorViewModel) {
+        guard let data = viewModel.exportForSlicer() else { return }
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("Slicer", isDirectory: true)
+        let url = folder.appendingPathComponent(SlicerExport.fileName(for: project.name))
+        do {
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            try data.write(to: url, options: .atomic)
+        } catch {
+            viewModel.errorMessage = "Couldn't write the file for the slicer: \(error.localizedDescription)"
+            return
+        }
+        #if targetEnvironment(macCatalyst)
+        UIApplication.shared.open(url) { opened in
+            // No app claims .3mf: save it like any other export instead.
+            if !opened {
+                exportDocument = ExportDocument(data: data, contentType: ExportDocument.threeMFType,
+                                                fileExtension: "3mf")
+            }
+        }
+        #else
+        slicerShare = SlicerShare(url: url)
+        #endif
+    }
+
     /// Toolbar Export menu (spec §12, plan §B14): mesh formats, sketch DXF,
     /// screenshot, and — where ModelIO can write USDZ — USDZ + AR Preview.
     private func exportMenu(_ viewModel: EditorViewModel) -> some View {
@@ -856,6 +1026,22 @@ struct EditorView: View {
                 Label("Open on the Web…", systemImage: "globe")
             }
             .accessibilityIdentifier("OpenOnWebButton")
+            // Export to Slicer: a print-ready 3MF (Z-up, on the bed). The Mac
+            // opens it in the app that handles .3mf — the slicer; the iPad
+            // hands it to the share sheet, where slicer apps pick it up.
+            Button {
+                exportToSlicer(viewModel)
+            } label: {
+                Label("Export to Slicer…", systemImage: "printer")
+            }
+            .accessibilityIdentifier("ExportToSlicerButton")
+            // File ▸ New Drawing (spec §15): 2D views with PDF/SVG/DXF export.
+            Button {
+                viewModel.openDrawing(designName: project.name)
+            } label: {
+                Label("Drawing…", systemImage: "doc.richtext")
+            }
+            .accessibilityIdentifier("NewDrawingButton")
             Divider()
             Button("STL") {
                 if let data = viewModel.exportSTL() {
@@ -919,6 +1105,24 @@ struct EditorView: View {
                 }
             }
             .accessibilityIdentifier("ExportSTEP")
+            // IGES: the other exact-geometry exchange format older CAD and CAM
+            // tools still ask for. Same rule as STEP: analytic bodies only.
+            Button("IGES") {
+                if let data = viewModel.exportSTEP(format: .iges) {
+                    exportDocument = ExportDocument(
+                        data: data,
+                        contentType: ExportDocument.igesType,
+                        fileExtension: "igs"
+                    )
+                }
+            }
+            .accessibilityIdentifier("ExportIGES")
+            Button("SVG from Sketch") {
+                if let data = viewModel.exportSVG() {
+                    exportDocument = ExportDocument(data: data, contentType: .svg, fileExtension: "svg")
+                }
+            }
+            .accessibilityIdentifier("ExportSVG")
             Divider()
             // Full-fidelity project archive: sketches, features, variables —
             // everything (Phase F, spec §13). Mesh exports above are geometry-
@@ -1030,6 +1234,8 @@ struct EditorView: View {
                 ZStack {
                     ExtrudeGizmoOverlay(viewModel: viewModel)
                     MoveDistanceOverlay(viewModel: viewModel)
+                    PinnedMeasurementsOverlay(viewModel: viewModel)
+                    TutorialOverlay(viewModel: viewModel)
                     RotationOrbitOverlay(viewModel: viewModel)
                 }
             }
@@ -1055,6 +1261,8 @@ struct EditorView: View {
                 }
             }
             .overlay(alignment: .bottom) {
+                // Visualization shows the model alone (spec §14).
+                if !viewModel.visualizeActive {
                 VStack(spacing: 10) {
                     // Selection info strip sits above the numeric bar when
                     // both are visible (spec §16.3).
@@ -1071,6 +1279,8 @@ struct EditorView: View {
                         replaceFaceBar(viewModel)
                     } else if case .pickingAxisReferences = viewModel.mode {
                         axisBar(viewModel)
+                    } else if case .pickingPlaneReferences = viewModel.mode {
+                        planeBar(viewModel)
                     } else if viewModel.mode.sketchTool == .offset {
                         sketchOffsetBar(viewModel)
                     } else {
@@ -1080,13 +1290,19 @@ struct EditorView: View {
                 .padding(.horizontal, 20)
                 .padding(.bottom, 12)
                 .measuringBottomBarHeight()
+                }
             }
             .onPreferenceChange(BottomBarHeightKey.self) { height in
                 bottomBarHeight = height
             }
+            .onChange(of: viewModel.itemsRevealRequest) { _, _ in showItemsPanel = true }
             .overlay(alignment: .topTrailing) {
-                // Items Manager sidebar (spec §11).
-                if showItemsPanel {
+                // Visualization panel (spec §14) in place of the Items panel.
+                if viewModel.visualizeActive {
+                    VisualizationPanelView(viewModel: viewModel) { showScreenshotOptions = true }
+                        .padding(.trailing, 14)
+                        .padding(.top, 8)
+                } else if showItemsPanel {
                     ItemsPanelView(viewModel: viewModel)
                         .padding(.trailing, 14)
                         .padding(.top, 8)
@@ -1103,6 +1319,8 @@ struct EditorView: View {
             }
             // Keep palette flyouts above the panels they temporarily overlap.
             .overlay(alignment: settings.paletteOnRight ? .trailing : .leading) {
+                // Visualization is a space of its own: no modelling tools.
+                if !viewModel.visualizeActive {
                 ToolPaletteView(viewModel: viewModel)
                     // The column itself (flyouts are overlays, outside it).
                     .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: {
@@ -1119,6 +1337,7 @@ struct EditorView: View {
                     // the numeric bar and become untappable in portrait.
                     .padding(.top, 8)
                     .padding(.bottom, bottomBarInset)
+                }
             }
             .overlay(alignment: .bottomLeading) {
                 // Variables panel (Phase D, Task B3). Anchored bottom-leading so
@@ -1174,6 +1393,22 @@ struct EditorView: View {
                     .tint(viewModel.gizmoRepositionArmed ? Color.orange : Color.secondary)
                     .background(.regularMaterial, in: Capsule())
                     .accessibilityIdentifier("RepositionBadge")
+                    // Orient badge (Auto-Orient, spec §5.1): line the
+                    // gizmo up with the selection's own axes. Offered only
+                    // when that differs from the world's.
+                    if viewModel.gizmoCanAutoOrient || viewModel.gizmoAutoOrient {
+                        Button {
+                            viewModel.toggleGizmoAutoOrient()
+                        } label: {
+                            Label("Orient", systemImage: "move.3d")
+                                .font(.subheadline.weight(.semibold))
+                        }
+                        .buttonStyle(.bordered)
+                        .tint(viewModel.gizmoAutoOrient ? Color.blue : Color.secondary)
+                        .background(.regularMaterial, in: Capsule())
+                        .accessibilityIdentifier("OrientBadge")
+                        .accessibilityValue(viewModel.gizmoAutoOrient ? "on" : "off")
+                    }
                     Button {
                         viewModel.copyOnDrag.toggle()
                     } label: {
@@ -1232,6 +1467,31 @@ struct EditorView: View {
                         }
                         .accessibilityIdentifier("SectionFlip")
                         Button {
+                            viewModel.toggle2DSectionView()
+                        } label: {
+                            Label("2D", systemImage: "square.split.diagonal")
+                                .font(.subheadline.weight(.semibold))
+                        }
+                        .tint(viewModel.sectionState?.isTwoD == true ? Color.blue : Color.secondary)
+                        .accessibilityIdentifier("Section2D")
+                        .accessibilityValue(viewModel.sectionState?.isTwoD == true ? "on" : "off")
+                        Button {
+                            viewModel.toggleSectionOnly()
+                        } label: {
+                            Label("Section Only", systemImage: "square.dashed")
+                                .font(.subheadline.weight(.semibold))
+                        }
+                        .tint(viewModel.sectionState?.sectionOnly == true ? Color.blue : Color.secondary)
+                        .accessibilityIdentifier("SectionOnly")
+                        .accessibilityValue(viewModel.sectionState?.sectionOnly == true ? "on" : "off")
+                        Button {
+                            viewModel.editSectionView()
+                        } label: {
+                            Label("Edit", systemImage: "pencil")
+                                .font(.subheadline.weight(.semibold))
+                        }
+                        .accessibilityIdentifier("SectionEdit")
+                        Button {
                             viewModel.endSection()
                         } label: {
                             Label("Section Off", systemImage: "xmark")
@@ -1278,6 +1538,33 @@ struct EditorView: View {
                     }
                 } else if viewModel.mode.isSketching {
                     VStack(spacing: 8) {
+                        if viewModel.mode.sketchTool == .spline {
+                            HStack(spacing: 12) {
+                                Picker("Spline", selection: Binding(
+                                    get: { viewModel.splineType },
+                                    set: { viewModel.setSplineType($0) })) {
+                                    ForEach(SplineType.allCases, id: \.self) { type in
+                                        Text(type.title).tag(type)
+                                    }
+                                }
+                                .pickerStyle(.segmented)
+                                .fixedSize()
+                                .accessibilityIdentifier("SplineTypePicker")
+                                Text(viewModel.splineInstruction).font(.caption)
+                                    .accessibilityIdentifier("SplineInstruction")
+                                if viewModel.hasPendingSpline {
+                                    Button("Cancel") { viewModel.clearSplinePlacement() }
+                                        .accessibilityIdentifier("CancelSpline")
+                                    Button("Finish") { viewModel.finishSplineInput() }
+                                        .buttonStyle(.borderedProminent)
+                                        .controlSize(.small)
+                                        .disabled(!viewModel.canFinishSpline)
+                                        .accessibilityIdentifier("FinishSpline")
+                                }
+                            }
+                            .padding(10)
+                            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
+                        }
                         if viewModel.mode.sketchTool == .rect {
                             HStack(spacing: 12) {
                                 Menu {
@@ -1433,6 +1720,17 @@ struct EditorView: View {
                     ) {
                         Button("Cancel") {
                             viewModel.cancelLoftProfilePick()
+                        }
+                        .controlSize(.small)
+                        .keyboardShortcut(.cancelAction)
+                    }
+                } else if case .pickingImprintSketch = viewModel.mode {
+                    statusPill(
+                        icon: "square.dashed.inset.filled",
+                        text: "Tap a sketch on the body to imprint its edges"
+                    ) {
+                        Button("Cancel") {
+                            viewModel.cancelImprint()
                         }
                         .controlSize(.small)
                         .keyboardShortcut(.cancelAction)
@@ -1633,15 +1931,67 @@ struct EditorView: View {
                                 }
                             }
                             Divider()
+                            Picker("Surface Analysis", selection: Binding(
+                                get: { viewModel.surfaceAnalysis },
+                                set: { viewModel.surfaceAnalysis = $0 }
+                            )) {
+                                ForEach(SurfaceAnalysis.allCases, id: \.self) { analysis in
+                                    Text(analysis.title).tag(analysis)
+                                }
+                            }
+                            Divider()
                             Toggle("Show Hidden Edges", isOn: Binding(
                                 get: { viewModel.showHiddenEdges },
                                 set: { viewModel.showHiddenEdges = $0 }
+                            ))
+                            Toggle("Show Pinned Measurements", isOn: Binding(
+                                get: { viewModel.showPinnedMeasurements },
+                                set: { viewModel.showPinnedMeasurements = $0 }
                             ))
                         } label: {
                             Label(
                                 "Display: \(viewModel.displayMode.displayLabel)",
                                 systemImage: "cube.transparent"
                             )
+                        }
+                        // View ▸ Nearest Ortho, Rotate View, Field of View,
+                        // grid and number formats (spec §7.3–7.4).
+                        Button("Nearest Ortho View") { viewModel.nearestOrthoView() }
+                            .accessibilityIdentifier("NearestOrthoView")
+                        Menu("Rotate View") {
+                            ForEach([15.0, 45.0], id: \.self) { step in
+                                Button("Rotate Left by \(Int(step))°") { viewModel.rotateView(yaw: -step) }
+                                Button("Rotate Right by \(Int(step))°") { viewModel.rotateView(yaw: step) }
+                                Button("Rotate Up by \(Int(step))°") { viewModel.rotateView(pitch: step) }
+                                Button("Rotate Down by \(Int(step))°") { viewModel.rotateView(pitch: -step) }
+                            }
+                        }
+                        Button("Field of View…") { viewModel.showFieldOfViewSheet = true }
+                            .accessibilityIdentifier("FieldOfViewButton")
+                        Menu("Grid") {
+                            Picker("Grid Position", selection: Binding(
+                                get: { viewModel.gridPosition },
+                                set: { viewModel.gridPosition = $0 })) {
+                                ForEach(EditorViewModel.GridPosition.allCases, id: \.self) { position in
+                                    Text(position.title).tag(position)
+                                }
+                            }
+                            Toggle(viewModel.lockGridSizeTitle, isOn: Binding(
+                                get: { viewModel.lockedGridSpacing != nil },
+                                set: { _ in viewModel.toggleLockGridSize() }))
+                        }
+                        Menu("Number Format") {
+                            Picker("Foot & Inch Format", selection: Binding(
+                                get: { settings.footInchFormat },
+                                set: { settings.footInchFormat = $0 })) {
+                                ForEach(FootInchFormat.allCases, id: \.self) { Text($0.title).tag($0) }
+                            }
+                            .disabled(settings.unit != .feet && settings.unit != .inches)
+                            Picker("Degree Format", selection: Binding(
+                                get: { settings.degreeFormat },
+                                set: { settings.degreeFormat = $0 })) {
+                                ForEach(DegreeFormat.allCases, id: \.self) { Text($0.title).tag($0) }
+                            }
                         }
                         // Ground blob shadows (visualization v1, plan §B15).
                         Toggle("Ground Shadow", isOn: Binding(
@@ -1665,6 +2015,17 @@ struct EditorView: View {
                             Button("Flip Section") {
                                 viewModel.flipSection()
                             }
+                            Button("Edit Section View") {
+                                viewModel.editSectionView()
+                            }
+                            Toggle("2D Section View", isOn: Binding(
+                                get: { viewModel.sectionState?.isTwoD == true },
+                                set: { _ in viewModel.toggle2DSectionView() }
+                            ))
+                            Toggle("Section Only", isOn: Binding(
+                                get: { viewModel.sectionState?.sectionOnly == true },
+                                set: { _ in viewModel.toggleSectionOnly() }
+                            ))
                             Button("Section Off") {
                                 viewModel.endSection()
                             }
@@ -1698,6 +2059,14 @@ struct EditorView: View {
                         Label("Items", systemImage: "sidebar.trailing")
                     }
                     .accessibilityIdentifier("ItemsButton")
+
+                    // Tools ▸ Visualize (spec §14).
+                    Button {
+                        if viewModel.visualizeActive { viewModel.exitVisualize() } else { viewModel.enterVisualize() }
+                    } label: {
+                        Label("Visualize", systemImage: viewModel.visualizeActive ? "paintpalette.fill" : "paintpalette")
+                    }
+                    .accessibilityIdentifier("VisualizeButton")
 
                     importMenu(viewModel)
 
@@ -1809,6 +2178,7 @@ struct EditorView: View {
             }
         case .dxf: viewModel.importDXF(data: data, fileName: name)
         case .step: viewModel.importSTEP(data: data, fileName: name)
+        case .iges: viewModel.importSTEP(data: data, fileName: name, format: .iges)
         case .image: viewModel.beginInsertImage(data: data)
         }
     }
@@ -1877,7 +2247,11 @@ struct EditorView: View {
                     }
                 }
             ) {
-                ScreenshotOptionsSheet { width, height, transparent, showGrid in
+                ScreenshotOptionsSheet(
+                    visualizing: viewModel.visualizeActive,
+                    transparent: viewModel.visualizeActive
+                        && viewModel.visualizationEnvironment.background == .transparent
+                ) { width, height, transparent, showGrid in
                     pendingScreenshot = viewModel.captureScreenshot(
                         width: width,
                         height: height,
@@ -1933,6 +2307,17 @@ struct EditorView: View {
                     viewModel.commitText(content: content, height: height, fontName: fontName)
                 }
             }
+            // Kept out on the editor's own modifier chain: a sheet hung off
+            // a toolbar item is dropped whenever the toolbar redraws.
+            .sheet(item: $slicerShare) { share in
+                ActivityShareSheet(items: [share.url])
+                    .accessibilityIdentifier("SlicerShareSheet")
+            }
+            // Drawings get the whole screen, like a workspace of their own.
+            .fullScreenCover(isPresented: Binding(get: { viewModel.showDrawingSheet },
+                                                  set: { if !$0 { viewModel.closeDrawing() } })) {
+                DrawingSheetView(viewModel: viewModel)
+            }
             .sheet(isPresented: Binding(
                 get: { viewModel.showMaterialSheet },
                 set: { viewModel.showMaterialSheet = $0 }
@@ -1942,6 +2327,13 @@ struct EditorView: View {
                 MaterialSheet(initial: viewModel.materialForSelection) { spec in
                     viewModel.applyMaterial(spec)
                 }
+            }
+            .sheet(isPresented: Binding(
+                get: { viewModel.showFieldOfViewSheet },
+                set: { viewModel.showFieldOfViewSheet = $0 }
+            )) {
+                FieldOfViewSheet(viewModel: viewModel)
+                    .presentationDetents([.height(220)])
             }
             .sheet(isPresented: Binding(
                 get: { viewModel.showConstraintSettings },

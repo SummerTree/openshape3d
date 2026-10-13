@@ -24,14 +24,22 @@ final class ConstructionAxisUITests: XCTestCase {
         app.launchEnvironment["OS3D_RESET_STORE"] = "1"
         app.launchEnvironment["OS3D_DEBUG_SEED_CYLINDER"] = "1"
         app.launch()
-        XCTAssertTrue(app.buttons["AxisButton"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.buttons["ConstructGroup"].waitForExistence(timeout: 10))
         return (app, app.windows.firstMatch)
+    }
+
+    /// Construct ▸ Axis ▸ <construction>.
+    private func armAxis(_ app: XCUIApplication, _ construction: String = "automatic") {
+        tapPaletteTool(app, group: "Construct", id: "AxisButton")
+        let entry = app.buttons["AxisConstruction-" + construction]
+        XCTAssertTrue(entry.waitForExistence(timeout: 3), "The Axis menu lists its constructions")
+        entry.tap()
     }
 
     func testTappingARoundFaceDerivesTheCylinderAxisAndCommits() throws {
         let (app, window) = appWithCylinder()
 
-        app.buttons["AxisButton"].tap()
+        armAxis(app)
         XCTAssertTrue(app.staticTexts["Tap an edge or face"].waitForExistence(timeout: 3),
                       "Arming the tool should show its bar")
         XCTAssertFalse(app.buttons["AxisApply"].isEnabled,
@@ -58,7 +66,7 @@ final class ConstructionAxisUITests: XCTestCase {
     func testTappingAFlatCapDerivesAPerpendicularAxis() throws {
         let (app, window) = appWithCylinder()
 
-        app.buttons["AxisButton"].tap()
+        armAxis(app)
         XCTAssertTrue(app.staticTexts["Tap an edge or face"].waitForExistence(timeout: 3))
 
         // The flat top cap.
@@ -71,7 +79,7 @@ final class ConstructionAxisUITests: XCTestCase {
     func testCancelLeavesNoAxisBehind() throws {
         let (app, window) = appWithCylinder()
 
-        app.buttons["AxisButton"].tap()
+        armAxis(app)
         XCTAssertTrue(app.staticTexts["Tap an edge or face"].waitForExistence(timeout: 3))
         window.coordinate(withNormalizedOffset: CGVector(dx: 0.48, dy: 0.55)).tap()
         XCTAssertTrue(app.staticTexts["Axis of Cylinder/Cone"].waitForExistence(timeout: 3))
@@ -85,5 +93,17 @@ final class ConstructionAxisUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["Axes"].waitForExistence(timeout: 3))
         XCTAssertTrue(app.staticTexts["No axes yet"].exists,
                       "Cancelling must not add an axis")
+    }
+
+    func testExplicitTwoPlanesWaitsForTheSecondFace() throws {
+        let (app, window) = appWithCylinder()
+
+        armAxis(app, "twoPlanes")
+        XCTAssertTrue(app.staticTexts["Tap a flat face or plane (1 of 2)"].waitForExistence(timeout: 3))
+        // The flat top cap: one plane is not enough for this construction.
+        window.coordinate(withNormalizedOffset: CGVector(dx: 0.50, dy: 0.33)).tap()
+        XCTAssertTrue(app.staticTexts["Tap a flat face or plane (2 of 2)"].waitForExistence(timeout: 3))
+        XCTAssertFalse(app.buttons["AxisApply"].isEnabled)
+        app.buttons["AxisCancel"].tap()
     }
 }

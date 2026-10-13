@@ -42,7 +42,7 @@ struct MoveGizmoOverlay: View {
            let control = viewModel.cameraControl,
            let center = control.worldToScreenPoint(dbl(origin)) {
             let scale = control.gizmoWorldScale(at: origin)
-            let ctx = ProjectionContext(origin: origin, scale: scale, control: control)
+            let ctx = ProjectionContext(origin: origin, scale: scale, basis: viewModel.gizmoBasis, control: control)
 
             ZStack(alignment: .topLeading) {
                 // Face-rotate shows ONLY the rings (+ pivot) so the control reads
@@ -283,10 +283,11 @@ struct MoveGizmoOverlay: View {
 private struct ProjectionContext {
     let origin: SIMD3<Float>
     let scale: Float
+    var basis: GizmoBasis = .world
     let control: any ViewportCameraControl
 
     func project(_ local: SIMD3<Float>) -> CGPoint? {
-        let world = origin + local * scale
+        let world = origin + basis.world(local) * scale
         return control.worldToScreenPoint(
             SIMD3(Double(world.x), Double(world.y), Double(world.z)))
     }

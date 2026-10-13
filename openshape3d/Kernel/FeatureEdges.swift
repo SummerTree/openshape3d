@@ -57,6 +57,10 @@ nonisolated enum FeatureEdgeExtractor {
 
         // 2. Map each undirected edge to its adjacent face normals.
         var edgeFaces = [EdgeKey: [SIMD3<Float>]]()
+        // An imprinted body (spec §4.17) also shows where one kernel face
+        // meets another in the same plane — the imprinted line itself.
+        let regions = mesh.validFaceRegions
+        var edgeRegions = [EdgeKey: [UInt32]]()
         var triangle = 0
         while triangle < mesh.triangleCount {
             let i0 = Int(mesh.indices[triangle * 3])
@@ -79,6 +83,12 @@ nonisolated enum FeatureEdgeExtractor {
             edgeFaces[EdgeKey(t0, t1), default: []].append(normal)
             edgeFaces[EdgeKey(t1, t2), default: []].append(normal)
             edgeFaces[EdgeKey(t2, t0), default: []].append(normal)
+            if let regions {
+                let r = regions[triangle - 1]
+                edgeRegions[EdgeKey(t0, t1), default: []].append(r)
+                edgeRegions[EdgeKey(t1, t2), default: []].append(r)
+                edgeRegions[EdgeKey(t2, t0), default: []].append(r)
+            }
         }
 
         // 3. Emit feature edges. Coplanar triangulation diagonals (dot ≈ 1)
@@ -92,6 +102,7 @@ nonisolated enum FeatureEdgeExtractor {
                 isFeature = true // boundary edge
             case 2:
                 isFeature = simd_dot(normals[0], normals[1]) < cosThreshold
+                    || edgeRegions[edge].map { $0.count == 2 && $0[0] != $0[1] } == true
             default:
                 isFeature = true // non-manifold — always show
             }

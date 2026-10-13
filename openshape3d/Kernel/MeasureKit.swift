@@ -123,6 +123,18 @@ nonisolated enum MeasureKit {
         return (simd_length(deltas), deltas)
     }
 
+    /// **3-Point Angle**: the angle at `vertex` between the arms to `a` and
+    /// `c`, in degrees (0…180). Nil when an arm has no length.
+    static func angleDegrees(
+        _ a: SIMD3<Double>, vertex: SIMD3<Double>, _ c: SIMD3<Double>
+    ) -> Double? {
+        let u = a - vertex, v = c - vertex
+        let lu = simd_length(u), lv = simd_length(v)
+        guard lu > 1e-12, lv > 1e-12 else { return nil }
+        let cosine = min(max(simd_dot(u, v) / (lu * lv), -1), 1)
+        return acos(cosine) * 180 / .pi
+    }
+
     // MARK: - Sketch entity metrics
 
     /// Length of a sketch entity: line length, rect perimeter, circle

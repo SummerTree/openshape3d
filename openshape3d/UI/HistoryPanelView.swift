@@ -17,11 +17,30 @@ struct HistoryPanelView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 2) {
-                sectionHeader("History")
+                HStack {
+                    sectionHeader("History")
+                    Spacer()
+                    Menu {
+                        Section("Filter by") {
+                            ForEach(EditorViewModel.HistoryFilter.allCases, id: \.self) { filter in
+                                Toggle(filter.title, isOn: Binding(
+                                    get: { viewModel.historyFilters.contains(filter) },
+                                    set: { _ in viewModel.toggleHistoryFilter(filter) }))
+                                .disabled(!viewModel.historyFilterAvailable(filter))
+                            }
+                        }
+                    } label: {
+                        Image(systemName: viewModel.historyFilters.isEmpty
+                              ? "line.3.horizontal.decrease.circle"
+                              : "line.3.horizontal.decrease.circle.fill")
+                    }
+                    .accessibilityIdentifier("HistoryFilterMenu")
+                }
                 if viewModel.historyRows.isEmpty {
                     emptyRow("No features yet")
                 }
                 ForEach(Array(viewModel.historyRows.enumerated()), id: \.element.id) { index, row in
+                  if row.matchesFilter {
                     // Subtle divider marking where rollback begins: the first
                     // rolled-back row (the one whose predecessor is still active).
                     if row.isRolledBack,
@@ -64,6 +83,7 @@ struct HistoryPanelView: View {
                     .dropDestination(for: AppDragPayload.self) { items, _ in
                         reorder(droppedIDs: items.filter { $0.kind == "feature" }.map(\.id), onto: index)
                     }
+                  }
                 }
             }
             .padding(12)
@@ -155,6 +175,7 @@ struct HistoryPanelView: View {
         case .shell: return "cube.transparent"
         case .deleteFace: return "square.slash"
         case .replaceFace: return "arrow.up.and.down.square"
+        case .imprint: return "square.dashed.inset.filled"
         }
     }
 

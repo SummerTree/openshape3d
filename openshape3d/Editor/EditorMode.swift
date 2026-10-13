@@ -7,6 +7,7 @@ import Foundation
 
 enum SketchTool: String, CaseIterable {
     case line
+    case spline
     case rect
     case circle
     case arc
@@ -75,6 +76,9 @@ enum EditorMode: Equatable {
     /// Split armed: waiting for a cutter tap — a world/construction plane
     /// tile, or a sketch profile fill (through-extruded cutter).
     case pickingSplitCutter(target: BodyID)
+    /// Imprint Edge armed (spec §4.17): waiting for a tap on a sketch — a
+    /// curve or a fill — whose curves split the target's faces.
+    case pickingImprintSketch(target: BodyID)
     /// Re-picking the BODY operand of an existing mirror / pattern /
     /// transform node (History "Edit Body"): the next tapped body becomes
     /// the node's operand and the rebuild replays it.
@@ -129,6 +133,10 @@ enum EditorMode: Equatable {
     /// derived from — a linear edge, a cylindrical face, or one or two planar
     /// faces. See `EditorViewModel.axisPicks`.
     case pickingAxisReferences
+    /// Construct ▸ Plane armed (spec §6.1): taps fill the slots the chosen
+    /// `PlaneConstruction` needs — points, faces, edges or a curve. See
+    /// `EditorViewModel.planePicks`.
+    case pickingPlaneReferences
 
     var isSketching: Bool {
         if case .sketching = self { return true }

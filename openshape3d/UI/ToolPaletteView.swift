@@ -12,7 +12,7 @@ import SwiftUI
 
 // MARK: - Palette model (view-layer only; values captured at build time)
 
-private enum ToolMenu { case constrain, dimension, insert, mirror }
+private enum ToolMenu { case constrain, dimension, insert, mirror, plane, axis }
 
 private struct ToolItem: Identifiable {
     let id: String
@@ -108,7 +108,7 @@ struct ToolPaletteView: View {
 
     private var bodyEntries: [PaletteEntry] {
         [.group(sketchGroup), .group(modifyGroup), .group(transformGroup), .group(combineGroup),
-         .item(axisItem), .item(measureItem), .item(materialItem),
+         .group(constructGroup), .item(measureItem), .item(materialItem),
          .item(selectItem), .item(deleteItem)]
     }
 
@@ -162,6 +162,11 @@ struct ToolPaletteView: View {
                        enabled: !viewModel.session.document.bodies.isEmpty, tint: .blue,
                        begin: { viewModel.beginReplaceFace() },
                        cancel: { viewModel.cancelReplaceFace() }),
+            toggleItem("Imprint Edge", "square.dashed.inset.filled", "ImprintButton",
+                       active: isMode { if case .pickingImprintSketch = $0 { return true }; return false },
+                       enabled: viewModel.selection.count == 1, tint: .blue,
+                       begin: { viewModel.beginImprint() },
+                       cancel: { viewModel.cancelImprint() }),
             toggleItem("Delete Face", "square.slash", "DeleteFaceButton",
                        active: isMode { if case .pickingDeleteFaces = $0 { return true }; return false },
                        enabled: !viewModel.session.document.bodies.isEmpty, tint: .blue,
@@ -238,6 +243,7 @@ struct ToolPaletteView: View {
 
     private var drawItems: [ToolItem] {
         [sketchTool("Line", "line.diagonal", .line),
+         sketchTool("Spline", "point.bottomleft.forward.to.point.topright.scurvepath", .spline),
          sketchTool("Rectangle", "rectangle", .rect),
          sketchTool("Circle", "circle", .circle),
          sketchTool("Arc", "point.topleft.down.to.point.bottomright.curvepath", .arc),
@@ -246,13 +252,18 @@ struct ToolPaletteView: View {
          sketchTool("Text", "textformat", .text)]
     }
 
-    /// Add Axis (spec §6.2). Construction geometry, so it sits with the
+    /// Construct (spec §6.1–6.2): Plane and Axis, each a menu of the
+    /// constructions it offers. Construction geometry, so it sits with the
     /// reference tools rather than inside Modify — nothing it makes is a body.
-    private var axisItem: ToolItem {
-        toggleItem("Axis", "line.diagonal.arrow", "AxisButton",
-                   active: isMode { if case .pickingAxisReferences = $0 { return true }; return false },
-                   enabled: !viewModel.session.document.bodies.isEmpty, tint: .blue,
-                   begin: { viewModel.beginAxisTool() }, cancel: { viewModel.cancelAxisTool() })
+    private var constructGroup: ToolGroup {
+        ToolGroup(id: "Construct", label: "Construct", icon: "square.3.layers.3d", items: [
+            ToolItem(id: "Plane", label: "Plane", icon: "square.3.layers.3d.top.filled",
+                     active: isMode { if case .pickingPlaneReferences = $0 { return true }; return false },
+                     accessibilityID: "PlaneButton", menu: .plane),
+            ToolItem(id: "Axis", label: "Axis", icon: "line.diagonal.arrow",
+                     active: isMode { if case .pickingAxisReferences = $0 { return true }; return false },
+                     accessibilityID: "AxisButton", menu: .axis),
+        ])
     }
 
     private var measureItem: ToolItem {
@@ -394,6 +405,8 @@ struct ToolPaletteView: View {
         case .dimension: dimensionMenu
         case .insert: insertSymbolMenu
         case .mirror: mirrorMenu
+        case .plane: planeMenu(item)
+        case .axis: axisMenu(item)
         case nil: actionButton(item, inFlyout: inFlyout)
         }
     }
@@ -446,6 +459,44 @@ struct ToolPaletteView: View {
         case .vertical: "Vertical"
         default: EditorViewModel.dimensionTitle(.init(kind: kind, refs: [], value: 0))
         }
+    }
+
+    private func planeMenu(_ item: ToolItem) -> some View {
+        Menu {
+            ForEach(PlaneConstruction.allCases, id: \.self) { construction in
+                Button {
+                    viewModel.beginPlaneTool(construction)
+                    expandedGroupID = nil
+                } label: {
+                    Label(construction.title, systemImage: construction.symbol)
+                }
+                .accessibilityIdentifier("PlaneConstruction-" + construction.rawValue)
+            }
+        } label: {
+            paletteIcon(item.icon, label: item.label)
+                .foregroundStyle(item.active ? Color.blue : Color.primary)
+        }
+        .accessibilityIdentifier("PlaneButton")
+    }
+
+    private func axisMenu(_ item: ToolItem) -> some View {
+        Menu {
+            ForEach(AxisConstruction.allCases, id: \.self) { construction in
+                Button {
+                    viewModel.beginAxisTool(construction)
+                    expandedGroupID = nil
+                } label: {
+                    Label(construction.menuTitle, systemImage: construction.symbol)
+                }
+                .accessibilityIdentifier("AxisConstruction-" + construction.rawValue)
+            }
+        } label: {
+            paletteIcon(item.icon, label: item.label)
+                .foregroundStyle(item.active ? Color.blue : Color.primary)
+        }
+        .disabled(viewModel.session.document.bodies.isEmpty && viewModel.session.document.planes.isEmpty
+                  && viewModel.session.document.sketches.isEmpty)
+        .accessibilityIdentifier("AxisButton")
     }
 
     private var mirrorMenu: some View {

@@ -122,4 +122,40 @@ final class MeasureUITests: XCTestCase {
         app.buttons["Done"].firstMatch.tap()
         XCTAssertFalse(app.staticTexts["MeasureDistanceValue"].exists)
     }
+
+    /// 3-Point Angle over box corners, then Pin keeps it as a label in the
+    /// model and Undo takes the pin back.
+    func testThreePointAngleAndPin() throws {
+        let app = launchSeeded()
+        let window = app.windows.firstMatch
+
+        app.buttons["MeasureButton"].firstMatch.tap()
+        app.buttons["MeasureTypeMenu"].tap()
+        app.buttons["MeasureType-threePointAngle"].tap()
+        XCTAssertTrue(app.staticTexts["Tap the first arm's point"].waitForExistence(timeout: 3))
+
+        let candidates: [CGVector] = [
+            CGVector(dx: 0.56, dy: 0.44), CGVector(dx: 0.78, dy: 0.665), CGVector(dx: 0.455, dy: 0.29),
+            CGVector(dx: 0.81, dy: 0.335), CGVector(dx: 0.55, dy: 0.77), CGVector(dx: 0.22, dy: 0.65),
+        ]
+        let angle = app.staticTexts["MeasureAngleValue"]
+        for offset in candidates {
+            window.coordinate(withNormalizedOffset: offset).tap()
+            sleep(1) // stay clear of the double-tap recognizer window
+            if angle.exists { break }
+        }
+        XCTAssertTrue(angle.waitForExistence(timeout: 3), "Three corner picks read an angle")
+        XCTAssertTrue(angle.label.hasSuffix("°"), angle.label)
+
+        app.buttons["PinMeasurement"].tap()
+        XCTAssertTrue(app.otherElements["PinnedMeasurement"].waitForExistence(timeout: 3)
+                        || app.staticTexts[angle.label].waitForExistence(timeout: 1),
+                      "The pinned reading stays on screen")
+        XCTAssertTrue(app.buttons["UnpinMeasurement"].exists, "In Measure mode a pin can be removed")
+
+        app.buttons["Done"].firstMatch.tap()
+        app.buttons["UndoButton"].tap()
+        XCTAssertFalse(app.buttons["UnpinMeasurement"].exists)
+        XCTAssertFalse(app.otherElements["PinnedMeasurement"].exists, "Undo takes the pin back")
+    }
 }

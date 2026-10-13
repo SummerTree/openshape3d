@@ -61,6 +61,61 @@ nonisolated struct GizmoState: Equatable {
     /// World-units-per-gizmo-unit, chosen for constant on-screen size.
     var scale: Float
     var highlighted: GizmoPart?
+    /// The gizmo's axes in the world: world-aligned unless Auto-Orient lines
+    /// them up with the selection (spec §5.1).
+    var basis: GizmoBasis = .world
+
+    /// A gizmo-local offset (unit scale) as a world point.
+    func world(_ local: SIMD3<Float>) -> SIMD3<Float> {
+        origin + basis.world(local) * scale
+    }
+}
+
+/// An orthonormal frame for the move/rotate gizmo: its X, Y and Z handles
+/// point along `x`, `y` and `z`.
+nonisolated struct GizmoBasis: Equatable, Sendable {
+    var x: SIMD3<Float>
+    var y: SIMD3<Float>
+    var z: SIMD3<Float>
+
+    static let world = GizmoBasis(x: SIMD3(1, 0, 0), y: SIMD3(0, 1, 0), z: SIMD3(0, 0, 1))
+
+    var isWorld: Bool { self == .world }
+
+    /// A gizmo-local direction in the world.
+    func world(_ local: SIMD3<Float>) -> SIMD3<Float> {
+        x * local.x + y * local.y + z * local.z
+    }
+
+    /// A world direction in gizmo-local terms.
+    func local(_ world: SIMD3<Float>) -> SIMD3<Float> {
+        SIMD3(simd_dot(world, x), simd_dot(world, y), simd_dot(world, z))
+    }
+
+    /// The world axis a handle moves along or turns about.
+    func axis(_ part: GizmoPart) -> SIMD3<Float> { world(part.axisDirection) }
+
+    /// A right-handed frame whose Z is `z` and whose X is `x` made
+    /// perpendicular to it. Nil when either is degenerate or they are
+    /// parallel.
+    static func frame(z: SIMD3<Double>, x: SIMD3<Double>) -> GizmoBasis? {
+        let lz = simd_length(z)
+        guard lz > 1e-9 else { return nil }
+        let zn = z / lz
+        let xo = x - zn * simd_dot(x, zn)
+        let lx = simd_length(xo)
+        guard lx > 1e-6 else { return nil }
+        let xn = xo / lx
+        let yn = simd_cross(zn, xn)
+        return GizmoBasis(x: SIMD3<Float>(xn), y: SIMD3<Float>(yn), z: SIMD3<Float>(zn))
+    }
+
+    /// The frame a body's rotation turns the world axes into.
+    static func rotation(_ q: simd_quatd) -> GizmoBasis {
+        GizmoBasis(x: SIMD3<Float>(simd_normalize(q.act(SIMD3(1, 0, 0)))),
+                   y: SIMD3<Float>(simd_normalize(q.act(SIMD3(0, 1, 0)))),
+                   z: SIMD3<Float>(simd_normalize(q.act(SIMD3(0, 0, 1)))))
+    }
 }
 
 nonisolated enum GizmoGeometry {
@@ -84,9 +139,9 @@ nonisolated enum GizmoGeometry {
 
     /// Nearest gizmo part hit by the ray, if any. Ray and state in world space.
     static func hitTest(ray: Ray, gizmo: GizmoState) -> GizmoPart? {
-        // Work in gizmo space: unit scale, origin at zero.
-        let localOrigin = (ray.origin - gizmo.origin) / gizmo.scale
-        let localRay = Ray(origin: localOrigin, direction: ray.direction)
+        // Work in gizmo space: unit scale, origin at zero, its own axes.
+        let localOrigin = gizmo.basis.local(ray.origin - gizmo.origin) / gizmo.scale
+        let localRay = Ray(origin: localOrigin, direction: gizmo.basis.local(ray.direction))
 
         var best: (part: GizmoPart, t: Float)?
 
@@ -175,6 +230,8 @@ nonisolated enum GizmoGeometry {
 nonisolated struct GizmoDragSession {
     let part: GizmoPart
     let startOrigin: SIMD3<Float>
+    /// The gizmo's frame when the drag began.
+    let basis: GizmoBasis
     private let anchor: SIMD3<Float>
     /// Ring drags only: running unwrapped total, and the previous sample it
     /// was accumulated from (see `rotationDelta`).
@@ -184,15 +241,20 @@ nonisolated struct GizmoDragSession {
     init?(part: GizmoPart, gizmo: GizmoState, ray: Ray) {
         self.part = part
         self.startOrigin = gizmo.origin
-        guard let anchor = Self.constrainedPoint(part: part, origin: gizmo.origin, ray: ray) else {
+        self.basis = gizmo.basis
+        guard let anchor = Self.constrainedPoint(part: part, axis: gizmo.basis.axis(part),
+                                                 origin: gizmo.origin, ray: ray) else {
             return nil
         }
         self.anchor = anchor
     }
 
+    /// The world axis this drag moves along or turns about.
+    var axis: SIMD3<Float> { basis.axis(part) }
+
     func translationDelta(for ray: Ray) -> SIMD3<Float>? {
         guard !part.isRing,
-              let current = Self.constrainedPoint(part: part, origin: startOrigin, ray: ray)
+              let current = Self.constrainedPoint(part: part, axis: axis, origin: startOrigin, ray: ray)
         else {
             return nil
         }
@@ -211,12 +273,12 @@ nonisolated struct GizmoDragSession {
     /// which is always well under π at gesture sample rates.
     mutating func rotationDelta(for ray: Ray) -> Float? {
         guard part.isRing,
-              let current = Self.constrainedPoint(part: part, origin: startOrigin, ray: ray)
+              let current = Self.constrainedPoint(part: part, axis: axis, origin: startOrigin, ray: ray)
         else {
             return nil
         }
-        let currentAngle = Self.ringAngle(of: current - startOrigin, part: part)
-        let previous = lastAngle ?? Self.ringAngle(of: anchor - startOrigin, part: part)
+        let currentAngle = Self.ringAngle(of: basis.local(current - startOrigin), part: part)
+        let previous = lastAngle ?? Self.ringAngle(of: basis.local(anchor - startOrigin), part: part)
         var step = currentAngle - previous
         if step > .pi { step -= 2 * .pi }
         if step <= -.pi { step += 2 * .pi }
@@ -230,7 +292,7 @@ nonisolated struct GizmoDragSession {
     /// starts under the user's finger the way Shapr3D's does.
     var ringStartAngle: Float? {
         guard part.isRing else { return nil }
-        return Self.ringAngle(of: anchor - startOrigin, part: part)
+        return Self.ringAngle(of: basis.local(anchor - startOrigin), part: part)
     }
 
     private static func ringAngle(of offset: SIMD3<Float>, part: GizmoPart) -> Float {
@@ -241,16 +303,15 @@ nonisolated struct GizmoDragSession {
     /// Point on the drag constraint (axis line, plane, or ring plane) nearest
     /// to the ray.
     private static func constrainedPoint(
-        part: GizmoPart, origin: SIMD3<Float>, ray: Ray
+        part: GizmoPart, axis: SIMD3<Float>, origin: SIMD3<Float>, ray: Ray
     ) -> SIMD3<Float>? {
         if part.isPlane || part.isRing {
-            guard let t = ray.intersect(planePoint: origin, planeNormal: part.axisDirection) else {
+            guard let t = ray.intersect(planePoint: origin, planeNormal: axis) else {
                 return nil
             }
             return ray.point(at: t)
         }
         // Closest point on the axis line to the ray.
-        let axis = part.axisDirection
         let w0 = ray.origin - origin
         let a = simd_dot(ray.direction, ray.direction)
         let b = simd_dot(ray.direction, axis)

@@ -136,6 +136,9 @@ nonisolated enum AgentExecOp: Sendable, Equatable {
     /// limitation as the interactive tool, for the same reason.
     case replaceFace(body: BodyID, face: Int, targetOrigin: SIMD3<Double>,
                      targetNormal: SIMD3<Double>, flip: Bool)
+    /// Imprint Edge (spec §4.17): split the body's faces along the curves of
+    /// the sketches that lie on them.
+    case imprint(body: BodyID, sketches: [SketchID])
     /// The Material sheet's Apply: one appearance over a set of bodies, one
     /// undo step. Not a feature — appearance lives on the body, not in the
     /// graph — so it goes through `SetMaterialCommand` like the sheet does.
@@ -145,6 +148,42 @@ nonisolated enum AgentExecOp: Sendable, Equatable {
     /// `/v1/state` lists no sketch ids, and a finished model usually wants
     /// all its profiles out of the way.
     case setHidden(ids: [UUID], allSketches: Bool, hidden: Bool)
+    /// Section View (spec §16.1): cut by the plane through `origin` with
+    /// `normal` (the kept side), or turn the section off. A display state,
+    /// not an edit — no undo step.
+    case section(origin: SIMD3<Double>, normal: SIMD3<Double>?, sectionOnly: Bool, twoD: Bool)
+    /// Tools ▸ Visualize (spec §14): enter or leave the workspace, and set
+    /// any of the environment's fields (one undo step when it changes).
+    case visualize(on: Bool, environment: VisualizeArgs)
+}
+
+/// `view.visualize`'s environment fields; nil leaves a field as it is.
+nonisolated struct VisualizeArgs: Equatable, Sendable {
+    var preset: EnvironmentPreset.ID?
+    var lightRotation: Double?
+    var sunElevation: Double?
+    var lightIntensity: Double?
+    var background: VisualizationEnvironment.Background?
+    var backgroundColor: SIMD3<Double>?
+    var groundShadow: Bool?
+
+    /// `environment` with these fields applied; a preset brings its own sun.
+    func applied(to environment: VisualizationEnvironment) -> VisualizationEnvironment {
+        var out = environment
+        if let name = preset, let value = EnvironmentPreset.library.first(where: { $0.name == name }) {
+            out.preset = value.name
+            out.lightRotation = value.lightRotation
+            out.sunElevation = value.sunElevation
+            out.lightIntensity = 1
+        }
+        if let lightRotation { out.lightRotation = lightRotation }
+        if let sunElevation { out.sunElevation = sunElevation }
+        if let lightIntensity { out.lightIntensity = lightIntensity }
+        if let background { out.background = background }
+        if let backgroundColor { out.backgroundColor = backgroundColor }
+        if let groundShadow { out.groundShadow = groundShadow }
+        return out
+    }
 }
 
 // MARK: - Parsing
@@ -160,8 +199,8 @@ nonisolated enum AgentExec {
         "feature.fillet", "feature.chamfer", "feature.shell",
         "feature.sweep", "feature.loft", "feature.pushPull",
         "feature.moveFace", "feature.scaleFace", "feature.rotateFace",
-        "feature.deleteFace", "feature.replaceFace", "feature.draftFace",
-        "body.setMaterial", "item.setHidden",
+        "feature.deleteFace", "feature.replaceFace", "feature.draftFace", "feature.imprint",
+        "body.setMaterial", "item.setHidden", "view.section", "view.visualize",
     ]
 
     static let booleanKinds = ["union", "subtract", "intersect"]
@@ -200,8 +239,11 @@ nonisolated enum AgentExec {
         case "feature.deleteFace": return parseDeleteFace(args)
         case "feature.draftFace":  return parseDraftFace(args)
         case "feature.replaceFace": return parseReplaceFace(args)
+        case "feature.imprint":    return parseImprint(args)
         case "body.setMaterial":   return parseSetMaterial(args)
         case "item.setHidden":     return parseSetHidden(args)
+        case "view.section":       return parseSection(args)
+        case "view.visualize":     return parseVisualize(args)
         default:
             return .failure(.init(code: "unknown_op",
                                   message: "No exec op '\(op)'. Known ops: \(opNames.joined(separator: ", "))."))
@@ -675,6 +717,24 @@ nonisolated enum AgentExec {
         } catch let e as AgentExecError { return .failure(e) } catch { return .failure(unexpected) }
     }
 
+    private static func parseImprint(_ a: [String: Any]) -> Result<AgentExecOp, AgentExecError> {
+        do {
+            let body = BodyID(raw: try uuid(a, "bodyID"))
+            var sketches: [SketchID] = []
+            if a["sketchID"] != nil { sketches.append(SketchID(raw: try uuid(a, "sketchID"))) }
+            for raw in a["sketchIDs"] as? [String] ?? [] {
+                guard let id = UUID(uuidString: raw) else {
+                    throw AgentExecError(code: "bad_args", message: "sketchIDs: '\(raw)' is not a UUID.")
+                }
+                sketches.append(SketchID(raw: id))
+            }
+            guard !sketches.isEmpty else {
+                throw AgentExecError(code: "bad_args", message: "feature.imprint needs a sketchID (or sketchIDs).")
+            }
+            return .success(.imprint(body: body, sketches: sketches))
+        } catch let e as AgentExecError { return .failure(e) } catch { return .failure(unexpected) }
+    }
+
     private static func parseReplaceFace(_ a: [String: Any]) -> Result<AgentExecOp, AgentExecError> {
         do {
             let body = BodyID(raw: try uuid(a, "bodyID"))
@@ -921,14 +981,76 @@ nonisolated enum AgentExec {
                 return .failure(.init(code: "missing_material",
                                       message: "args needs a \"preset\" name or a \"color\" [r, g, b]."))
             }
-            for key in ["metallic", "roughness"] {
+            for key in ["metallic", "roughness", "emission"] {
                 guard let v = try optionalDouble(a, key) else { continue }
                 guard (0...1).contains(v) else {
                     return .failure(.init(code: "bad_\(key)", message: "args.\(key) must be 0…1."))
                 }
-                if key == "metallic" { spec.metallic = v } else { spec.roughness = v }
+                switch key {
+                case "metallic": spec.metallic = v
+                case "roughness": spec.roughness = v
+                default: spec.emission = v
+                }
             }
             return .success(.setMaterial(bodies: bodies, material: spec))
+        } catch let e as AgentExecError { return .failure(e) } catch { return .failure(unexpected) }
+    }
+
+    private static func parseVisualize(_ a: [String: Any]) -> Result<AgentExecOp, AgentExecError> {
+        if a["off"] as? Bool == true { return .success(.visualize(on: false, environment: VisualizeArgs())) }
+        do {
+            var out = VisualizeArgs()
+            if let name = a["preset"] as? String {
+                guard let preset = EnvironmentPreset.library.first(where: {
+                    $0.name.caseInsensitiveCompare(name) == .orderedSame
+                }) else {
+                    return .failure(.init(code: "unknown_preset", message: "No environment '\(name)'. Known: "
+                        + EnvironmentPreset.library.map(\.name).joined(separator: ", ") + "."))
+                }
+                out.preset = preset.name
+            }
+            out.lightRotation = try optionalDouble(a, "lightRotation")
+            out.sunElevation = try optionalDouble(a, "sunElevation")
+            out.lightIntensity = try optionalDouble(a, "lightIntensity")
+            if let v = out.sunElevation, !(0...90).contains(v) {
+                return .failure(.init(code: "bad_sunElevation", message: "args.sunElevation must be 0…90 degrees."))
+            }
+            if let v = out.lightIntensity, !(0...2).contains(v) {
+                return .failure(.init(code: "bad_lightIntensity", message: "args.lightIntensity must be 0…2."))
+            }
+            if let raw = a["background"] as? String {
+                guard let background = VisualizationEnvironment.Background(rawValue: raw) else {
+                    return .failure(.init(code: "bad_background",
+                                          message: "args.background is environment, color or transparent."))
+                }
+                out.background = background
+            }
+            if let rgb = a["backgroundColor"] as? [Double] {
+                guard rgb.count == 3, rgb.allSatisfy({ (0...1).contains($0) }) else {
+                    return .failure(.init(code: "bad_backgroundColor",
+                                          message: "args.backgroundColor must be [r, g, b], each 0…1."))
+                }
+                out.backgroundColor = SIMD3(rgb[0], rgb[1], rgb[2])
+            }
+            out.groundShadow = a["groundShadow"] as? Bool
+            return .success(.visualize(on: true, environment: out))
+        } catch let e as AgentExecError { return .failure(e) } catch { return .failure(unexpected) }
+    }
+
+    private static func parseSection(_ a: [String: Any]) -> Result<AgentExecOp, AgentExecError> {
+        do {
+            if a["off"] as? Bool == true {
+                return .success(.section(origin: .zero, normal: nil, sectionOnly: false, twoD: false))
+            }
+            let origin = try vector3(a, "origin", default: .zero)
+            let normal = try vector3(a, "normal", default: .zero)
+            guard simd_length(normal) > 1e-9 else {
+                return .failure(.init(code: "missing_normal",
+                                      message: "args.normal [x, y, z] is required (the side that stays visible), or pass \"off\": true."))
+            }
+            return .success(.section(origin: origin, normal: simd_normalize(normal),
+                                     sectionOnly: a["sectionOnly"] as? Bool ?? false,
+                                     twoD: a["twoD"] as? Bool ?? false))
         } catch let e as AgentExecError { return .failure(e) } catch { return .failure(unexpected) }
     }
 

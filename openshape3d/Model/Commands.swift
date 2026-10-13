@@ -1373,8 +1373,13 @@ struct DeletePlaneCommand: DocumentCommand {
 }
 
 struct AddConstructionPlaneCommand: DocumentCommand {
-    let title = "Offset Plane"
+    let title: String
     let plane: ConstructionPlane
+
+    init(plane: ConstructionPlane, title: String = "Offset Plane") {
+        self.plane = plane
+        self.title = title
+    }
 
     func apply(to document: inout DesignDocument) {
         document.planes.append(plane)

@@ -65,6 +65,12 @@ struct CommandShortcutsView: View {
                     .keyboardShortcut(.defaultAction)
                     .accessibilityHidden(true)
             }
+            if viewModel.mode.sketchTool == .spline, viewModel.canFinishSpline,
+               viewModel.editingDimension == nil {
+                Button { viewModel.finishSplineInput() } label: { EmptyView() }
+                    .keyboardShortcut(.defaultAction)
+                    .accessibilityHidden(true)
+            }
             if viewModel.mode.sketchTool == .line,
                viewModel.editingDimension == nil {
                 Button { viewModel.finishLineInput() } label: { EmptyView() }
@@ -93,6 +99,13 @@ struct CommandShortcutsView: View {
                 Button { viewModel.deleteLineInput() } label: { EmptyView() }
                     .keyboardShortcut(.delete, modifiers: [])
                     .accessibilityHidden(true)
+            } else if viewModel.mode.sketchTool == .spline {
+                Button { viewModel.cancelSplineInput() } label: { EmptyView() }
+                    .keyboardShortcut(.cancelAction)
+                    .accessibilityHidden(true)
+                Button { viewModel.deleteSplinePoint() } label: { EmptyView() }
+                    .keyboardShortcut(.delete, modifiers: [])
+                    .accessibilityHidden(true)
             } else if viewModel.mode.sketchTool == .rect {
                 Button { viewModel.cancelRectangleInput() } label: { EmptyView() }
                     .keyboardShortcut(.cancelAction)
@@ -113,7 +126,10 @@ struct CommandShortcutsView: View {
             ForEach(CommandRegistry.routableChordedCommands) { command in
                 if let chord = command.chord, let key = chord.keyEquivalent,
                    !(launcherOwnsBareKeys && chord.isBareKey) {
-                    Button { viewModel.runCommand(command.id) } label: { EmptyView() }
+                    Button {
+                        if AppSettings.shared.showKeyPresses { viewModel.echoKeys(chord.label) }
+                        viewModel.runCommand(command.id)
+                    } label: { EmptyView() }
                         .keyboardShortcut(key, modifiers: chord.eventModifiers)
                         .accessibilityHidden(true)
                 }

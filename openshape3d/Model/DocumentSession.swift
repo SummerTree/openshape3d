@@ -85,6 +85,12 @@ final class DocumentSession {
         var bodyBrep: Set<UUID> = []
         /// The Items-folder blob failed to decode — leave the column alone.
         var itemFolders = false
+        /// The pinned-measurements blob failed to decode — leave the column alone.
+        var pinnedMeasurements = false
+        /// The drawings blob failed to decode — leave the column alone.
+        var drawings = false
+        /// The visualization blob failed to decode — leave the column alone.
+        var visualization = false
         /// Whole rows that could not be decoded (absent from the document).
         var rowCount: Int {
             bodies.count + sketches.count + planes.count + axes.count
@@ -567,6 +573,21 @@ final class DocumentSession {
         }
     }
 
+    /// The variable formulas a node's parameters are driven by (empty when
+    /// every value was typed). The same parameters `reevaluatedKind` revisits.
+    static func formulas(of kind: FeatureKind) -> [String] {
+        let exprs: [Expr]
+        switch kind {
+        case let .extrude(_, _, distance, _, _, _): exprs = [distance]
+        case let .revolve(_, _, _, angle, _): exprs = [angle]
+        case let .pushPull(_, distance, _): exprs = [distance]
+        case let .scaleFace(_, factor): exprs = [factor]
+        case let .rotateFace(_, angle, _): exprs = [angle]
+        default: exprs = []
+        }
+        return exprs.compactMap(\.formula)
+    }
+
     /// Pre-resolve feature `Expr` formulas against the current variable values,
     /// writing the fresh `.value` into `document.features` IN PLACE. Optional hook
     /// for a rebuild triggered by means OTHER than a variable edit (so it still
@@ -764,6 +785,27 @@ final class DocumentSession {
                 loaded.itemFolders = folders
             } else {
                 unreadableRows.itemFolders = true
+            }
+        }
+        if let data = project.pinnedMeasurementsData {
+            if let pins = try? JSONDecoder().decode([PinnedMeasurement].self, from: data) {
+                loaded.pinnedMeasurements = pins
+            } else {
+                unreadableRows.pinnedMeasurements = true
+            }
+        }
+        if let data = project.drawingsData {
+            if let drawings = try? JSONDecoder().decode([SavedDrawing].self, from: data) {
+                loaded.drawings = drawings
+            } else {
+                unreadableRows.drawings = true
+            }
+        }
+        if let data = project.visualizationData {
+            if let environment = try? JSONDecoder().decode(VisualizationEnvironment.self, from: data) {
+                loaded.visualization = environment
+            } else {
+                unreadableRows.visualization = true
             }
         }
         // Phase D feature graph: replay order is `orderIndex` (SwiftData
@@ -1193,6 +1235,21 @@ final class DocumentSession {
             let folders = ItemFolderTree(document.itemFolders).pruned(to: document.itemKeys)
             let data = folders.isEmpty ? nil : try? JSONEncoder().encode(folders)
             if project.itemFoldersData != data { project.itemFoldersData = data }
+        }
+        if !unreadableRows.pinnedMeasurements {
+            let pins = document.pinnedMeasurements
+            let data = pins.isEmpty ? nil : try? JSONEncoder().encode(pins)
+            if project.pinnedMeasurementsData != data { project.pinnedMeasurementsData = data }
+        }
+        if !unreadableRows.drawings {
+            let drawings = document.drawings
+            let data = drawings.isEmpty ? nil : try? JSONEncoder().encode(drawings)
+            if project.drawingsData != data { project.drawingsData = data }
+        }
+        if !unreadableRows.visualization {
+            let environment = document.visualization
+            let data = environment == VisualizationEnvironment() ? nil : try? JSONEncoder().encode(environment)
+            if project.visualizationData != data { project.visualizationData = data }
         }
 
         project.modifiedAt = Date()
