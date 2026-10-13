@@ -2174,11 +2174,23 @@ SVG and DXF (layers VISIBLE, HIDDEN with a HIDDEN linetype, CUTTING with a
 CENTER linetype, HATCH, DIMENSIONS, BORDER, TEXT) written by the app itself
 (`DrawingExport`), so iPad, Mac and web files match. Drawings are
 regenerated from the model whenever shown; projections are cached between
-option changes and drags. Missing: free placement of new views from any
-angle (custom projection angles, extra projected views), cutting lines
-through picked points / stepped sections, interactive dimensions and
-annotations, centerlines and marks, title-block layouts, multiple sheets,
-DWG.
+option changes and drags. **Dimensions & notes (2026-10-13):** tools over
+the preview — Move, Dimension, Note (`DrawingAnnotations.swift`). Dimension
+takes two taps on one view, snapping to the ends of its long lines (true
+corners, where a straight edge meets a curve) before the samples of curves;
+it measures the model in that view's plane (horizontal, vertical or
+aligned — chosen from the points, changeable), starts outside the view
+clear of its name, and its line drags out from the part. The isometric is
+not dimensioned (foreshortened). Note places text, with a leader when tapped
+on a line, or free on the sheet; its text is edited in the form. Both keep
+their points in the view's own coordinates, so they move and rescale with
+it, are saved with the drawing, listed under "Dimensions & Notes", and
+exported to PDF / SVG / DXF. Tests: `DrawingAnnotationsTests`,
+`DrawingUITests`, web `drawing-annotations-smoke.mjs`. Missing: free
+placement of new views from any angle (custom projection angles, extra
+projected views), cutting lines through picked points / stepped sections,
+radius / diameter / angle dimensions, tolerances, centerlines and marks,
+title-block layouts, multiple sheets, DWG.
 **Feasibility:** [mesh-kernel OK] for a first version (orthographic
 projection + silhouette/hidden-line from meshes; associativity with the model
 [needs history engine]; production-grade HLR quality benefits from a B-rep

@@ -96,6 +96,16 @@ nonisolated struct DrawingLayout: Sendable {
     /// Every placed view — standard, section and detail — by
     /// `DrawingSheet.viewKey`, for dragging views on the sheet.
     var placedViews: [String: (min: SIMD2<Double>, max: SIMD2<Double>)] = [:]
+    /// How each placed view maps onto the sheet, and the corners and line
+    /// ends a dimension snaps to (view coordinates) — for placing
+    /// annotations on the preview.
+    var viewTransforms: [String: DrawingViewTransform] = [:]
+    var snapPoints: [String: [SIMD2<Double>]] = [:]
+    /// The ends of a view's long lines — true corners and where a straight
+    /// edge meets a curve — which win over the points a curve is sampled at.
+    var strongSnapPoints: [String: [SIMD2<Double>]] = [:]
+    /// Each annotation's handle (its text), sheet mm — to select or drag it.
+    var annotationHandles: [UUID: SIMD2<Double>] = [:]
 
     var isEmpty: Bool { viewFrames.isEmpty }
 }
@@ -403,8 +413,76 @@ nonisolated enum DrawingSheet {
             dimension(from: SIMD2(s.min.x, s.min.y), to: SIMD2(s.max.x, s.min.y), offset: offset(.right, .vertical),
                       value: formatLength(side.size.x), into: &out)
         }
+        // Notes on the bare sheet are kept in sheet mm.
+        out.viewTransforms[""] = DrawingViewTransform(at: .zero, min: .zero, k: 1)
+        for annotation in drawing.annotations {
+            guard let transform = out.viewTransforms[annotation.view] else { continue }
+            switch annotation.kind {
+            case .linear:
+                out.annotationHandles[annotation.id] = linear(
+                    from: transform.sheet(annotation.a), to: transform.sheet(annotation.b),
+                    orientation: annotation.orientation, offset: annotation.offset,
+                    value: formatLength(annotation.measured), into: &out)
+            case .note:
+                out.annotationHandles[annotation.id] = note(annotation, transform: transform, into: &out)
+            }
+        }
         appendFrame(into: &out, options: options, scale: scaleLabel(scale), date: date)
         return out
+    }
+
+    /// A placed dimension between two sheet points; returns where its value
+    /// sits (the handle that drags it).
+    private static func linear(from a: SIMD2<Double>, to b: SIMD2<Double>,
+                               orientation: DrawingAnnotation.Orientation, offset: Double,
+                               value: String, into out: inout DrawingLayout) -> SIMD2<Double> {
+        let (l0, l1) = DrawingAnnotationKit.dimensionLine(a, b, orientation: orientation, offset: offset)
+        let mid = (l0 + l1) / 2
+        let length = simd_distance(l0, l1)
+        guard length > 1e-6 else { return mid }
+        // Extension lines: a small gap at the part, 2 mm past the line.
+        for (p, q) in [(a, l0), (b, l1)] {
+            let d = q - p, len = simd_length(d)
+            guard len > 1e-6 else { continue }
+            let u = d / len
+            out.lines.append(DrawingLine(a: p + u * Swift.min(1.5, len), b: q + u * 2, style: .thin))
+        }
+        out.lines.append(DrawingLine(a: l0, b: l1, style: .thin))
+        let dir = (l1 - l0) / length
+        let arrow = Swift.min(2.5, length / 4), side = SIMD2(-dir.y, dir.x)
+        for (tip, back) in [(l0, dir), (l1, -dir)] {
+            out.lines.append(DrawingLine(a: tip, b: tip + back * arrow + side * arrow * 0.35, style: .thin))
+            out.lines.append(DrawingLine(a: tip, b: tip + back * arrow - side * arrow * 0.35, style: .thin))
+        }
+        // The value reads along the line, never upside down, just off it.
+        var angle = atan2(dir.y, dir.x)
+        if angle > .pi / 2 + 1e-9 { angle -= .pi } else if angle <= -.pi / 2 + 1e-9 { angle += .pi }
+        let up = SIMD2(-sin(angle), cos(angle))
+        out.texts.append(DrawingText(position: mid + up, height: 2.5, string: value, anchor: .middle, rotation: angle))
+        return mid + up * 2
+    }
+
+    /// A note: its lines of text at `a`, and a leader with an arrowhead to
+    /// `b`. Returns the text's position (its handle).
+    private static func note(_ note: DrawingAnnotation, transform: DrawingViewTransform,
+                             into out: inout DrawingLayout) -> SIMD2<Double> {
+        let at = transform.sheet(note.a)
+        let height = 3.5
+        let tip = transform.sheet(note.b)
+        let pointsLeft = note.leader && tip.x < at.x
+        let lines = note.text.isEmpty ? ["Note"] : note.text.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        for (i, line) in lines.enumerated() {
+            out.texts.append(DrawingText(position: at - SIMD2(0, Double(i) * height * 1.4), height: height,
+                                         string: line, anchor: pointsLeft || !note.leader ? .start : .end))
+        }
+        if note.leader, simd_distance(at, tip) > 1 {
+            let start = at + SIMD2(pointsLeft ? -1 : 1, height * 0.35)
+            out.lines.append(DrawingLine(a: start, b: tip, style: .thin))
+            let d = start - tip, u = d / simd_length(d), side = SIMD2(-u.y, u.x)
+            out.lines.append(DrawingLine(a: tip, b: tip + u * 2.5 + side * 0.9, style: .thin))
+            out.lines.append(DrawingLine(a: tip, b: tip + u * 2.5 - side * 0.9, style: .thin))
+        }
+        return at + SIMD2(0, height / 2)
     }
 
     /// Draw a projected view with its lower-left corner at `at`, `scale`
@@ -419,6 +497,22 @@ nonisolated enum DrawingSheet {
         }
         let frame = (min: at, max: at + view.size * scale)
         out.placedViews[key] = frame
+        out.viewTransforms[key] = DrawingViewTransform(at: at, min: view.min, k: scale)
+        // Line ends (corners, and the vertices of curves), each once.
+        var seen = Set<SIMD2<Int64>>(), seenStrong = Set<SIMD2<Int64>>()
+        var snaps: [SIMD2<Double>] = [], strong: [SIMD2<Double>] = []
+        // A curve is sampled into lines well under 2 sheet mm long.
+        let long = 2 / Swift.max(scale, 1e-9)
+        for s in view.visible {
+            let isLong = simd_distance(s.a, s.b) >= long
+            for p in [s.a, s.b] {
+                let cell = SIMD2<Int64>(Int64((p.x * 1e4).rounded()), Int64((p.y * 1e4).rounded()))
+                if seen.insert(cell).inserted { snaps.append(p) }
+                if isLong, seenStrong.insert(cell).inserted { strong.append(p) }
+            }
+        }
+        out.snapPoints[key] = snaps
+        out.strongSnapPoints[key] = strong
         out.texts.append(DrawingText(position: SIMD2((frame.min.x + frame.max.x) / 2, frame.max.y + 3),
                                      height: 2.5, string: label, anchor: .middle))
     }

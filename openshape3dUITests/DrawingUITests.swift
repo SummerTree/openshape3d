@@ -105,4 +105,57 @@ final class DrawingUITests: XCTestCase {
         app.buttons["DrawingDone"].tap()
         XCTAssertTrue(preview.waitForNonExistence(timeout: 5))
     }
+
+    /// Dimensions & notes (spec §15): the Dimension tool takes two points of
+    /// a view, the Note tool places a note; both are listed and deletable.
+    func testDimensionAndNoteArePlacedOnTheSheet() throws {
+        let app = XCUIApplication()
+        app.launchEnvironment["OS3D_FRESH"] = "1"
+        app.launchEnvironment["OS3D_RESET_STORE"] = "1"
+        app.launchEnvironment["OS3D_DEBUG_SEED_HOLE"] = "1"
+        app.launch()
+        XCTAssertTrue(app.buttons["ExportMenu"].waitForExistence(timeout: 10))
+        app.buttons["ExportMenu"].tap()
+        XCTAssertTrue(app.buttons["NewDrawingButton"].waitForExistence(timeout: 3))
+        app.buttons["NewDrawingButton"].tap()
+
+        let preview = app.descendants(matching: .any)["DrawingPreview"]
+        XCTAssertTrue(preview.waitForExistence(timeout: 10))
+        let tools = app.segmentedControls["DrawingToolPicker"]
+        XCTAssertTrue(tools.waitForExistence(timeout: 5))
+        tools.buttons["Dimension"].tap()
+
+        // Walk taps across the sheet: two in a row inside one view make a
+        // dimension (wherever the standard put the views).
+        let dimension = app.descendants(matching: .any)["DrawingAnnotation_linear"]
+        var placed = false
+        outer: for y in stride(from: 0.25, through: 0.75, by: 0.1) {
+            for x in stride(from: 0.2, through: 0.8, by: 0.04) {
+                preview.coordinate(withNormalizedOffset: CGVector(dx: x, dy: y)).tap()
+                if dimension.exists { placed = true; break outer }
+            }
+        }
+        XCTAssertTrue(placed, "a dimension is placed on a view")
+        XCTAssertTrue(app.segmentedControls["DrawingAnnotationOrientation"].exists)
+
+        // Off the paper, a Note tap does nothing; on it, it places a note.
+        tools.buttons["Note"].tap()
+        let note = app.descendants(matching: .any)["DrawingAnnotation_note"]
+        preview.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.02)).tap()
+        XCTAssertFalse(note.waitForExistence(timeout: 1), "the grey around the sheet takes no note")
+        for y in stride(from: 0.3, through: 0.8, by: 0.05) where !note.exists {
+            preview.coordinate(withNormalizedOffset: CGVector(dx: 0.12, dy: y)).tap()
+        }
+        XCTAssertTrue(note.waitForExistence(timeout: 3), "a free note on the sheet")
+        XCTAssertTrue(tools.buttons["Move"].isSelected, "back to Move to drag it")
+        let shot = XCTAttachment(screenshot: app.screenshot())
+        shot.name = "drawing-annotations"; shot.lifetime = .keepAlways; add(shot)
+
+        // Deleting removes it.
+        let deletes = app.buttons.matching(identifier: "DrawingAnnotationDelete")
+        XCTAssertEqual(deletes.count, 2)
+        deletes.element(boundBy: 1).tap()
+        XCTAssertTrue(note.waitForNonExistence(timeout: 3))
+        XCTAssertTrue(dimension.exists)
+    }
 }

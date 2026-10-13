@@ -272,6 +272,141 @@ final class EditorViewModel {
         set { activeDrawing?.viewOffsets = newValue }
     }
 
+    /// The active drawing's dimensions and notes.
+    var drawingAnnotations: [DrawingAnnotation] {
+        get { activeDrawing?.annotations ?? [] }
+        set { activeDrawing?.annotations = newValue }
+    }
+
+    /// The preview's tool, a dimension's first point (view, view
+    /// coordinates) and the selected annotation.
+    var drawingTool: DrawingTool = .move {
+        didSet { drawingPendingPoint = nil }
+    }
+    var drawingPendingPoint: (view: String, point: SIMD2<Double>)?
+    var drawingSelectedAnnotation: UUID?
+
+    /// What the preview's tool does, under the tool picker.
+    var drawingToolHint: String {
+        switch drawingTool {
+        case .move: "Drag views, dimensions and notes. Tap one to select it."
+        case .dimension: drawingPendingPoint == nil
+            ? "Tap a corner of a view, then another — taps snap to corners and line ends."
+            : "Tap the second point, on the same view."
+        case .note: "Tap a line to point at it, or anywhere on the sheet for a free note."
+        }
+    }
+
+    /// The first point of a dimension being placed, on the sheet.
+    var drawingPendingSheetPoint: SIMD2<Double>? {
+        guard let pending = drawingPendingPoint,
+              let transform = drawingLayout().viewTransforms[pending.view] else { return nil }
+        return transform.sheet(pending.point)
+    }
+
+    /// A tap on the preview at `point` (sheet mm): Move selects the
+    /// dimension or note under it; Dimension takes two points of one view
+    /// (snapping to its corners and line ends); Note places a note — with a
+    /// leader when tapped on a line of a view.
+    func drawingTap(at point: SIMD2<Double>) {
+        guard activeDrawing != nil else { return }
+        let layout = drawingLayout()
+        switch drawingTool {
+        case .move:
+            drawingSelectedAnnotation = DrawingAnnotationKit.annotation(at: point, in: layout)
+        case .dimension:
+            guard let pick = DrawingAnnotationKit.pick(point, in: layout) else {
+                drawingPendingPoint = nil
+                return
+            }
+            guard let first = drawingPendingPoint, first.view == pick.view,
+                  simd_distance(first.point, pick.point) > 1e-6 else {
+                drawingPendingPoint = (pick.view, pick.point)
+                return
+            }
+            var dimension = DrawingAnnotation(kind: .linear, view: pick.view, a: first.point, b: pick.point)
+            dimension.orientation = DrawingAnnotationKit.orientation(first.point, pick.point)
+            if let transform = layout.viewTransforms[pick.view], let frame = layout.placedViews[pick.view] {
+                dimension.offset = DrawingAnnotationKit.defaultOffset(dimension, transform: transform, frame: frame)
+            }
+            activeDrawing?.annotations.append(dimension)
+            drawingSelectedAnnotation = dimension.id
+            drawingPendingPoint = nil
+        case .note:
+            var note: DrawingAnnotation
+            if let pick = DrawingAnnotationKit.pick(point, in: layout, pictorial: true),
+               let transform = layout.viewTransforms[pick.view] {
+                note = DrawingAnnotation(kind: .note, view: pick.view, a: pick.point, b: pick.point)
+                if pick.snapped {
+                    // On a line: the text up and to the right, pointing back.
+                    note.leader = true
+                    note.a = transform.view(transform.sheet(pick.point) + SIMD2(10, 8))
+                }
+            } else {
+                // The bare sheet — not the grey around it.
+                guard point.x >= 0, point.y >= 0, point.x <= layout.size.x, point.y <= layout.size.y else { return }
+                note = DrawingAnnotation(kind: .note, view: "", a: point, b: point)
+            }
+            note.text = "Note"
+            activeDrawing?.annotations.append(note)
+            drawingSelectedAnnotation = note.id
+            drawingTool = .move
+        }
+    }
+
+    @ObservationIgnored
+    private var drawingAnnotationGrab: (id: UUID, offset: SIMD2<Double>)?
+
+    /// A drag starting at `point` grabs the dimension or note there (Move
+    /// tool). False when there is none — the drag moves a view instead.
+    func drawingAnnotationDragBegan(at point: SIMD2<Double>) -> Bool {
+        guard drawingTool == .move,
+              let id = DrawingAnnotationKit.annotation(at: point, in: drawingLayout()),
+              let handle = drawingLayout().annotationHandles[id] else { return false }
+        drawingAnnotationGrab = (id, handle - point)
+        drawingSelectedAnnotation = id
+        return true
+    }
+
+    /// Drag the grabbed annotation: a dimension's line follows the finger
+    /// out from the part; a note's text follows it.
+    func drawingAnnotationDragged(to point: SIMD2<Double>) {
+        guard let grab = drawingAnnotationGrab,
+              let index = drawingAnnotations.firstIndex(where: { $0.id == grab.id }) else { return }
+        let layout = drawingLayout()
+        let annotation = drawingAnnotations[index]
+        guard let transform = layout.viewTransforms[annotation.view] else { return }
+        switch annotation.kind {
+        case .linear:
+            activeDrawing?.annotations[index].offset = DrawingAnnotationKit.offset(
+                through: point, a: transform.sheet(annotation.a), b: transform.sheet(annotation.b),
+                orientation: annotation.orientation)
+        case .note:
+            let handleToText = SIMD2(0, 3.5 / 2)
+            activeDrawing?.annotations[index].a = transform.view(point + grab.offset - handleToText)
+        }
+    }
+
+    func drawingAnnotationDragEnded() { drawingAnnotationGrab = nil }
+
+    func deleteDrawingAnnotation(_ id: UUID) {
+        activeDrawing?.annotations.removeAll { $0.id == id }
+        if drawingSelectedAnnotation == id { drawingSelectedAnnotation = nil }
+    }
+
+    /// The view an annotation sits on, by name ("Front", "Section A-A", …).
+    func drawingViewName(_ key: String) -> String {
+        if key.isEmpty { return "Sheet" }
+        if let direction = DrawingViewDirection(rawValue: key) { return direction.title }
+        if let section = drawingSections.first(where: { DrawingSheet.viewKey(section: $0.id) == key }) {
+            return "Section \(section.label)-\(section.label)"
+        }
+        if let detail = drawingDetails.first(where: { DrawingSheet.viewKey(detail: $0.id) == key }) {
+            return "Detail \(detail.label)"
+        }
+        return "Removed View"
+    }
+
     /// Add a section view cutting the front view through its middle.
     func addDrawingSection() {
         guard let drawing = activeDrawing else { return }
@@ -321,6 +456,7 @@ final class EditorViewModel {
         commitActiveDrawing()
         activeDrawing = drawing
         lastDrawingID = id
+        resetDrawingTool()
     }
 
     /// Delete the drawing on the sheet; the sheet moves to another drawing,
@@ -348,6 +484,12 @@ final class EditorViewModel {
     func closeDrawing() {
         commitActiveDrawing()
         showDrawingSheet = false
+        resetDrawingTool()
+    }
+
+    private func resetDrawingTool() {
+        drawingTool = .move
+        drawingSelectedAnnotation = nil
     }
 
     @ObservationIgnored
