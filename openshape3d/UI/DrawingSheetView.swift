@@ -306,6 +306,8 @@ struct DrawingSheetView: View {
                     .accessibilityIdentifier("DrawingHiddenToggle")
                 Toggle("Overall Dimensions", isOn: $viewModel.drawingOptions.showDimensions)
                     .accessibilityIdentifier("DrawingDimensionsToggle")
+                Toggle("Centre Marks", isOn: $viewModel.drawingOptions.showCenterMarks)
+                    .accessibilityIdentifier("DrawingCenterMarksToggle")
                 if !viewModel.drawingViewOffsets.isEmpty {
                     Button("Reset View Positions") { viewModel.drawingViewOffsets = [:] }
                         .accessibilityIdentifier("DrawingResetPositions")
@@ -334,11 +336,10 @@ struct DrawingSheetView: View {
             ForEach($viewModel.drawingAnnotations) { $annotation in
                 VStack(alignment: .leading, spacing: 6) {
                     HStack {
-                        Image(systemName: annotation.kind == .linear ? "ruler" : "text.bubble")
+                        Image(systemName: annotation.kind == .note ? "text.bubble"
+                              : annotation.kind == .linear ? "ruler" : "circle.dashed")
                             .foregroundStyle(.secondary)
-                        Text(annotation.kind == .linear
-                             ? AppSettings.shared.unit.compactLengthString(fromMM: annotation.measured)
-                             : "Note")
+                        Text(annotation.listTitle)
                             .font(.subheadline.weight(.semibold))
                         Text(viewModel.drawingViewName(annotation.view))
                             .font(.caption)
@@ -358,7 +359,7 @@ struct DrawingSheetView: View {
                         }
                         .pickerStyle(.segmented)
                         .accessibilityIdentifier("DrawingAnnotationOrientation")
-                    } else {
+                    } else if annotation.kind == .note {
                         TextField("Text", text: $annotation.text, axis: .vertical)
                             .accessibilityIdentifier("DrawingNoteText")
                         if !annotation.view.isEmpty {

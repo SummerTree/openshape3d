@@ -291,7 +291,7 @@ final class EditorViewModel {
         switch drawingTool {
         case .move: "Drag views, dimensions and notes. Tap one to select it."
         case .dimension: drawingPendingPoint == nil
-            ? "Tap a corner of a view, then another — taps snap to corners and line ends."
+            ? "Tap a corner of a view, then another — or a circle's outline for its diameter."
             : "Tap the second point, on the same view."
         case .note: "Tap a line to point at it, or anywhere on the sheet for a free note."
         }
@@ -315,6 +315,20 @@ final class EditorViewModel {
         case .move:
             drawingSelectedAnnotation = DrawingAnnotationKit.annotation(at: point, in: layout)
         case .dimension:
+            // A tap on a circle's outline, away from any corner, dimensions
+            // the circle: its diameter, or an arc's radius.
+            if drawingPendingPoint == nil, !DrawingAnnotationKit.isNearStrongSnap(point, in: layout),
+               let hit = DrawingCircleKit.circle(at: point, in: layout),
+               let transform = layout.viewTransforms[hit.view] {
+                let frame = layout.placedViews[hit.view] ?? (transform.at, transform.at)
+                let leader = DrawingAnnotationKit.defaultCircleLeader(hit.circle, transform: transform, frame: frame)
+                var dimension = DrawingAnnotation(kind: hit.circle.full ? .diameter : .radius, view: hit.view,
+                                                  a: hit.circle.center, b: leader.rim)
+                dimension.offset = leader.offset
+                activeDrawing?.annotations.append(dimension)
+                drawingSelectedAnnotation = dimension.id
+                return
+            }
             guard let pick = DrawingAnnotationKit.pick(point, in: layout) else {
                 drawingPendingPoint = nil
                 return
@@ -384,6 +398,12 @@ final class EditorViewModel {
         case .note:
             let handleToText = SIMD2(0, 3.5 / 2)
             activeDrawing?.annotations[index].a = transform.view(point + grab.offset - handleToText)
+        case .diameter, .radius:
+            let leader = DrawingAnnotationKit.circleLeader(
+                through: point, center: annotation.a, radius: simd_distance(annotation.a, annotation.b),
+                transform: transform)
+            activeDrawing?.annotations[index].b = leader.rim
+            activeDrawing?.annotations[index].offset = leader.offset
         }
     }
 

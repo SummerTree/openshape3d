@@ -2185,11 +2185,18 @@ not dimensioned (foreshortened). Note places text, with a leader when tapped
 on a line, or free on the sheet; its text is edited in the form. Both keep
 their points in the view's own coordinates, so they move and rescale with
 it, are saved with the drawing, listed under "Dimensions & Notes", and
-exported to PDF / SVG / DXF. Tests: `DrawingAnnotationsTests`,
+exported to PDF / SVG / DXF. **Circles:** each view's lines are joined into
+chains and circles fitted to them (`DrawingCircleKit`: every vertex on the
+fit, turning one way, pieces of one circle merged); a Dimension tap on an
+outline away from a corner gives its diameter ("Ø6 mm", across the circle)
+or an arc's radius ("R3 mm"), its leader up and away from the view's
+middle, out past the view, and it swings round when dragged. **Centre
+marks** (sheet option, on by default): chain-line crosses 2 mm past every
+full circle outside the isometric. Tests: `DrawingAnnotationsTests`,
 `DrawingUITests`, web `drawing-annotations-smoke.mjs`. Missing: free
 placement of new views from any angle (custom projection angles, extra
 projected views), cutting lines through picked points / stepped sections,
-radius / diameter / angle dimensions, tolerances, centerlines and marks,
+angle dimensions, tolerances, centerlines,
 title-block layouts, multiple sheets, DWG.
 **Feasibility:** [mesh-kernel OK] for a first version (orthographic
 projection + silhouette/hidden-line from meshes; associativity with the model

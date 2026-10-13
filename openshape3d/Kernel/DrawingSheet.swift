@@ -56,6 +56,29 @@ nonisolated struct DrawingOptions: Equatable, Codable, Sendable {
     /// Sheet scale as drawn ÷ real (0.5 = 1:2); nil picks the largest
     /// standard scale that fits.
     var scale: Double?
+    /// A cross of chain lines through the centre of every circle seen end on.
+    var showCenterMarks = true
+
+    init(title: String = "Drawing") { self.title = title }
+
+    private enum CodingKeys: String, CodingKey {
+        case title, sheet, standard, includeIsometric, showHiddenLines, showDimensions, scale, showCenterMarks
+    }
+
+    // Every field optional on the way in: drawings saved before a setting
+    // existed still open.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        let d = DrawingOptions()
+        title = try c.decodeIfPresent(String.self, forKey: .title) ?? d.title
+        sheet = (try? c.decodeIfPresent(DrawingSheetSize.self, forKey: .sheet)) ?? d.sheet
+        standard = (try? c.decodeIfPresent(DrawingStandard.self, forKey: .standard)) ?? d.standard
+        includeIsometric = try c.decodeIfPresent(Bool.self, forKey: .includeIsometric) ?? d.includeIsometric
+        showHiddenLines = try c.decodeIfPresent(Bool.self, forKey: .showHiddenLines) ?? d.showHiddenLines
+        showDimensions = try c.decodeIfPresent(Bool.self, forKey: .showDimensions) ?? d.showDimensions
+        scale = try c.decodeIfPresent(Double.self, forKey: .scale)
+        showCenterMarks = try c.decodeIfPresent(Bool.self, forKey: .showCenterMarks) ?? d.showCenterMarks
+    }
 }
 
 nonisolated enum DrawingLineStyle: String, Sendable {
@@ -104,6 +127,8 @@ nonisolated struct DrawingLayout: Sendable {
     /// The ends of a view's long lines — true corners and where a straight
     /// edge meets a curve — which win over the points a curve is sampled at.
     var strongSnapPoints: [String: [SIMD2<Double>]] = [:]
+    /// The circles and arcs each view shows (view coordinates).
+    var circles: [String: [DrawingCircle]] = [:]
     /// Each annotation's handle (its text), sheet mm — to select or drag it.
     var annotationHandles: [UUID: SIMD2<Double>] = [:]
 
@@ -413,6 +438,14 @@ nonisolated enum DrawingSheet {
             dimension(from: SIMD2(s.min.x, s.min.y), to: SIMD2(s.max.x, s.min.y), offset: offset(.right, .vertical),
                       value: formatLength(side.size.x), into: &out)
         }
+        if options.showCenterMarks {
+            for (key, circles) in out.circles where key != viewKey(.isometric) {
+                guard let t = out.viewTransforms[key] else { continue }
+                for circle in circles where circle.full {
+                    centerMark(at: t.sheet(circle.center), radius: circle.radius * t.k, into: &out)
+                }
+            }
+        }
         // Notes on the bare sheet are kept in sheet mm.
         out.viewTransforms[""] = DrawingViewTransform(at: .zero, min: .zero, k: 1)
         for annotation in drawing.annotations {
@@ -425,6 +458,12 @@ nonisolated enum DrawingSheet {
                     value: formatLength(annotation.measured), into: &out)
             case .note:
                 out.annotationHandles[annotation.id] = note(annotation, transform: transform, into: &out)
+            case .diameter, .radius:
+                let prefix = annotation.kind == .diameter ? "Ø" : "R"
+                out.annotationHandles[annotation.id] = circleDimension(
+                    center: transform.sheet(annotation.a), rim: transform.sheet(annotation.b),
+                    diameter: annotation.kind == .diameter, offset: annotation.offset,
+                    value: prefix + formatLength(annotation.measured), into: &out)
             }
         }
         appendFrame(into: &out, options: options, scale: scaleLabel(scale), date: date)
@@ -460,6 +499,42 @@ nonisolated enum DrawingSheet {
         let up = SIMD2(-sin(angle), cos(angle))
         out.texts.append(DrawingText(position: mid + up, height: 2.5, string: value, anchor: .middle, rotation: angle))
         return mid + up * 2
+    }
+
+    /// A circle's centre mark: two chain lines crossing at the centre, 2 mm
+    /// past the outline (a plain small cross on a circle too small for dashes).
+    private static func centerMark(at c: SIMD2<Double>, radius r: Double, into out: inout DrawingLayout) {
+        let reach = r + 2
+        let style: DrawingLineStyle = r >= 4 ? .chain : .thin
+        out.lines.append(DrawingLine(a: c - SIMD2(reach, 0), b: c + SIMD2(reach, 0), style: style))
+        out.lines.append(DrawingLine(a: c - SIMD2(0, reach), b: c + SIMD2(0, reach), style: style))
+    }
+
+    /// A diameter (across the circle, through the centre) or radius (from the
+    /// centre) dimension, its arrow touching the outline at `rim`, the line
+    /// carried `offset` mm out to a short shoulder and the value. Returns the
+    /// value's position (its handle).
+    private static func circleDimension(center c: SIMD2<Double>, rim: SIMD2<Double>, diameter: Bool, offset: Double,
+                                        value: String, into out: inout DrawingLayout) -> SIMD2<Double> {
+        let r = simd_distance(c, rim)
+        guard r > 1e-9 else { return c }
+        let u = (rim - c) / r, side = SIMD2(-u.y, u.x)
+        let outside = rim + u * Swift.max(offset, 3)
+        out.lines.append(DrawingLine(a: diameter ? c - u * r : c, b: outside, style: .thin))
+        let arrow = Swift.min(2.5, r)
+        // Arrowheads point out at the outline: at `rim`, and across a diameter.
+        var tips = [(rim, -u)]
+        if diameter { tips.append((c - u * r, u)) }
+        for (tip, back) in tips {
+            out.lines.append(DrawingLine(a: tip, b: tip + back * arrow + side * arrow * 0.35, style: .thin))
+            out.lines.append(DrawingLine(a: tip, b: tip + back * arrow - side * arrow * 0.35, style: .thin))
+        }
+        let right = u.x >= 0
+        let shoulder = outside + SIMD2(right ? 4 : -4, 0)
+        out.lines.append(DrawingLine(a: outside, b: shoulder, style: .thin))
+        let at = shoulder + SIMD2(right ? 1 : -1, -0.9)
+        out.texts.append(DrawingText(position: at, height: 2.5, string: value, anchor: right ? .start : .end))
+        return shoulder + SIMD2(right ? 5 : -5, 0)
     }
 
     /// A note: its lines of text at `a`, and a leader with an arrowhead to
@@ -513,6 +588,7 @@ nonisolated enum DrawingSheet {
         }
         out.snapPoints[key] = snaps
         out.strongSnapPoints[key] = strong
+        out.circles[key] = DrawingCircleKit.circles(in: view.visible + (hidden ? view.hidden : []))
         out.texts.append(DrawingText(position: SIMD2((frame.min.x + frame.max.x) / 2, frame.max.y + 3),
                                      height: 2.5, string: label, anchor: .middle))
     }
