@@ -38,6 +38,8 @@ nonisolated struct DesignDocument: Sendable {
     var variables: [Variable] = []
     /// Measurements pinned to always show (spec §16.3).
     var pinnedMeasurements: [PinnedMeasurement] = []
+    /// Drawings kept in the project (spec §15), in creation order.
+    var drawings: [SavedDrawing] = []
 
     /// Monotonic revision source for mesh changes (GPU cache invalidation).
     private var revisionCounter: UInt64 = 0

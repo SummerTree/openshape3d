@@ -35,6 +35,8 @@ nonisolated struct ProjectArchive: Codable, Sendable {
     var itemFolders: Data?
     /// Pinned measurements (`[PinnedMeasurement]` JSON); absent in older archives.
     var pinnedMeasurements: Data?
+    /// Saved drawings (`[SavedDrawing]` JSON); absent in older archives.
+    var drawings: Data?
 
     struct BodyRecord: Codable, Sendable {
         var id: UUID
@@ -162,6 +164,8 @@ nonisolated extension ProjectArchive {
 
         var out = self
         out.itemFolders = itemFolders.map(rewritten)
+        // Drawings name the bodies they draw (and key moved views by view id).
+        out.drawings = drawings.map(rewritten)
         out.bodies = bodies.map { record in
             var r = record
             r.id = mapped(record.id)
@@ -208,6 +212,7 @@ extension ProjectArchive {
         archive.rollbackIndex = project.rollbackIndex
         archive.itemFolders = project.itemFoldersData
         archive.pinnedMeasurements = project.pinnedMeasurementsData
+        archive.drawings = project.drawingsData
         archive.bodies = project.bodies.map {
             BodyRecord(
                 id: $0.bodyID, name: $0.name, transform: $0.transformData,
@@ -256,6 +261,7 @@ extension ProjectArchive {
         project.rollbackIndex = rollbackIndex
         project.itemFoldersData = itemFolders
         project.pinnedMeasurementsData = pinnedMeasurements
+        project.drawingsData = drawings
         context.insert(project)
 
         for record in bodies {

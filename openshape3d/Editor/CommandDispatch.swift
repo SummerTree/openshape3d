@@ -273,7 +273,7 @@ extension EditorViewModel {
         case "items.invert":       invertBodyVisibility();      return true
         case "items.reveal":       revealInItems();             return true
         case "file.newDrawing":
-            openDrawing(designName: session.project.name); return true
+            newDrawing(designName: session.project.name); return true
         case "view.section":       toggleSectionView();         return true
         case "view.editSection":
             guard sectionState != nil else { return false }

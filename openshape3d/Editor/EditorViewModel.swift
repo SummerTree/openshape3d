@@ -237,40 +237,162 @@ final class EditorViewModel {
 
     /// File ▸ New Drawing: the drawing sheet is up.
     var showDrawingSheet = false
-    /// The sheet's options; the title starts as the design's name.
-    var drawingOptions = DrawingOptions()
+    /// The drawing on the sheet: a working copy of one of the document's
+    /// drawings, written back as one undo step ("Edit Drawing") when the
+    /// sheet closes or another drawing is opened.
+    var activeDrawing: SavedDrawing?
 
-    /// Open the drawing sheet titled after `designName`.
+    /// The active drawing's sheet options (what the options form edits).
+    var drawingOptions: DrawingOptions {
+        get { activeDrawing?.options ?? DrawingOptions() }
+        set { activeDrawing?.options = newValue }
+    }
+
+    /// The active drawing's section views, detail views, chosen bodies and
+    /// moved views (what the sheet's controls edit).
+    var drawingSections: [DrawingSectionView] {
+        get { activeDrawing?.sections ?? [] }
+        set { activeDrawing?.sections = newValue }
+    }
+    var drawingDetails: [DrawingDetailView] {
+        get { activeDrawing?.details ?? [] }
+        set { activeDrawing?.details = newValue }
+    }
+    var drawingBodyIDs: [BodyID] {
+        get { activeDrawing?.bodyIDs ?? [] }
+        set { activeDrawing?.bodyIDs = newValue }
+    }
+    var drawingViewOffsets: [String: SIMD2<Double>] {
+        get { activeDrawing?.viewOffsets ?? [:] }
+        set { activeDrawing?.viewOffsets = newValue }
+    }
+
+    /// Add a section view cutting the front view through its middle.
+    func addDrawingSection() {
+        guard let drawing = activeDrawing else { return }
+        activeDrawing?.sections.append(DrawingSectionView(label: drawing.nextLabel()))
+    }
+
+    /// Add a detail view of the front view's centre, at 2:1 the sheet scale.
+    func addDrawingDetail() {
+        guard let drawing = activeDrawing else { return }
+        activeDrawing?.details.append(DrawingDetailView(label: drawing.nextLabel()))
+    }
+
+    /// Export ▸ Drawing…: the last drawing opened, or a new one when the
+    /// design has none.
     func openDrawing(designName: String) {
-        if drawingOptions.title == DrawingOptions().title || drawingOptions.title.isEmpty {
-            drawingOptions.title = designName
+        let drawings = session.document.drawings
+        if let id = lastDrawingID, let drawing = drawings.first(where: { $0.id == id }) {
+            activeDrawing = drawing
+        } else if let drawing = drawings.last {
+            activeDrawing = drawing
+        } else {
+            newDrawing(designName: designName)
+            return
         }
+        lastDrawingID = activeDrawing?.id
         showDrawingSheet = true
     }
 
-    /// The laid-out sheet for the visible bodies, memoized on the options and
-    /// the document revision (projection is the slow part).
+    /// File ▸ New Drawing: a new drawing of the selected bodies (every
+    /// visible body when none is selected), saved in the design.
+    func newDrawing(designName: String) {
+        commitActiveDrawing()
+        var options = activeDrawing?.options ?? session.document.drawings.last?.options ?? DrawingOptions()
+        options.title = session.document.uniqueDrawingTitle(base: designName)
+        let bodies = session.document.bodies.map(\.id).filter { selection.contains($0) }
+        let drawing = SavedDrawing(options: options, bodyIDs: bodies)
+        session.perform(AddDrawingCommand(drawing: drawing))
+        activeDrawing = drawing
+        lastDrawingID = drawing.id
+        showDrawingSheet = true
+    }
+
+    /// Switch the sheet to another saved drawing.
+    func selectDrawing(_ id: UUID) {
+        guard id != activeDrawing?.id,
+              let drawing = session.document.drawings.first(where: { $0.id == id }) else { return }
+        commitActiveDrawing()
+        activeDrawing = drawing
+        lastDrawingID = id
+    }
+
+    /// Delete the drawing on the sheet; the sheet moves to another drawing,
+    /// or closes when it was the last.
+    func deleteActiveDrawing() {
+        guard let active = activeDrawing,
+              let index = session.document.drawings.firstIndex(where: { $0.id == active.id }) else { return }
+        session.perform(DeleteDrawingCommand(drawing: session.document.drawings[index], index: index))
+        let rest = session.document.drawings
+        activeDrawing = rest.isEmpty ? nil : rest[min(index, rest.count - 1)]
+        lastDrawingID = activeDrawing?.id
+        if activeDrawing == nil { showDrawingSheet = false }
+    }
+
+    /// Write the working copy back to the document (one undo step) if it
+    /// changed.
+    func commitActiveDrawing() {
+        guard let active = activeDrawing,
+              let saved = session.document.drawings.first(where: { $0.id == active.id }),
+              saved != active else { return }
+        session.perform(UpdateDrawingCommand(old: saved, new: active))
+    }
+
+    /// Done on the drawing sheet.
+    func closeDrawing() {
+        commitActiveDrawing()
+        showDrawingSheet = false
+    }
+
+    @ObservationIgnored
+    private var lastDrawingID: UUID?
+
+    /// The bodies `drawing` draws: its chosen ones (hidden or not), or every
+    /// visible body.
+    func drawingBodies(_ drawing: SavedDrawing) -> [Body] {
+        let bodies = session.document.bodies
+        guard !drawing.bodyIDs.isEmpty else { return bodies.filter { !$0.isHidden } }
+        let chosen = Set(drawing.bodyIDs)
+        return bodies.filter { chosen.contains($0.id) }
+    }
+
+    /// The laid-out sheet for the active drawing, memoized on the drawing
+    /// and the document revision; projections are cached across option
+    /// changes and view drags (projection is the slow part).
     func drawingLayout() -> DrawingLayout {
-        let key = DrawingCacheKey(options: drawingOptions, revision: session.changeCount,
-                                  unit: AppSettings.shared.unit.rawValue)
-        if let cached = drawingCache, cached.key == key { return cached.layout }
-        let bodies = session.document.bodies.filter { !$0.isHidden }.map(DrawingBodyInput.init(body:))
+        let drawing = activeDrawing ?? SavedDrawing()
         let unit = AppSettings.shared.unit
+        let key = DrawingCacheKey(drawing: drawing, revision: session.changeCount, unit: unit.rawValue)
+        if let cached = drawingCache, cached.key == key { return cached.layout }
+        let projectionKey = DrawingProjectionKey(revision: session.changeCount, bodyIDs: drawing.bodyIDs)
+        if projectionKey != drawingProjectionKey {
+            drawingViews.removeAll()
+            drawingProjectionKey = projectionKey
+        }
         let layout = DrawingSheet.layout(
-            bodies: bodies, options: drawingOptions,
+            bodies: drawingBodies(drawing).map(DrawingBodyInput.init(body:)), drawing: drawing,
             formatLength: { unit.compactLengthString(fromMM: $0) },
-            date: DrawingSheet.isoDate(Date()))
+            date: DrawingSheet.isoDate(Date()), cache: drawingViews)
         drawingCache = (key, layout)
         return layout
     }
 
     private struct DrawingCacheKey: Equatable {
-        let options: DrawingOptions
+        let drawing: SavedDrawing
         let revision: Int
         let unit: String
     }
+    private struct DrawingProjectionKey: Equatable {
+        let revision: Int
+        let bodyIDs: [BodyID]
+    }
     @ObservationIgnored
     private var drawingCache: (key: DrawingCacheKey, layout: DrawingLayout)?
+    @ObservationIgnored
+    private let drawingViews = DrawingViewCache()
+    @ObservationIgnored
+    private var drawingProjectionKey: DrawingProjectionKey?
 
     /// The sheet as a file; nil (with an error) when nothing is drawn.
     func exportDrawing(_ format: DrawingFileFormat) -> Data? {

@@ -59,6 +59,10 @@ nonisolated struct ProjectedView: Sendable {
     var min = SIMD2<Double>(repeating: 0)
     var max = SIMD2<Double>(repeating: 0)
 
+    /// A section view's cut faces as closed loops (outer boundaries and
+    /// holes alike, view coordinates); the sheet hatches them even-odd.
+    var sectionLoops: [[SIMD2<Double>]] = []
+
     var size: SIMD2<Double> { max - min }
     var isEmpty: Bool { visible.isEmpty && hidden.isEmpty }
 }
@@ -89,7 +93,14 @@ nonisolated enum DrawingProjection {
 
     /// Project `bodies` as seen from `direction`.
     static func project(_ bodies: [DrawingBodyInput], direction: DrawingViewDirection) -> ProjectedView {
-        let (r, u, v) = direction.basis
+        project(bodies, basis: direction.basis)
+    }
+
+    /// Project `bodies` onto the plane of `basis` (right, up), looking along
+    /// −toward — any view, not only the standard ones (section views).
+    static func project(_ bodies: [DrawingBodyInput],
+                        basis: (right: SIMD3<Double>, up: SIMD3<Double>, toward: SIMD3<Double>)) -> ProjectedView {
+        let (r, u, v) = basis
         func flat(_ p: SIMD3<Double>) -> SIMD2<Double> { SIMD2(simd_dot(p, r), simd_dot(p, u)) }
 
         // Triangles in view space: 2D corners plus depth toward the viewer.

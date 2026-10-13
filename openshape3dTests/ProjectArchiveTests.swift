@@ -133,6 +133,22 @@ final class ProjectArchiveTests: XCTestCase {
         XCTAssertNotEqual(sketch.entities.first?.id, entityID)
     }
 
+    func testRemapCarriesDrawingsToTheNewBodyIDs() throws {
+        var archive = try sampleArchive()
+        var drawing = SavedDrawing(bodyIDs: [bodyID])
+        drawing.sections = [DrawingSectionView(label: "A")]
+        drawing.viewOffsets[DrawingSheet.viewKey(section: drawing.sections[0].id)] = SIMD2(4, 2)
+        archive.drawings = try JSONEncoder().encode([drawing])
+        let remapped = archive.remappingAllUUIDs()
+        let back = try JSONDecoder().decode([SavedDrawing].self, from: XCTUnwrap(remapped.drawings))
+        let newBody = try XCTUnwrap(remapped.bodies.first)
+        XCTAssertEqual(back.first?.bodyIDs, [BodyID(raw: newBody.id)], "the drawing still names its body")
+        XCTAssertNotEqual(back.first?.id, drawing.id)
+        let section = try XCTUnwrap(back.first?.sections.first)
+        XCTAssertEqual(back.first?.viewOffsets[DrawingSheet.viewKey(section: section.id)], SIMD2(4, 2),
+                       "a moved section view keeps its offset under its new id")
+    }
+
     func testRemapLeavesBinaryBlobsUntouched() throws {
         let archive = try sampleArchive()
         let remapped = archive.remappingAllUUIDs()

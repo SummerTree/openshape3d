@@ -80,6 +80,10 @@ final class Project {
     /// (`[PinnedMeasurement]`); `nil` = none. Defaulted, so stores migrate lightly.
     var pinnedMeasurementsData: Data? = nil
 
+    /// Saved drawings (spec §15) as one JSON blob (`[SavedDrawing]`);
+    /// `nil` = none. Defaulted, so stores migrate lightly.
+    var drawingsData: Data? = nil
+
     init(name: String) {
         self.name = name
         self.createdAt = Date()

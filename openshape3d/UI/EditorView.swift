@@ -2284,7 +2284,7 @@ struct EditorView: View {
             }
             // Drawings get the whole screen, like a workspace of their own.
             .fullScreenCover(isPresented: Binding(get: { viewModel.showDrawingSheet },
-                                                  set: { viewModel.showDrawingSheet = $0 })) {
+                                                  set: { if !$0 { viewModel.closeDrawing() } })) {
                 DrawingSheetView(viewModel: viewModel)
             }
             .sheet(isPresented: Binding(

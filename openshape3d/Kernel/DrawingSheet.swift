@@ -60,6 +60,13 @@ nonisolated struct DrawingOptions: Equatable, Codable, Sendable {
 
 nonisolated enum DrawingLineStyle: String, Sendable {
     case visible, hidden, thin, border
+    /// Thin chain line: cutting planes.
+    case chain
+    /// Thin hatching across cut faces.
+    case hatch
+
+    /// Back to front: what is drawn last sits on top.
+    static let drawOrder: [DrawingLineStyle] = [.border, .thin, .hatch, .chain, .hidden, .visible]
 }
 
 nonisolated struct DrawingLine: Equatable, Sendable {
@@ -84,10 +91,31 @@ nonisolated struct DrawingLayout: Sendable {
     var texts: [DrawingText] = []
     /// Drawn ÷ real.
     var scale: Double = 1
-    /// Where each view landed (sheet mm), for tests and labels.
+    /// Where each standard view landed (sheet mm), for tests and labels.
     var viewFrames: [DrawingViewDirection: (min: SIMD2<Double>, max: SIMD2<Double>)] = [:]
+    /// Every placed view — standard, section and detail — by
+    /// `DrawingSheet.viewKey`, for dragging views on the sheet.
+    var placedViews: [String: (min: SIMD2<Double>, max: SIMD2<Double>)] = [:]
 
     var isEmpty: Bool { viewFrames.isEmpty }
+}
+
+/// Projected views kept between layouts of the same model, so changing a
+/// sheet option or dragging a view does not project the bodies again. The
+/// owner empties it whenever the bodies change.
+nonisolated final class DrawingViewCache {
+    private var views: [String: ProjectedView] = [:]
+
+    init() {}
+
+    func view(_ key: String, _ make: () -> ProjectedView) -> ProjectedView {
+        if let hit = views[key] { return hit }
+        let view = make()
+        views[key] = view
+        return view
+    }
+
+    func removeAll() { views.removeAll() }
 }
 
 nonisolated enum DrawingSheet {
@@ -129,6 +157,49 @@ nonisolated enum DrawingSheet {
         formatLength: (Double) -> String = { String(format: "%.2f", $0) },
         date: String = ""
     ) -> DrawingLayout {
+        layout(bodies: bodies, drawing: SavedDrawing(options: options), formatLength: formatLength, date: date)
+    }
+
+    /// The key a view's frame and drag offset are stored under.
+    static func viewKey(_ direction: DrawingViewDirection) -> String { direction.rawValue }
+    static func viewKey(section id: UUID) -> String { "section:\(id.uuidString)" }
+    static func viewKey(detail id: UUID) -> String { "detail:\(id.uuidString)" }
+
+    /// The view under `point` (sheet mm) for dragging: the smallest frame
+    /// within `slop` mm of it, so a detail inside a big view's box wins.
+    static func view(at point: SIMD2<Double>, in layout: DrawingLayout, slop: Double = 3) -> String? {
+        layout.placedViews
+            .filter { point.x >= $0.value.min.x - slop && point.x <= $0.value.max.x + slop
+                && point.y >= $0.value.min.y - slop && point.y <= $0.value.max.y + slop }
+            .min { a, b in
+                let areaA = (a.value.max.x - a.value.min.x) * (a.value.max.y - a.value.min.y)
+                let areaB = (b.value.max.x - b.value.min.x) * (b.value.max.y - b.value.min.y)
+                return areaA != areaB ? areaA < areaB : a.key < b.key
+            }?
+            .key
+    }
+
+    /// A section or detail view, stacked in a column beside the main views.
+    private struct ExtraView {
+        var key: String
+        var label: String
+        var view: ProjectedView
+        /// Times the sheet scale (detail views).
+        var magnification: Double
+        var isSection: Bool
+        var showHidden: Bool
+        var detailMagnification: Double?
+    }
+
+    /// Lay out `drawing` for `bodies`: the standard views, then its section
+    /// and detail views in a column to the right, each moved by the drawing's
+    /// view offsets.
+    static func layout(
+        bodies: [DrawingBodyInput], drawing: SavedDrawing,
+        formatLength: (Double) -> String = { String(format: "%.2f", $0) },
+        date: String = "", cache: DrawingViewCache = DrawingViewCache()
+    ) -> DrawingLayout {
+        let options = drawing.options
         let paper = options.sheet.size
         var out = DrawingLayout(size: paper)
         guard !bodies.isEmpty else {
@@ -136,18 +207,61 @@ nonisolated enum DrawingSheet {
             return out
         }
 
-        let front = DrawingProjection.project(bodies, direction: .front)
+        func project(_ direction: DrawingViewDirection) -> ProjectedView {
+            cache.view(direction.rawValue) { DrawingProjection.project(bodies, direction: direction) }
+        }
+        let front = project(.front)
         guard !front.isEmpty else {
             appendFrame(into: &out, options: options, scale: "", date: date)
             return out
         }
-        let top = DrawingProjection.project(bodies, direction: .top)
-        let side = DrawingProjection.project(bodies, direction: .right)
-        let iso = options.includeIsometric ? DrawingProjection.project(bodies, direction: .isometric) : nil
+        let top = project(.top)
+        let side = project(.right)
+        let iso = options.includeIsometric ? project(.isometric) : nil
+        var baseViews: [DrawingViewDirection: ProjectedView] = [.front: front, .top: top, .right: side]
+        if let iso { baseViews[.isometric] = iso }
+        func baseView(_ direction: DrawingViewDirection) -> ProjectedView {
+            if let view = baseViews[direction] { return view }
+            let view = project(direction)
+            baseViews[direction] = view
+            return view
+        }
+
+        // Section and detail views.
+        var extras: [ExtraView] = []
+        var cuts: [(section: DrawingSectionView, cut: DrawingViewKit.SectionCut)] = []
+        for section in drawing.sections where DrawingSectionView.bases.contains(section.base) {
+            let base = baseView(section.base)
+            guard !base.isEmpty else { continue }
+            let cut = DrawingViewKit.cut(section, baseView: base)
+            cuts.append((section, cut))
+            let cutKey = "section:\(section.base.rawValue):\(section.cut.rawValue):\(section.position):\(section.flipped)"
+            let view = cache.view(cutKey) { DrawingViewKit.section(bodies, cut: cut) }
+            guard !view.isEmpty else { continue }
+            extras.append(ExtraView(key: viewKey(section: section.id),
+                                    label: "SECTION \(section.label)-\(section.label)", view: view,
+                                    magnification: 1, isSection: true, showHidden: false))
+        }
+        var circles: [(detail: DrawingDetailView, center: SIMD2<Double>, radius: Double)] = []
+        for detail in drawing.details where DrawingDetailView.bases.contains(detail.base) {
+            let base = baseView(detail.base)
+            guard !base.isEmpty else { continue }
+            let circle = DrawingViewKit.detailCircle(detail, baseView: base)
+            circles.append((detail, circle.center, circle.radius))
+            let magnification = Swift.max(1, detail.magnification)
+            extras.append(ExtraView(key: viewKey(detail: detail.id), label: "DETAIL \(detail.label)",
+                                    view: DrawingViewKit.detail(detail, baseView: base),
+                                    magnification: magnification, isSection: false,
+                                    showHidden: options.showHiddenLines && detail.base != .isometric,
+                                    detailMagnification: magnification))
+        }
 
         // Drawing area: inside the border, above the title block's height.
         let areaMin = SIMD2(margin + 6, margin + titleBlockSize.y + 6)
-        let areaMax = paper - SIMD2(margin + 6, margin + 6)
+        // A vertical cutting line lifts its view's name (see below): keep
+        // room for it under the border.
+        let liftRoom = cuts.contains { $0.section.cut == .vertical } ? 5.0 : 0
+        let areaMax = paper - SIMD2(margin + 6, margin + 6 + liftRoom)
         let area = areaMax - areaMin
         let dimRoom = options.showDimensions ? 14.0 : 0
         // A 2×2 grid: Front's column also holds Top, the side view's column
@@ -158,18 +272,30 @@ nonisolated enum DrawingSheet {
         let frontRow = Swift.max(front.size.y, side.size.y)
         let topRow = Swift.max(top.size.y, isoReal.y)
         let gap = viewGap + dimRoom
+        // The extra column: as wide as its widest view, as tall as its views
+        // stacked with a label gap between them.
+        let extraColumn = extras.map { $0.view.size.x * $0.magnification }.max() ?? 0
+        let extraHeight = extras.reduce(0) { $0 + $1.view.size.y * $1.magnification }
+        let extraGaps = Double(Swift.max(0, extras.count - 1)) * viewGap
+        let extraRoom = extras.isEmpty ? 0 : viewGap
         let scale: Double
         if let fixed = options.scale, fixed > 0 {
             scale = fixed
         } else {
-            let fit = Swift.min((area.x - gap - dimRoom) / Swift.max(frontColumn + sideColumn, 1e-6),
+            var fit = Swift.min((area.x - gap - dimRoom - extraRoom) / Swift.max(frontColumn + sideColumn + extraColumn, 1e-6),
                                 (area.y - gap - dimRoom) / Swift.max(frontRow + topRow, 1e-6))
+            if !extras.isEmpty {
+                fit = Swift.min(fit, (area.y - extraGaps) / Swift.max(extraHeight, 1e-6))
+            }
             scale = standardScales.first { $0 <= fit } ?? standardScales.last!
         }
         out.scale = scale
 
-        let block = SIMD2((frontColumn + sideColumn) * scale + gap + dimRoom,
-                          (frontRow + topRow) * scale + gap + dimRoom)
+        let mainBlock = SIMD2((frontColumn + sideColumn) * scale + gap + dimRoom,
+                              (frontRow + topRow) * scale + gap + dimRoom)
+        let extraBlock = SIMD2(extraColumn * scale, extraHeight * scale + extraGaps)
+        let block = SIMD2(mainBlock.x + (extras.isEmpty ? 0 : extraRoom + extraBlock.x),
+                          Swift.max(mainBlock.y, extraBlock.y))
         let origin = areaMin + simd_max((area - block) / 2, .zero)
 
         // Third angle: Front bottom-left, Top above it, Right to its right.
@@ -180,47 +306,165 @@ nonisolated enum DrawingSheet {
         let frontY = third ? origin.y + dimRoom : origin.y + dimRoom + topRow * scale + gap
         let topY = third ? frontY + frontRow * scale + gap : origin.y + dimRoom
 
-        place(front, at: SIMD2(frontX, frontY), scale: scale, direction: .front, options: options, into: &out)
+        // Dragged views. Top and the side view stay lined up with Front: they
+        // move with it, and on their own only along their shared axis.
+        func offset(_ key: String) -> SIMD2<Double> { drawing.viewOffsets[key] ?? .zero }
+        let frontShift = offset(viewKey(.front))
+        var origins: [DrawingViewDirection: SIMD2<Double>] = [:]
+        func placeStandard(_ view: ProjectedView, at: SIMD2<Double>, direction: DrawingViewDirection) {
+            place(view, at: at, scale: scale, key: viewKey(direction), label: direction.title.uppercased(),
+                  hidden: options.showHiddenLines && direction != .isometric, into: &out)
+            out.viewFrames[direction] = out.placedViews[viewKey(direction)]
+            origins[direction] = at
+        }
+        placeStandard(front, at: SIMD2(frontX, frontY) + frontShift, direction: .front)
         // Projected views line up with the front: Top shares its x, the side
         // view its y.
-        place(top, at: SIMD2(frontX, topY), scale: scale, direction: .top, options: options, into: &out)
-        place(side, at: SIMD2(sideX, frontY), scale: scale, direction: .right, options: options, into: &out)
+        placeStandard(top, at: SIMD2(frontX, topY) + frontShift + SIMD2(0, offset(viewKey(.top)).y), direction: .top)
+        placeStandard(side, at: SIMD2(sideX, frontY) + frontShift + SIMD2(offset(viewKey(.right)).x, 0),
+                      direction: .right)
         if let iso, !iso.isEmpty {
             // Centred in the free cell.
             let isoPos = SIMD2(sideX + (sideColumn - iso.size.x) * scale / 2,
                                topY + (topRow - iso.size.y) * scale / 2)
-            place(iso, at: isoPos, scale: scale, direction: .isometric, options: options, into: &out)
+            placeStandard(iso, at: isoPos + offset(viewKey(.isometric)), direction: .isometric)
+        }
+        /// A point of a placed standard view on the sheet.
+        func sheet(_ direction: DrawingViewDirection, _ p: SIMD2<Double>) -> SIMD2<Double>? {
+            guard let at = origins[direction], let view = baseViews[direction] else { return nil }
+            return at + (p - view.min) * scale
+        }
+
+        // The extra column, top down.
+        var y = origin.y + block.y
+        let columnX = origin.x + mainBlock.x + extraRoom
+        for extra in extras {
+            let k = scale * extra.magnification
+            let size = extra.view.size * k
+            y -= size.y
+            let at = SIMD2(columnX + (extraColumn * scale - size.x) / 2, y) + offset(extra.key)
+            var label = extra.label
+            if let m = extra.detailMagnification { label += " (\(scaleLabel(scale * m)))" }
+            place(extra.view, at: at, scale: k, key: extra.key, label: label, hidden: extra.showHidden, into: &out)
+            if extra.isSection {
+                let loops = extra.view.sectionLoops.map { $0.map { at + ($0 - extra.view.min) * k } }
+                for (a, b) in DrawingViewKit.hatch(loops, spacing: 2.5) {
+                    out.lines.append(DrawingLine(a: a, b: b, style: .hatch))
+                }
+            }
+            if extra.detailMagnification != nil, let frame = out.placedViews[extra.key] {
+                // The detail's own boundary.
+                circle(center: (frame.min + frame.max) / 2, radius: (frame.max.x - frame.min.x) / 2,
+                       style: .thin, into: &out)
+            }
+            y -= viewGap
+        }
+
+        // Cutting lines and detail circles on their base views.
+        for (section, cut) in cuts {
+            guard let a = sheet(section.base, cut.line.a), let b = sheet(section.base, cut.line.b) else { continue }
+            cuttingLine(from: a, to: b, sight: cut.sight, label: section.label, into: &out)
+            if section.cut == .vertical, let frame = out.viewFrames[section.base] {
+                // The line's top end and its arrow sit where the view's name
+                // does: lift the name clear of them.
+                let title = section.base.title.uppercased()
+                for i in out.texts.indices where out.texts[i].string == title
+                    && abs(out.texts[i].position.y - (frame.max.y + 3)) < 1e-9 {
+                    out.texts[i].position.y = frame.max.y + 8
+                }
+            }
+        }
+        for (detail, center, radius) in circles {
+            guard let c = sheet(detail.base, center), let frame = out.viewFrames[detail.base] else { continue }
+            let r = radius * scale
+            circle(center: c, radius: r, style: .thin, into: &out)
+            // The letter sits outside the circle, on the side away from the
+            // middle of the view (where there is room).
+            var away = c - (frame.min + frame.max) / 2
+            away = simd_length(away) > 1e-6 ? simd_normalize(away) : simd_normalize(SIMD2(1, 1))
+            let at = c + away * (r + 2.5)
+            out.texts.append(DrawingText(position: at - SIMD2(0, 1.75), height: 3.5, string: detail.label,
+                                         anchor: away.x > 0.3 ? .start : away.x < -0.3 ? .end : .middle))
         }
 
         if options.showDimensions {
             let f = out.viewFrames[.front]!, s = out.viewFrames[.right]!
+            // A cutting line ends where a dimension would sit: move the
+            // dimension further out, past the line's arrow and letter.
+            func offset(_ view: DrawingViewDirection, _ cut: DrawingSectionView.Cut) -> Double {
+                cuts.contains { $0.section.base == view && $0.section.cut == cut } ? -12 : -8
+            }
             // Width under the front view, height to its left, depth under the
             // side view.
-            dimension(from: SIMD2(f.min.x, f.min.y), to: SIMD2(f.max.x, f.min.y), offset: -8,
+            dimension(from: SIMD2(f.min.x, f.min.y), to: SIMD2(f.max.x, f.min.y), offset: offset(.front, .vertical),
                       value: formatLength(front.size.x), into: &out)
-            dimension(from: SIMD2(f.min.x, f.min.y), to: SIMD2(f.min.x, f.max.y), offset: -8,
+            dimension(from: SIMD2(f.min.x, f.min.y), to: SIMD2(f.min.x, f.max.y), offset: offset(.front, .horizontal),
                       value: formatLength(front.size.y), into: &out)
-            dimension(from: SIMD2(s.min.x, s.min.y), to: SIMD2(s.max.x, s.min.y), offset: -8,
+            dimension(from: SIMD2(s.min.x, s.min.y), to: SIMD2(s.max.x, s.min.y), offset: offset(.right, .vertical),
                       value: formatLength(side.size.x), into: &out)
         }
         appendFrame(into: &out, options: options, scale: scaleLabel(scale), date: date)
         return out
     }
 
-    /// Draw a projected view with its lower-left corner at `at`.
-    private static func place(_ view: ProjectedView, at: SIMD2<Double>, scale: Double,
-                              direction: DrawingViewDirection, options: DrawingOptions,
-                              into out: inout DrawingLayout) {
+    /// Draw a projected view with its lower-left corner at `at`, `scale`
+    /// sheet mm per model mm, labelled above.
+    private static func place(_ view: ProjectedView, at: SIMD2<Double>, scale: Double, key: String,
+                              label: String, hidden: Bool, into out: inout DrawingLayout) {
         func map(_ p: SIMD2<Double>) -> SIMD2<Double> { at + (p - view.min) * scale }
         for s in view.visible { out.lines.append(DrawingLine(a: map(s.a), b: map(s.b), style: .visible)) }
         // Pictorial views are drawn without hidden lines, as drafting does.
-        if options.showHiddenLines, direction != .isometric {
+        if hidden {
             for s in view.hidden { out.lines.append(DrawingLine(a: map(s.a), b: map(s.b), style: .hidden)) }
         }
         let frame = (min: at, max: at + view.size * scale)
-        out.viewFrames[direction] = frame
+        out.placedViews[key] = frame
         out.texts.append(DrawingText(position: SIMD2((frame.min.x + frame.max.x) / 2, frame.max.y + 3),
-                                     height: 2.5, string: direction.title.uppercased(), anchor: .middle))
+                                     height: 2.5, string: label, anchor: .middle))
+    }
+
+    /// A circle as a 72-sided polygon.
+    private static func circle(center: SIMD2<Double>, radius: Double, style: DrawingLineStyle,
+                               into out: inout DrawingLayout) {
+        let n = 72
+        for i in 0..<n {
+            let a0 = Double(i) / Double(n) * 2 * .pi, a1 = Double(i + 1) / Double(n) * 2 * .pi
+            out.lines.append(DrawingLine(a: center + SIMD2(cos(a0), sin(a0)) * radius,
+                                         b: center + SIMD2(cos(a1), sin(a1)) * radius, style: style))
+        }
+    }
+
+    /// A cutting-plane line: chain line across the view, thick ends, arrows
+    /// pointing the way the section looks, and the section letter just past
+    /// each arrow's tip.
+    private static func cuttingLine(from a: SIMD2<Double>, to b: SIMD2<Double>, sight: SIMD2<Double>,
+                                    label: String, into out: inout DrawingLayout) {
+        let length = simd_distance(a, b)
+        guard length > 1e-9 else { return }
+        let dir = (b - a) / length
+        let overshoot = 3.0
+        let ends = [a - dir * overshoot, b + dir * overshoot]
+        out.lines.append(DrawingLine(a: ends[0], b: ends[1], style: .chain))
+        for (end, inward) in [(ends[0], dir), (ends[1], -dir)] {
+            out.lines.append(DrawingLine(a: end, b: end + inward * Swift.min(6, length / 3), style: .visible))
+            let tip = end + sight * 6
+            out.lines.append(DrawingLine(a: end, b: tip, style: .visible))
+            let side = SIMD2(-sight.y, sight.x)
+            out.lines.append(DrawingLine(a: tip, b: tip - sight * 2.5 + side * 0.9, style: .visible))
+            out.lines.append(DrawingLine(a: tip, b: tip - sight * 2.5 - side * 0.9, style: .visible))
+            // Beside a sideways arrow; under (or over) an up/down one.
+            let height = 3.5
+            let at: SIMD2<Double>
+            let anchor: DrawingText.Anchor
+            if abs(sight.x) > abs(sight.y) {
+                at = tip + sight * 1.5 - SIMD2(0, height / 2)
+                anchor = sight.x > 0 ? .start : .end
+            } else {
+                at = tip + SIMD2(0, sight.y > 0 ? 1.5 : -1.5 - height * 1.4)
+                anchor = .middle
+            }
+            out.texts.append(DrawingText(position: at, height: height, string: label, anchor: anchor))
+        }
     }
 
     /// A linear dimension between two points, its line `offset` mm off to the

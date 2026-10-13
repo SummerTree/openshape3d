@@ -56,4 +56,53 @@ final class DrawingUITests: XCTestCase {
         app.buttons["DrawingDone"].tap()
         XCTAssertTrue(preview.waitForNonExistence(timeout: 5))
     }
+
+    /// Drawings v2: section and detail views appear on the sheet, and the
+    /// drawing is kept in the design — reopening it brings them back.
+    func testSectionAndDetailViewsAreSavedWithTheDrawing() throws {
+        let app = XCUIApplication()
+        app.launchEnvironment["OS3D_FRESH"] = "1"
+        app.launchEnvironment["OS3D_RESET_STORE"] = "1"
+        app.launchEnvironment["OS3D_DEBUG_SEED_HOLE"] = "1"
+        app.launch()
+
+        func openDrawing() {
+            XCTAssertTrue(app.buttons["ExportMenu"].waitForExistence(timeout: 10))
+            app.buttons["ExportMenu"].tap()
+            XCTAssertTrue(app.buttons["NewDrawingButton"].waitForExistence(timeout: 3))
+            app.buttons["NewDrawingButton"].tap()
+        }
+        func reveal(_ element: XCUIElement) {
+            XCTAssertTrue(element.waitForExistence(timeout: 5))
+            for _ in 0..<8 where !element.isHittable {
+                app.collectionViews.firstMatch.swipeUp(velocity: .slow)
+            }
+            XCTAssertTrue(element.isHittable)
+        }
+
+        openDrawing()
+        let preview = app.descendants(matching: .any)["DrawingPreview"]
+        XCTAssertTrue(preview.waitForExistence(timeout: 10))
+        XCTAssertEqual(preview.value as? String, "4 views", "Front, Top, Right, Isometric")
+
+        let addSection = app.buttons["DrawingAddSection"]
+        reveal(addSection)
+        addSection.tap()
+        let addDetail = app.buttons["DrawingAddDetail"]
+        reveal(addDetail)
+        addDetail.tap()
+        XCTAssertEqual(preview.value as? String, "6 views", "plus Section A-A and Detail B")
+        let shot = XCTAttachment(screenshot: app.screenshot())
+        shot.name = "drawing-section-detail"; shot.lifetime = .keepAlways; add(shot)
+
+        app.buttons["DrawingDone"].tap()
+        XCTAssertTrue(preview.waitForNonExistence(timeout: 5))
+
+        // Export ▸ Drawing… reopens the same drawing, views and all.
+        openDrawing()
+        XCTAssertTrue(preview.waitForExistence(timeout: 10))
+        XCTAssertEqual(preview.value as? String, "6 views")
+        app.buttons["DrawingDone"].tap()
+        XCTAssertTrue(preview.waitForNonExistence(timeout: 5))
+    }
 }

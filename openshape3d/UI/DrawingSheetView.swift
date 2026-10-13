@@ -2,10 +2,11 @@
 //  DrawingSheetView.swift
 //  openshape3d
 //
-//  File ▸ New Drawing (spec §15): a live preview of the drawing sheet —
-//  Front, Top and side views placed by the projection standard, an
-//  isometric, overall dimensions and a title block — with its options, and
-//  PDF / SVG / DXF export. The sheet always follows the current model.
+//  Drawings (spec §15): the design's saved drawings, one at a time — a live
+//  preview of the sheet (standard views placed by the projection standard,
+//  an isometric, section and detail views, overall dimensions and a title
+//  block) with its options, and PDF / SVG / DXF export. Views are moved by
+//  dragging them on the preview. The sheet always follows the current model.
 //
 
 import SwiftUI
@@ -13,10 +14,12 @@ import UniformTypeIdentifiers
 
 struct DrawingSheetView: View {
     @Bindable var viewModel: EditorViewModel
-    @Environment(\.dismiss) private var dismiss
     /// The file waiting in the save panel (presented from the sheet itself,
     /// so several formats can be saved without closing it).
     @State private var document: ExportDocument?
+    /// The view being dragged on the preview and its offset when the drag began.
+    @State private var drag: (key: String, start: SIMD2<Double>)?
+    @State private var confirmDelete = false
 
     var body: some View {
         NavigationStack {
@@ -27,7 +30,7 @@ struct DrawingSheetView: View {
                     if wide {
                         HStack(spacing: 0) {
                             preview(layout)
-                            options.frame(width: 320)
+                            options.frame(width: 340)
                         }
                     } else {
                         VStack(spacing: 0) {
@@ -48,12 +51,20 @@ struct DrawingSheetView: View {
                     viewModel.errorMessage = "Export failed — please try again."
                 }
             }
+            .confirmationDialog("Delete “\(viewModel.drawingOptions.title)”?", isPresented: $confirmDelete,
+                                titleVisibility: .visible) {
+                Button("Delete Drawing", role: .destructive) { viewModel.deleteActiveDrawing() }
+                    .accessibilityIdentifier("DrawingDeleteConfirm")
+            }
             .navigationTitle("Drawing")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Done") { dismiss() }
+                    Button("Done") { viewModel.closeDrawing() }
                         .accessibilityIdentifier("DrawingDone")
+                }
+                ToolbarItem(placement: .principal) {
+                    drawingMenu
                 }
                 ToolbarItem(placement: .primaryAction) {
                     Menu {
@@ -70,6 +81,39 @@ struct DrawingSheetView: View {
         }
     }
 
+    /// The design's drawings: switch, add, delete.
+    private var drawingMenu: some View {
+        Menu {
+            Picker("Drawings", selection: Binding(
+                get: { viewModel.activeDrawing?.id },
+                set: { if let id = $0 { viewModel.selectDrawing(id) } })) {
+                ForEach(viewModel.session.document.drawings) { drawing in
+                    Text(drawing.id == viewModel.activeDrawing?.id ? viewModel.drawingOptions.title : drawing.name)
+                        .tag(UUID?.some(drawing.id))
+                }
+            }
+            Divider()
+            Button {
+                viewModel.newDrawing(designName: viewModel.session.project.name)
+            } label: {
+                Label("New Drawing", systemImage: "plus")
+            }
+            .accessibilityIdentifier("DrawingNew")
+            Button(role: .destructive) {
+                confirmDelete = true
+            } label: {
+                Label("Delete Drawing", systemImage: "trash")
+            }
+            .accessibilityIdentifier("DrawingDelete")
+        } label: {
+            HStack(spacing: 4) {
+                Text(viewModel.drawingOptions.title).font(.headline)
+                Image(systemName: "chevron.down").font(.caption.weight(.semibold))
+            }
+        }
+        .accessibilityIdentifier("DrawingMenu")
+    }
+
     private func export(_ format: DrawingFileFormat) {
         guard let data = viewModel.exportDrawing(format) else { return }
         let type: UTType
@@ -83,52 +127,97 @@ struct DrawingSheetView: View {
 
     // MARK: - Preview
 
+    /// Paper placement in the preview: `k` points per sheet mm.
+    private struct Paper {
+        let k: Double
+        let origin: CGPoint
+        let height: Double
+
+        init(canvas: CGSize, sheet: SIMD2<Double>) {
+            let inset = 16.0
+            k = min((canvas.width - inset * 2) / sheet.x, (canvas.height - inset * 2) / sheet.y)
+            height = sheet.y * k
+            origin = CGPoint(x: (canvas.width - sheet.x * k) / 2, y: (canvas.height - height) / 2)
+        }
+
+        func point(_ p: SIMD2<Double>) -> CGPoint {
+            CGPoint(x: origin.x + p.x * k, y: origin.y + height - p.y * k)
+        }
+
+        func sheet(_ p: CGPoint) -> SIMD2<Double> {
+            SIMD2((p.x - origin.x) / k, (origin.y + height - p.y) / k)
+        }
+    }
+
     private func preview(_ layout: DrawingLayout) -> some View {
-        ZStack {
-            Color(white: 0.9)
-            Canvas { context, size in
-                let inset: CGFloat = 16
-                let k = min((size.width - inset * 2) / layout.size.x, (size.height - inset * 2) / layout.size.y)
-                let paper = CGSize(width: layout.size.x * k, height: layout.size.y * k)
-                let origin = CGPoint(x: (size.width - paper.width) / 2, y: (size.height - paper.height) / 2)
-                func pt(_ p: SIMD2<Double>) -> CGPoint {
-                    CGPoint(x: origin.x + p.x * k, y: origin.y + paper.height - p.y * k)
-                }
-                context.fill(Path(CGRect(origin: origin, size: paper)), with: .color(.white))
-                for style in [DrawingLineStyle.border, .thin, .hidden, .visible] {
-                    var path = Path()
-                    for line in layout.lines where line.style == style {
-                        path.move(to: pt(line.a))
-                        path.addLine(to: pt(line.b))
+        GeometryReader { geo in
+            let paper = Paper(canvas: geo.size, sheet: layout.size)
+            ZStack {
+                Color(white: 0.9)
+                Canvas { context, _ in
+                    let k = paper.k
+                    context.fill(Path(CGRect(origin: paper.origin,
+                                             size: CGSize(width: layout.size.x * k, height: paper.height))),
+                                 with: .color(.white))
+                    if let key = drag?.key, let frame = layout.placedViews[key] {
+                        let a = paper.point(frame.min - 2), b = paper.point(frame.max + 2)
+                        context.fill(Path(CGRect(x: a.x, y: b.y, width: b.x - a.x, height: a.y - b.y)),
+                                     with: .color(.accentColor.opacity(0.12)))
                     }
-                    let width = max(0.5, DrawingExport.width(style) * k)
-                    let dash: [CGFloat] = style == .hidden ? DrawingExport.hiddenDash.map { CGFloat($0) * k } : []
-                    context.stroke(path, with: .color(.black),
-                                   style: StrokeStyle(lineWidth: width, lineCap: .round, dash: dash))
+                    for style in DrawingLineStyle.drawOrder {
+                        var path = Path()
+                        for line in layout.lines where line.style == style {
+                            path.move(to: paper.point(line.a))
+                            path.addLine(to: paper.point(line.b))
+                        }
+                        let width = max(0.5, DrawingExport.width(style) * k)
+                        let dash = DrawingExport.dash(style).map { CGFloat($0 * k) }
+                        context.stroke(path, with: .color(.black),
+                                       style: StrokeStyle(lineWidth: width, lineCap: .round, dash: dash))
+                    }
+                    for text in layout.texts {
+                        let size = max(4, text.height * 1.4 * k)
+                        let resolved = context.resolve(Text(text.string).font(.system(size: size)))
+                        let anchor: UnitPoint = text.anchor == .start ? .bottomLeading
+                            : text.anchor == .middle ? .bottom : .bottomTrailing
+                        var c = context
+                        let at = paper.point(text.position)
+                        c.translateBy(x: at.x, y: at.y)
+                        c.rotate(by: .radians(-text.rotation))
+                        c.draw(resolved, at: .zero, anchor: anchor)
+                    }
                 }
-                for text in layout.texts {
-                    let size = max(4, text.height * 1.4 * k)
-                    let resolved = context.resolve(Text(text.string).font(.system(size: size)))
-                    let anchor: UnitPoint = text.anchor == .start ? .bottomLeading
-                        : text.anchor == .middle ? .bottom : .bottomTrailing
-                    var c = context
-                    let at = pt(text.position)
-                    c.translateBy(x: at.x, y: at.y)
-                    c.rotate(by: .radians(-text.rotation))
-                    c.draw(resolved, at: .zero, anchor: anchor)
+                if layout.isEmpty {
+                    Text(viewModel.drawingBodyIDs.isEmpty
+                         ? "Nothing to draw — the design has no visible bodies."
+                         : "Nothing to draw — the chosen bodies are gone.")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .padding(8)
+                        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
                 }
             }
-            if layout.isEmpty {
-                Text("Nothing to draw — the design has no visible bodies.")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                    .padding(8)
-                    .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
-            }
+            .contentShape(Rectangle())
+            .gesture(DragGesture(minimumDistance: 4)
+                .onChanged { value in moveView(value, layout: layout, paper: paper) }
+                .onEnded { _ in drag = nil })
         }
         .accessibilityElement(children: .ignore)
         .accessibilityIdentifier("DrawingPreview")
         .accessibilityLabel(layout.isEmpty ? "Empty drawing" : "Drawing at \(DrawingSheet.scaleLabel(layout.scale))")
+        .accessibilityValue("\(layout.placedViews.count) views")
+    }
+
+    /// Drag a view: the smallest view frame under the drag's start moves
+    /// with the finger.
+    private func moveView(_ value: DragGesture.Value, layout: DrawingLayout, paper: Paper) {
+        if drag == nil {
+            guard let key = DrawingSheet.view(at: paper.sheet(value.startLocation), in: layout) else { return }
+            drag = (key, viewModel.drawingViewOffsets[key] ?? .zero)
+        }
+        guard let drag else { return }
+        let delta = SIMD2(value.translation.width / paper.k, -value.translation.height / paper.k)
+        viewModel.drawingViewOffsets[drag.key] = drag.start + delta
     }
 
     // MARK: - Options
@@ -161,12 +250,143 @@ struct DrawingSheetView: View {
                     .accessibilityIdentifier("DrawingHiddenToggle")
                 Toggle("Overall Dimensions", isOn: $viewModel.drawingOptions.showDimensions)
                     .accessibilityIdentifier("DrawingDimensionsToggle")
+                if !viewModel.drawingViewOffsets.isEmpty {
+                    Button("Reset View Positions") { viewModel.drawingViewOffsets = [:] }
+                        .accessibilityIdentifier("DrawingResetPositions")
+                }
             }
+            bodiesSection
+            sectionViews
+            detailViews
             Section {
-                Text("Front, Top and Right views of the visible bodies, laid out by the standard. The drawing follows the model as it changes.")
+                Text("Drag a view on the sheet to move it; Top and the side view stay lined up with Front. The drawing is saved in the design and follows the model as it changes.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
+        }
+    }
+
+    private var bodiesSection: some View {
+        Section("Bodies") {
+            let chosen = Set(viewModel.drawingBodyIDs)
+            Button {
+                viewModel.drawingBodyIDs = []
+            } label: {
+                checkRow("All Visible Bodies", checked: chosen.isEmpty)
+            }
+            .accessibilityIdentifier("DrawingAllBodies")
+            ForEach(viewModel.session.document.bodies) { body in
+                Button {
+                    var ids = viewModel.drawingBodyIDs
+                    if let i = ids.firstIndex(of: body.id) { ids.remove(at: i) } else { ids.append(body.id) }
+                    viewModel.drawingBodyIDs = ids
+                } label: {
+                    checkRow(body.name, checked: chosen.contains(body.id))
+                }
+                .accessibilityIdentifier("DrawingBody_\(body.name)")
+            }
+        }
+    }
+
+    private func checkRow(_ title: String, checked: Bool) -> some View {
+        HStack {
+            Text(title).foregroundStyle(.primary)
+            Spacer()
+            if checked { Image(systemName: "checkmark").foregroundStyle(Color.accentColor) }
+        }
+        .contentShape(Rectangle())
+        .accessibilityAddTraits(checked ? .isSelected : [])
+    }
+
+    private var sectionViews: some View {
+        Section("Section Views") {
+            ForEach($viewModel.drawingSections) { $section in
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack {
+                        Text("Section \(section.label)-\(section.label)").font(.subheadline.weight(.semibold))
+                        Spacer()
+                        Button(role: .destructive) {
+                            viewModel.drawingSections.removeAll { $0.id == section.id }
+                        } label: {
+                            Image(systemName: "trash")
+                        }
+                        .buttonStyle(.borderless)
+                        .accessibilityIdentifier("DrawingSectionDelete_\(section.label)")
+                    }
+                    Picker("Cut On", selection: $section.base) {
+                        ForEach(DrawingSectionView.bases, id: \.self) { Text($0.title).tag($0) }
+                    }
+                    Picker("Line", selection: $section.cut) {
+                        ForEach(DrawingSectionView.Cut.allCases, id: \.self) { Text($0.title).tag($0) }
+                    }
+                    .pickerStyle(.segmented)
+                    .accessibilityIdentifier("DrawingSectionCut_\(section.label)")
+                    HStack {
+                        Text("Position")
+                        Slider(value: $section.position, in: 0...1)
+                            .accessibilityIdentifier("DrawingSectionPosition_\(section.label)")
+                    }
+                    Toggle("Look the Other Way", isOn: $section.flipped)
+                        .accessibilityIdentifier("DrawingSectionFlip_\(section.label)")
+                }
+                .padding(.vertical, 4)
+            }
+            Button {
+                viewModel.addDrawingSection()
+            } label: {
+                Label("Add Section View", systemImage: "square.split.diagonal")
+            }
+            .accessibilityIdentifier("DrawingAddSection")
+        }
+    }
+
+    private var detailViews: some View {
+        Section("Detail Views") {
+            ForEach($viewModel.drawingDetails) { $detail in
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack {
+                        Text("Detail \(detail.label)").font(.subheadline.weight(.semibold))
+                        Spacer()
+                        Button(role: .destructive) {
+                            viewModel.drawingDetails.removeAll { $0.id == detail.id }
+                        } label: {
+                            Image(systemName: "trash")
+                        }
+                        .buttonStyle(.borderless)
+                        .accessibilityIdentifier("DrawingDetailDelete_\(detail.label)")
+                    }
+                    Picker("Of", selection: $detail.base) {
+                        ForEach(DrawingDetailView.bases, id: \.self) { Text($0.title).tag($0) }
+                    }
+                    Picker("Magnify", selection: $detail.magnification) {
+                        ForEach(DrawingDetailView.magnifications, id: \.self) { m in
+                            Text("\(Int(m))×").tag(m)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .accessibilityIdentifier("DrawingDetailMagnification_\(detail.label)")
+                    HStack {
+                        Text("Across").frame(width: 64, alignment: .leading)
+                        Slider(value: $detail.center.x, in: 0...1)
+                    }
+                    HStack {
+                        Text("Up").frame(width: 64, alignment: .leading)
+                        Slider(value: $detail.center.y, in: 0...1)
+                    }
+                    HStack {
+                        Text("Size").frame(width: 64, alignment: .leading)
+                        Slider(value: $detail.radius, in: 0.05...0.5)
+                            .accessibilityIdentifier("DrawingDetailSize_\(detail.label)")
+                    }
+                }
+                .padding(.vertical, 4)
+            }
+            Button {
+                viewModel.addDrawingDetail()
+            } label: {
+                Label("Add Detail View", systemImage: "plus.magnifyingglass")
+            }
+            .accessibilityIdentifier("DrawingAddDetail")
         }
     }
 }

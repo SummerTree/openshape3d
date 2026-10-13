@@ -27,11 +27,24 @@ nonisolated enum DrawingExport {
         case .hidden: 0.35
         case .thin: 0.18
         case .border: 0.7
+        case .chain: 0.25
+        case .hatch: 0.18
         }
     }
 
     /// Hidden lines: 3 mm dashes, 1.5 mm gaps.
     static let hiddenDash: [Double] = [3, 1.5]
+    /// Chain lines: 8 mm dashes split by dots.
+    static let chainDash: [Double] = [8, 1.5, 0.5, 1.5]
+
+    /// The dash pattern of `style` (sheet mm), empty for solid lines.
+    static func dash(_ style: DrawingLineStyle) -> [Double] {
+        switch style {
+        case .hidden: hiddenDash
+        case .chain: chainDash
+        default: []
+        }
+    }
 
     // MARK: - SVG
 
@@ -44,10 +57,11 @@ nonisolated enum DrawingExport {
         <g fill="none" stroke="#000000" stroke-linecap="round">
 
         """
-        for style in [DrawingLineStyle.border, .thin, .hidden, .visible] {
+        for style in DrawingLineStyle.drawOrder {
             let lines = layout.lines.filter { $0.style == style }
             guard !lines.isEmpty else { continue }
-            let dash = style == .hidden ? " stroke-dasharray=\"\(hiddenDash.map(num).joined(separator: " "))\"" : ""
+            let pattern = dash(style)
+            let dash = pattern.isEmpty ? "" : " stroke-dasharray=\"\(pattern.map(num).joined(separator: " "))\""
             out += "<path stroke-width=\"\(num(width(style)))\"\(dash) d=\""
             for line in lines {
                 out += "M\(num(line.a.x)) \(num(h - line.a.y))L\(num(line.b.x)) \(num(h - line.b.y))"
@@ -71,11 +85,11 @@ nonisolated enum DrawingExport {
     static func pdf(_ layout: DrawingLayout) -> Data {
         let k = 72 / 25.4 // mm → points
         var content = "q\n1 J 1 j\n"
-        for style in [DrawingLineStyle.border, .thin, .hidden, .visible] {
+        for style in DrawingLineStyle.drawOrder {
             let lines = layout.lines.filter { $0.style == style }
             guard !lines.isEmpty else { continue }
             content += "\(num(width(style) * k)) w\n"
-            content += style == .hidden ? "[\(hiddenDash.map { num($0 * k) }.joined(separator: " "))] 0 d\n" : "[] 0 d\n"
+            content += "[\(dash(style).map { num($0 * k) }.joined(separator: " "))] 0 d\n"
             for line in lines {
                 content += "\(num(line.a.x * k)) \(num(line.a.y * k)) m \(num(line.b.x * k)) \(num(line.b.y * k)) l\n"
             }
@@ -122,7 +136,8 @@ nonisolated enum DrawingExport {
     // MARK: - DXF
 
     /// DXF R12, in millimetres at sheet scale: layers VISIBLE, HIDDEN (dashed
-    /// HIDDEN linetype), DIMENSIONS, BORDER and TEXT.
+    /// HIDDEN linetype), CUTTING (CENTER linetype), HATCH, DIMENSIONS, BORDER
+    /// and TEXT.
     static func dxf(_ layout: DrawingLayout) -> String {
         var out = ""
         func pair(_ code: Int, _ value: String) { out += "\(code)\n\(value)\n" }
@@ -134,14 +149,18 @@ nonisolated enum DrawingExport {
         pair(0, "ENDSEC")
 
         pair(0, "SECTION"); pair(2, "TABLES")
-        pair(0, "TABLE"); pair(2, "LTYPE"); pair(70, "2")
+        pair(0, "TABLE"); pair(2, "LTYPE"); pair(70, "3")
         pair(0, "LTYPE"); pair(2, "CONTINUOUS"); pair(70, "0"); pair(3, "Solid line")
         pair(72, "65"); pair(73, "0"); pair(40, "0.0")
         pair(0, "LTYPE"); pair(2, "HIDDEN"); pair(70, "0"); pair(3, "Hidden __ __ __")
         pair(72, "65"); pair(73, "2"); pair(40, num(hiddenDash[0] + hiddenDash[1]))
         pair(49, num(hiddenDash[0])); pair(49, num(-hiddenDash[1]))
+        pair(0, "LTYPE"); pair(2, "CENTER"); pair(70, "0"); pair(3, "Center ____ _ ____ _")
+        pair(72, "65"); pair(73, "\(chainDash.count)"); pair(40, num(chainDash.reduce(0, +)))
+        for (i, length) in chainDash.enumerated() { pair(49, num(i.isMultiple(of: 2) ? length : -length)) }
         pair(0, "ENDTAB")
         let layers: [(String, String)] = [("VISIBLE", "CONTINUOUS"), ("HIDDEN", "HIDDEN"),
+                                          ("CUTTING", "CENTER"), ("HATCH", "CONTINUOUS"),
                                           ("DIMENSIONS", "CONTINUOUS"), ("BORDER", "CONTINUOUS"),
                                           ("TEXT", "CONTINUOUS")]
         pair(0, "TABLE"); pair(2, "LAYER"); pair(70, "\(layers.count)")
@@ -159,6 +178,8 @@ nonisolated enum DrawingExport {
             case .hidden: layer = "HIDDEN"
             case .thin: layer = "DIMENSIONS"
             case .border: layer = "BORDER"
+            case .chain: layer = "CUTTING"
+            case .hatch: layer = "HATCH"
             }
             pair(0, "LINE"); pair(8, layer)
             pair(10, num(line.a.x)); pair(20, num(line.a.y)); pair(30, "0")

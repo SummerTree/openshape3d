@@ -2096,25 +2096,46 @@ Center Mark, Intersection Mark. Notes (leader or
 free, 1200 chars), images. Per-sheet properties: projection angle first/third,
 units/precision/decimal separator, line widths per class. Hidden-line toggle
 per view; Cmd+R updates the drawing from the model.
-**Status:** 🟡 partial (first version, 2026-10-13) — Export ▸ Drawing… (and
-Command Search "New Drawing") opens a full-screen drawing of the visible
-bodies: Front as the base view, Top and Right placed by the standard (ANSI
-third angle: Top above, Right to the right; ISO first angle: Top below,
-Right to the left), an optional isometric in the free cell, hidden lines
-dashed (`DrawingProjection`: feature edges plus silhouettes, sampled and
-tested against the tessellation; seams a mesh boolean leaves across flat
-faces and duplicate pieces are dropped), overall width/height/depth
-dimensions in the display unit, a border and a title block (title, scale,
-sheet, projection, date). Options: title, sheet size (A4, A3, Letter,
+**Status:** 🟡 partial (v2, 2026-10-13) — drawings are saved in the design
+(`SavedDrawing`, `DesignDocument.drawings`, the `Project.drawingsData` JSON
+column and the `.os3d` archive, UUIDs remapped on import). Export ▸
+Drawing… reopens the last drawing (or makes one); File ▸ New Drawing
+(Command Search) always makes a new one of the selected bodies (every
+visible body when none is selected). The sheet's title menu switches
+drawings, adds and deletes them; its edits are one undo step ("Edit
+Drawing") when the sheet closes. Each drawing has: Front as the base view,
+Top and Right placed by the standard (ANSI third angle: Top above, Right to
+the right; ISO first angle: Top below, Right to the left), an optional
+isometric, hidden lines dashed (`DrawingProjection`: feature edges plus
+silhouettes, sampled and tested against the tessellation; seams a mesh
+boolean leaves across flat faces and duplicate pieces are dropped), overall
+width/height/depth dimensions in the display unit, a border and a title
+block (title, scale, sheet, projection, date). **Bodies:** all visible, or
+a chosen list. **Section views** (`DrawingViewKit`): a cutting line on
+Front, Top or Right, vertical or horizontal, at any position, either way of
+looking; the bodies are clipped by the plane, the cut faces closed with
+`SectionCapKit` caps and hatched at 45°, and the view drawn like the
+standard view that looks the same way (upright, unmirrored), titled
+"SECTION A-A". The base view shows the cutting plane as a chain line with
+thick ends, arrows in the direction of sight and the letter at each end.
+**Detail views:** a circle on Front, Top, Right or the isometric (centre
+and size), magnified 2×/4×/5×/10× the sheet scale, titled "DETAIL B (4:1)",
+with the circle and letter on the base view. Section and detail views stack
+in a column to the right; the automatic scale makes room for them. Letters
+skip I, O and Q. **Moving views:** drag a view on the preview; Top and the
+side view follow Front and move on their own only along their shared axis;
+"Reset View Positions". Options: title, sheet size (A4, A3, Letter,
 Tabloid; landscape), standard, scale (automatic = largest standard scale
-that fits, or a fixed one), isometric / hidden lines / dimensions. Exports
-PDF, SVG and DXF (layers VISIBLE, HIDDEN with a HIDDEN linetype,
-DIMENSIONS, BORDER, TEXT) written by the app itself (`DrawingExport`), so
-iPad, Mac and web files match. The drawing is regenerated from the model
-whenever it is opened or changed. Missing: drawings saved in the project,
-choosing bodies, placing and moving views, section and detail views,
-custom projection angles, interactive dimensions and annotations,
-centerlines and marks, title-block layouts, multiple sheets, DWG.
+that fits, or fixed), isometric / hidden lines / dimensions. Exports PDF,
+SVG and DXF (layers VISIBLE, HIDDEN with a HIDDEN linetype, CUTTING with a
+CENTER linetype, HATCH, DIMENSIONS, BORDER, TEXT) written by the app itself
+(`DrawingExport`), so iPad, Mac and web files match. Drawings are
+regenerated from the model whenever shown; projections are cached between
+option changes and drags. Missing: free placement of new views from any
+angle (custom projection angles, extra projected views), cutting lines
+through picked points / stepped sections, interactive dimensions and
+annotations, centerlines and marks, title-block layouts, multiple sheets,
+DWG.
 **Feasibility:** [mesh-kernel OK] for a first version (orthographic
 projection + silhouette/hidden-line from meshes; associativity with the model
 [needs history engine]; production-grade HLR quality benefits from a B-rep
