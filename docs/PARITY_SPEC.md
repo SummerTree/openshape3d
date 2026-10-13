@@ -1095,6 +1095,33 @@ heal (today those simply error).
 purpose, since healing means EXTENDING adjacent surfaces and a mesh has no
 surfaces to extend.
 
+### 4.17 Imprint Edge
+
+**Spec:** Imprint a sketch's edges onto the faces of a body: each face the
+sketch lies on is split along its curves, so a region of a face becomes a
+face of its own — push/pull it into a boss or a pocket, offset it, or give it
+its own appearance — without first building and subtracting a cutter body.
+**Status:** 🟡 partial — Modify ▸ Imprint Edge (and the `model.imprint`
+command): select one body, choose the tool, tap the sketch (a fill or any of
+its curves). The kernel splits the faces with `BRepAlgoAPI_Splitter`, keeping
+lines, arcs and fit splines exact (`ImprintKit`, `OCCTKernel.imprintResult…`),
+and records an `.imprint(body:sketches:)` history node that replays when the
+sketch or anything upstream changes. The render mesh carries a per-triangle
+face channel (`RenderMesh.faceRegions`, saved as a trailer on the mesh blob),
+so picking stops at the imprinted line and the line draws as an edge. Pushing
+a region in cuts a pocket the shape of the region: an inward push/pull now
+subtracts the face's own prism instead of slicing the body at the moved plane
+(which also fixes pushing one face of a stepped part down). A boolean keeps
+the target's coplanar seams, so pulling one imprinted region leaves the
+others in place. The sketch auto-hides once used. Agent op `feature.imprint`.
+Covered by `ImprintTests`, `ImprintUITests`; on the web by
+`scripts/imprint-smoke.mjs`.
+**Missing:** imprinting body edges (not only sketches); projecting a sketch
+that is not on the face (the curves must lie in the face); curved faces are
+split but only planar regions push/pull; an imprinted face is a mesh-path
+face for ops that have no B-rep route (move/scale/rotate face).
+**Feasibility:** [needs B-rep kernel] — done on OCCT.
+
 ---
 
 # 5. Transform menu

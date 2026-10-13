@@ -1705,6 +1705,17 @@ struct EditorView: View {
                         .controlSize(.small)
                         .keyboardShortcut(.cancelAction)
                     }
+                } else if case .pickingImprintSketch = viewModel.mode {
+                    statusPill(
+                        icon: "square.dashed.inset.filled",
+                        text: "Tap a sketch on the body to imprint its edges"
+                    ) {
+                        Button("Cancel") {
+                            viewModel.cancelImprint()
+                        }
+                        .controlSize(.small)
+                        .keyboardShortcut(.cancelAction)
+                    }
                 } else if case .pickingSplitCutter = viewModel.mode {
                     statusPill(
                         icon: "square.split.1x2",

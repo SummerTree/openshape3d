@@ -185,6 +185,7 @@ nonisolated struct CommandRegistry: Sendable {
         AppCommand(id: "model.loft", title: "Loft", category: .modeling, chord: KeyChord("w")),
         AppCommand(id: "model.deleteFace", title: "Delete Face", category: .modeling, chord: nil),
         AppCommand(id: "model.replaceFace", title: "Replace Face", category: .modeling, chord: nil),
+        AppCommand(id: "model.imprint", title: "Imprint Edge", category: .modeling, chord: nil),
         AppCommand(id: "model.offsetFace", title: "Offset Face", category: .modeling, chord: nil),
         AppCommand(id: "model.offsetEdge", title: "Offset Edge", category: .modeling, chord: nil),
         AppCommand(id: "model.wrap", title: "Wrap - Emboss", category: .modeling, chord: nil),

@@ -427,13 +427,13 @@ typedef NS_ENUM(NSInteger, OCCTOpCode) {
                               status:(nullable OCCTOpStatus *)status;
 
 /// The tool solid of a planar-face push/pull, for the caller to fuse or cut
-/// with the existing boolean (`FeatureGraph.evalPushPull`). `distance > 0`:
-/// the picked face's own prism along its outward normal — exact, so a face
-/// bounded by arcs pulls out a true cylinder wall, not facets. `distance < 0`:
-/// a box covering everything on the outward side of the face's plane moved
-/// by `distance` — the same "truncate at the moved plane" the mesh path
-/// (`SplitKit`) does, so replays keep their shape. `point` must lie on the
-/// face. Nil when no PLANAR face with this outward normal is under the point.
+/// with the existing boolean (`FeatureGraph.evalPushPull`): the picked face's
+/// own prism, `distance` along its outward normal — exact, so a face bounded
+/// by arcs pulls out a true cylinder wall, not facets. A negative distance
+/// builds the prism INTO the body for the caller to subtract, so only the
+/// material under the face goes, not everything above the moved plane (an
+/// imprinted region pushes in as a pocket). `point` must lie on the face.
+/// Nil when no PLANAR face with this outward normal is under the point.
 + (nullable OCCTShape *)pushPullToolForShape:(OCCTShape *)shape
                                       pointX:(double)px pointY:(double)py pointZ:(double)pz
                                      normalX:(double)nx normalY:(double)ny normalZ:(double)nz
@@ -492,6 +492,19 @@ typedef NS_ENUM(NSInteger, OCCTOpCode) {
                               tolerance:(double)tolerance
                                  status:(nullable OCCTOpStatus *)status
                                 history:(nullable OCCTShapeHistory *)history;
+
+/// Imprint Edge (spec §4.17): split the faces of `shape` along the curves in
+/// `segments` — `extrudedShapeWithOuterLoop:`'s segment records, plane-local
+/// to `basis`, but any set of curves, connected or not — so a region of a
+/// face becomes a face of its own that push/pull and Offset Face can move.
+/// Only curves lying IN a face divide it. Nil with `noTargetMatched` when no
+/// face was divided. `history` reports which input face each piece came from.
++ (nullable OCCTShape *)imprintedShape:(OCCTShape *)shape
+                              segments:(NSData *)segments
+                                 basis:(OCCTPlaneBasis *)basis
+                             tolerance:(double)tolerance
+                                status:(nullable OCCTOpStatus *)status
+                               history:(nullable OCCTShapeHistory *)history;
 
 /// Per-kernel-face geometry, straight from the shape: packed doubles, 10
 /// per face — `index, kindCode, normal xyz, centroid xyz, area, extra` —

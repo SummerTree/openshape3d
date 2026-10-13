@@ -136,6 +136,9 @@ nonisolated enum AgentExecOp: Sendable, Equatable {
     /// limitation as the interactive tool, for the same reason.
     case replaceFace(body: BodyID, face: Int, targetOrigin: SIMD3<Double>,
                      targetNormal: SIMD3<Double>, flip: Bool)
+    /// Imprint Edge (spec §4.17): split the body's faces along the curves of
+    /// the sketches that lie on them.
+    case imprint(body: BodyID, sketches: [SketchID])
     /// The Material sheet's Apply: one appearance over a set of bodies, one
     /// undo step. Not a feature — appearance lives on the body, not in the
     /// graph — so it goes through `SetMaterialCommand` like the sheet does.
@@ -164,7 +167,7 @@ nonisolated enum AgentExec {
         "feature.fillet", "feature.chamfer", "feature.shell",
         "feature.sweep", "feature.loft", "feature.pushPull",
         "feature.moveFace", "feature.scaleFace", "feature.rotateFace",
-        "feature.deleteFace", "feature.replaceFace", "feature.draftFace",
+        "feature.deleteFace", "feature.replaceFace", "feature.draftFace", "feature.imprint",
         "body.setMaterial", "item.setHidden", "view.section",
     ]
 
@@ -204,6 +207,7 @@ nonisolated enum AgentExec {
         case "feature.deleteFace": return parseDeleteFace(args)
         case "feature.draftFace":  return parseDraftFace(args)
         case "feature.replaceFace": return parseReplaceFace(args)
+        case "feature.imprint":    return parseImprint(args)
         case "body.setMaterial":   return parseSetMaterial(args)
         case "item.setHidden":     return parseSetHidden(args)
         case "view.section":       return parseSection(args)
@@ -677,6 +681,24 @@ nonisolated enum AgentExec {
             let body = BodyID(raw: try uuid(a, "bodyID"))
             let faces = try edgeIndices(a, "faces", allowEmpty: false)
             return .success(.deleteFace(body: body, faces: faces))
+        } catch let e as AgentExecError { return .failure(e) } catch { return .failure(unexpected) }
+    }
+
+    private static func parseImprint(_ a: [String: Any]) -> Result<AgentExecOp, AgentExecError> {
+        do {
+            let body = BodyID(raw: try uuid(a, "bodyID"))
+            var sketches: [SketchID] = []
+            if a["sketchID"] != nil { sketches.append(SketchID(raw: try uuid(a, "sketchID"))) }
+            for raw in a["sketchIDs"] as? [String] ?? [] {
+                guard let id = UUID(uuidString: raw) else {
+                    throw AgentExecError(code: "bad_args", message: "sketchIDs: '\(raw)' is not a UUID.")
+                }
+                sketches.append(SketchID(raw: id))
+            }
+            guard !sketches.isEmpty else {
+                throw AgentExecError(code: "bad_args", message: "feature.imprint needs a sketchID (or sketchIDs).")
+            }
+            return .success(.imprint(body: body, sketches: sketches))
         } catch let e as AgentExecError { return .failure(e) } catch { return .failure(unexpected) }
     }
 

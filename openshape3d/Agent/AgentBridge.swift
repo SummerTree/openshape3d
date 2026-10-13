@@ -477,6 +477,16 @@ final class AgentBridge {
                                    targetOrigin: origin, targetNormal: normal,
                                    flip: flip, on: viewModel)
 
+        case let .imprint(bodyID, sketchIDs):
+            if let bad = missingBody([bodyID], session) { return bad }
+            if let missing = sketchIDs.first(where: { id in !session.document.sketches.contains { $0.id == id } }) {
+                return execMissing("sketch", missing.raw.uuidString)
+            }
+            return record(FeatureNode(
+                name: "Imprint Edge",
+                kind: .imprint(body: bodyRef(bodyID, session), sketches: sketchIDs),
+                outputBodyIDs: [bodyID]), on: viewModel)
+
         case let .setMaterial(bodies, material):
             if let bad = missingBody(bodies, session) { return bad }
             session.perform(SetMaterialCommand(bodyIDs: Set(bodies), material: material.clamped,

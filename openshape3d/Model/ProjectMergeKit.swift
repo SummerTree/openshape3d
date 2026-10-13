@@ -329,6 +329,8 @@ nonisolated enum ProjectMergeKit {
                     targetOrigin: PointWrapper(targetOrigin.point + t),
                     targetNormal: targetNormal,
                     flip: flip)
+            case let .imprint(body, sketchIDs):
+                return .imprint(body: remap(body), sketches: sketchIDs.map(newSketch))
             }
         }
 

@@ -5268,6 +5268,81 @@ final class EditorViewModel {
         }
     }
 
+    // MARK: - Imprint Edge (spec §4.17)
+
+    /// Arm Imprint Edge on the one selected body: the next tap on a sketch
+    /// splits the body's faces along that sketch's curves.
+    func beginImprint() {
+        guard selection.count == 1, let target = selection.first,
+              session.document.body(with: target) != nil
+        else {
+            errorMessage = "Select one body, then choose Imprint Edge and tap the sketch to imprint."
+            return
+        }
+        cancelTransientPicks()
+        cancelTool()
+        mode = .pickingImprintSketch(target: target)
+    }
+
+    func cancelImprint() {
+        if case let .pickingImprintSketch(target) = mode {
+            mode = .selected(target)
+        }
+    }
+
+    /// The sketch under the tap: a fill first (the larger target), then any
+    /// curve within pick tolerance — an open line has no fill.
+    private func imprintSketchHit(ray: Ray) -> SketchID? {
+        if let fill = profileHit(ray: ray) { return fill.sketchID }
+        let sketches = session.document.sketches
+        guard let hit = SketchHitTester.nearestEntity(
+            along: ray, in: sketches,
+            tolerance: SketchHitTester.screenPickTolerance(worldUnitsPerPoint: worldPerPoint))
+        else { return nil }
+        return sketches.first { $0.entities.contains { $0.id == hit.entity.id } }?.id
+    }
+
+    private func handleImprintTap(target: BodyID, ray: Ray) {
+        guard let sketchID = imprintSketchHit(ray: ray) else { return }
+        applyImprint(body: target, sketch: sketchID)
+    }
+
+    /// Split `bodyID`'s faces along the sketch's curves — one undo step, and
+    /// an `.imprint` history node when a feature owns the body.
+    @discardableResult
+    func applyImprint(body bodyID: BodyID, sketch sketchID: SketchID) -> Bool {
+        guard let source = session.document.body(with: bodyID),
+              let sketch = session.document.sketches.first(where: { $0.id == sketchID })
+        else { return false }
+        let after: Body
+        switch ImprintKit.imprint(source, sketches: [sketch], revision: 0) {
+        case let .success(outcome):
+            after = outcome.body
+        case let .failure(failure):
+            errorMessage = failure.message
+            return false
+        }
+        var commands: [DocumentCommand] = [
+            ReplaceBodyCommand(title: "Imprint Edge", before: source, after: after),
+        ]
+        if let owner = featureNode(owning: bodyID) {
+            commands.append(AppendFeatureCommand(node: FeatureNode(
+                name: "Imprint Edge",
+                kind: .imprint(body: BodyRef(producer: owner.id, bodyID: bodyID), sketches: [sketchID]),
+                outputBodyIDs: [bodyID])))
+        }
+        // The sketch is used up, as an extrude's is (spec §11): hide it so
+        // the next tap lands on the new faces, not on its fill.
+        if !sketch.isHidden {
+            commands.append(SetItemVisibilityCommand(item: .sketch(sketchID), isHidden: true))
+        }
+        session.perform(CompositeCommand(title: "Imprint Edge", commands: commands))
+        mode = .selected(bodyID)
+        selection = [bodyID]
+        session.save()
+        return true
+    }
+
     /// Replace the body with the first half and add the second as a new body
     /// (one undo step — Keep Originals is what undo restores); both halves
     /// end up selected. Halves are named "<name> A" / "<name> B" so the Items
@@ -5985,7 +6060,8 @@ final class EditorViewModel {
         switch mode {
         case .editingPrimitive(let id) where !liveIDs.contains(id),
              .selected(let id) where !liveIDs.contains(id),
-             .pickingSplitCutter(let id) where !liveIDs.contains(id):
+             .pickingSplitCutter(let id) where !liveIDs.contains(id),
+             .pickingImprintSketch(let id) where !liveIDs.contains(id):
             mode = .idle
         case .sketching(let id, _)
             where !session.document.sketches.contains(where: { $0.id == id }):
@@ -6485,6 +6561,8 @@ final class EditorViewModel {
             handleFeatureProfileTap(featureID: featureID, ray: ray)
         case .pickingSplitCutter(let target):
             handleSplitCutterTap(target: target, ray: ray)
+        case .pickingImprintSketch(let target):
+            handleImprintTap(target: target, ray: ray)
         case .patterning:
             break // parameters live in the pattern bar; Apply/Cancel there
         case .rotatingAroundAxis:
@@ -7719,6 +7797,7 @@ final class EditorViewModel {
         // Split/pattern/transform picks never start an extrude; unclaimed
         // drags orbit (rotate-axis angle drags are claimed upstream).
         if case .pickingSplitCutter = mode { return false }
+        if case .pickingImprintSketch = mode { return false }
         if case .patterning = mode { return false }
         if case .rotatingAroundAxis = mode { return false }
         if case .translating = mode { return false }
@@ -16276,7 +16355,8 @@ final class EditorViewModel {
                 mode = .idle
             case .pickingBooleanTool(_, let target) where bodyIDs.contains(target):
                 mode = .idle
-            case .pickingSplitCutter(let target) where bodyIDs.contains(target):
+            case .pickingSplitCutter(let target) where bodyIDs.contains(target),
+                 .pickingImprintSketch(let target) where bodyIDs.contains(target):
                 mode = .idle
             default:
                 break
@@ -16463,7 +16543,8 @@ final class EditorViewModel {
                 mode = .idle
             case .pickingBooleanTool(_, let target) where target == id:
                 mode = .idle
-            case .pickingSplitCutter(let target) where target == id:
+            case .pickingSplitCutter(let target) where target == id,
+                 .pickingImprintSketch(let target) where target == id:
                 mode = .idle
             default:
                 break
@@ -17788,6 +17869,8 @@ final class EditorViewModel {
             return "Delete Face (\(faces.count) face\(faces.count == 1 ? "" : "s"))"
         case let .replaceFace(_, _, _, flip):
             return flip ? "Replace Face (flipped)" : "Replace Face"
+        case let .imprint(_, sketches):
+            return sketches.count == 1 ? "Imprint Edge" : "Imprint Edge (\(sketches.count) sketches)"
         }
     }
 

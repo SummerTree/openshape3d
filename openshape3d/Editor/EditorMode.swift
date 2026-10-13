@@ -76,6 +76,9 @@ enum EditorMode: Equatable {
     /// Split armed: waiting for a cutter tap — a world/construction plane
     /// tile, or a sketch profile fill (through-extruded cutter).
     case pickingSplitCutter(target: BodyID)
+    /// Imprint Edge armed (spec §4.17): waiting for a tap on a sketch — a
+    /// curve or a fill — whose curves split the target's faces.
+    case pickingImprintSketch(target: BodyID)
     /// Re-picking the BODY operand of an existing mirror / pattern /
     /// transform node (History "Edit Body"): the next tapped body becomes
     /// the node's operand and the rebuild replays it.

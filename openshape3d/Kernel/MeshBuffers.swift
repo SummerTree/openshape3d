@@ -21,6 +21,12 @@ nonisolated struct RenderMesh: Sendable, Equatable {
     /// that rebuilds a mesh drops them, which is right: a boolean or blend
     /// has no way to carry a photo across the new faces.
     var texcoords: [SIMD2<Float>]? = nil
+    /// Per-triangle face id, present only on a body whose faces carry an
+    /// Imprint Edge (spec §4.17): the OCCT face each triangle tessellates.
+    /// Face picking stops at a change of id, so an imprinted region is its own
+    /// face even though it is coplanar with its neighbour. Every op that
+    /// rebuilds the mesh drops it, as it does `texcoords`.
+    var faceRegions: [UInt32]? = nil
 
     var triangleCount: Int { indices.count / 3 }
 
@@ -38,7 +44,12 @@ nonisolated struct RenderMesh: Sendable, Equatable {
 
     static func == (lhs: RenderMesh, rhs: RenderMesh) -> Bool {
         lhs.indices == rhs.indices && lhs.positions == rhs.positions && lhs.normals == rhs.normals
-            && lhs.texcoords == rhs.texcoords
+            && lhs.texcoords == rhs.texcoords && lhs.faceRegions == rhs.faceRegions
+    }
+
+    /// `faceRegions` when it is usable — one entry per triangle.
+    var validFaceRegions: [UInt32]? {
+        faceRegions.flatMap { $0.count == triangleCount ? $0 : nil }
     }
 }
 
@@ -114,6 +125,10 @@ nonisolated enum MeshQuantize {
 /// Layout (little-endian): "OS3D" magic, u32 version, u32 vertexCount,
 /// u32 indexCount, positions (f32×3 × vertexCount), normals (f32×3 × vertexCount),
 /// indices (u32 × indexCount).
+///
+/// A mesh with `faceRegions` appends a trailer after everything else: "FREG"
+/// then one u32 per triangle. Older builds stop reading before it, so the
+/// blob stays readable everywhere (they just lose the imprint).
 nonisolated enum MeshBlob {
     static let magic: UInt32 = 0x4F533344 // "OS3D"
     /// v1: positions, normals, indices. v2 (2026-09-04) appends per-vertex
@@ -122,6 +137,7 @@ nonisolated enum MeshBlob {
     /// can still read.
     static let version: UInt32 = 1
     static let texturedVersion: UInt32 = 2
+    static let faceRegionMagic: UInt32 = 0x46524547 // "FREG"
 
     enum BlobError: Error {
         case badMagic
@@ -160,6 +176,10 @@ nonisolated enum MeshBlob {
                 withUnsafeBytes(of: t.x) { data.append(contentsOf: $0) }
                 withUnsafeBytes(of: t.y) { data.append(contentsOf: $0) }
             }
+        }
+        if let regions = mesh.validFaceRegions {
+            withUnsafeBytes(of: faceRegionMagic.littleEndian) { data.append(contentsOf: $0) }
+            regions.withUnsafeBytes { data.append(contentsOf: $0) }
         }
         return data
     }
@@ -228,6 +248,15 @@ nonisolated enum MeshBlob {
                 texcoords.append(SIMD2(u, v))
             }
             mesh.texcoords = texcoords
+        }
+        // Optional trailer; anything that is not exactly one well-formed
+        // region table is ignored rather than failing the whole mesh.
+        let regionBytes = 4 + mesh.triangleCount * 4
+        if data.count - offset == regionBytes, (try? read(UInt32.self)) == faceRegionMagic {
+            var regions = [UInt32]()
+            regions.reserveCapacity(mesh.triangleCount)
+            for _ in 0..<mesh.triangleCount { regions.append(try read(UInt32.self)) }
+            mesh.faceRegions = regions
         }
         return mesh
     }

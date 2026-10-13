@@ -87,6 +87,7 @@ design. Launching the app is `docs/AI_MODELING_SETUP.md`.
 | `feature.draftFace` | `bodyID`, `face`, `angleDegrees` (±89); the neutral plane defaults to the ground |
 | `feature.deleteFace` | `bodyID`, `faces[]` — the kernel heals over them (removes a fillet or a boss) |
 | `feature.replaceFace` | `bodyID`, `face`, `targetOrigin`, `targetNormal` (world plane) |
+| `feature.imprint` | `bodyID`, `sketchID` (or `sketchIDs`) — splits the faces the sketch lies on, so a region push/pulls on its own |
 | `body.setMaterial` | `bodyIDs[]`, `preset` (Steel, Aluminum, Brass, Plastic Matte, Plastic Gloss, Rubber, Wood) or `color` `[r,g,b]` 0…1; optional `metallic`, `roughness` |
 | `item.setHidden` | `ids[]` and/or `allSketches: true`; optional `hidden` (true) |
 | `command.run` | `id` — a view, `edit.undo`, `edit.redo` (MCP; over curl it is `POST /v1/command`) |

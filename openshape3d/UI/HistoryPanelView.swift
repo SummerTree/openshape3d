@@ -175,6 +175,7 @@ struct HistoryPanelView: View {
         case .shell: return "cube.transparent"
         case .deleteFace: return "square.slash"
         case .replaceFace: return "arrow.up.and.down.square"
+        case .imprint: return "square.dashed.inset.filled"
         }
     }
 

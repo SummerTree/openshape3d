@@ -57,7 +57,7 @@ extension CommandRegistry {
         "model.move", "transform.scaleUniform", "transform.pattern",
 
         // Direct modeling — the face tools shipped 2026-08-29.
-        "model.deleteFace", "model.replaceFace",
+        "model.deleteFace", "model.replaceFace", "model.imprint",
 
         // The launcher itself: X and Cmd+F open Command Search.
         "app.commandSearch", "app.commandSearchAlt",
@@ -185,6 +185,10 @@ extension EditorViewModel {
         case "model.replaceFace":
             guard !session.document.bodies.isEmpty else { return false }
             beginReplaceFace()
+            return true
+        case "model.imprint":
+            guard selection.count == 1 else { return false }
+            beginImprint()
             return true
 
         // MARK: The launcher itself

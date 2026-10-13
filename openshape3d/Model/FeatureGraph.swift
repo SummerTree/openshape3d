@@ -216,6 +216,11 @@ nonisolated enum FeatureKind: Codable, Sendable {
     /// and the target is routinely on a different one.
     case replaceFace(
         face: FaceRef, targetOrigin: PointWrapper, targetNormal: PointWrapper, flip: Bool)
+    /// Imprint Edge (spec §4.17): split `body`'s faces along the curves of
+    /// `sketches` that lie in them, so a region of a face becomes a face of
+    /// its own (to push/pull, offset or paint). B-rep only. The sketches stay
+    /// live inputs: editing one re-imprints.
+    case imprint(body: BodyRef, sketches: [SketchID])
 }
 
 /// A node in the feature graph: stable identity, display name, its operation, a
@@ -274,6 +279,8 @@ nonisolated extension FeatureNode {
             for ref in sections { ids.insert(ref.sketchID) }
         case let .mirror(_, plane, _):
             addPlane(plane)
+        case let .imprint(_, sketches):
+            ids.formUnion(sketches)
         case .primitive, .boolean, .transform, .pattern, .pushPull, .moveFace,
              .scaleFace, .rotateFace, .draftFace, .chamfer, .fillet, .shell,
              .deleteFace, .replaceFace:
@@ -296,7 +303,7 @@ nonisolated extension FeatureNode {
             add(plane)
         case .primitive, .loft, .boolean, .transform, .pattern, .pushPull, .moveFace,
              .scaleFace, .rotateFace, .draftFace, .chamfer, .fillet, .shell,
-             .deleteFace, .replaceFace:
+             .deleteFace, .replaceFace, .imprint:
             break
         }
         return ids
@@ -318,7 +325,7 @@ nonisolated extension FeatureNode {
             return [target.bodyID] + tools.map(\.bodyID)
         case let .transform(body, _), let .mirror(body, _, _), let .pattern(body, _),
              let .chamfer(body, _, _), let .fillet(body, _, _), let .shell(body, _, _),
-             let .deleteFace(body, _):
+             let .deleteFace(body, _), let .imprint(body, _):
             return [body.bodyID]
         case let .pushPull(face, _, _), let .moveFace(face, _), let .scaleFace(face, _),
              let .rotateFace(face, _, _), let .draftFace(face, _, _, _),
@@ -595,6 +602,8 @@ nonisolated extension FeatureGraph {
                 node, faceRef: face, targetOrigin: targetOrigin.point,
                 targetNormal: targetNormal.point, flip: flip,
                 into: &state, next: nextRevision)
+        case let .imprint(body, sketchIDs):
+            evalImprint(node, bodyRef: body, sketchIDs: sketchIDs, into: &state, next: nextRevision)
 
         case let .transform(body, delta):
             evalTransform(node, bodyRef: body, delta: delta, into: &state, next: nextRevision)
@@ -1834,6 +1843,54 @@ nonisolated extension FeatureGraph {
         }
         state.put(result, table: newTable)
         if !outNames.isEmpty { state.kernelNames[result.id] = outNames }
+    }
+
+    // MARK: Imprint Edge (spec §4.17)
+
+    /// Split the body's faces along the sketches' curves. The sketch plane is
+    /// carried into the body's frame, so a body moved after it was imprinted
+    /// still meets the curves where the user drew them.
+    private func evalImprint(
+        _ node: FeatureNode,
+        bodyRef: BodyRef,
+        sketchIDs: [SketchID],
+        into state: inout EvalState,
+        next nextRevision: () -> UInt64
+    ) {
+        guard let body = state.bodies[bodyRef.bodyID] else {
+            state.errors[node.id] = .brokenRef("imprint body unresolved")
+            return
+        }
+        var sketches: [Sketch] = []
+        for sid in sketchIDs {
+            guard let sketch = state.sketches.first(where: { $0.id == sid }) else {
+                state.errors[node.id] = .brokenRef("imprint sketch missing")
+                return
+            }
+            sketches.append(sketch)
+        }
+        let result: Body
+        let ancestries: [ShapeAncestry]
+        switch ImprintKit.imprint(body, sketches: sketches, revision: nextRevision()) {
+        case let .success(outcome):
+            (result, ancestries) = outcome
+        case let .failure(failure):
+            state.errors[node.id] = .kernelFailure("imprint: \(failure.message)")
+            return
+        }
+        // Each split face keeps the identity of the face it came from.
+        var names = state.kernelNames[body.id] ?? [:]
+        for ancestry in ancestries {
+            names = ElementNaming.composeNames(operation: node.id, ancestry: ancestry,
+                                               inputNames: [names])
+        }
+        var newTable = state.naming.faceTable(for: result, createdBy: node.id, scheme: .generic)
+        if !names.isEmpty {
+            newTable = ElementNaming.attach(names, to: newTable,
+                                            channel: result.render.faceRegions ?? [])
+        }
+        state.put(result, table: newTable)
+        if !names.isEmpty { state.kernelNames[result.id] = names }
     }
 
     // MARK: Replace Face (direct modeling, spec §4.12)
