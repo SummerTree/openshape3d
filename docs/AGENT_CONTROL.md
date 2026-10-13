@@ -270,6 +270,16 @@ path; pull it with `scripts/fetch_captures.sh`, replay it with
 `openshape3dTests/Fixtures/Captures/` as a regression fixture. 409
 `nothing_to_capture` when no body carries a brep.
 
+### `POST /v1/spacemouse` (development builds only)
+
+Body `{"axes":[tx,ty,tz,rx,ry,rz],"seconds":0.5,"buttons":0}` — raw device
+counts (±350 is full deflection; HID frame: X right, Y toward the user,
+Z down). Feeds `SpaceMouseDriver` the reports a 3Dconnexion SpaceMouse
+would send: the axes held for `seconds` at 60 ticks a second, released,
+then `buttons` (a bit mask: 1 Isometric, 2 Fit, 4 Top, …) pressed and let
+go. The whole report-to-camera path of spec §7.5, without the device;
+check the result with `/v1/screenshot` or `/v1/project`.
+
 ### `GET /v1/archive`
 
 The open design as `.os3d` archive bytes (`application/octet-stream`) — the

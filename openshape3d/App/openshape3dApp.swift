@@ -13,6 +13,9 @@ struct openshape3dApp: App {
         // it on in Settings ▸ AI Assistant (or, in DEBUG, a developer launched
         // with OS3D_AGENT=1). Off by default — see `AgentServer`.
         AIControl.shared.launch()
+        #if targetEnvironment(macCatalyst)
+        SpaceMouseHIDMonitor.shared.start()
+        #endif
     }
 
     var sharedModelContainer: ModelContainer = {

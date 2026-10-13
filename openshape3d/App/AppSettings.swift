@@ -365,6 +365,12 @@ final class AppSettings {
         static let startWith = "os3d.startWith"
         static let lastOpenedDesign = "os3d.lastOpenedDesign"
         static let defaultSplineType = "os3d.defaultSplineType"
+        static let spaceMouse = "os3d.spaceMouse"
+    }
+
+    /// Settings ▸ SpaceMouse (spec §7.5), stored as one JSON value.
+    var spaceMouse: SpaceMouseSettings {
+        didSet { defaults.set(try? JSONEncoder().encode(spaceMouse), forKey: Key.spaceMouse) }
     }
 
     /// Interface ▸ Selection Extension.
@@ -565,6 +571,8 @@ final class AppSettings {
         startWith = defaults.string(forKey: Key.startWith).flatMap(StartWith.init) ?? .gallery
         lastOpenedDesign = defaults.object(forKey: Key.lastOpenedDesign) as? Date
         defaultSplineType = defaults.string(forKey: Key.defaultSplineType).flatMap(SplineType.init) ?? .fit
+        spaceMouse = defaults.data(forKey: Key.spaceMouse)
+            .flatMap { try? JSONDecoder().decode(SpaceMouseSettings.self, from: $0) } ?? SpaceMouseSettings()
     }
 
     // Under `SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor`, this class is

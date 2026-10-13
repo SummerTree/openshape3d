@@ -1579,7 +1579,22 @@ conversions, grid lock, grid on other planes.
 SpaceMouse Settings under the Views menu; Wacom pen displays/tablets act as
 pen input on desktop (pen draws/selects, touch/mouse navigates — same split
 as Apple Pencil).
-**Status:** ❌ not implemented — no external-controller or tablet input path.
+**Status:** 🟡 partial — **SpaceMouse built 2026-10-13** on the Mac and the
+web: `Interaction/SpaceMouse.swift` parses the HID reports (six-axis report
+1, older split 1 + 2, buttons 3; or IOKit element values) and integrates
+them each frame into turntable motion in 3Dconnexion's object mode (push =
+pan, pull/push = zoom, tilt = elevation, twist = spin; roll left out so the
+view stays upright), with a dead zone and a precision curve. Buttons: Menu =
+Isometric, Fit = Fit View, the view keys = the standard views. Settings ▸
+SpaceMouse: speed, Rotation / Pan and Zoom, Dominant Axis Only, an Invert
+per axis; Views ▸ SpaceMouse Settings… while one is connected. The Mac reads
+it through IOKit HID (`App/SpaceMouseHIDMonitor.swift`; USB and Bluetooth
+sandbox entitlements), the web through WebHID (Chrome/Edge,
+`editor/spacemouse.ts`). iPadOS gives apps no access to the device, so the
+iPad has none. Tests: `SpaceMouseTests`, `/v1/spacemouse` (DEBUG),
+web `spacemouse-smoke.mjs`. Directions are set from the HID convention, not
+yet confirmed on a physical device — each axis can be inverted. Missing:
+Wacom (pen input on the desktop).
 **Feasibility:** [platform/service] (3Dconnexion/Wacom SDK + OS integration)
 
 ---

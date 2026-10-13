@@ -1972,6 +1972,11 @@ struct EditorView: View {
                         }
                         Button("Field of View…") { viewModel.showFieldOfViewSheet = true }
                             .accessibilityIdentifier("FieldOfViewButton")
+                        // Spec §7.5: under Views while a SpaceMouse is connected.
+                        if SpaceMouseDriver.shared.deviceName != nil {
+                            Button("SpaceMouse Settings…") { showSettings = true }
+                                .accessibilityIdentifier("SpaceMouseSettingsButton")
+                        }
                         Menu("Grid") {
                             Picker("Grid Position", selection: Binding(
                                 get: { viewModel.gridPosition },

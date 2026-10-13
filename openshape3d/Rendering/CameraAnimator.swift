@@ -42,6 +42,12 @@ final class CameraAnimator {
         displayLink = link
     }
 
+    /// Ends a flight where it is — the user took the camera (SpaceMouse).
+    func stop() {
+        displayLink?.invalidate()
+        displayLink = nil
+    }
+
     @objc private func step() {
         guard let renderer, let start, let target else {
             displayLink?.invalidate()
