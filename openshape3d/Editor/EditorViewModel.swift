@@ -27,12 +27,16 @@ extension ViewportCameraControl {
     func animateToNearestOrthoView() {}
     func setFieldOfView(degrees: Double) {}
     var currentGridSpacing: Double { 1 }
+    func moveCameraHeadOn(to plane: SketchPlane, fromFront: Bool) { moveCameraHeadOn(to: plane) }
 }
 
 protocol ViewportCameraControl: AnyObject {
     func fitScene()
     /// Animate to look head-on at a sketch plane.
     func moveCameraHeadOn(to plane: SketchPlane)
+    /// Head-on from the plane's +normal side, whichever side the camera is
+    /// on now (2D Section View looks at the cut from the removed side).
+    func moveCameraHeadOn(to plane: SketchPlane, fromFront: Bool)
     /// Animate to a standard view (Views popover, spec §7.3).
     func animateToStandardView(_ view: StandardView)
     /// View ▸ Rotate View: turn the camera by these angles (degrees).
@@ -1285,10 +1289,43 @@ final class EditorViewModel {
             quadPlane.origin += keep * 1e-3
             appendPlaneQuad(
                 quadPlane, size: section.size,
-                fill: SIMD4(0.0, 0.52, 1.0, 0.10),
+                fill: SIMD4(0.0, 0.52, 1.0, section.sectionOnly ? 0.04 : 0.10),
                 border: SIMD4(0.0, 0.52, 1.0, 0.85),
                 into: &scene
             )
+            // Caps: each body's cut drawn solid, in its own color (a distinct
+            // hue while it still has the default color), red where bodies
+            // overlap. Nudged to the kept side like the rectangle.
+            let cutBodies = scene.bodies.filter {
+                !$0.isTranslucent && session.document.body(with: $0.id) != nil
+            }
+            let caps = sectionCaps(plane: plane, bodies: cutBodies)
+            let interfering = SectionCapKit.interfering(caps.map(\.cap.regions))
+            let nudge = SIMD3<Float>(keep * 2e-3)
+            for (i, entry) in caps.enumerated() where !entry.cap.outline.isEmpty {
+                let color: SIMD4<Float>
+                if interfering.contains(i) {
+                    color = SectionCapKit.interferenceColor
+                } else if let material = session.document.body(with: entry.id)?.material {
+                    var own = SIMD4<Float>(material.baseColor)
+                    own.w = 1
+                    color = own
+                } else {
+                    let index = session.document.bodies.firstIndex { $0.id == entry.id } ?? i
+                    color = SectionCapKit.defaultColor(index: index)
+                }
+                if !entry.cap.triangles.isEmpty {
+                    scene.profileFills.append(SketchFillBatch(
+                        triangles: entry.cap.triangles.map { $0 + nudge }, color: color))
+                }
+                scene.sketchLines.append(SketchLineBatch(
+                    segments: entry.cap.outline.map { $0 + nudge },
+                    color: SIMD4(0.12, 0.13, 0.16, 1)))
+            }
+            if section.sectionOnly {
+                let cut = Set(cutBodies.map(\.id))
+                scene.bodies.removeAll { cut.contains($0.id) }
+            }
             // The section plane's own pull arrow comes from `pullArrowState`.
         }
 
@@ -6048,6 +6085,18 @@ final class EditorViewModel {
         var flipped = false
         /// On-screen plane rectangle size (sized to the scene at pick time).
         var size: Double = 8
+        /// Section Only: draw just the cut faces, not the bodies.
+        var sectionOnly = false
+        /// 2D Section View: head-on and orthographic. Holds the projection
+        /// to restore on leaving it.
+        var orthographicBefore2D: Bool?
+        var isTwoD: Bool { orthographicBefore2D != nil }
+
+        /// The side of the plane that stays visible.
+        var keptNormal: SIMD3<Double> {
+            let n = simd_normalize(basePlane.normal)
+            return flipped ? -n : n
+        }
 
         /// The base plane shifted by the current offset.
         var plane: SketchPlane {
@@ -6081,13 +6130,102 @@ final class EditorViewModel {
     /// Flip badge: switch which side of the plane stays visible.
     func flipSection() {
         sectionState?.flipped.toggle()
+        if sectionState?.isTwoD == true { lookNormalToSection() }
     }
 
     /// Section off: restore the full model.
     func endSection() {
+        if let before = sectionState?.orthographicBefore2D, before != orthographicEnabled {
+            setOrthographic(before)
+        }
         sectionState = nil
         sectionDragAnchor = nil
+        sectionCapCache = nil
         cancelSectionPlanePick()
+    }
+
+    /// Tools ▸ Section View: pick a plane, or turn the section off.
+    func toggleSectionView() {
+        if sectionState == nil {
+            beginSectionPlanePick()
+        } else {
+            endSection()
+        }
+    }
+
+    /// Edit Section View: pick a new plane; the current cut stays until then.
+    func editSectionView() {
+        guard sectionState != nil else { return }
+        beginSectionPlanePick()
+    }
+
+    /// Section Only: hide the bodies and keep only their cut faces.
+    func toggleSectionOnly() {
+        sectionState?.sectionOnly.toggle()
+    }
+
+    /// 2D Section View: look straight at the cut, orthographic; again to
+    /// return to the previous projection.
+    func toggle2DSectionView() {
+        guard var section = sectionState else { return }
+        if let before = section.orthographicBefore2D {
+            section.orthographicBefore2D = nil
+            sectionState = section
+            if before != orthographicEnabled { setOrthographic(before) }
+            return
+        }
+        section.orthographicBefore2D = orthographicEnabled
+        sectionState = section
+        if !orthographicEnabled { setOrthographic(true) }
+        lookNormalToSection()
+    }
+
+    /// Normal to Section: the camera faces the cut from the removed side.
+    func lookNormalToSection() {
+        guard let section = sectionState else { return }
+        // A plane whose +normal points at the removed side, so the head-on
+        // camera sits there looking at the cut.
+        let keep = section.keptNormal
+        var facing = section.plane
+        if simd_dot(facing.normal, keep) > 0 { facing.yAxis = -facing.yAxis }
+        cameraControl?.moveCameraHeadOn(to: facing, fromFront: true)
+    }
+
+    /// Cut faces for the current section, memoized on the plane and the
+    /// bodies' mesh revisions and placements.
+    @ObservationIgnored
+    private var sectionCapCache: (key: [String], caps: [(id: BodyID, cap: SectionCapKit.Cap)])?
+
+    private func sectionCaps(plane: SketchPlane, bodies: [BodyDrawable]) -> [(id: BodyID, cap: SectionCapKit.Cap)] {
+        let key = ["\(plane.origin)\(plane.normal)"] + bodies.map {
+            "\($0.id)/\($0.meshRevision)/\($0.modelMatrix)"
+        }
+        if let cache = sectionCapCache, cache.key == key { return cache.caps }
+        let caps = bodies.map { body in
+            (id: body.id, cap: SectionCapKit.cap(
+                positions: body.renderMesh.positions, indices: body.renderMesh.indices,
+                matrix: simd_double4x4(columns: (
+                    SIMD4<Double>(body.modelMatrix.columns.0), SIMD4<Double>(body.modelMatrix.columns.1),
+                    SIMD4<Double>(body.modelMatrix.columns.2), SIMD4<Double>(body.modelMatrix.columns.3))),
+                plane: plane))
+        }
+        sectionCapCache = (key, caps)
+        return caps
+    }
+
+    /// The bodies the section cuts interfere where: ids whose cut overlaps
+    /// another body's (spec §16.1 interference highlighting).
+    var sectionInterferingBodyIDs: Set<BodyID> {
+        guard let section = sectionState else { return [] }
+        let bodies = sceneBodiesForSection
+        let caps = sectionCaps(plane: section.plane, bodies: bodies)
+        let hits = SectionCapKit.interfering(caps.map(\.cap.regions))
+        return Set(hits.map { caps[$0].id })
+    }
+
+    /// The document's visible, opaque bodies as drawn — what a section cuts.
+    private var sceneBodiesForSection: [BodyDrawable] {
+        scene.bodies.filter { !$0.isTranslucent && session.document.body(with: $0.id) != nil }
     }
 
     /// Tap routing while Section View waits for its plane: a world or
@@ -6107,14 +6245,25 @@ final class EditorViewModel {
         }
         // Taps that miss keep the picker armed (Cancel dismisses it).
         guard let plane = picked else { return }
+        applySectionPlane(plane)
+    }
 
+    /// Section the model by `plane` (a pick, or the agent's `view.section`).
+    func applySectionPlane(_ plane: SketchPlane) {
         // Rectangle sized to cover the model from wherever the plane sits.
         var size = 8.0
         if let bounds = scene.worldBounds {
             size = max(size, Double(simd_length(bounds.max - bounds.min)) * 1.4)
         }
-        sectionState = SectionState(basePlane: plane, size: size)
+        var section = SectionState(basePlane: plane, size: size)
+        if let previous = sectionState {
+            // Edit Section View keeps the display options.
+            section.sectionOnly = previous.sectionOnly
+            section.orthographicBefore2D = previous.orthographicBefore2D
+        }
+        sectionState = section
         mode = .idle
+        if section.isTwoD { lookNormalToSection() }
     }
 
     /// A drag starting near the section pull arrow moves the plane along its

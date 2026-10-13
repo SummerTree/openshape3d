@@ -1389,6 +1389,31 @@ struct EditorView: View {
                         }
                         .accessibilityIdentifier("SectionFlip")
                         Button {
+                            viewModel.toggle2DSectionView()
+                        } label: {
+                            Label("2D", systemImage: "square.split.diagonal")
+                                .font(.subheadline.weight(.semibold))
+                        }
+                        .tint(viewModel.sectionState?.isTwoD == true ? Color.blue : Color.secondary)
+                        .accessibilityIdentifier("Section2D")
+                        .accessibilityValue(viewModel.sectionState?.isTwoD == true ? "on" : "off")
+                        Button {
+                            viewModel.toggleSectionOnly()
+                        } label: {
+                            Label("Section Only", systemImage: "square.dashed")
+                                .font(.subheadline.weight(.semibold))
+                        }
+                        .tint(viewModel.sectionState?.sectionOnly == true ? Color.blue : Color.secondary)
+                        .accessibilityIdentifier("SectionOnly")
+                        .accessibilityValue(viewModel.sectionState?.sectionOnly == true ? "on" : "off")
+                        Button {
+                            viewModel.editSectionView()
+                        } label: {
+                            Label("Edit", systemImage: "pencil")
+                                .font(.subheadline.weight(.semibold))
+                        }
+                        .accessibilityIdentifier("SectionEdit")
+                        Button {
                             viewModel.endSection()
                         } label: {
                             Label("Section Off", systemImage: "xmark")
@@ -1901,6 +1926,17 @@ struct EditorView: View {
                             Button("Flip Section") {
                                 viewModel.flipSection()
                             }
+                            Button("Edit Section View") {
+                                viewModel.editSectionView()
+                            }
+                            Toggle("2D Section View", isOn: Binding(
+                                get: { viewModel.sectionState?.isTwoD == true },
+                                set: { _ in viewModel.toggle2DSectionView() }
+                            ))
+                            Toggle("Section Only", isOn: Binding(
+                                get: { viewModel.sectionState?.sectionOnly == true },
+                                set: { _ in viewModel.toggleSectionOnly() }
+                            ))
                             Button("Section Off") {
                                 viewModel.endSection()
                             }

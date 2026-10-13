@@ -145,6 +145,10 @@ nonisolated enum AgentExecOp: Sendable, Equatable {
     /// `/v1/state` lists no sketch ids, and a finished model usually wants
     /// all its profiles out of the way.
     case setHidden(ids: [UUID], allSketches: Bool, hidden: Bool)
+    /// Section View (spec §16.1): cut by the plane through `origin` with
+    /// `normal` (the kept side), or turn the section off. A display state,
+    /// not an edit — no undo step.
+    case section(origin: SIMD3<Double>, normal: SIMD3<Double>?, sectionOnly: Bool, twoD: Bool)
 }
 
 // MARK: - Parsing
@@ -161,7 +165,7 @@ nonisolated enum AgentExec {
         "feature.sweep", "feature.loft", "feature.pushPull",
         "feature.moveFace", "feature.scaleFace", "feature.rotateFace",
         "feature.deleteFace", "feature.replaceFace", "feature.draftFace",
-        "body.setMaterial", "item.setHidden",
+        "body.setMaterial", "item.setHidden", "view.section",
     ]
 
     static let booleanKinds = ["union", "subtract", "intersect"]
@@ -202,6 +206,7 @@ nonisolated enum AgentExec {
         case "feature.replaceFace": return parseReplaceFace(args)
         case "body.setMaterial":   return parseSetMaterial(args)
         case "item.setHidden":     return parseSetHidden(args)
+        case "view.section":       return parseSection(args)
         default:
             return .failure(.init(code: "unknown_op",
                                   message: "No exec op '\(op)'. Known ops: \(opNames.joined(separator: ", "))."))
@@ -929,6 +934,23 @@ nonisolated enum AgentExec {
                 if key == "metallic" { spec.metallic = v } else { spec.roughness = v }
             }
             return .success(.setMaterial(bodies: bodies, material: spec))
+        } catch let e as AgentExecError { return .failure(e) } catch { return .failure(unexpected) }
+    }
+
+    private static func parseSection(_ a: [String: Any]) -> Result<AgentExecOp, AgentExecError> {
+        do {
+            if a["off"] as? Bool == true {
+                return .success(.section(origin: .zero, normal: nil, sectionOnly: false, twoD: false))
+            }
+            let origin = try vector3(a, "origin", default: .zero)
+            let normal = try vector3(a, "normal", default: .zero)
+            guard simd_length(normal) > 1e-9 else {
+                return .failure(.init(code: "missing_normal",
+                                      message: "args.normal [x, y, z] is required (the side that stays visible), or pass \"off\": true."))
+            }
+            return .success(.section(origin: origin, normal: simd_normalize(normal),
+                                     sectionOnly: a["sectionOnly"] as? Bool ?? false,
+                                     twoD: a["twoD"] as? Bool ?? false))
         } catch let e as AgentExecError { return .failure(e) } catch { return .failure(unexpected) }
     }
 

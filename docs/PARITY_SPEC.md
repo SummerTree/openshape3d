@@ -2079,14 +2079,25 @@ overlapping/interpenetrating bodies render RED while sectioned, and
 scrubbing the plane across the model serves as a collision-verification
 pass — the red disappears once clearance is achieved (Interference
 analysis; Wall Clock pt 2). Saved Views can store a section.
-**Status:** 🟡 partial — Views → Section arms a plane pick (world +
-construction plane tiles); the chosen plane clips the lit, edge, fill, and
-sketch-line shaders (`SectionPlaneState` → per-fragment discard), with a
-drag arrow to move the plane along its normal and Flip / Section Off
-badges (also mirrored in the Views menu). Cut faces are left OPEN (no cap
-fills), interior back faces render shaded. Missing: caps with per-body
-section colors, rotate/tilt handles, 2D Section View, Section Only,
-interference highlighting, sketch-on-datum while sectioned, Saved Views.
+**Status:** 🟡 partial — Views → Section (also Command Search "Section
+View") arms a plane pick (world + construction plane tiles, or a planar
+face); the chosen plane clips the lit, edge, fill, and sketch-line shaders
+(`SectionPlaneState` → per-fragment discard), with a drag arrow to move the
+plane along its normal. **Caps:** each body's mesh is sliced by the plane
+(`SectionCapKit`: crossing segments chained into loops, nested into regions
+with holes, triangulated) and the cut drawn solid with a dark outline — a
+distinct hue per body while it has the default color, its own color when
+custom-colored. **Interference:** bodies whose cuts overlap (positive area —
+touching bodies don't count) both turn red, so dragging the plane through an
+assembly checks clearance. Badges and Views-menu entries: Flip, **2D**
+(2D Section View: orthographic, camera head-on to the cut from the removed
+side; again returns to the previous projection), **Section Only** (hides
+the bodies, keeps the cuts), **Edit** (Edit Section View: pick a new plane,
+keeping the options) and Section Off. The agent bridge's `view.section` exec
+sets a section by origin/normal and reports the interfering body ids.
+Missing: rotate/tilt handles, fill patterns (hatching), background edges
+only in 2D (bodies stay shaded behind the cut), sketch-on-datum while
+sectioned, Saved Views.
 **Feasibility:** [mesh-kernel OK] (clip plane + cap rendering in the Metal
 renderer)
 

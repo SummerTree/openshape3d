@@ -499,6 +499,18 @@ final class AgentBridge {
             }
             for item in items { session.perform(SetItemVisibilityCommand(item: item, isHidden: hidden)) }
             return execOK(viewModel, ["count": items.count, "undoSteps": items.count])
+
+        case let .section(origin, normal, sectionOnly, twoD):
+            guard let normal else {
+                viewModel.endSection()
+                return execOK(viewModel, ["section": false, "undoSteps": 0])
+            }
+            viewModel.endSection()
+            viewModel.applySectionPlane(SketchPlane.readable(origin: origin, normal: normal))
+            if sectionOnly { viewModel.toggleSectionOnly() }
+            if twoD { viewModel.toggle2DSectionView() }
+            let interfering = viewModel.sectionInterferingBodyIDs.map(\.raw.uuidString).sorted()
+            return execOK(viewModel, ["section": true, "interferingBodyIDs": interfering, "undoSteps": 0])
         }
     }
 

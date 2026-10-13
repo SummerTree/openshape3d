@@ -128,4 +128,49 @@ final class SectionDisplayUITests: XCTestCase {
         XCTAssertFalse(app.staticTexts["Choose a section plane"].exists)
         XCTAssertFalse(flip.exists)
     }
+
+    /// 2D Section View, Section Only and Edit Section View (spec §16.1):
+    /// the toggles report their state, and picking a new plane keeps them.
+    func testSectionOnly2DAndEditKeepOptions() throws {
+        let app = XCUIApplication()
+        app.launchEnvironment["OS3D_FRESH"] = "1"
+        app.launchEnvironment["OS3D_RESET_STORE"] = "1"
+        app.launch()
+
+        let window = app.windows.firstMatch
+        let viewsButton = app.buttons["ViewsMenu"]
+        XCTAssertTrue(viewsButton.waitForExistence(timeout: 10))
+        viewsButton.tap()
+        XCTAssertTrue(app.buttons["Section"].waitForExistence(timeout: 3))
+        app.buttons["Section"].tap()
+        XCTAssertTrue(app.staticTexts["Choose a section plane"].waitForExistence(timeout: 3))
+        let zxTile = window.coordinate(withNormalizedOffset: CGVector(dx: 0.77, dy: 0.49))
+        zxTile.tap()
+
+        let twoD = app.buttons["Section2D"], only = app.buttons["SectionOnly"]
+        XCTAssertTrue(twoD.waitForExistence(timeout: 3))
+        XCTAssertEqual(twoD.value as? String, "off")
+        only.tap()
+        XCTAssertEqual(only.value as? String, "on", "Section Only turns on")
+
+        // Edit Section View re-arms the picker without dropping the section.
+        app.buttons["SectionEdit"].tap()
+        XCTAssertTrue(app.staticTexts["Choose a section plane"].waitForExistence(timeout: 3))
+        XCTAssertTrue(only.exists, "the current section stays until a new plane is picked")
+        zxTile.tap()
+        XCTAssertTrue(app.staticTexts["Choose a section plane"].waitForNonExistence(timeout: 3),
+                      "A new plane is picked")
+        XCTAssertEqual(only.value as? String, "on", "the new plane keeps Section Only")
+
+        twoD.tap()
+        XCTAssertEqual(twoD.value as? String, "on", "2D Section View turns on")
+        twoD.tap()
+        XCTAssertEqual(twoD.value as? String, "off", "and off again")
+
+        // The Views menu mirrors the options.
+        viewsButton.tap()
+        XCTAssertTrue(app.buttons["Edit Section View"].waitForExistence(timeout: 3))
+        app.buttons["Section Off"].firstMatch.tap()
+        XCTAssertFalse(twoD.waitForExistence(timeout: 1), "Section Off drops the badges")
+    }
 }

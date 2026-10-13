@@ -72,6 +72,7 @@ extension CommandRegistry {
         "view.rotateDown15", "view.rotateLeft45", "view.rotateRight45", "view.rotateUp45",
         "view.rotateDown45", "view.fieldOfView", "view.lockGrid",
         "items.showHidden", "items.invert", "items.reveal", "view.zebra", "view.curvature",
+        "view.section", "view.editSection", "view.section2D", "view.sectionOnly", "view.sectionFlip",
     ]
 
     /// Catalog entries that advertise a chord but have no editor entry point
@@ -267,6 +268,19 @@ extension EditorViewModel {
         case "items.showHidden":   showHiddenBodies();          return true
         case "items.invert":       invertBodyVisibility();      return true
         case "items.reveal":       revealInItems();             return true
+        case "view.section":       toggleSectionView();         return true
+        case "view.editSection":
+            guard sectionState != nil else { return false }
+            editSectionView(); return true
+        case "view.section2D":
+            guard sectionState != nil else { return false }
+            toggle2DSectionView(); return true
+        case "view.sectionOnly":
+            guard sectionState != nil else { return false }
+            toggleSectionOnly(); return true
+        case "view.sectionFlip":
+            guard sectionState != nil else { return false }
+            flipSection(); return true
 
         default:
             return false

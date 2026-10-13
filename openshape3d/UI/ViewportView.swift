@@ -1013,6 +1013,10 @@ final class ViewportCoordinator: NSObject, ViewportGestureDelegate, ViewportCame
     }
 
     func moveCameraHeadOn(to plane: SketchPlane) {
+        moveCameraHeadOn(to: plane, fromFront: false)
+    }
+
+    func moveCameraHeadOn(to plane: SketchPlane, fromFront: Bool) {
         guard let renderer else { return }
         var target = renderer.camera
         let origin = plane.origin
@@ -1020,7 +1024,7 @@ final class ViewportCoordinator: NSObject, ViewportGestureDelegate, ViewportCame
         let n = plane.normal
         var normal = simd_normalize(SIMD3<Float>(Float(n.x), Float(n.y), Float(n.z)))
         // Keep the camera on its current side of the plane.
-        if simd_dot(normal, renderer.camera.position - originF) < 0 {
+        if !fromFront, simd_dot(normal, renderer.camera.position - originF) < 0 {
             normal = -normal
         }
         // Turntable angles that put the eye along the plane normal; vertical
