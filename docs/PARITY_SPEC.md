@@ -2069,7 +2069,25 @@ Center Mark, Intersection Mark. Notes (leader or
 free, 1200 chars), images. Per-sheet properties: projection angle first/third,
 units/precision/decimal separator, line widths per class. Hidden-line toggle
 per view; Cmd+R updates the drawing from the model.
-**Status:** ❌ not implemented.
+**Status:** 🟡 partial (first version, 2026-10-13) — Export ▸ Drawing… (and
+Command Search "New Drawing") opens a full-screen drawing of the visible
+bodies: Front as the base view, Top and Right placed by the standard (ANSI
+third angle: Top above, Right to the right; ISO first angle: Top below,
+Right to the left), an optional isometric in the free cell, hidden lines
+dashed (`DrawingProjection`: feature edges plus silhouettes, sampled and
+tested against the tessellation; seams a mesh boolean leaves across flat
+faces and duplicate pieces are dropped), overall width/height/depth
+dimensions in the display unit, a border and a title block (title, scale,
+sheet, projection, date). Options: title, sheet size (A4, A3, Letter,
+Tabloid; landscape), standard, scale (automatic = largest standard scale
+that fits, or a fixed one), isometric / hidden lines / dimensions. Exports
+PDF, SVG and DXF (layers VISIBLE, HIDDEN with a HIDDEN linetype,
+DIMENSIONS, BORDER, TEXT) written by the app itself (`DrawingExport`), so
+iPad, Mac and web files match. The drawing is regenerated from the model
+whenever it is opened or changed. Missing: drawings saved in the project,
+choosing bodies, placing and moving views, section and detail views,
+custom projection angles, interactive dimensions and annotations,
+centerlines and marks, title-block layouts, multiple sheets, DWG.
 **Feasibility:** [mesh-kernel OK] for a first version (orthographic
 projection + silhouette/hidden-line from meshes; associativity with the model
 [needs history engine]; production-grade HLR quality benefits from a B-rep

@@ -1026,6 +1026,13 @@ struct EditorView: View {
                 Label("Export to Slicer…", systemImage: "printer")
             }
             .accessibilityIdentifier("ExportToSlicerButton")
+            // File ▸ New Drawing (spec §15): 2D views with PDF/SVG/DXF export.
+            Button {
+                viewModel.openDrawing(designName: project.name)
+            } label: {
+                Label("Drawing…", systemImage: "doc.richtext")
+            }
+            .accessibilityIdentifier("NewDrawingButton")
             Divider()
             Button("STL") {
                 if let data = viewModel.exportSTL() {
@@ -2080,10 +2087,6 @@ struct EditorView: View {
             .sheet(isPresented: $showSettings) {
                 SettingsView(settings: AppSettings.shared)
             }
-            .sheet(item: $slicerShare) { share in
-                ActivityShareSheet(items: [share.url])
-                    .accessibilityIdentifier("SlicerShareSheet")
-            }
             .sheet(isPresented: $showWebHandoff) {
                 WebHandoffSheet(designName: project.name) {
                     viewModel.session.save()   // rows must reflect live edits
@@ -2261,6 +2264,17 @@ struct EditorView: View {
                 TextToolSheet { content, height, fontName in
                     viewModel.commitText(content: content, height: height, fontName: fontName)
                 }
+            }
+            // Kept out on the editor's own modifier chain: a sheet hung off
+            // a toolbar item is dropped whenever the toolbar redraws.
+            .sheet(item: $slicerShare) { share in
+                ActivityShareSheet(items: [share.url])
+                    .accessibilityIdentifier("SlicerShareSheet")
+            }
+            // Drawings get the whole screen, like a workspace of their own.
+            .fullScreenCover(isPresented: Binding(get: { viewModel.showDrawingSheet },
+                                                  set: { viewModel.showDrawingSheet = $0 })) {
+                DrawingSheetView(viewModel: viewModel)
             }
             .sheet(isPresented: Binding(
                 get: { viewModel.showMaterialSheet },

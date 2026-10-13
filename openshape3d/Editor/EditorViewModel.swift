@@ -233,6 +233,59 @@ final class EditorViewModel {
         return SlicerExport.threeMF(bodies: bodies)
     }
 
+    // MARK: - Drawings (spec §15)
+
+    /// File ▸ New Drawing: the drawing sheet is up.
+    var showDrawingSheet = false
+    /// The sheet's options; the title starts as the design's name.
+    var drawingOptions = DrawingOptions()
+
+    /// Open the drawing sheet titled after `designName`.
+    func openDrawing(designName: String) {
+        if drawingOptions.title == DrawingOptions().title || drawingOptions.title.isEmpty {
+            drawingOptions.title = designName
+        }
+        showDrawingSheet = true
+    }
+
+    /// The laid-out sheet for the visible bodies, memoized on the options and
+    /// the document revision (projection is the slow part).
+    func drawingLayout() -> DrawingLayout {
+        let key = DrawingCacheKey(options: drawingOptions, revision: session.changeCount,
+                                  unit: AppSettings.shared.unit.rawValue)
+        if let cached = drawingCache, cached.key == key { return cached.layout }
+        let bodies = session.document.bodies.filter { !$0.isHidden }.map(DrawingBodyInput.init(body:))
+        let unit = AppSettings.shared.unit
+        let layout = DrawingSheet.layout(
+            bodies: bodies, options: drawingOptions,
+            formatLength: { unit.compactLengthString(fromMM: $0) },
+            date: DrawingSheet.isoDate(Date()))
+        drawingCache = (key, layout)
+        return layout
+    }
+
+    private struct DrawingCacheKey: Equatable {
+        let options: DrawingOptions
+        let revision: Int
+        let unit: String
+    }
+    @ObservationIgnored
+    private var drawingCache: (key: DrawingCacheKey, layout: DrawingLayout)?
+
+    /// The sheet as a file; nil (with an error) when nothing is drawn.
+    func exportDrawing(_ format: DrawingFileFormat) -> Data? {
+        let layout = drawingLayout()
+        guard !layout.isEmpty else {
+            errorMessage = "Nothing to draw — the design has no visible bodies."
+            return nil
+        }
+        switch format {
+        case .pdf: return DrawingExport.pdf(layout)
+        case .svg: return Data(DrawingExport.svg(layout).utf8)
+        case .dxf: return Data(DrawingExport.dxf(layout).utf8)
+        }
+    }
+
     /// 3MF of the whole document, or nil when empty.
     func exportThreeMF() -> Data? {
         exportableBodies().map { ThreeMFExporter.threeMF(bodies: $0) }

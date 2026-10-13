@@ -258,6 +258,7 @@ nonisolated struct CommandRegistry: Sendable {
         AppCommand(id: "items.showHidden", title: "Show Hidden Bodies", category: .view, chord: nil),
         AppCommand(id: "items.invert", title: "Invert Body Visibility", category: .view, chord: nil),
         AppCommand(id: "items.reveal", title: "Reveal in Items Sidebar", category: .view, chord: nil),
+        AppCommand(id: "file.newDrawing", title: "New Drawing", category: .view, chord: nil),
         AppCommand(id: "view.section", title: "Section View", category: .view, chord: nil),
         AppCommand(id: "view.editSection", title: "Edit Section View", category: .view, chord: nil),
         AppCommand(id: "view.section2D", title: "2D Section View", category: .view, chord: nil),
