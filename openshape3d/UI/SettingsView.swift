@@ -46,6 +46,11 @@ struct SettingsView: View {
                     .accessibilityIdentifier("SettingsCircularAnnotations")
                     Text("Choose radius or diameter readouts for circles without resizing them.")
                         .font(.caption).foregroundStyle(.secondary)
+                    Picker("Default Spline Type", selection: $settings.defaultSplineType) {
+                        Text("Fit Point").tag(SplineType.fit)
+                        Text("Control Point").tag(SplineType.control)
+                    }
+                    .accessibilityIdentifier("SettingsDefaultSplineType")
                 }
 
                 SnappingSettingsSection(settings: settings)
@@ -82,6 +87,25 @@ struct SettingsView: View {
                          + "⌘ shortcuts work either way.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
+
+                    Picker("Selection Extension", selection: $settings.selectionExtension) {
+                        ForEach(SelectionExtension.allCases, id: \.self) { Text($0.title).tag($0) }
+                    }
+                    .pickerStyle(.segmented)
+                    .accessibilityIdentifier("SettingsSelectionExtension")
+                    Text(settings.selectionExtension == .click
+                         ? "Each click adds to the selection or takes away; Shift-click selects just that one."
+                         : "A click selects one item; Shift-click adds to the selection or takes away.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+
+                    Toggle("Menu Button Labels", isOn: $settings.menuButtonLabels)
+                        .accessibilityIdentifier("SettingsMenuButtonLabels")
+
+                    Picker("Start With", selection: $settings.startWith) {
+                        ForEach(StartWith.allCases, id: \.self) { Text($0.title).tag($0) }
+                    }
+                    .accessibilityIdentifier("SettingsStartWith")
                 }
 
                 Section("Graphics") {

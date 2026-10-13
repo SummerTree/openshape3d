@@ -1593,7 +1593,7 @@ sketch element); tapping a body selects the planar face under the finger;
 double-tap/double-click selects the whole body/connected group. Selected items
 stay visible (highlighted through occluders). Deselect: tap empty space /
 Escape / Cmd+. . Shift+click multi-selects (macOS Selection Extension setting
-can invert this). Selecting a sketch element from 3D jumps straight into
+can invert this — built 2026-10-13, Settings ▸ Interface; §17). Selecting a sketch element from 3D jumps straight into
 editing that sketch without rotating the camera.
 **Status:** 🟡 partial — tap = planar face selection with orange highlight
 (`selectFaceOrBody` + `FaceTopology`), fallback to whole body on curved
@@ -2290,8 +2290,18 @@ Control) and Reverse Scroll Direction; the mouse wheel now zooms and a
 trackpad's two-finger scroll pans on iPad and Mac. Graphics ▸ Tessellation
 Quality (applies at the next launch). Tutorial Mode ▸ Display Touches and
 Clicks / Display Keyboard Shortcuts. All but Tessellation Quality on the web
-too. Still missing: interface language, customizable shortcuts, start-with,
-menu button labels, selection extension.
+too.
+**Added (2026-10-13):** Interface ▸ **Selection Extension** (Shift-Click
+Adds — the default — or Click Adds, where Shift-click selects just the one;
+Shift-click itself is new on the iPad with a keyboard, the Mac and the web),
+Interface ▸ **Menu Button Labels** (names under the toolbar icons; the bar
+ignores label styles, so the titled form is drawn as its own stack and the
+"…" overflow still lists every button), Interface ▸ **Start With** (Designs
+Gallery, Last Opened Design, New Design — the first-run welcome and test
+hooks come first; a deleted last design falls back to the gallery), and
+Sketch Annotations ▸ **Default Spline Type** (Fit Point / Control Point).
+All four on the web too (Start With remembers the last design in the
+browser). Still missing: interface language, customizable shortcuts.
 **Status:** 🟡 partial — a Settings surface ships (`AppSettings`, Phase F
 tranche 1): display Units (mm/cm/m/in/ft), Theme System/Light/Dark, Interface
 Left/Right, and Anti-Aliasing (Disabled | 2x | 4x MSAA), persisted across

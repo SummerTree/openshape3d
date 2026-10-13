@@ -46,6 +46,54 @@ final class AppSettingsTests: XCTestCase {
         XCTAssertEqual(AppSettings(defaults: defaults).toolPreviewOpacity, 1, "out-of-range values clamp")
     }
 
+    @MainActor
+    func testInterfaceAndStartupSettingsPersist() throws {
+        let suite = "InterfaceSettingsTests-" + UUID().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let settings = AppSettings(defaults: defaults)
+        XCTAssertEqual(settings.selectionExtension, .shiftClick)
+        XCTAssertFalse(settings.menuButtonLabels)
+        XCTAssertEqual(settings.startWith, .gallery)
+        XCTAssertNil(settings.lastOpenedDesign)
+        XCTAssertEqual(settings.defaultSplineType, .fit)
+
+        let opened = Date(timeIntervalSince1970: 1_791_000_000)
+        settings.selectionExtension = .click
+        settings.menuButtonLabels = true
+        settings.startWith = .lastDesign
+        settings.lastOpenedDesign = opened
+        settings.defaultSplineType = .control
+        let reloaded = AppSettings(defaults: defaults)
+        XCTAssertEqual(reloaded.selectionExtension, .click)
+        XCTAssertTrue(reloaded.menuButtonLabels)
+        XCTAssertEqual(reloaded.startWith, .lastDesign)
+        XCTAssertEqual(reloaded.lastOpenedDesign, opened)
+        XCTAssertEqual(reloaded.defaultSplineType, .control)
+
+        defaults.set("sideways", forKey: "os3d.startWith")
+        XCTAssertEqual(AppSettings(defaults: defaults).startWith, .gallery, "an unknown value falls back")
+    }
+
+    func testSelectionExtension() {
+        XCTAssertFalse(SelectionExtension.shiftClick.extends(shift: false))
+        XCTAssertTrue(SelectionExtension.shiftClick.extends(shift: true))
+        XCTAssertTrue(SelectionExtension.click.extends(shift: false), "every click adds")
+        XCTAssertFalse(SelectionExtension.click.extends(shift: true), "Shift picks just the one")
+    }
+
+    func testStartWith() {
+        XCTAssertEqual(StartWith.gallery.launch(hasLastDesign: true, welcomeShowing: false, hookActive: false), .stay)
+        XCTAssertEqual(StartWith.lastDesign.launch(hasLastDesign: true, welcomeShowing: false, hookActive: false), .open)
+        XCTAssertEqual(StartWith.lastDesign.launch(hasLastDesign: false, welcomeShowing: false, hookActive: false), .stay,
+                       "a deleted last design leaves you in the gallery")
+        XCTAssertEqual(StartWith.newDesign.launch(hasLastDesign: false, welcomeShowing: false, hookActive: false), .create)
+        XCTAssertEqual(StartWith.newDesign.launch(hasLastDesign: true, welcomeShowing: true, hookActive: false), .stay,
+                       "the first-run welcome comes first")
+        XCTAssertEqual(StartWith.lastDesign.launch(hasLastDesign: true, welcomeShowing: false, hookActive: true), .stay,
+                       "automation hooks decide on their own")
+    }
+
     // MARK: DisplayUnit conversion
 
     func testConversionFactors() {

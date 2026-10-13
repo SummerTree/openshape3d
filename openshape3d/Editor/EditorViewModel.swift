@@ -89,6 +89,11 @@ final class EditorViewModel {
     /// it, and area selects add instead of replace. Boolean tool picking
     /// has its own always-additive tap flow and is unaffected.
     var selectionAdditive = false
+    /// Shift is held for the tap being handled (set by the viewport around
+    /// one tap). With Settings ▸ Selection Extension it decides whether the
+    /// tap extends the selection.
+    @ObservationIgnored
+    var tapShiftHeld = false
 
     weak var cameraControl: (any ViewportCameraControl)?
 
@@ -6738,6 +6743,22 @@ final class EditorViewModel {
         // Items plane selection.
         axisEntryPart = nil
         selectedPlaneID = nil
+        // Selection Extension (spec §8.1): Shift-click — or, set to "Click
+        // Adds", a plain click — extends the selection the way the Select
+        // chip does. A click on empty space still clears, unless Shift asks
+        // to extend.
+        var extending = false
+        switch mode {
+        case .idle, .editingPrimitive, .selected, .faceSelected:
+            extending = !selectModeActive
+                && AppSettings.shared.selectionExtension.extends(shift: tapShiftHeld)
+                && (tapShiftHeld || HitTester.pickBody(ray: ray, in: scene) != nil)
+        default:
+            break
+        }
+        let savedAdditive = selectionAdditive
+        if extending { selectionAdditive = true }
+        defer { selectionAdditive = savedAdditive }
         // Visualization dresses whole bodies (spec §14): a tap selects the
         // body under it (Shift/⌘ adds or removes it), never a face, and
         // empty space clears the selection.
@@ -9470,8 +9491,9 @@ final class EditorViewModel {
     // MARK: - Spline tool (spec §1.4)
 
     /// Fit Point (the curve runs through each tap) or Control Point (the taps
-    /// are a control polygon). See `SplineConstruction`.
-    private(set) var splineType: SplineType = .fit
+    /// are a control polygon). See `SplineConstruction`. Starts as Settings ▸
+    /// Default Spline Type; the Spline bar switches it for the session.
+    private(set) var splineType: SplineType = AppSettings.shared.defaultSplineType
     /// Points placed so far, in sketch-plane coordinates.
     private(set) var splinePlacedPoints: [SIMD2<Double>] = []
     private var splineHoverPoint: SIMD2<Double>?

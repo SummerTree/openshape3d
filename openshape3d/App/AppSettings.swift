@@ -252,6 +252,51 @@ nonisolated enum AnchoredSketchEntity: String, CaseIterable, Codable, Sendable {
     }
 }
 
+/// Settings ▸ Interface ▸ Selection Extension (spec §8.1, Shapr3D's macOS
+/// setting): which click adds to the selection.
+nonisolated enum SelectionExtension: String, CaseIterable, Codable, Sendable {
+    /// A click selects one item; Shift-click adds or removes (default).
+    case shiftClick
+    /// Every click adds or removes; Shift-click selects just the one item.
+    case click
+
+    var title: String {
+        switch self {
+        case .shiftClick: "Shift-Click Adds"
+        case .click: "Click Adds"
+        }
+    }
+
+    /// Whether a click with Shift held (`shift`) extends the selection.
+    func extends(shift: Bool) -> Bool { self == .click ? !shift : shift }
+}
+
+/// Settings ▸ General ▸ Start With: what the app shows at launch.
+nonisolated enum StartWith: String, CaseIterable, Codable, Sendable {
+    case gallery, lastDesign, newDesign
+
+    var title: String {
+        switch self {
+        case .gallery: "Designs Gallery"
+        case .lastDesign: "Last Opened Design"
+        case .newDesign: "New Design"
+        }
+    }
+
+    enum Launch: Equatable { case stay, open, create }
+
+    /// What to do at launch. The welcome screen (first run) and automation
+    /// hooks win; a missing last design falls back to the gallery.
+    func launch(hasLastDesign: Bool, welcomeShowing: Bool, hookActive: Bool) -> Launch {
+        guard !welcomeShowing, !hookActive else { return .stay }
+        switch self {
+        case .gallery: return .stay
+        case .lastDesign: return hasLastDesign ? .open : .stay
+        case .newDesign: return .create
+        }
+    }
+}
+
 // MARK: - Theme
 
 nonisolated enum AppTheme: String, CaseIterable, Codable, Sendable {
@@ -315,6 +360,34 @@ final class AppSettings {
         static let navigationPreset = "os3d.navigationPreset"
         static let showTouches = "os3d.tutorialShowTouches"
         static let showKeyPresses = "os3d.tutorialShowKeyPresses"
+        static let selectionExtension = "os3d.selectionExtension"
+        static let menuButtonLabels = "os3d.menuButtonLabels"
+        static let startWith = "os3d.startWith"
+        static let lastOpenedDesign = "os3d.lastOpenedDesign"
+        static let defaultSplineType = "os3d.defaultSplineType"
+    }
+
+    /// Interface ▸ Selection Extension.
+    var selectionExtension: SelectionExtension {
+        didSet { defaults.set(selectionExtension.rawValue, forKey: Key.selectionExtension) }
+    }
+    /// Interface ▸ Menu Button Labels: names under the toolbar's icons.
+    var menuButtonLabels: Bool {
+        didSet { defaults.set(menuButtonLabels, forKey: Key.menuButtonLabels) }
+    }
+    /// General ▸ Start With.
+    var startWith: StartWith {
+        didSet { defaults.set(startWith.rawValue, forKey: Key.startWith) }
+    }
+    /// The design opened most recently (a project's creation date, which is
+    /// stable and unique enough to find it again), for Start With ▸ Last
+    /// Opened Design.
+    var lastOpenedDesign: Date? {
+        didSet { defaults.set(lastOpenedDesign, forKey: Key.lastOpenedDesign) }
+    }
+    /// Sketching ▸ Default Spline Type: what the Spline tool starts in.
+    var defaultSplineType: SplineType {
+        didSet { defaults.set(defaultSplineType.rawValue, forKey: Key.defaultSplineType) }
     }
 
     /// The welcome screen has been dismissed once. Stored as soon as it is
@@ -486,6 +559,12 @@ final class AppSettings {
             defaults.object(forKey: Key.alwaysShowConstraints) as? Bool ?? false
         anchoredSketchEntity = defaults.string(forKey: Key.anchoredSketchEntity)
             .flatMap(AnchoredSketchEntity.init) ?? .firstSelected
+        selectionExtension = defaults.string(forKey: Key.selectionExtension)
+            .flatMap(SelectionExtension.init) ?? .shiftClick
+        menuButtonLabels = Self.storedBool(defaults, Key.menuButtonLabels) ?? false
+        startWith = defaults.string(forKey: Key.startWith).flatMap(StartWith.init) ?? .gallery
+        lastOpenedDesign = defaults.object(forKey: Key.lastOpenedDesign) as? Date
+        defaultSplineType = defaults.string(forKey: Key.defaultSplineType).flatMap(SplineType.init) ?? .fit
     }
 
     // Under `SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor`, this class is

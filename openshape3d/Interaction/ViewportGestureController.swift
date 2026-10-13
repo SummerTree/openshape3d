@@ -18,6 +18,8 @@ import MetalKit
 @MainActor
 protocol ViewportGestureDelegate: AnyObject {
     func gestureTapped(at point: CGPoint)
+    /// A tap with Shift held or not (Selection Extension, spec §8.1).
+    func gestureTapped(at point: CGPoint, shift: Bool)
     func gestureDoubleTapped(at point: CGPoint)
     /// Offered the one-finger drag at `.began`. Return true to claim it
     /// (gizmo drag, sketch stroke); false lets the camera orbit. `isPencil`
@@ -343,7 +345,10 @@ final class ViewportGestureController: NSObject {
 
     @objc private func handleTap(_ gesture: UITapGestureRecognizer) {
         guard let view else { return }
-        delegate?.gestureTapped(at: gesture.location(in: view))
+        // Shift-click (Selection Extension, spec §8.1) — a hardware keyboard
+        // or the Mac; a bare finger tap never carries it.
+        delegate?.gestureTapped(at: gesture.location(in: view),
+                                shift: gesture.modifierFlags.contains(.shift))
     }
 
     @objc private func handleDoubleTap(_ gesture: UITapGestureRecognizer) {

@@ -185,6 +185,12 @@ final class ViewportCoordinator: NSObject, ViewportGestureDelegate, ViewportCame
     private var pivotDragGrab = SIMD3<Float>.zero
     private var pivotDragNormal = SIMD3<Float>(0, 0, 1)
 
+    func gestureTapped(at point: CGPoint, shift: Bool) {
+        viewModel.tapShiftHeld = shift
+        defer { viewModel.tapShiftHeld = false }
+        gestureTapped(at: point)
+    }
+
     func gestureTapped(at point: CGPoint) {
         // Orientation cube first: taps on it never reach the model.
         if let renderer, let view,
