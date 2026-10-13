@@ -37,10 +37,17 @@ final class MaterialTests: XCTestCase {
 
     func testPresetLibraryContents() {
         let names = MaterialPreset.library.map(\.name)
-        XCTAssertEqual(names, [
+        // The original starter set leads, unchanged (saved designs and the
+        // agent name these); the library grew behind it.
+        XCTAssertEqual(Array(names.prefix(7)), [
             "Steel", "Aluminum", "Brass", "Plastic Matte",
             "Plastic Gloss", "Rubber", "Wood",
         ])
+        XCTAssertGreaterThanOrEqual(names.count, 40)
+        XCTAssertEqual(Set(names).count, names.count, "names are unique")
+        for category in MaterialPreset.Category.allCases {
+            XCTAssertTrue(MaterialPreset.library.contains { $0.category == category }, "\(category) is empty")
+        }
         // Metals are metallic, the rest dielectric; every factor is in 0…1.
         for preset in MaterialPreset.library {
             XCTAssertEqual(preset.spec, preset.spec.clamped, "\(preset.name) out of range")

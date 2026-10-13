@@ -152,6 +152,38 @@ nonisolated enum AgentExecOp: Sendable, Equatable {
     /// `normal` (the kept side), or turn the section off. A display state,
     /// not an edit — no undo step.
     case section(origin: SIMD3<Double>, normal: SIMD3<Double>?, sectionOnly: Bool, twoD: Bool)
+    /// Tools ▸ Visualize (spec §14): enter or leave the workspace, and set
+    /// any of the environment's fields (one undo step when it changes).
+    case visualize(on: Bool, environment: VisualizeArgs)
+}
+
+/// `view.visualize`'s environment fields; nil leaves a field as it is.
+nonisolated struct VisualizeArgs: Equatable, Sendable {
+    var preset: EnvironmentPreset.ID?
+    var lightRotation: Double?
+    var sunElevation: Double?
+    var lightIntensity: Double?
+    var background: VisualizationEnvironment.Background?
+    var backgroundColor: SIMD3<Double>?
+    var groundShadow: Bool?
+
+    /// `environment` with these fields applied; a preset brings its own sun.
+    func applied(to environment: VisualizationEnvironment) -> VisualizationEnvironment {
+        var out = environment
+        if let name = preset, let value = EnvironmentPreset.library.first(where: { $0.name == name }) {
+            out.preset = value.name
+            out.lightRotation = value.lightRotation
+            out.sunElevation = value.sunElevation
+            out.lightIntensity = 1
+        }
+        if let lightRotation { out.lightRotation = lightRotation }
+        if let sunElevation { out.sunElevation = sunElevation }
+        if let lightIntensity { out.lightIntensity = lightIntensity }
+        if let background { out.background = background }
+        if let backgroundColor { out.backgroundColor = backgroundColor }
+        if let groundShadow { out.groundShadow = groundShadow }
+        return out
+    }
 }
 
 // MARK: - Parsing
@@ -168,7 +200,7 @@ nonisolated enum AgentExec {
         "feature.sweep", "feature.loft", "feature.pushPull",
         "feature.moveFace", "feature.scaleFace", "feature.rotateFace",
         "feature.deleteFace", "feature.replaceFace", "feature.draftFace", "feature.imprint",
-        "body.setMaterial", "item.setHidden", "view.section",
+        "body.setMaterial", "item.setHidden", "view.section", "view.visualize",
     ]
 
     static let booleanKinds = ["union", "subtract", "intersect"]
@@ -211,6 +243,7 @@ nonisolated enum AgentExec {
         case "body.setMaterial":   return parseSetMaterial(args)
         case "item.setHidden":     return parseSetHidden(args)
         case "view.section":       return parseSection(args)
+        case "view.visualize":     return parseVisualize(args)
         default:
             return .failure(.init(code: "unknown_op",
                                   message: "No exec op '\(op)'. Known ops: \(opNames.joined(separator: ", "))."))
@@ -948,14 +981,59 @@ nonisolated enum AgentExec {
                 return .failure(.init(code: "missing_material",
                                       message: "args needs a \"preset\" name or a \"color\" [r, g, b]."))
             }
-            for key in ["metallic", "roughness"] {
+            for key in ["metallic", "roughness", "emission"] {
                 guard let v = try optionalDouble(a, key) else { continue }
                 guard (0...1).contains(v) else {
                     return .failure(.init(code: "bad_\(key)", message: "args.\(key) must be 0…1."))
                 }
-                if key == "metallic" { spec.metallic = v } else { spec.roughness = v }
+                switch key {
+                case "metallic": spec.metallic = v
+                case "roughness": spec.roughness = v
+                default: spec.emission = v
+                }
             }
             return .success(.setMaterial(bodies: bodies, material: spec))
+        } catch let e as AgentExecError { return .failure(e) } catch { return .failure(unexpected) }
+    }
+
+    private static func parseVisualize(_ a: [String: Any]) -> Result<AgentExecOp, AgentExecError> {
+        if a["off"] as? Bool == true { return .success(.visualize(on: false, environment: VisualizeArgs())) }
+        do {
+            var out = VisualizeArgs()
+            if let name = a["preset"] as? String {
+                guard let preset = EnvironmentPreset.library.first(where: {
+                    $0.name.caseInsensitiveCompare(name) == .orderedSame
+                }) else {
+                    return .failure(.init(code: "unknown_preset", message: "No environment '\(name)'. Known: "
+                        + EnvironmentPreset.library.map(\.name).joined(separator: ", ") + "."))
+                }
+                out.preset = preset.name
+            }
+            out.lightRotation = try optionalDouble(a, "lightRotation")
+            out.sunElevation = try optionalDouble(a, "sunElevation")
+            out.lightIntensity = try optionalDouble(a, "lightIntensity")
+            if let v = out.sunElevation, !(0...90).contains(v) {
+                return .failure(.init(code: "bad_sunElevation", message: "args.sunElevation must be 0…90 degrees."))
+            }
+            if let v = out.lightIntensity, !(0...2).contains(v) {
+                return .failure(.init(code: "bad_lightIntensity", message: "args.lightIntensity must be 0…2."))
+            }
+            if let raw = a["background"] as? String {
+                guard let background = VisualizationEnvironment.Background(rawValue: raw) else {
+                    return .failure(.init(code: "bad_background",
+                                          message: "args.background is environment, color or transparent."))
+                }
+                out.background = background
+            }
+            if let rgb = a["backgroundColor"] as? [Double] {
+                guard rgb.count == 3, rgb.allSatisfy({ (0...1).contains($0) }) else {
+                    return .failure(.init(code: "bad_backgroundColor",
+                                          message: "args.backgroundColor must be [r, g, b], each 0…1."))
+                }
+                out.backgroundColor = SIMD3(rgb[0], rgb[1], rgb[2])
+            }
+            out.groundShadow = a["groundShadow"] as? Bool
+            return .success(.visualize(on: true, environment: out))
         } catch let e as AgentExecError { return .failure(e) } catch { return .failure(unexpected) }
     }
 

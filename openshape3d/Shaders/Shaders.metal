@@ -18,6 +18,16 @@ static bool sectionClipped(float3 worldPosition, constant FrameUniforms &frame) 
         && dot(worldPosition, frame.clipPlane.xyz) + frame.clipPlane.w < 0.0;
 }
 
+// Visualization (spec §14): the sun's colour, and how far its light wraps
+// around a surface. The modelling headlight keeps its soft half-Lambert wrap
+// in white; a visualization sun is coloured and casts a firmer terminator.
+static float3 keyLightColor(constant FrameUniforms &frame) {
+    return frame.keyLightColor.w > 0.5 ? frame.keyLightColor.rgb : float3(1.0);
+}
+static float keyLightWrap(constant FrameUniforms &frame) {
+    return frame.keyLightColor.w > 0.5 ? 0.2 : 0.5;
+}
+
 // MARK: - Background gradient (fullscreen triangle, no buffers)
 
 struct FullscreenOut {
@@ -117,7 +127,8 @@ fragment float4 fragment_lit(
     }
 
     // Half-lambert wrap for a soft CAD look that never goes fully dark.
-    float ndl = saturate(dot(N, L)) * 0.5 + 0.5;
+    float wrap = keyLightWrap(frame);
+    float ndl = saturate(dot(N, L)) * (1.0 - wrap) + wrap;
     float3 hemi = mix(frame.groundColor.rgb, frame.skyColor.rgb, N.y * 0.5 + 0.5);
     float3 H = normalize(L + V);
     // Material-lite (visualization v1): roughness 0 keeps the legacy fixed
@@ -132,13 +143,24 @@ fragment float4 fragment_lit(
         specStrength = mix(0.85, 0.06, r);
     }
     float3 specTint = mix(float3(1.0), albedo, body.metallic);
-    float3 spec = pow(saturate(dot(N, H)), specPower) * specStrength * specTint;
+    float3 sun = keyLightColor(frame);
+    float3 spec = pow(saturate(dot(N, H)), specPower) * specStrength * specTint * sun;
     float rim = pow(1.0 - saturate(dot(N, V)), 3.0) * 0.12;
     float3 rimColor = (body.selectionState == SelectionStateSelected)
         ? frame.accentColor.rgb : float3(1.0);
 
-    float3 diffuse = albedo * (hemi * 0.45 + ndl * 0.70) * (1.0 - body.metallic * 0.55);
+    float3 diffuse = albedo * (hemi * 0.45 + ndl * 0.70 * sun) * (1.0 - body.metallic * 0.55);
     float3 color = diffuse + spec + rim * rimColor;
+    // Visualization: polished and metal surfaces mirror the environment's
+    // sky and ground (a cheap stand-in for image-based lighting).
+    if (frame.keyLightColor.w > 0.5) {
+        float3 R = reflect(-V, N);
+        float3 env = mix(frame.groundColor.rgb, frame.skyColor.rgb, saturate(R.y * 0.5 + 0.5));
+        float gloss = 1.0 - (body.roughness > 0.0 ? body.roughness : 0.6);
+        color += env * specTint * (0.08 + 0.55 * body.metallic) * gloss;
+    }
+    // Glow: the surface shows its own colour, brighter, whatever the light.
+    color = mix(color, albedo * (1.0 + body.emission), saturate(body.emission));
     float analysis = frame.gridParams.w;
     if (analysis > 0.5 && body.selectionState != SelectionStatePreview) {
         color = surfaceAnalysisColor(analysis, N, V, in.worldPosition, ndl);
@@ -204,7 +226,8 @@ fragment float4 fragment_litTextured(
         albedo = mix(albedo, frame.accentColor.rgb, 0.30);
         alpha = body.baseColor.a; // Tool Preview Opacity (the renderer sets it)
     }
-    float ndl = saturate(dot(N, L)) * 0.5 + 0.5;
+    float wrap = keyLightWrap(frame);
+    float ndl = saturate(dot(N, L)) * (1.0 - wrap) + wrap;
     float3 hemi = mix(frame.groundColor.rgb, frame.skyColor.rgb, N.y * 0.5 + 0.5);
     float3 H = normalize(L + V);
     float specPower = 48.0;
@@ -215,12 +238,23 @@ fragment float4 fragment_litTextured(
         specStrength = mix(0.85, 0.06, r);
     }
     float3 specTint = mix(float3(1.0), albedo, body.metallic);
-    float3 spec = pow(saturate(dot(N, H)), specPower) * specStrength * specTint;
+    float3 sun = keyLightColor(frame);
+    float3 spec = pow(saturate(dot(N, H)), specPower) * specStrength * specTint * sun;
     float rim = pow(1.0 - saturate(dot(N, V)), 3.0) * 0.12;
     float3 rimColor = (body.selectionState == SelectionStateSelected)
         ? frame.accentColor.rgb : float3(1.0);
-    float3 diffuse = albedo * (hemi * 0.45 + ndl * 0.70) * (1.0 - body.metallic * 0.55);
-    return float4(diffuse + spec + rim * rimColor, alpha);
+    float3 diffuse = albedo * (hemi * 0.45 + ndl * 0.70 * sun) * (1.0 - body.metallic * 0.55);
+    float3 color = diffuse + spec + rim * rimColor;
+    // Visualization: polished and metal surfaces mirror the environment's
+    // sky and ground (a cheap stand-in for image-based lighting).
+    if (frame.keyLightColor.w > 0.5) {
+        float3 R = reflect(-V, N);
+        float3 env = mix(frame.groundColor.rgb, frame.skyColor.rgb, saturate(R.y * 0.5 + 0.5));
+        float gloss = 1.0 - (body.roughness > 0.0 ? body.roughness : 0.6);
+        color += env * specTint * (0.08 + 0.55 * body.metallic) * gloss;
+    }
+    color = mix(color, albedo * (1.0 + body.emission), saturate(body.emission));
+    return float4(color, alpha);
 }
 
 // MARK: - Unlit flat color (gizmo, generic lines)

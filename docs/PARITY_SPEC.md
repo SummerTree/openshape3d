@@ -2055,16 +2055,35 @@ View, Aperture, Blur Intensity (depth of field). **Sharing:** Capture tool
 (clean high-res image, no grid/UI), textured USDZ export, AR button,
 Generative Render (AI enhancement of a capture; prompt → Generate → Save;
 plan-gated, daily limit, requires Sync).
-**Status:** 🟡 partial (visualization-lite, no separate space) — a palette
-Material button on the selected body/multi-selection opens a Material sheet:
-a small preset library (Steel, Aluminum, Brass, Plastic Matte/Gloss, Rubber,
-Wood) plus a custom color picker and metallic/roughness sliders, applied per
-body as one undoable `SetMaterialCommand` and persisted
-(`BodyMaterialSpec`); the renderer blends the metallic/roughness factors
-into its Blinn-Phong shading, and a Views-menu **Ground Shadow** toggle
-draws cheap planar blob shadows. Missing: a real PBR/IBL pipeline,
-environments, per-FACE materials, decals, emission/glow, DoF, Capture,
-material search/library breadth, Generative Render.
+**Status:** 🟡 partial (Visualization workspace v1, 2026-10-13) — Tools ▸
+**Visualize** (toolbar palette button, Command Search "Visualize", agent
+`view.visualize`) turns the editor into a space of its own: the grid,
+edges, tool palette, bottom bars and move gizmo step aside, a tap selects
+whole bodies (Shift/⌘ adds), and the **Visualization panel** takes the
+Items panel's place. **Materials:** a 48-entry library in ten categories
+(Metal, Plastic, Rubber, Wood, Glass, Stone, Ceramic, Fabric, Paint,
+Emissive) with instant search and a category filter, a **Used Materials**
+row (most used first), tap-to-apply over the selection (one undo step),
+Edit… (the Material sheet, now with Opacity and **Glow**) and Reset to
+Default. Glass is see-through (drawn in the blended pass). **Glow**
+(`BodyMaterialSpec.emission`, optional in the record) shows the surface's
+own colour, brightened, whatever the light — no bloom. **Environment**
+(`VisualizationEnvironment`, saved with the design: `Project.visualizationData`
+and the `.os3d` archive): six presets (Studio, Daylight, Sunset, Overcast,
+Warm Interior, Night) with their sky/ground light, sun colour and
+background, plus Light Rotation, Sun Elevation and Light Intensity
+(sliders preview live, save as one undo step on release), background
+Environment / Color / Transparent, and Ground Shadow. While visualizing the
+renderer swaps the camera headlight for the world-fixed sun
+(`VisualizationLighting`, one pure function shared by iPad, Mac and web),
+with a firmer terminator and a sky/ground reflection on polished and metal
+surfaces. **Capture** opens the Screenshot sheet with the grid off and a
+transparent background when the environment asks for one. The web app
+mirrors all of it (panel, lighting in the WebGL shaders). Missing: real
+PBR/IBL and HDR environments, transmission/IOR, per-FACE materials,
+decals, texture mapping controls (scale, rotation, auto-match), custom
+.GLB materials, emission bloom, depth of field and focus point, textured
+USDZ / AR, Generative Render.
 **Feasibility:** PBR space, materials, decals, environments, DoF, capture
 [mesh-kernel OK] (pure Metal renderer work); the material *library content*
 itself is an asset-sourcing problem; Generative Render [platform/service]

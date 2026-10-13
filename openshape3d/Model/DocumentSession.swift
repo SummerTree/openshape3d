@@ -89,6 +89,8 @@ final class DocumentSession {
         var pinnedMeasurements = false
         /// The drawings blob failed to decode — leave the column alone.
         var drawings = false
+        /// The visualization blob failed to decode — leave the column alone.
+        var visualization = false
         /// Whole rows that could not be decoded (absent from the document).
         var rowCount: Int {
             bodies.count + sketches.count + planes.count + axes.count
@@ -799,6 +801,13 @@ final class DocumentSession {
                 unreadableRows.drawings = true
             }
         }
+        if let data = project.visualizationData {
+            if let environment = try? JSONDecoder().decode(VisualizationEnvironment.self, from: data) {
+                loaded.visualization = environment
+            } else {
+                unreadableRows.visualization = true
+            }
+        }
         // Phase D feature graph: replay order is `orderIndex` (SwiftData
         // relationships are unordered). A node whose kind blob won't decode is
         // skipped (decodeFeature -> nil), not fatal. Pre-Phase-D projects have no
@@ -1236,6 +1245,11 @@ final class DocumentSession {
             let drawings = document.drawings
             let data = drawings.isEmpty ? nil : try? JSONEncoder().encode(drawings)
             if project.drawingsData != data { project.drawingsData = data }
+        }
+        if !unreadableRows.visualization {
+            let environment = document.visualization
+            let data = environment == VisualizationEnvironment() ? nil : try? JSONEncoder().encode(environment)
+            if project.visualizationData != data { project.visualizationData = data }
         }
 
         project.modifiedAt = Date()

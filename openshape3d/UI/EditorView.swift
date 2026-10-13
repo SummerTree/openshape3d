@@ -116,11 +116,20 @@ struct MeshExportOptionsSheet: View {
 struct ScreenshotOptionsSheet: View {
     /// Multiplier of the 1024×768 base size (1x / 2x / 4x).
     @State private var resolutionScale = 1
-    @State private var transparentBackground = false
-    @State private var showGrid = true
+    @State private var transparentBackground: Bool
+    @State private var showGrid: Bool
 
     @Environment(\.dismiss) private var dismiss
     let onExport: (Int, Int, Bool, Bool) -> Void
+
+    /// `visualizing`: Capture from the Visualization workspace — no grid,
+    /// and a transparent background when the environment asks for one.
+    init(visualizing: Bool = false, transparent: Bool = false,
+         onExport: @escaping (Int, Int, Bool, Bool) -> Void) {
+        _transparentBackground = State(initialValue: transparent)
+        _showGrid = State(initialValue: !visualizing)
+        self.onExport = onExport
+    }
 
     private static let baseSize = (width: 1024, height: 768)
 
@@ -1252,6 +1261,8 @@ struct EditorView: View {
                 }
             }
             .overlay(alignment: .bottom) {
+                // Visualization shows the model alone (spec §14).
+                if !viewModel.visualizeActive {
                 VStack(spacing: 10) {
                     // Selection info strip sits above the numeric bar when
                     // both are visible (spec §16.3).
@@ -1279,14 +1290,19 @@ struct EditorView: View {
                 .padding(.horizontal, 20)
                 .padding(.bottom, 12)
                 .measuringBottomBarHeight()
+                }
             }
             .onPreferenceChange(BottomBarHeightKey.self) { height in
                 bottomBarHeight = height
             }
             .onChange(of: viewModel.itemsRevealRequest) { _, _ in showItemsPanel = true }
             .overlay(alignment: .topTrailing) {
-                // Items Manager sidebar (spec §11).
-                if showItemsPanel {
+                // Visualization panel (spec §14) in place of the Items panel.
+                if viewModel.visualizeActive {
+                    VisualizationPanelView(viewModel: viewModel) { showScreenshotOptions = true }
+                        .padding(.trailing, 14)
+                        .padding(.top, 8)
+                } else if showItemsPanel {
                     ItemsPanelView(viewModel: viewModel)
                         .padding(.trailing, 14)
                         .padding(.top, 8)
@@ -1303,6 +1319,8 @@ struct EditorView: View {
             }
             // Keep palette flyouts above the panels they temporarily overlap.
             .overlay(alignment: settings.paletteOnRight ? .trailing : .leading) {
+                // Visualization is a space of its own: no modelling tools.
+                if !viewModel.visualizeActive {
                 ToolPaletteView(viewModel: viewModel)
                     // The column itself (flyouts are overlays, outside it).
                     .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: {
@@ -1319,6 +1337,7 @@ struct EditorView: View {
                     // the numeric bar and become untappable in portrait.
                     .padding(.top, 8)
                     .padding(.bottom, bottomBarInset)
+                }
             }
             .overlay(alignment: .bottomLeading) {
                 // Variables panel (Phase D, Task B3). Anchored bottom-leading so
@@ -2041,6 +2060,14 @@ struct EditorView: View {
                     }
                     .accessibilityIdentifier("ItemsButton")
 
+                    // Tools ▸ Visualize (spec §14).
+                    Button {
+                        if viewModel.visualizeActive { viewModel.exitVisualize() } else { viewModel.enterVisualize() }
+                    } label: {
+                        Label("Visualize", systemImage: viewModel.visualizeActive ? "paintpalette.fill" : "paintpalette")
+                    }
+                    .accessibilityIdentifier("VisualizeButton")
+
                     importMenu(viewModel)
 
                     exportMenu(viewModel)
@@ -2220,7 +2247,11 @@ struct EditorView: View {
                     }
                 }
             ) {
-                ScreenshotOptionsSheet { width, height, transparent, showGrid in
+                ScreenshotOptionsSheet(
+                    visualizing: viewModel.visualizeActive,
+                    transparent: viewModel.visualizeActive
+                        && viewModel.visualizationEnvironment.background == .transparent
+                ) { width, height, transparent, showGrid in
                     pendingScreenshot = viewModel.captureScreenshot(
                         width: width,
                         height: height,

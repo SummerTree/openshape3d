@@ -255,6 +255,7 @@ nonisolated struct CommandRegistry: Sendable {
         AppCommand(id: "view.fieldOfView", title: "Field of View", category: .view, chord: nil),
         AppCommand(id: "view.lockGrid", title: "Lock Grid Size", category: .view, chord: nil),
         AppCommand(id: "view.zebra", title: "Zebra Analysis", category: .view, chord: nil),
+        AppCommand(id: "view.visualize", title: "Visualize", category: .view, chord: nil),
         AppCommand(id: "view.curvature", title: "Curvature Map", category: .view, chord: nil),
         AppCommand(id: "items.showHidden", title: "Show Hidden Bodies", category: .view, chord: nil),
         AppCommand(id: "items.invert", title: "Invert Body Visibility", category: .view, chord: nil),

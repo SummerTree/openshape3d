@@ -21,16 +21,18 @@ final class RenderFlagsTests: XCTestCase {
 
     func testFrameUniformsStride() {
         // 1 float4x4 (64) + 12 float4 (192) + 4 floats (16) = 272,
-        // rounded to the imported C struct's 16-byte tail alignment (288).
+        // rounded to the imported C struct's 16-byte tail alignment (288),
+        // + keyLightColor float4 (16, Visualization) = 304.
         // MSL compiles the same header, so a drift here means the GPU reads
         // garbage — update both sides together.
-        XCTAssertEqual(MemoryLayout<FrameUniforms>.stride, 288)
+        XCTAssertEqual(MemoryLayout<FrameUniforms>.stride, 304)
         XCTAssertEqual(MemoryLayout<FrameUniforms>.stride % 16, 0)
     }
 
     func testBodyUniformsStride() {
-        // float4x4 (64) + float4 (16) + uint + 2 floats + pad (16) = 96.
-        XCTAssertEqual(MemoryLayout<BodyUniforms>.stride, 96)
+        // float4x4 (64) + float4 (16) + uint + 3 floats (16) + emission
+        // float + pad (16) = 112.
+        XCTAssertEqual(MemoryLayout<BodyUniforms>.stride, 112)
         XCTAssertEqual(MemoryLayout<BodyUniforms>.stride % 16, 0)
     }
 

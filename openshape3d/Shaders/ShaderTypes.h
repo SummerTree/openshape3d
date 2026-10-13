@@ -48,6 +48,8 @@ typedef struct {
     float clipEnabled;                 // 0 = section view off (default)
     float viewportWidth;               // drawable pixels — thick lines expand in
     float viewportHeight;              // screen space, so they need the size
+    vector_float4 keyLightColor;       // Visualization (spec §14): rgb sun colour × intensity,
+                                       // w 1 = world-fixed sun lighting; w 0 = modelling headlight
 } FrameUniforms;
 
 typedef struct {
@@ -57,6 +59,7 @@ typedef struct {
     float metallic;                    // 0 (default) = dielectric, white highlight
     float roughness;                   // 0 (default) = legacy fixed highlight; >0 mapped
     float lineHalfWidthPx;             // thick-line pipeline: half stroke width
+    float emission;                    // Glow (spec §14): 0 lit, 1 self-lit and brightened
 } BodyUniforms;
 
 #endif /* ShaderTypes_h */

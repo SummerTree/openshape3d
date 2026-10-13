@@ -521,6 +521,21 @@ final class AgentBridge {
             if twoD { viewModel.toggle2DSectionView() }
             let interfering = viewModel.sectionInterferingBodyIDs.map(\.raw.uuidString).sorted()
             return execOK(viewModel, ["section": true, "interferingBodyIDs": interfering, "undoSteps": 0])
+
+        case let .visualize(on, args):
+            guard on else {
+                viewModel.exitVisualize()
+                return execOK(viewModel, ["visualize": false, "undoSteps": 0])
+            }
+            viewModel.enterVisualize()
+            let environment = args.applied(to: viewModel.visualizationEnvironment)
+            let before = viewModel.session.document.visualization
+            viewModel.setEnvironment(environment)
+            let saved = viewModel.session.document.visualization
+            return execOK(viewModel, ["visualize": true, "preset": saved.preset,
+                                      "lightRotation": saved.lightRotation, "sunElevation": saved.sunElevation,
+                                      "lightIntensity": saved.lightIntensity, "background": saved.background.rawValue,
+                                      "groundShadow": saved.groundShadow, "undoSteps": saved == before ? 0 : 1])
         }
     }
 

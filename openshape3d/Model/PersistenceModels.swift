@@ -84,6 +84,11 @@ final class Project {
     /// `nil` = none. Defaulted, so stores migrate lightly.
     var drawingsData: Data? = nil
 
+    /// The Visualization environment (spec §14) as JSON
+    /// (`VisualizationEnvironment`); `nil` = the default. Defaulted, so
+    /// stores migrate lightly.
+    var visualizationData: Data? = nil
+
     init(name: String) {
         self.name = name
         self.createdAt = Date()

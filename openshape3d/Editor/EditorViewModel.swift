@@ -727,6 +727,8 @@ final class EditorViewModel {
     /// armed profile tool wins; the section arrow appears only with no tool
     /// armed; the blend-edge arrow comes last.
     var pullArrowState: PullArrowState? {
+        // Visualization is not for editing: no handles.
+        if visualizeActive { return nil }
         // Armed profile tool (extrude / revolve / offset plane). Suppressed
         // while a face Move/Scale/Rotate tool is armed: then only that gizmo
         // shows, and drags reach it (shear/taper) instead of the arrow.
@@ -1463,6 +1465,11 @@ final class EditorViewModel {
         scene.displayMode = displayMode
         scene.showHiddenEdges = showHiddenEdges
         scene.groundShadow = groundShadowEnabled
+        if visualizeActive {
+            let environment = visualizationEnvironment
+            scene.visualization = VisualizationLighting(environment)
+            scene.groundShadow = groundShadowEnabled || environment.groundShadow
+        }
         scene.toolPreviewOpacity = Float(AppSettings.shared.toolPreviewOpacity)
         if let section = sectionState {
             let plane = section.plane
@@ -1621,7 +1628,8 @@ final class EditorViewModel {
     /// selections only — face selections use the pull arrow instead. A
     /// selected inserted image (plan §B10) attaches the gizmo at its center.
     var gizmoOrigin: SIMD3<Float>? {
-        guard let base = gizmoBaseOrigin else { return nil }
+        // Visualization selects bodies to dress, never to move.
+        guard !visualizeActive, let base = gizmoBaseOrigin else { return nil }
         return base + activeGizmoPivotOffset
     }
 
@@ -6350,6 +6358,92 @@ final class EditorViewModel {
     /// rebuild. Not persisted, like the display mode.
     var groundShadowEnabled = false
 
+    // MARK: - Visualization workspace (spec §14)
+
+    enum VisualizationTab: String, CaseIterable {
+        case materials = "Materials", environment = "Environment"
+    }
+
+    /// Tools ▸ Visualize: the design is lit by its environment, without grid
+    /// or edges, and the Visualization panel is up.
+    private(set) var visualizeActive = false
+    var visualizationTab: VisualizationTab = .materials
+    /// The environment while a slider is being dragged (committed — one undo
+    /// step — when the drag ends).
+    private var environmentDraft: VisualizationEnvironment?
+
+    /// The environment as shown: the draft while dragging, else the design's.
+    var visualizationEnvironment: VisualizationEnvironment {
+        environmentDraft ?? session.document.visualization
+    }
+
+    func enterVisualize() {
+        guard !visualizeActive else { return }
+        // Leave any tool first: Visualization dresses the model, it does not
+        // edit it.
+        if mode.isSketching { finishSketch() }
+        cancelTool()
+        visualizeActive = true
+    }
+
+    func exitVisualize() {
+        commitEnvironment()
+        visualizeActive = false
+    }
+
+    /// Change the environment. `live` keeps it as a draft (a slider still
+    /// moving); otherwise it is saved as one undoable step.
+    func setEnvironment(_ environment: VisualizationEnvironment, live: Bool = false) {
+        let value = environment.clamped
+        if live {
+            environmentDraft = value
+            return
+        }
+        environmentDraft = nil
+        let old = session.document.visualization
+        guard value != old else { return }
+        session.perform(SetVisualizationEnvironmentCommand(old: old, new: value))
+    }
+
+    /// Save a dragged slider's value.
+    func commitEnvironment() {
+        guard let draft = environmentDraft else { return }
+        setEnvironment(draft)
+    }
+
+    /// Apply a preset with its own sun, keeping the background and shadow.
+    func applyEnvironmentPreset(_ preset: EnvironmentPreset) {
+        var environment = visualizationEnvironment
+        environment.preset = preset.name
+        environment.lightRotation = preset.lightRotation
+        environment.sunElevation = preset.sunElevation
+        environment.lightIntensity = 1
+        setEnvironment(environment)
+    }
+
+    /// Materials on the design's bodies, most used first, each once.
+    var usedMaterials: [BodyMaterialSpec] {
+        var counts: [(spec: BodyMaterialSpec, count: Int)] = []
+        for body in session.document.bodies {
+            var spec = body.material ?? .default
+            spec.baseColorTexture = nil
+            if let i = counts.firstIndex(where: { $0.spec == spec }) {
+                counts[i].count += 1
+            } else {
+                counts.append((spec, 1))
+            }
+        }
+        return counts.enumerated()
+            .sorted { $0.element.count != $1.element.count ? $0.element.count > $1.element.count : $0.offset < $1.offset }
+            .map(\.element.spec)
+    }
+
+    /// Reset the selected bodies to the default look.
+    func resetMaterial() {
+        guard !selection.isEmpty else { return }
+        session.perform(SetMaterialCommand(bodyIDs: selection, material: nil, document: session.document))
+    }
+
     // MARK: - Materials (plan §B15)
 
     /// Material sheet presentation flag (Material palette action).
@@ -6644,6 +6738,22 @@ final class EditorViewModel {
         // Items plane selection.
         axisEntryPart = nil
         selectedPlaneID = nil
+        // Visualization dresses whole bodies (spec §14): a tap selects the
+        // body under it (Shift/⌘ adds or removes it), never a face, and
+        // empty space clears the selection.
+        if visualizeActive {
+            if let hit = HitTester.pickBody(ray: ray, in: scene) {
+                if selectionAdditive {
+                    if selection.contains(hit.bodyID) { selection.remove(hit.bodyID) } else { selection.insert(hit.bodyID) }
+                } else {
+                    selection = [hit.bodyID]
+                }
+            } else if !selectionAdditive {
+                selection = []
+            }
+            mode = selection.count == 1 ? .selected(selection.first!) : .idle
+            return
+        }
         // A Modify-group operation armed from the palette consumes the next tap.
         if let tool = pendingCreateTool {
             applyPendingCreate(tool, ray: ray)

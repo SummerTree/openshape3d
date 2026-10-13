@@ -37,6 +37,8 @@ nonisolated struct ProjectArchive: Codable, Sendable {
     var pinnedMeasurements: Data?
     /// Saved drawings (`[SavedDrawing]` JSON); absent in older archives.
     var drawings: Data?
+    /// The Visualization environment (`VisualizationEnvironment` JSON); absent in older archives.
+    var visualization: Data?
 
     struct BodyRecord: Codable, Sendable {
         var id: UUID
@@ -213,6 +215,7 @@ extension ProjectArchive {
         archive.itemFolders = project.itemFoldersData
         archive.pinnedMeasurements = project.pinnedMeasurementsData
         archive.drawings = project.drawingsData
+        archive.visualization = project.visualizationData
         archive.bodies = project.bodies.map {
             BodyRecord(
                 id: $0.bodyID, name: $0.name, transform: $0.transformData,
@@ -262,6 +265,7 @@ extension ProjectArchive {
         project.itemFoldersData = itemFolders
         project.pinnedMeasurementsData = pinnedMeasurements
         project.drawingsData = drawings
+        project.visualizationData = visualization
         context.insert(project)
 
         for record in bodies {

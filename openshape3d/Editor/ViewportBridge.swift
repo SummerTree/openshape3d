@@ -16,6 +16,8 @@ struct BodyMaterial: Equatable {
     var baseColor: SIMD4<Float>
     var metallic: Float = 0
     var roughness: Float = 0
+    /// Glow, 0…1.
+    var emission: Float = 0
     /// Encoded image bytes sampled as the albedo when the mesh has texcoords.
     /// Decoded into an MTLTexture keyed by (body id, textureRevision).
     var textureData: Data? = nil
@@ -34,6 +36,7 @@ extension BodyMaterial {
             baseColor: SIMD4<Float>(spec.baseColor),
             metallic: Float(spec.metallic),
             roughness: Float(spec.roughness),
+            emission: Float(spec.emission),
             textureData: meshHasTexcoords ? spec.baseColorTexture : nil,
             textureRevision: revision
         )
@@ -54,6 +57,10 @@ struct BodyDrawable: Identifiable {
     /// Optional appearance override; when set its baseColor/metallic/roughness
     /// replace `baseColor` and the default shading response.
     var material: BodyMaterial?
+
+    /// Drawn in the blended pass: a tool preview, or a body whose material
+    /// is see-through (glass, acrylic).
+    var isSeeThrough: Bool { isTranslucent || (material?.baseColor.w ?? 1) < 0.999 }
 }
 
 /// A snapshot of what the viewport should draw. Value type, rebuilt cheaply
@@ -187,6 +194,9 @@ struct ViewportScene {
     var imageQuads: [ImageQuadDrawable] = []
     /// Cheap planar blob shadows under body AABBs (visualization v1).
     var groundShadow: Bool = false
+    /// The Visualization workspace (spec §14): its sun and colours light the
+    /// scene, and the grid and edges are left out. Nil while modelling.
+    var visualization: VisualizationLighting?
     /// Alpha of translucent tool previews (Tool Preview Opacity).
     var toolPreviewOpacity: Float = 0.55
 

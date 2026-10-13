@@ -40,6 +40,8 @@ nonisolated struct DesignDocument: Sendable {
     var pinnedMeasurements: [PinnedMeasurement] = []
     /// Drawings kept in the project (spec §15), in creation order.
     var drawings: [SavedDrawing] = []
+    /// The Visualization workspace's environment (spec §14).
+    var visualization = VisualizationEnvironment()
 
     /// Monotonic revision source for mesh changes (GPU cache invalidation).
     private var revisionCounter: UInt64 = 0

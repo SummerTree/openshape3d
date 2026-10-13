@@ -93,8 +93,9 @@ design. Launching the app is `docs/AI_MODELING_SETUP.md`.
 | `feature.deleteFace` | `bodyID`, `faces[]` — the kernel heals over them (removes a fillet or a boss) |
 | `feature.replaceFace` | `bodyID`, `face`, `targetOrigin`, `targetNormal` (world plane) |
 | `feature.imprint` | `bodyID`, `sketchID` (or `sketchIDs`) — splits the faces the sketch lies on, so a region push/pulls on its own |
-| `body.setMaterial` | `bodyIDs[]`, `preset` (Steel, Aluminum, Brass, Plastic Matte, Plastic Gloss, Rubber, Wood) or `color` `[r,g,b]` 0…1; optional `metallic`, `roughness` |
+| `body.setMaterial` | `bodyIDs[]`, `preset` (any library name: Steel, Aluminum, Brass, Chrome, Gold, Copper, Clear Glass, Oak, Concrete, Glow Warm, … — an unknown name lists them all) or `color` `[r,g,b]` / `[r,g,b,a]` 0…1; optional `metallic`, `roughness`, `emission` (glow) |
 | `item.setHidden` | `ids[]` and/or `allSketches: true`; optional `hidden` (true) |
+| `view.visualize` | enter Visualize (no grid or edges, lit by the design's environment) and optionally set `preset` (Studio, Daylight, Sunset, Overcast, Warm Interior, Night), `lightRotation` °, `sunElevation` 0…90°, `lightIntensity` 0…2, `background` (`environment` / `color` / `transparent`), `backgroundColor` `[r,g,b]`, `groundShadow`; `off: true` leaves. Take the screenshot while it is on for a render-style picture |
 | `command.run` | `id` — a view, `edit.undo`, `edit.redo` (MCP; over curl it is `POST /v1/command`) |
 | `document.export` | `format` (`stl` / `3mf` / `obj` / `step`), `up` (`"z"` for slicers), `body` `[ids]`, `name` (MCP; over curl it is `GET /v1/export`) |
 | `health`, `guide`, `state`, `sketches`, `commands` | no args — reads (MCP; over curl `GET /v1/…`) |
