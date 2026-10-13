@@ -81,7 +81,8 @@ struct RotationOrbitOverlay: View {
         guard let origin = viewModel.gizmoOrigin else { return nil }
         // Spelled out step by step: the one-line version of this is the kind of
         // mixed Float/Double SIMD expression the type checker gives up on.
-        let (uf, vf) = GizmoGeometry.ringBasis(for: part)
+        let (ul, vl) = GizmoGeometry.ringBasis(for: part)
+        let uf = viewModel.gizmoBasis.world(ul), vf = viewModel.gizmoBasis.world(vl)
         let u = SIMD3<Double>(Double(uf.x), Double(uf.y), Double(uf.z))
         let v = SIMD3<Double>(Double(vf.x), Double(vf.y), Double(vf.z))
         let radius: Double = viewModel.rotationOrbitRadius

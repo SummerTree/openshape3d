@@ -101,6 +101,15 @@ struct SettingsView: View {
                         ForEach(TessellationQuality.allCases, id: \.self) { Text($0.title).tag($0) }
                     }
                     .accessibilityIdentifier("SettingsTessellation")
+                    VStack(alignment: .leading) {
+                        LabeledContent("Tool Preview Opacity",
+                                       value: "\(Int((settings.toolPreviewOpacity * 100).rounded()))%")
+                        Slider(value: $settings.toolPreviewOpacity, in: 0.1...1, step: 0.05)
+                            .accessibilityIdentifier("SettingsToolPreviewOpacity")
+                        Text("How solid a tool's preview draws while editing.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
                     if settings.tessellationQuality != TessellationQuality.launch {
                         Text("Takes effect the next time the app launches, for curved faces built after it.")
                             .font(.caption)

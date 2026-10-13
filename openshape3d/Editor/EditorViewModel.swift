@@ -220,6 +220,19 @@ final class EditorViewModel {
         exportableBodies().map { Data(OBJExporter.obj(bodies: $0).utf8) }
     }
 
+    /// File ▸ Export to Slicer: the VISIBLE bodies as a Z-up 3MF standing
+    /// on the bed (`SlicerExport`), or nil with an error when none show.
+    func exportForSlicer() -> Data? {
+        let bodies = session.document.bodies.filter { !$0.isHidden }
+        guard !bodies.isEmpty else {
+            errorMessage = session.document.bodies.isEmpty
+                ? "Nothing to export — the design has no solid bodies."
+                : "Nothing to print — every body is hidden."
+            return nil
+        }
+        return SlicerExport.threeMF(bodies: bodies)
+    }
+
     /// 3MF of the whole document, or nil when empty.
     func exportThreeMF() -> Data? {
         exportableBodies().map { ThreeMFExporter.threeMF(bodies: $0) }
@@ -1275,6 +1288,7 @@ final class EditorViewModel {
         scene.displayMode = displayMode
         scene.showHiddenEdges = showHiddenEdges
         scene.groundShadow = groundShadowEnabled
+        scene.toolPreviewOpacity = Float(AppSettings.shared.toolPreviewOpacity)
         if let section = sectionState {
             let plane = section.plane
             let n = simd_normalize(section.basePlane.normal)
@@ -1531,6 +1545,55 @@ final class EditorViewModel {
         let armed = gizmoRepositionArmed
         claimGizmoPivot()
         gizmoPivotArmed = !armed
+    }
+
+    // MARK: - Gizmo orientation (Auto-Orient, spec §5.1)
+
+    /// Orient badge: line the gizmo's axes up with the selection — a body's
+    /// own axes (so a turned part moves along its length), a face's edge and
+    /// normal, an image's or a sketch's plane — instead of the world's.
+    var gizmoAutoOrient = false
+
+    func toggleGizmoAutoOrient() {
+        gizmoAutoOrient.toggle()
+    }
+
+    /// The frame captured when a move began, so the handles hold still while
+    /// the selection turns under them.
+    private var moveGizmoBasis: GizmoBasis?
+
+    /// The gizmo's axes right now.
+    var gizmoBasis: GizmoBasis {
+        moveGizmoBasis ?? naturalGizmoBasis
+    }
+
+    /// True when Auto-Orient changes anything for this selection.
+    var gizmoCanAutoOrient: Bool {
+        gizmoOrigin != nil && !selectionGizmoBasis.isWorld
+    }
+
+    private var naturalGizmoBasis: GizmoBasis {
+        gizmoAutoOrient ? selectionGizmoBasis : .world
+    }
+
+    /// The frame of what is selected.
+    private var selectionGizmoBasis: GizmoBasis {
+        if let image = selectedImage {
+            return GizmoBasis.frame(z: image.plane.normal, x: image.plane.xAxis) ?? .world
+        }
+        if case .faceSelected = mode, let context = toolContext {
+            return GizmoBasis.frame(z: context.plane.normal, x: context.plane.xAxis) ?? .world
+        }
+        if modelSketchSelectionCentroid != nil,
+           let sketch = session.document.sketches.first(where: { sketch in
+               sketch.entities.contains { selectedSketchEntityIDs.contains($0.id) }
+           }) {
+            return GizmoBasis.frame(z: sketch.plane.normal, x: sketch.plane.xAxis) ?? .world
+        }
+        if let first = selection.first, let body = session.document.body(with: first) {
+            return .rotation(body.transform.rotation)
+        }
+        return .world
     }
 
     /// Put the gizmo back at its natural attach point — the centre of the
@@ -2242,6 +2305,7 @@ final class EditorViewModel {
         }
         moveBefore = before
         moveRotationPivot = gizmoOrigin.map { SIMD3(Double($0.x), Double($0.y), Double($0.z)) }
+        moveGizmoBasis = gizmoBasis
     }
 
     /// Copy badge: clone each selected body in place (AddBodyCommand, new id,
@@ -2361,7 +2425,7 @@ final class EditorViewModel {
     private func applyRotation(part: GizmoPart, degrees: Double) {
         guard part.isRing else { return }
         if let move = modelSketchMove {
-            let axis = part.axisDirection
+            let axis = gizmoBasis.axis(part)
             let q = simd_quatd(angle: degrees * .pi / 180,
                                axis: SIMD3(Double(axis.x), Double(axis.y), Double(axis.z)))
             previewModelSketchMotion(
@@ -2369,7 +2433,7 @@ final class EditorViewModel {
             return
         }
         guard let moveBefore else { return }
-        let axis = part.axisDirection
+        let axis = gizmoBasis.axis(part)
         let q = simd_quatd(
             angle: degrees * .pi / 180,
             axis: SIMD3(Double(axis.x), Double(axis.y), Double(axis.z))
@@ -2456,6 +2520,7 @@ final class EditorViewModel {
         guard let before = moveBefore else { return }
         moveBefore = nil
         moveRotationPivot = nil
+        moveGizmoBasis = nil
         var after = [BodyID: Transform3D]()
         var changed = false
         for (id, original) in before {
@@ -2560,7 +2625,7 @@ final class EditorViewModel {
         angleEntryPart = nil
         rotationOrbit = nil
         guard abs(degrees) > 1e-9 else { return }
-        let a = part.axisDirection
+        let a = gizmoBasis.axis(part)
         let axis = SIMD3<Double>(Double(a.x), Double(a.y), Double(a.z))
         // Rotate tool armed on a FACE: spin the face, deforming the solid.
         if faceRotateActive {
@@ -2639,7 +2704,7 @@ final class EditorViewModel {
             return nil
         }
         let d = SIMD3<Double>(Double(delta.x), Double(delta.y), Double(delta.z))
-        let a = part.axisDirection
+        let a = gizmoBasis.axis(part)
         // An arrow reads its own axis component (signed travel); a plane tile
         // reads how far the body slid in that plane.
         let distance = part.isArrow
@@ -2666,7 +2731,7 @@ final class EditorViewModel {
         guard let part = axisEntryPart else { return }
         axisEntryPart = nil
         guard abs(distance) > 1e-9 else { return }
-        let a = part.axisDirection
+        let a = gizmoBasis.axis(part)
         let axis = SIMD3(Double(a.x), Double(a.y), Double(a.z))
         // Selected image (plan §B10): exact in-plane move along the axis.
         // The Copy badge applies to a typed move as it does to a drag
@@ -9099,7 +9164,7 @@ final class EditorViewModel {
 
     private func handleSplineTap(ray: Ray) {
         guard let sketch = activeSketch, let raw = rawSketchPoint(from: ray) else { return }
-        let point = SnapEngine.snap(raw, in: sketch, faceLoops: activeFaceSnapLoops(),
+        let point = SnapEngine.snap(raw, in: sketch, faceLoops: activeFaceSnapLoops(), distant: activeDistantSnap(),
                                     options: AppSettings.shared.snapOptions,
                                     tolerance: sketchSnapTolerance).point
         if splinePlacedPoints.count >= 3,
@@ -10415,7 +10480,7 @@ final class EditorViewModel {
         if tool == .arc, pendingArc == nil {
             guard let raw = rawSketchPoint(from: ray) else { return }
             let point = SnapEngine.snap(raw, in: activeSketch,
-                faceLoops: activeFaceSnapLoops(), options: AppSettings.shared.snapOptions,
+                faceLoops: activeFaceSnapLoops(), distant: activeDistantSnap(), options: AppSettings.shared.snapOptions,
                 tolerance: sketchSnapTolerance).point
             clearChain()
             if let start = arcTapStart {
@@ -11648,7 +11713,7 @@ final class EditorViewModel {
                 return previous != nil
             }
             let snap = SnapEngine.snap(raw, in: sketch,
-                faceLoops: activeFaceSnapLoops(), options: AppSettings.shared.snapOptions,
+                faceLoops: activeFaceSnapLoops(), distant: activeDistantSnap(), options: AppSettings.shared.snapOptions,
                 tolerance: sketchSnapTolerance)
             guard simd_length(snap.point - start) > 1e-6 else {
                 pendingEntity = nil
@@ -11670,7 +11735,7 @@ final class EditorViewModel {
             guard hasPendingSpline else { return false }
             let previous = pendingEntity
             if let ray, let sketch = activeSketch, let raw = rawSketchPoint(from: ray) {
-                let snap = SnapEngine.snap(raw, in: sketch, faceLoops: activeFaceSnapLoops(),
+                let snap = SnapEngine.snap(raw, in: sketch, faceLoops: activeFaceSnapLoops(), distant: activeDistantSnap(),
                                            options: AppSettings.shared.snapOptions,
                                            tolerance: sketchSnapTolerance)
                 splineHoverPoint = snap.point
@@ -11687,7 +11752,7 @@ final class EditorViewModel {
             let previous = activeSnap
             if let ray, let sketch = activeSketch, let raw = rawSketchPoint(from: ray) {
                 let snap = SnapEngine.snap(raw, in: sketch,
-                    faceLoops: activeFaceSnapLoops(), options: AppSettings.shared.snapOptions, tolerance: sketchSnapTolerance)
+                    faceLoops: activeFaceSnapLoops(), distant: activeDistantSnap(), options: AppSettings.shared.snapOptions, tolerance: sketchSnapTolerance)
                 activeSnap = snap.snappedToPoint ? (snap.kind, snap.point) : nil
             } else {
                 activeSnap = nil
@@ -11721,7 +11786,7 @@ final class EditorViewModel {
               let ray, let sketch = activeSketch, let raw = rawSketchPoint(from: ray)
         else { return clearLinePreviewIfNeeded() }
 
-        let snap = SnapEngine.snap(raw, in: sketch, faceLoops: activeFaceSnapLoops(), options: AppSettings.shared.snapOptions, tolerance: sketchSnapTolerance)
+        let snap = SnapEngine.snap(raw, in: sketch, faceLoops: activeFaceSnapLoops(), distant: activeDistantSnap(), options: AppSettings.shared.snapOptions, tolerance: sketchSnapTolerance)
         var end = snap.point
         var willClose = false
         if let start = chainStart,
@@ -12145,7 +12210,7 @@ final class EditorViewModel {
     /// Ray → snapped plane-local point, while sketching.
     private func sketchPoint(from ray: Ray) -> SIMD2<Double>? {
         guard let raw = rawSketchPoint(from: ray) else { return nil }
-        let result = SnapEngine.snap(raw, in: activeSketch, faceLoops: activeFaceSnapLoops(), options: AppSettings.shared.snapOptions, tolerance: sketchSnapTolerance)
+        let result = SnapEngine.snap(raw, in: activeSketch, faceLoops: activeFaceSnapLoops(), distant: activeDistantSnap(), options: AppSettings.shared.snapOptions, tolerance: sketchSnapTolerance)
         activeSnap = (result.kind, result.point)
         return result.point
     }
@@ -12166,6 +12231,34 @@ final class EditorViewModel {
         faceSnapCache = (key, loops)
         return loops
     }
+
+    /// Distant Edges: every visible body's edges projected onto the active
+    /// sketch plane, memoized like the face loops.
+    private func activeDistantSnap() -> DistantSnapGeometry {
+        guard AppSettings.shared.snapToDistantEdges,
+              case .sketching = mode, let plane = activeSketch?.plane else { return .empty }
+        var meshRevision: UInt64 = 0
+        for body in session.document.bodies where !body.isHidden {
+            meshRevision &+= body.meshRevision &* 31 &+ UInt64(body.isHidden ? 1 : 0)
+        }
+        let key = FaceSnapCacheKey(plane: plane, revision: session.document.bodies.count,
+                                   meshRevision: meshRevision)
+        if let cached = distantSnapCache, cached.key == key { return cached.geometry }
+        var segments: [SIMD3<Double>] = []
+        for body in session.document.bodies where !body.isHidden {
+            let edges = body.edges
+            let matrix = body.transform.matrix
+            for p in edges.segments {
+                let w = matrix * SIMD4<Double>(Double(p.x), Double(p.y), Double(p.z), 1)
+                segments.append(SIMD3(w.x, w.y, w.z))
+            }
+        }
+        let geometry = DistantSnapGeometry.build(segments: segments, plane: plane)
+        distantSnapCache = (key, geometry)
+        return geometry
+    }
+    @ObservationIgnored
+    private var distantSnapCache: (key: FaceSnapCacheKey, geometry: DistantSnapGeometry)?
 
     private struct FaceSnapCacheKey: Equatable {
         let plane: SketchPlane
@@ -12246,7 +12339,7 @@ final class EditorViewModel {
         // No drawing tool armed: empty-space drags orbit the camera so the
         // sketch can be viewed from an angle (Shapr3D).
         guard tool != nil else { return false }
-        var point = SnapEngine.snap(raw, in: activeSketch, faceLoops: activeFaceSnapLoops(), options: AppSettings.shared.snapOptions, tolerance: sketchSnapTolerance).point
+        var point = SnapEngine.snap(raw, in: activeSketch, faceLoops: activeFaceSnapLoops(), distant: activeDistantSnap(), options: AppSettings.shared.snapOptions, tolerance: sketchSnapTolerance).point
         if tool == .line, let anchor = chainAnchor {
             if simd_length(raw - anchor) <= (AppSettings.shared.snapToSketchGuidepoints
                 ? sketchSnapTolerance : 1e-9) {
@@ -12500,7 +12593,7 @@ final class EditorViewModel {
         else { return }
         _ = clearLinePreviewIfNeeded() // the tap supersedes any hover preview
 
-        let target = SnapEngine.snap(raw, in: sketch, faceLoops: activeFaceSnapLoops(), options: AppSettings.shared.snapOptions, tolerance: sketchSnapTolerance).point
+        let target = SnapEngine.snap(raw, in: sketch, faceLoops: activeFaceSnapLoops(), distant: activeDistantSnap(), options: AppSettings.shared.snapOptions, tolerance: sketchSnapTolerance).point
 
         guard tapChainActive, let anchor = chainAnchor, let start = chainStart else {
             // Not chaining: an endpoint resumes from that exact point, matching
@@ -16604,6 +16697,11 @@ final class EditorViewModel {
             euclidMesh: .primitive(.box(width: 4, depth: 4, height: 4)),
             revision: document.nextRevision()
         )
+        // OS3D_DEBUG_SEED_TURNED: the box turned 30° about Y, for the
+        // gizmo's Auto-Orient (spec §5.1).
+        if ProcessInfo.processInfo.environment["OS3D_DEBUG_SEED_TURNED"] != nil {
+            body.transform.rotation = simd_quatd(angle: .pi / 6, axis: SIMD3(0, 1, 0))
+        }
         // Seeded screenshots carry the default material explicitly (plan
         // §B15) — value-identical to the legacy look.
         body.material = .default

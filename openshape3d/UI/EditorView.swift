@@ -190,6 +190,8 @@ struct EditorView: View {
     @State private var showBugReport = false
     /// Export ▸ Open on the Web… (WebHandoffSheet).
     @State private var showWebHandoff = false
+    /// Export to Slicer on iPad: the 3MF waiting in the share sheet.
+    @State private var slicerShare: SlicerShare?
     /// Set by a failure alert's "Report This…"; nil from the toolbar button.
     @State private var bugReportDraft: BugReportDraft?
     @State private var pendingMeshImport: MeshImportProbe?
@@ -978,6 +980,31 @@ struct EditorView: View {
         .accessibilityIdentifier("ImportMenu")
     }
 
+    /// Write the slicer 3MF to a temporary file and hand it on.
+    private func exportToSlicer(_ viewModel: EditorViewModel) {
+        guard let data = viewModel.exportForSlicer() else { return }
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("Slicer", isDirectory: true)
+        let url = folder.appendingPathComponent(SlicerExport.fileName(for: project.name))
+        do {
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            try data.write(to: url, options: .atomic)
+        } catch {
+            viewModel.errorMessage = "Couldn't write the file for the slicer: \(error.localizedDescription)"
+            return
+        }
+        #if targetEnvironment(macCatalyst)
+        UIApplication.shared.open(url) { opened in
+            // No app claims .3mf: save it like any other export instead.
+            if !opened {
+                exportDocument = ExportDocument(data: data, contentType: ExportDocument.threeMFType,
+                                                fileExtension: "3mf")
+            }
+        }
+        #else
+        slicerShare = SlicerShare(url: url)
+        #endif
+    }
+
     /// Toolbar Export menu (spec §12, plan §B14): mesh formats, sketch DXF,
     /// screenshot, and — where ModelIO can write USDZ — USDZ + AR Preview.
     private func exportMenu(_ viewModel: EditorViewModel) -> some View {
@@ -990,6 +1017,15 @@ struct EditorView: View {
                 Label("Open on the Web…", systemImage: "globe")
             }
             .accessibilityIdentifier("OpenOnWebButton")
+            // Export to Slicer: a print-ready 3MF (Z-up, on the bed). The Mac
+            // opens it in the app that handles .3mf — the slicer; the iPad
+            // hands it to the share sheet, where slicer apps pick it up.
+            Button {
+                exportToSlicer(viewModel)
+            } label: {
+                Label("Export to Slicer…", systemImage: "printer")
+            }
+            .accessibilityIdentifier("ExportToSlicerButton")
             Divider()
             Button("STL") {
                 if let data = viewModel.exportSTL() {
@@ -1331,6 +1367,22 @@ struct EditorView: View {
                     .tint(viewModel.gizmoRepositionArmed ? Color.orange : Color.secondary)
                     .background(.regularMaterial, in: Capsule())
                     .accessibilityIdentifier("RepositionBadge")
+                    // Orient badge (Auto-Orient, spec §5.1): line the
+                    // gizmo up with the selection's own axes. Offered only
+                    // when that differs from the world's.
+                    if viewModel.gizmoCanAutoOrient || viewModel.gizmoAutoOrient {
+                        Button {
+                            viewModel.toggleGizmoAutoOrient()
+                        } label: {
+                            Label("Orient", systemImage: "move.3d")
+                                .font(.subheadline.weight(.semibold))
+                        }
+                        .buttonStyle(.bordered)
+                        .tint(viewModel.gizmoAutoOrient ? Color.blue : Color.secondary)
+                        .background(.regularMaterial, in: Capsule())
+                        .accessibilityIdentifier("OrientBadge")
+                        .accessibilityValue(viewModel.gizmoAutoOrient ? "on" : "off")
+                    }
                     Button {
                         viewModel.copyOnDrag.toggle()
                     } label: {
@@ -2027,6 +2079,10 @@ struct EditorView: View {
             }
             .sheet(isPresented: $showSettings) {
                 SettingsView(settings: AppSettings.shared)
+            }
+            .sheet(item: $slicerShare) { share in
+                ActivityShareSheet(items: [share.url])
+                    .accessibilityIdentifier("SlicerShareSheet")
             }
             .sheet(isPresented: $showWebHandoff) {
                 WebHandoffSheet(designName: project.name) {

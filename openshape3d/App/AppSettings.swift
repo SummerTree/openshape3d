@@ -305,6 +305,8 @@ final class AppSettings {
         static let snapToSketchGuidelines = "os3d.snapToSketchGuidelines"
         static let snapToSketchGuidepoints = "os3d.snapToSketchGuidepoints"
         static let snapToFaceGuidepoints = "os3d.snapToFaceGuidepoints"
+        static let snapToDistantEdges = "os3d.snapToDistantEdges"
+        static let toolPreviewOpacity = "os3d.toolPreviewOpacity"
         static let showSnapHints = "os3d.showSnapHints"
         static let hasSeenWelcome = "os3d.hasSeenWelcome"
         static let footInchFormat = "os3d.footInchFormat"
@@ -344,6 +346,13 @@ final class AppSettings {
         didSet { defaults.set(navigationPreset.rawValue, forKey: Key.navigationPreset) }
     }
     /// Settings ▸ Tessellation Quality; applies at the next launch.
+    /// Display Modes ▸ Tool Preview Opacity: how solid a tool's preview
+    /// body draws while editing (0.1…1).
+    var toolPreviewOpacity: Double {
+        didSet { defaults.set(toolPreviewOpacity, forKey: Key.toolPreviewOpacity) }
+    }
+    static let defaultToolPreviewOpacity = 0.55
+
     var tessellationQuality: TessellationQuality {
         didSet { defaults.set(tessellationQuality.rawValue, forKey: TessellationQuality.defaultsKey) }
     }
@@ -401,13 +410,16 @@ final class AppSettings {
     var snapToFaceGuidepoints: Bool {
         didSet { defaults.set(snapToFaceGuidepoints, forKey: Key.snapToFaceGuidepoints) }
     }
+    var snapToDistantEdges: Bool {
+        didSet { defaults.set(snapToDistantEdges, forKey: Key.snapToDistantEdges) }
+    }
     var showSnapHints: Bool {
         didSet { defaults.set(showSnapHints, forKey: Key.showSnapHints) }
     }
 
     var snapOptions: SnapOptions {
         SnapOptions(grid: snapToGrid, sketchGuidepoints: snapToSketchGuidepoints,
-                    faceGuidepoints: snapToFaceGuidepoints)
+                    faceGuidepoints: snapToFaceGuidepoints, distantEdges: snapToDistantEdges)
     }
 
     /// The sample count pipelines were actually built with this launch.
@@ -439,6 +451,7 @@ final class AppSettings {
         snapToSketchGuidelines = Self.storedBool(defaults, Key.snapToSketchGuidelines) ?? true
         snapToSketchGuidepoints = Self.storedBool(defaults, Key.snapToSketchGuidepoints) ?? true
         snapToFaceGuidepoints = Self.storedBool(defaults, Key.snapToFaceGuidepoints) ?? true
+        snapToDistantEdges = Self.storedBool(defaults, Key.snapToDistantEdges) ?? true
         showSnapHints = Self.storedBool(defaults, Key.showSnapHints) ?? true
         hasSeenWelcome = Self.storedBool(defaults, Key.hasSeenWelcome) ?? false
         unit = defaults.string(forKey: Key.unit).flatMap(DisplayUnit.init) ?? .millimeters
@@ -446,6 +459,8 @@ final class AppSettings {
         degreeFormat = defaults.string(forKey: Key.degreeFormat).flatMap(DegreeFormat.init) ?? .decimal
         reverseZoom = Self.storedBool(defaults, Key.reverseZoom) ?? false
         navigationPreset = defaults.string(forKey: Key.navigationPreset).flatMap(NavigationPreset.init) ?? .shapr3d
+        toolPreviewOpacity = (defaults.object(forKey: Key.toolPreviewOpacity) as? Double)
+            .map { min(max($0, 0.1), 1) } ?? Self.defaultToolPreviewOpacity
         tessellationQuality = defaults.string(forKey: TessellationQuality.defaultsKey)
             .flatMap(TessellationQuality.init) ?? .high
         showTouches = Self.storedBool(defaults, Key.showTouches) ?? false

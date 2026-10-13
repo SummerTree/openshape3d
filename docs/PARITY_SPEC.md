@@ -579,9 +579,16 @@ visibility and Snapping Hints (text next to pointer, e.g. "endpoint",
 "midpoint", "sketch center"). Snap points are suggestions only.
 **Status:** 🟡 partial — `SnapEngine` snaps to sketch endpoints, line
 midpoints, rect corners, circle/ellipse/arc centers, arc endpoints, and
-polygon vertices (0.35 tolerance), then to a fixed 0.5 grid. Missing:
-guidelines, entity–entity intersection points, 3D guide points, distant
-edges, hints UI, enable/disable toggles, dynamic grid resolution.
+polygon vertices; to the corners, edge midpoints, centers and edges of the
+face being sketched on; and, with **Distant Edges** (`DistantSnapGeometry`),
+to every visible body's edges projected onto the sketch plane — corners,
+midpoints and runs of straight edges, and the centers of closed curves (a
+hole's rim offers its center, not its facets) — then to the grid. The
+Snapping settings toggle Grid, Sketch Guide Lines, Sketch Guidepoints, Face
+Guidepoints and Distant Edges, and Snapping Hints name the snap. Distant
+edges apply in any view, not only orthogonal ones. Missing: entity–entity
+intersection points, the Show Guide Points toggle, guideline memory,
+dynamic grid resolution.
 **Feasibility:** snapping [mesh-kernel OK]; guide-created constraints
 [needs constraint solver]
 
@@ -1123,9 +1130,14 @@ rotationDelta`, quaternion-multiplying `updateTransform`); tapping an arrow
 (`beginAxisDistanceEntry` → "Move X/Y/Z" field); the **Copy badge** chip
 duplicates the selection in place before the next drag (`copyOnDrag`,
 `AddBodyCommand` clones); undoable via `TransformBodiesCommand`. Highlight
-is drag-time only (no hover recognizer). Missing: center
-re-anchoring/snapping, dimension labels during drag, Link badge,
-auto-orientation, model-aware totals.
+is drag-time only (no hover recognizer). **Auto-Orient:** an Orient badge
+(shown when the selection has a frame of its own — a turned body, a face
+picked for Move, an image or a sketch selection) lines the gizmo's arrows,
+tiles and rings up with that frame (`GizmoBasis`); hit tests, drags, typed
+distances and angles then run along those axes, and the frame holds still
+for the length of a drag. The Reposition badge moves the gizmo's centre.
+Missing: center snapping to geometry (re-anchoring is a free drop), Link
+badge, model-aware totals, auto-centering on circular faces.
 **Feasibility:** [mesh-kernel OK]; history integration [needs history engine]
 
 ### 5.2 Translate
@@ -1878,6 +1890,12 @@ as MSBO, mm) — same analytic-bodies-only rule as STEP (`STEPKitTests`).
 **SVG from Sketch (2026-10-12):** the open (or ground-plane) sketch as an SVG
 drawing in millimetres, Y flipped to read head-on; lines, circles, arcs and
 ellipses exact, splines tessellated (`SVGKitTests`).
+**Export to Slicer (2026-10-12):** the visible bodies as a print-ready 3MF
+(`SlicerExport`): turned Z-up, lowest point on the bed, centred in x/y, the
+arrangement kept, named after the design. The Mac opens it in the app that
+handles .3mf (the installed slicer), falling back to a save panel; the iPad
+hands it to the share sheet, where slicer apps take it; the web downloads it
+(`SlicerExportTests`). No per-slicer picker or resolution options.
 **Status:** 🟡 partial. **STEP (AP214) export now ships** via OCCT
 DataExchange (`OCCTKernel.writeSTEP`) — unlike every mesh format below it
 carries the EXACT B-rep, so analytic surfaces survive into other CAD
@@ -1892,8 +1910,7 @@ is hidden elsewhere, never faked), and **DXF** of the active/ground sketch
 File per Body" split (per-item files). Plus a **PNG screenshot** entry with
 an options sheet: resolution multiplier, transparent background, and grid
 on/off (offscreen renderer capture). Missing: native/X_T/STEP/IGES, DWG/SVG/
-PDF, unit options, hidden-item filtering, vertex colors, favorites/batch,
-slicer hand-off.
+PDF, unit options, hidden-item filtering, vertex colors, favorites/batch.
 **Feasibility:** OBJ/3MF/GLB/USDZ/PNG [mesh-kernel OK]; STEP/IGES
 [needs B-rep kernel]; X_T/X_B commercial; DWG via licensed libs (DXF/SVG
 [mesh-kernel OK])
@@ -2158,8 +2175,10 @@ default), **Shaded (No Edges)**, **Wireframe** (feature edges over a
 depth-only prepass so hidden lines stay hidden), and **X-Ray** (translucent
 fill, depth-read/no-write), plus a **Show Hidden Edges** toggle (extra
 low-alpha edge pass with a reversed depth test — occluded edges render
-faintly). Bodies stay selectable in every mode. Missing: Visualized mode,
-Zebra/Curvature surface analysis.
+faintly). Bodies stay selectable in every mode. **Tool Preview Opacity**
+(Settings ▸ Graphics, 10–100 %, default 55 %) sets how solid a tool's
+translucent preview draws. Zebra and Curvature Map are in Surface Analysis
+(above). Missing: Visualized mode, Show Decals.
 **Feasibility:** [mesh-kernel OK]
 
 ---

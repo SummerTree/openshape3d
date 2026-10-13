@@ -187,6 +187,8 @@ struct ViewportScene {
     var imageQuads: [ImageQuadDrawable] = []
     /// Cheap planar blob shadows under body AABBs (visualization v1).
     var groundShadow: Bool = false
+    /// Alpha of translucent tool previews (Tool Preview Opacity).
+    var toolPreviewOpacity: Float = 0.55
 
     /// World-space AABB of everything drawn — bodies AND sketches — for
     /// fit-view. Nil when empty.

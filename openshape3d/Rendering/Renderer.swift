@@ -303,9 +303,10 @@ final class Renderer: NSObject, MTKViewDelegate {
         // here at a fixed low alpha (depth read, no write).
         for drawable in scene.bodies where drawable.isTranslucent || mode == .xray {
             encoder.setDepthStencilState(pipelines.depthReadOnly)
-            let xrayAlpha: Float? = (mode == .xray && !drawable.isTranslucent) ? 0.35 : nil
+            // Previews take the Tool Preview Opacity setting.
+            let alpha: Float = drawable.isTranslucent ? scene.toolPreviewOpacity : 0.35
             drawBody(drawable, encoder: encoder, pipeline: pipelines.litBlended,
-                     alphaOverride: xrayAlpha)
+                     alphaOverride: alpha)
         }
     }
 

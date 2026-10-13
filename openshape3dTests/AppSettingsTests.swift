@@ -25,6 +25,27 @@ final class AppSettingsTests: XCTestCase {
         XCTAssertEqual(AppSettings(defaults: defaults).circularAnnotations, .radiusAndDiameter)
     }
 
+    @MainActor
+    func testDistantEdgesAndToolPreviewOpacityPersist() throws {
+        let suite = "SnapPreviewTests-" + UUID().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let settings = AppSettings(defaults: defaults)
+        XCTAssertTrue(settings.snapToDistantEdges, "on by default, as in the reference app")
+        XCTAssertTrue(settings.snapOptions.distantEdges)
+        XCTAssertEqual(settings.toolPreviewOpacity, AppSettings.defaultToolPreviewOpacity)
+
+        settings.snapToDistantEdges = false
+        settings.toolPreviewOpacity = 0.8
+        let reloaded = AppSettings(defaults: defaults)
+        XCTAssertFalse(reloaded.snapToDistantEdges)
+        XCTAssertFalse(reloaded.snapOptions.distantEdges)
+        XCTAssertEqual(reloaded.toolPreviewOpacity, 0.8, accuracy: 1e-9)
+
+        defaults.set(7.0, forKey: "os3d.toolPreviewOpacity")
+        XCTAssertEqual(AppSettings(defaults: defaults).toolPreviewOpacity, 1, "out-of-range values clamp")
+    }
+
     // MARK: DisplayUnit conversion
 
     func testConversionFactors() {

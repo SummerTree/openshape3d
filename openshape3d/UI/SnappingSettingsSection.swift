@@ -13,6 +13,8 @@ struct SnappingSettingsSection: View {
                 .accessibilityIdentifier("SnapToSketchGuidepointsToggle")
             Toggle("Face Guidepoints", isOn: $settings.snapToFaceGuidepoints)
                 .accessibilityIdentifier("SnapToFaceGuidepointsToggle")
+            Toggle("Distant Edges", isOn: $settings.snapToDistantEdges)
+                .accessibilityIdentifier("SnapToDistantEdgesToggle")
             HStack {
                 Text("Snapping Hints")
                 Spacer()
@@ -24,7 +26,7 @@ struct SnappingSettingsSection: View {
         } header: {
             Text("Snapping")
         } footer: {
-            Text("Snap to grid steps, sketch points, or the corners and edges of the face you are sketching on. Hints label the snap without changing it. Auto-Constrain separately controls inferred geometric relationships.")
+            Text("Snap to grid steps, sketch points, or the corners and edges of the face you are sketching on. Distant Edges adds the edges of other bodies, seen straight through the sketch plane. Hints label the snap without changing it. Auto-Constrain separately controls inferred geometric relationships.")
         }
     }
 }

@@ -51,6 +51,147 @@ nonisolated struct SnapOptions: Equatable, Sendable {
     var grid = true
     var sketchGuidepoints = true
     var faceGuidepoints = true
+    /// Snap to the edges of bodies away from the sketch plane, projected
+    /// onto it (Shapr3D's "Distant Edges").
+    var distantEdges = true
+}
+
+/// Body edges off the sketch plane, projected onto it: their corners, the
+/// midpoints of straight runs, the centers of closed curves (a hole's rim
+/// projects to its circle) and the straight runs themselves.
+nonisolated struct DistantSnapGeometry: Equatable, Sendable {
+    var corners: [SIMD2<Double>] = []
+    var midpoints: [SIMD2<Double>] = []
+    var centers: [SIMD2<Double>] = []
+    var runs: [(SIMD2<Double>, SIMD2<Double>)] = []
+
+    static let empty = DistantSnapGeometry()
+
+    var isEmpty: Bool { corners.isEmpty && centers.isEmpty && runs.isEmpty }
+
+    static func == (lhs: DistantSnapGeometry, rhs: DistantSnapGeometry) -> Bool {
+        lhs.corners == rhs.corners && lhs.midpoints == rhs.midpoints && lhs.centers == rhs.centers
+            && lhs.runs.count == rhs.runs.count
+            && zip(lhs.runs, rhs.runs).allSatisfy { $0.0 == $1.0 && $0.1 == $1.1 }
+    }
+
+    /// Chain world-space edge segments (pairs) into polylines, split them at
+    /// sharp turns, and project onto `plane`. Tessellated curves stay one
+    /// polyline, so a circle offers its center rather than dozens of
+    /// facet corners.
+    static func build(segments: [SIMD3<Double>], plane: SketchPlane,
+                      cornerAngleDegrees: Double = 25) -> DistantSnapGeometry {
+        var geometry = DistantSnapGeometry()
+        guard segments.count >= 2 else { return geometry }
+        // Weld endpoints.
+        var ids: [SIMD3<Int64>: Int] = [:]
+        var points: [SIMD3<Double>] = []
+        func id(_ p: SIMD3<Double>) -> Int {
+            let key = SIMD3(MeshQuantize.key64(p.x, inverseQuantum: 1e5),
+                            MeshQuantize.key64(p.y, inverseQuantum: 1e5),
+                            MeshQuantize.key64(p.z, inverseQuantum: 1e5))
+            if let existing = ids[key] { return existing }
+            ids[key] = points.count
+            points.append(p)
+            return points.count - 1
+        }
+        var adjacency: [Int: [Int]] = [:]
+        var edges = Set<SIMD2<Int>>()
+        var i = 0
+        while i + 1 < segments.count {
+            let a = id(segments[i]), b = id(segments[i + 1])
+            i += 2
+            guard a != b, edges.insert(SIMD2(min(a, b), max(a, b))).inserted else { continue }
+            adjacency[a, default: []].append(b)
+            adjacency[b, default: []].append(a)
+        }
+        // Walk polylines: from every non-degree-2 vertex first, then the
+        // remaining closed loops.
+        var used = Set<SIMD2<Int>>()
+        func key(_ a: Int, _ b: Int) -> SIMD2<Int> { SIMD2(min(a, b), max(a, b)) }
+        var chains: [(points: [Int], closed: Bool)] = []
+        func walk(from start: Int, via next: Int) -> [Int] {
+            var chain = [start, next]
+            used.insert(key(start, next))
+            var previous = start, current = next
+            while adjacency[current, default: []].count == 2 {
+                guard let step = adjacency[current]!.first(where: { $0 != previous && !used.contains(key(current, $0)) })
+                else { break }
+                used.insert(key(current, step))
+                chain.append(step)
+                previous = current
+                current = step
+            }
+            return chain
+        }
+        let order = adjacency.keys.sorted()
+        for v in order where adjacency[v]!.count != 2 {
+            for n in adjacency[v]! where !used.contains(key(v, n)) {
+                chains.append((walk(from: v, via: n), false))
+            }
+        }
+        for v in order {
+            for n in adjacency[v]! where !used.contains(key(v, n)) {
+                var chain = walk(from: v, via: n)
+                let closed = chain.count > 3 && chain.last == chain.first
+                if closed { chain.removeLast() }
+                chains.append((chain, closed))
+            }
+        }
+
+        let cosCorner = cos(cornerAngleDegrees * .pi / 180)
+        var cornerKeys = Set<SIMD2<Int64>>()
+        func addCorner(_ p: SIMD2<Double>) {
+            let k = SIMD2(MeshQuantize.key64(p.x, inverseQuantum: 1e4), MeshQuantize.key64(p.y, inverseQuantum: 1e4))
+            if cornerKeys.insert(k).inserted { geometry.corners.append(p) }
+        }
+        for chain in chains {
+            let world = chain.points.map { points[$0] }
+            let n = world.count
+            guard n >= 2 else { continue }
+            // Sharp turns split a chain into pieces; a smooth closed chain
+            // (a circle, a rounded slot) is one curve with a center.
+            var sharp: [Int] = []
+            for k in 0..<n {
+                let hasPrev = chain.closed || k > 0, hasNext = chain.closed || k < n - 1
+                guard hasPrev, hasNext else { sharp.append(k); continue }
+                let a = world[(k - 1 + n) % n], b = world[k], c = world[(k + 1) % n]
+                let u = b - a, v = c - b
+                let lu = simd_length(u), lv = simd_length(v)
+                if lu < 1e-9 || lv < 1e-9 || simd_dot(u, v) / (lu * lv) < cosCorner { sharp.append(k) }
+            }
+            if chain.closed && sharp.isEmpty {
+                let centroid = world.reduce(SIMD3<Double>.zero, +) / Double(n)
+                geometry.centers.append(plane.toLocal(centroid))
+                continue
+            }
+            for k in sharp { addCorner(plane.toLocal(world[k])) }
+            // Straight runs between consecutive sharp vertices.
+            let stops = chain.closed ? sharp + [sharp[0] + n] : sharp
+            for s in 0..<(stops.count - 1) {
+                let from = stops[s], to = stops[s + 1]
+                let a3 = world[from % n], b3 = world[to % n]
+                // Straight only if every vertex between lies on the chord.
+                let chord = b3 - a3
+                let len = simd_length(chord)
+                guard len > 1e-9 else { continue }
+                var straight = true
+                if to - from > 1 {
+                    for m in (from + 1)..<to {
+                        let p = world[m % n]
+                        let off = simd_length(simd_cross(p - a3, chord)) / len
+                        if off > max(1e-4, len * 1e-3) { straight = false; break }
+                    }
+                }
+                guard straight else { continue }
+                let a = plane.toLocal(a3), b = plane.toLocal(b3)
+                guard simd_distance(a, b) > 1e-6 else { continue } // seen end-on: just a corner
+                geometry.runs.append((a, b))
+                geometry.midpoints.append((a + b) / 2)
+            }
+        }
+        return geometry
+    }
 }
 
 nonisolated enum SnapEngine {
@@ -88,6 +229,7 @@ nonisolated enum SnapEngine {
     /// edges the same status as existing sketch geometry.
     static func snap(
         _ p: SIMD2<Double>, in sketch: Sketch?, faceLoops: [[SIMD2<Double>]] = [],
+        distant: DistantSnapGeometry = .empty,
         options: SnapOptions = .init(), tolerance: Double = pointTolerance
     ) -> SnapResult {
         var best: (candidate: SnapCandidate, distance: Double)?
@@ -110,6 +252,11 @@ nonisolated enum SnapEngine {
         }
         if options.faceGuidepoints {
             for candidate in faceSnapCandidates(loops: faceLoops, near: p, grid: options.grid) {
+                consider(candidate)
+            }
+        }
+        if options.distantEdges {
+            for candidate in distantSnapCandidates(distant, near: p, grid: options.grid) {
                 consider(candidate)
             }
         }
@@ -150,6 +297,21 @@ nonisolated enum SnapEngine {
                 if let onEdge = closestPointOnSegment(p, a, b) {
                     out.append(SnapCandidate(point: grid ? gridAlongEdge(onEdge, a, b) : onEdge, kind: .edge))
                 }
+            }
+        }
+        return out
+    }
+
+    /// Snappable points from projected distant edges.
+    static func distantSnapCandidates(
+        _ geometry: DistantSnapGeometry, near p: SIMD2<Double>, grid: Bool = true
+    ) -> [SnapCandidate] {
+        var out = geometry.corners.map { SnapCandidate(point: $0, kind: .endpoint) }
+        out += geometry.midpoints.map { SnapCandidate(point: $0, kind: .midpoint) }
+        out += geometry.centers.map { SnapCandidate(point: $0, kind: .center) }
+        for (a, b) in geometry.runs {
+            if let onEdge = closestPointOnSegment(p, a, b) {
+                out.append(SnapCandidate(point: grid ? gridAlongEdge(onEdge, a, b) : onEdge, kind: .edge))
             }
         }
         return out

@@ -247,8 +247,9 @@ final class ViewportCoordinator: NSObject, ViewportGestureDelegate, ViewportCame
     private func gizmoProjector() -> ((SIMD3<Float>) -> CGPoint?)? {
         guard let renderer, let origin = viewModel.gizmoOrigin else { return nil }
         let scale = renderer.gizmoScale(origin: origin)
+        let basis = viewModel.gizmoBasis
         return { [weak self] local in
-            let world = origin + local * scale
+            let world = origin + basis.world(local) * scale
             return self?.worldToScreenPoint(
                 SIMD3(Double(world.x), Double(world.y), Double(world.z)))
         }
@@ -545,11 +546,11 @@ final class ViewportCoordinator: NSObject, ViewportGestureDelegate, ViewportCame
                 if viewModel.faceRotateActive, part.isRing {
                     let gizmo = GizmoState(
                         origin: origin, scale: renderer.gizmoScale(origin: origin),
-                        highlighted: nil)
+                        highlighted: nil, basis: viewModel.gizmoBasis)
                     if let session = GizmoDragSession(part: part, gizmo: gizmo, ray: ray),
                        viewModel.beginFaceRotate() {
                         gizmoDrag = session
-                        faceRotateAxis = SIMD3<Double>(part.axisDirection)
+                        faceRotateAxis = SIMD3<Double>(session.axis)
                         faceRotateDragActive = true
                         viewModel.gizmoHighlight = part
                         viewModel.beginRingRotation(
@@ -576,7 +577,8 @@ final class ViewportCoordinator: NSObject, ViewportGestureDelegate, ViewportCame
                 let gizmo = GizmoState(
                     origin: origin,
                     scale: renderer.gizmoScale(origin: origin),
-                    highlighted: nil
+                    highlighted: nil,
+                    basis: viewModel.gizmoBasis
                 )
                 if let session = GizmoDragSession(part: part, gizmo: gizmo, ray: ray) {
                     gizmoDrag = session
@@ -596,7 +598,8 @@ final class ViewportCoordinator: NSObject, ViewportGestureDelegate, ViewportCame
             let gizmo = GizmoState(
                 origin: origin,
                 scale: renderer.gizmoScale(origin: origin),
-                highlighted: nil
+                highlighted: nil,
+                basis: viewModel.gizmoBasis
             )
             if let session = GizmoDragSession(part: part, gizmo: gizmo, ray: ray) {
                 gizmoDrag = session

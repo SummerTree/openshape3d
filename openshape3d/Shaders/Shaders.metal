@@ -113,7 +113,7 @@ fragment float4 fragment_lit(
         albedo = mix(albedo, frame.accentColor.rgb, 0.18);
     } else if (body.selectionState == SelectionStatePreview) {
         albedo = mix(albedo, frame.accentColor.rgb, 0.30);
-        alpha = 0.55;
+        alpha = body.baseColor.a; // Tool Preview Opacity (the renderer sets it)
     }
 
     // Half-lambert wrap for a soft CAD look that never goes fully dark.
@@ -202,7 +202,7 @@ fragment float4 fragment_litTextured(
         albedo = mix(albedo, frame.accentColor.rgb, 0.18);
     } else if (body.selectionState == SelectionStatePreview) {
         albedo = mix(albedo, frame.accentColor.rgb, 0.30);
-        alpha = 0.55;
+        alpha = body.baseColor.a; // Tool Preview Opacity (the renderer sets it)
     }
     float ndl = saturate(dot(N, L)) * 0.5 + 0.5;
     float3 hemi = mix(frame.groundColor.rgb, frame.skyColor.rgb, N.y * 0.5 + 0.5);
