@@ -217,13 +217,16 @@ nonisolated enum DrawingExport {
     }
 
     /// PDF literal string: escape the delimiters, and keep to the font's
-    /// Latin range (anything else becomes "?").
-    private static func pdfEscaped(_ s: String) -> String {
+    /// Latin range — Ø, °, ±, × as WinAnsi codes, written in octal so the
+    /// stream stays ASCII (anything else becomes "?").
+    static func pdfEscaped(_ s: String) -> String {
         var out = ""
         for ch in s.unicodeScalars {
-            switch ch {
-            case "(", ")", "\\": out += "\\" + String(ch)
-            default: out += ch.value < 0x80 && ch.value >= 0x20 ? String(ch) : "?"
+            switch ch.value {
+            case 0x28, 0x29, 0x5C: out += "\\" + String(ch)
+            case 0x20..<0x7F: out += String(ch)
+            case 0xA0...0xFF: out += "\\" + String(ch.value, radix: 8)
+            default: out += "?"
             }
         }
         return out

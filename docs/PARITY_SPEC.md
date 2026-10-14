@@ -2200,12 +2200,20 @@ the tapped sides, edges carried out or in to it; across the corner, edges
 carried through, when the corner is too small to hold it — dragging the
 value through the corner flips it), two parallel edges the gap between
 them, an edge and a corner the distance square across. A corner wins near
-it unless the tap is right on a short edge, along from its ends. Tests:
+it unless the tap is right on a short edge, along from its ends.
+**Tolerances (2026-10-14):** every dimension has Prefix and Suffix text
+("2× Ø6 mm THRU") and a Tolerance — None, Symmetrical ("40 ±0.1 mm"),
+Deviation (+upper / −lower stacked small after the value), Limits (the two
+limits stacked in place of the value) or Basic (the value boxed); the
+deviations are typed in the display unit (an angle's in degrees) and kept
+when the style changes. The list shows the value on one line ("40
++0.1/-0.05 mm"). PDF text now keeps Ø, °, ± and × (WinAnsi codes; they
+were written as "?"). Tests:
 `DrawingAnnotationsTests`, `DrawingUITests`, web
 `drawing-annotations-smoke.mjs`. Missing: free
 placement of new views from any angle (custom projection angles, extra
 projected views), cutting lines through picked points / stepped sections,
-tolerances, centerlines,
+precision per dimension, centerlines,
 title-block layouts, multiple sheets, DWG.
 **Feasibility:** [mesh-kernel OK] for a first version (orthographic
 projection + silhouette/hidden-line from meshes; associativity with the model

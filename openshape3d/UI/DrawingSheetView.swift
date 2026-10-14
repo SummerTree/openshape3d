@@ -366,7 +366,10 @@ struct DrawingSheetView: View {
                         }
                         .pickerStyle(.segmented)
                         .accessibilityIdentifier("DrawingAnnotationOrientation")
-                    } else if annotation.kind == .note {
+                    }
+                    if annotation.kind != .note {
+                        dimensionText($annotation)
+                    } else {
                         TextField("Text", text: $annotation.text, axis: .vertical)
                             .accessibilityIdentifier("DrawingNoteText")
                         if !annotation.view.isEmpty {
@@ -382,6 +385,44 @@ struct DrawingSheetView: View {
             }
         } header: {
             Text("Dimensions & Notes")
+        }
+    }
+
+    /// A dimension's prefix and suffix text and its tolerance.
+    @ViewBuilder
+    private func dimensionText(_ annotation: Binding<DrawingAnnotation>) -> some View {
+        let kind: ExpressionValueField.Kind = annotation.wrappedValue.kind == .angle ? .plain : .length
+        let unit = annotation.wrappedValue.kind == .angle ? "°" : AppSettings.shared.unit.symbol
+        HStack {
+            TextField("Prefix", text: annotation.prefix)
+                .accessibilityIdentifier("DrawingDimensionPrefix")
+            TextField("Suffix", text: annotation.suffix)
+                .accessibilityIdentifier("DrawingDimensionSuffix")
+        }
+        Picker("Tolerance", selection: annotation.tolerance) {
+            ForEach(DrawingAnnotation.Tolerance.allCases, id: \.self) { Text($0.title).tag($0) }
+        }
+        .accessibilityIdentifier("DrawingDimensionTolerance")
+        switch annotation.wrappedValue.tolerance {
+        case .symmetrical:
+            HStack {
+                Text("±")
+                Spacer()
+                ExpressionValueField(placeholder: unit, value: annotation.upper, kind: kind, clamp: 0...1_000,
+                                     identifier: "DrawingToleranceUpper")
+            }
+        case .deviation, .limits:
+            HStack {
+                Text("Upper")
+                ExpressionValueField(placeholder: unit, value: annotation.upper, kind: kind,
+                                     identifier: "DrawingToleranceUpper")
+                Spacer()
+                Text("Lower")
+                ExpressionValueField(placeholder: unit, value: annotation.lower, kind: kind,
+                                     identifier: "DrawingToleranceLower")
+            }
+        case .none, .basic:
+            EmptyView()
         }
     }
 

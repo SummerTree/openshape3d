@@ -39,6 +39,29 @@ nonisolated struct DrawingAnnotation: Identifiable, Codable, Equatable, Sendable
         }
     }
 
+    /// How a dimension's value carries its tolerance (spec §15).
+    enum Tolerance: String, Codable, CaseIterable, Sendable {
+        case none
+        /// "40 ±0.1 mm" — `upper` either way.
+        case symmetrical
+        /// The value with the deviations stacked after it.
+        case deviation
+        /// The two limits stacked in place of the value.
+        case limits
+        /// The theoretically exact value, boxed.
+        case basic
+
+        var title: String {
+            switch self {
+            case .none: "None"
+            case .symmetrical: "Symmetrical"
+            case .deviation: "Deviation"
+            case .limits: "Limits"
+            case .basic: "Basic"
+            }
+        }
+    }
+
     var id = UUID()
     var kind: Kind
     /// The view it belongs to (`DrawingSheet.viewKey`).
@@ -60,6 +83,13 @@ nonisolated struct DrawingAnnotation: Identifiable, Codable, Equatable, Sendable
     var text = ""
     /// A note points at `b`.
     var leader = false
+    /// A dimension's text before and after its value ("2×", "THRU").
+    var prefix = ""
+    var suffix = ""
+    var tolerance: Tolerance = .none
+    /// The deviations from the value, signed: mm, an angle's degrees.
+    var upper = 0.1
+    var lower = -0.1
 
     init(kind: Kind, view: String, a: SIMD2<Double>, b: SIMD2<Double>) {
         self.kind = kind
@@ -68,7 +98,8 @@ nonisolated struct DrawingAnnotation: Identifiable, Codable, Equatable, Sendable
         self.b = b
     }
 
-    private enum CodingKeys: String, CodingKey { case id, kind, view, a, b, c, d, orientation, offset, text, leader }
+    private enum CodingKeys: String, CodingKey { case id, kind, view, a, b, c, d, orientation, offset, text, leader,
+                                                    prefix, suffix, tolerance, upper, lower }
 
     // Tolerant of drawings saved by other builds.
     init(from decoder: Decoder) throws {
@@ -84,18 +115,27 @@ nonisolated struct DrawingAnnotation: Identifiable, Codable, Equatable, Sendable
         offset = try c.decodeIfPresent(Double.self, forKey: .offset) ?? 8
         text = try c.decodeIfPresent(String.self, forKey: .text) ?? ""
         leader = try c.decodeIfPresent(Bool.self, forKey: .leader) ?? false
+        prefix = try c.decodeIfPresent(String.self, forKey: .prefix) ?? ""
+        suffix = try c.decodeIfPresent(String.self, forKey: .suffix) ?? ""
+        tolerance = (try? c.decodeIfPresent(Tolerance.self, forKey: .tolerance)) ?? .none
+        upper = try c.decodeIfPresent(Double.self, forKey: .upper) ?? 0.1
+        lower = try c.decodeIfPresent(Double.self, forKey: .lower) ?? -0.1
     }
 
-    /// How the Dimensions & Notes list names it: "40 mm", "Ø8 mm", "R3 mm",
-    /// "45°", "Note".
+    /// How the Dimensions & Notes list names it: "40 mm", "Ø8 mm ±0.1",
+    /// "R3 mm", "45°", "Note".
     @MainActor var listTitle: String {
-        let value = { AppSettings.shared.unit.compactLengthString(fromMM: measured) }
+        guard kind != .note else { return "Note" }
+        let unit = AppSettings.shared.unit
+        return DrawingAnnotationKit.valueString(self, format: { unit.compactLengthString(fromMM: $0) })
+    }
+
+    /// What goes before a dimension's number: "Ø" for a diameter, "R" for a radius.
+    var symbol: String {
         switch kind {
-        case .linear: return value()
-        case .diameter: return "Ø" + value()
-        case .radius: return "R" + value()
-        case .angle: return DrawingAnnotationKit.angleString(measured)
-        case .note: return "Note"
+        case .diameter: "Ø"
+        case .radius: "R"
+        default: ""
         }
     }
 
@@ -424,6 +464,96 @@ nonisolated enum DrawingAnnotationKit {
         let tenths = (degrees * 10).rounded()
         return tenths.truncatingRemainder(dividingBy: 10) == 0
             ? "\(Int(tenths / 10))°" : String(format: "%.1f°", tenths / 10)
+    }
+
+    // MARK: Values
+
+    /// A piece of a dimension's value, written left to right.
+    enum ValuePiece: Equatable, Sendable {
+        case text(String)
+        /// Two smaller lines, one over the other (deviations, limits).
+        case stack(String, String)
+        /// Text in a box (a basic dimension).
+        case boxed(String)
+    }
+
+    /// A dimension's value as written: prefix, symbol and number (or its two
+    /// limits), tolerance, unit and suffix. `format` writes a length (or an
+    /// angle) with its unit — "40 mm", "1.5\"", "63.4°".
+    static func valuePieces(_ dim: DrawingAnnotation, format: (Double) -> String) -> [ValuePiece] {
+        let value = dim.measured
+        let angle = dim.kind == .angle
+        func write(_ v: Double) -> String { angle ? angleString(v) : format(v) }
+        // A deviation's own precision: an angle's to hundredths of a degree.
+        func deviation(_ v: Double) -> String {
+            angle ? String(format: "%g", (v * 100).rounded() / 100) + "°" : format(v)
+        }
+        let prefix = dim.prefix.trimmingCharacters(in: .whitespacesAndNewlines)
+        let suffix = dim.suffix.trimmingCharacters(in: .whitespacesAndNewlines)
+        let lead = (prefix.isEmpty ? "" : prefix + " ") + dim.symbol
+        let tail = suffix.isEmpty ? "" : " " + suffix
+        let (number, unit) = splitUnit(write(value))
+        func signed(_ d: Double) -> String {
+            let n = splitUnit(deviation(abs(d))).number
+            return n == "0" ? "0" : (d > 0 ? "+" : "-") + n
+        }
+        var pieces: [ValuePiece]
+        switch dim.tolerance {
+        case .none:
+            pieces = [.text(lead + number + unit + tail)]
+        case .symmetrical:
+            pieces = [.text(lead + number + " ±" + splitUnit(deviation(abs(dim.upper))).number + unit + tail)]
+        case .deviation:
+            pieces = [.text(lead + number), .stack(signed(dim.upper), signed(dim.lower)), .text(unit + tail)]
+        case .limits:
+            pieces = [.text(lead), .stack(splitUnit(write(value + dim.upper)).number,
+                                          splitUnit(write(value + dim.lower)).number), .text(unit + tail)]
+        case .basic:
+            pieces = [.text(prefix.isEmpty ? "" : prefix + " "), .boxed(dim.symbol + number + unit), .text(tail)]
+        }
+        return pieces.filter { $0 != .text("") }
+    }
+
+    /// The value on one line, for lists: stacks as "upper/lower", a box in brackets.
+    static func valueString(_ dim: DrawingAnnotation, format: (Double) -> String) -> String {
+        valuePieces(dim, format: format).map {
+            switch $0 {
+            case .text(let s): s
+            case .stack(let u, let l): " \(u)/\(l)"
+            case .boxed(let s): "[\(s)]"
+            }
+        }.joined().trimmingCharacters(in: .whitespaces)
+    }
+
+    /// "40 mm" → ("40", " mm"); "63.4°" → ("63.4", "°"): the unit is what
+    /// follows the last digit.
+    static func splitUnit(_ s: String) -> (number: String, unit: String) {
+        guard let i = s.lastIndex(where: \.isNumber) else { return (s, "") }
+        let next = s.index(after: i)
+        return (String(s[..<next]), String(s[next...]))
+    }
+
+    /// About how wide a line of text is, sheet mm, at `height` (the text's
+    /// size, drawn at 1.4× in Helvetica): its character widths, per 1000 em.
+    static func textWidth(_ s: String, height: Double) -> Double {
+        let em = height * 1.4 / 1000
+        return s.reduce(0) { sum, ch in
+            let w: Double
+            switch ch {
+            case " ", ".", ",", "/", "f", "t", "I": w = 278
+            case "i", "j", "l": w = 222
+            case "-", "r", "(", ")": w = 333
+            case "+", "±", "×", "=": w = 584
+            case "°": w = 400
+            case "\"": w = 355
+            case "'": w = 191
+            case "m", "M": w = 833
+            case "w": w = 722
+            case "Ø", "O", "Q", "G": w = 778
+            default: w = ch.isUppercase ? 667 : 556
+            }
+            return sum + w * em
+        }
     }
 }
 

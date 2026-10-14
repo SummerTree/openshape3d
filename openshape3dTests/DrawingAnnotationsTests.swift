@@ -513,4 +513,115 @@ final class DrawingAnnotationsTests: XCTestCase {
         XCTAssertLessThan(handle.x, corner.x, "the value sits down and left of the corner, away from both edges")
         XCTAssertLessThan(handle.y, corner.y)
     }
+
+    // MARK: - Tolerances, prefix and suffix
+
+    private func format(_ mm: Double) -> String { String(format: "%g mm", (mm * 1000).rounded() / 1000) }
+
+    func testValuesCarryTheirTolerance() {
+        var dim = DrawingAnnotation(kind: .linear, view: front, a: .zero, b: SIMD2(40, 0))
+        func pieces() -> [DrawingAnnotationKit.ValuePiece] { DrawingAnnotationKit.valuePieces(dim, format: format) }
+        XCTAssertEqual(pieces(), [.text("40 mm")])
+        dim.tolerance = .symmetrical
+        dim.upper = 0.1
+        XCTAssertEqual(pieces(), [.text("40 ±0.1 mm")])
+        dim.tolerance = .deviation
+        dim.lower = -0.05
+        XCTAssertEqual(pieces(), [.text("40"), .stack("+0.1", "-0.05"), .text(" mm")])
+        dim.lower = 0
+        XCTAssertEqual(pieces(), [.text("40"), .stack("+0.1", "0"), .text(" mm")])
+        dim.lower = -0.05
+        dim.tolerance = .limits
+        XCTAssertEqual(pieces(), [.stack("40.1", "39.95"), .text(" mm")])
+        dim.tolerance = .basic
+        XCTAssertEqual(pieces(), [.boxed("40 mm")])
+
+        // Prefix and suffix, round a diameter's symbol.
+        var hole = DrawingAnnotation(kind: .diameter, view: front, a: .zero, b: SIMD2(3, 0))
+        hole.prefix = " 2× "
+        hole.suffix = "THRU"
+        XCTAssertEqual(DrawingAnnotationKit.valuePieces(hole, format: format), [.text("2× Ø6 mm THRU")])
+        hole.tolerance = .basic
+        XCTAssertEqual(DrawingAnnotationKit.valuePieces(hole, format: format),
+                       [.text("2× "), .boxed("Ø6 mm"), .text(" THRU")])
+        hole.tolerance = .deviation
+        XCTAssertEqual(DrawingAnnotationKit.valueString(hole, format: format), "2× Ø6 +0.1/-0.1 mm THRU")
+
+        // An angle's deviations are degrees.
+        var angle = DrawingAnnotation(kind: .angle, view: front, a: .zero, b: SIMD2(10, 0))
+        angle.c = .zero
+        angle.d = SIMD2(0, 5)
+        angle.tolerance = .symmetrical
+        angle.upper = 0.25
+        XCTAssertEqual(DrawingAnnotationKit.valuePieces(angle, format: format), [.text("90 ±0.25°")])
+    }
+
+    @MainActor func testTheListShowsTheTolerance() {
+        var dim = DrawingAnnotation(kind: .radius, view: front, a: .zero, b: SIMD2(3, 0))
+        XCTAssertFalse(dim.listTitle.contains("±"))
+        dim.tolerance = .symmetrical
+        XCTAssertTrue(dim.listTitle.hasPrefix("R"))
+        XCTAssertTrue(dim.listTitle.contains(" ±"))
+        XCTAssertEqual(DrawingAnnotation(kind: .note, view: "", a: .zero, b: .zero).listTitle, "Note")
+    }
+
+    func testToleranceIsDrawnStackedOrBoxed() throws {
+        var drawing = SavedDrawing()
+        drawing.options.showDimensions = false
+        let (a, b) = bottomCorners(layout(drawing))
+        var dim = DrawingAnnotation(kind: .linear, view: front, a: a, b: b)
+        dim.orientation = .horizontal
+        dim.offset = -8
+        dim.tolerance = .deviation
+        dim.upper = 0.2
+        dim.lower = -0.1
+        drawing.annotations = [dim]
+        var l = layout(drawing)
+        let value = try XCTUnwrap(l.texts.first { $0.string == "10.0" })
+        let up = try XCTUnwrap(l.texts.first { $0.string == "+0.2" })
+        let down = try XCTUnwrap(l.texts.first { $0.string == "-0.1" })
+        XCTAssertLessThan(up.height, value.height, "deviations are smaller")
+        XCTAssertGreaterThan(up.position.x, value.position.x, "after the value")
+        XCTAssertEqual(up.position.x, down.position.x, accuracy: 1e-9, "one over the other")
+        XCTAssertGreaterThan(up.position.y, down.position.y)
+        // Still centred on the dimension line.
+        let t = try XCTUnwrap(l.viewTransforms[front])
+        let mid = (t.sheet(a).x + t.sheet(b).x) / 2
+        let end = up.position.x + DrawingAnnotationKit.textWidth("+0.2", height: up.height)
+        XCTAssertEqual((value.position.x + end) / 2, mid, accuracy: 1)
+
+        // Basic: a box round the value.
+        drawing.annotations[0].tolerance = .basic
+        let before = layout({ var d = drawing; d.annotations[0].tolerance = .none; return d }()).lines.count
+        l = layout(drawing)
+        XCTAssertEqual(l.lines.count, before + 4)
+        XCTAssertNotNil(l.texts.first { $0.string == "10.0" })
+
+        // Exports carry the symbols the PDF font has.
+        drawing.annotations[0].tolerance = .symmetrical
+        let pdf = String(decoding: DrawingExport.pdf(layout(drawing)), as: UTF8.self)
+        XCTAssertTrue(pdf.contains("(10.0 \\2610.2)"), "± as its WinAnsi code")
+    }
+
+    func testPDFTextKeepsLatinSymbols() {
+        XCTAssertEqual(DrawingExport.pdfEscaped("Ø6 ±0.1 90° (a)"), "\\3306 \\2610.1 90\\260 \\(a\\)")
+        XCTAssertEqual(DrawingExport.pdfEscaped("√"), "?")
+    }
+
+    func testTolerancesSave() throws {
+        var dim = DrawingAnnotation(kind: .linear, view: front, a: .zero, b: SIMD2(3, 4))
+        dim.prefix = "2×"
+        dim.suffix = "TYP"
+        dim.tolerance = .limits
+        dim.upper = 0.3
+        dim.lower = -0.2
+        XCTAssertEqual(try JSONDecoder().decode(DrawingAnnotation.self, from: JSONEncoder().encode(dim)), dim)
+        // Saved before tolerances.
+        let old = #"{"kind":"linear","view":"front","a":[0,0],"b":[3,4]}"#
+        let plain = try JSONDecoder().decode(DrawingAnnotation.self, from: Data(old.utf8))
+        XCTAssertEqual(plain.tolerance, .none)
+        XCTAssertEqual(plain.prefix, "")
+        XCTAssertEqual(plain.upper, 0.1)
+        XCTAssertEqual(plain.lower, -0.1)
+    }
 }

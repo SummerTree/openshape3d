@@ -458,17 +458,18 @@ nonisolated enum DrawingSheet {
                 out.annotationHandles[annotation.id] = linear(
                     from: transform.sheet(annotation.a), to: transform.sheet(annotation.b),
                     orientation: annotation.orientation, offset: annotation.offset,
-                    value: formatLength(annotation.measured), into: &out)
+                    value: DrawingAnnotationKit.valuePieces(annotation, format: formatLength), into: &out)
             case .note:
                 out.annotationHandles[annotation.id] = note(annotation, transform: transform, into: &out)
             case .diameter, .radius:
-                let prefix = annotation.kind == .diameter ? "Ø" : "R"
                 out.annotationHandles[annotation.id] = circleDimension(
                     center: transform.sheet(annotation.a), rim: transform.sheet(annotation.b),
                     diameter: annotation.kind == .diameter, offset: annotation.offset,
-                    value: prefix + formatLength(annotation.measured), into: &out)
+                    value: DrawingAnnotationKit.valuePieces(annotation, format: formatLength), into: &out)
             case .angle:
-                out.annotationHandles[annotation.id] = angular(annotation, transform: transform, into: &out)
+                out.annotationHandles[annotation.id] = angular(
+                    annotation, transform: transform,
+                    value: DrawingAnnotationKit.valuePieces(annotation, format: formatLength), into: &out)
             }
         }
         appendFrame(into: &out, options: options, scale: scaleLabel(scale), date: date)
@@ -479,7 +480,7 @@ nonisolated enum DrawingSheet {
     /// sits (the handle that drags it).
     private static func linear(from a: SIMD2<Double>, to b: SIMD2<Double>,
                                orientation: DrawingAnnotation.Orientation, offset: Double,
-                               value: String, into out: inout DrawingLayout) -> SIMD2<Double> {
+                               value: [DrawingAnnotationKit.ValuePiece], into out: inout DrawingLayout) -> SIMD2<Double> {
         let (l0, l1) = DrawingAnnotationKit.dimensionLine(a, b, orientation: orientation, offset: offset)
         let mid = (l0 + l1) / 2
         let length = simd_distance(l0, l1)
@@ -502,7 +503,7 @@ nonisolated enum DrawingSheet {
         var angle = atan2(dir.y, dir.x)
         if angle > .pi / 2 + 1e-9 { angle -= .pi } else if angle <= -.pi / 2 + 1e-9 { angle += .pi }
         let up = SIMD2(-sin(angle), cos(angle))
-        out.texts.append(DrawingText(position: mid + up, height: 2.5, string: value, anchor: .middle, rotation: angle))
+        write(value, at: mid + up, anchor: .middle, rotation: angle, into: &out)
         return mid + up * 2
     }
 
@@ -512,6 +513,7 @@ nonisolated enum DrawingSheet {
     /// A negative offset puts the arc across the corner, the edges carried
     /// on past it. Returns the value's position (its handle).
     private static func angular(_ angle: DrawingAnnotation, transform t: DrawingViewTransform,
+                                value: [DrawingAnnotationKit.ValuePiece],
                                 into out: inout DrawingLayout) -> SIMD2<Double> {
         let v = DrawingAnnotationKit.vertex(angle)
         let c = t.sheet(v)
@@ -558,11 +560,59 @@ nonisolated enum DrawingSheet {
         let edge = c + bisector * (r + 1.5)
         let anchor: DrawingText.Anchor = bisector.x > 0.3 ? .start : bisector.x < -0.3 ? .end : .middle
         let at = edge + SIMD2(0, bisector.y < -0.3 ? -2.5 : bisector.y > 0.3 ? 0 : -1.25)
-        out.texts.append(DrawingText(position: at, height: 2.5, string: DrawingAnnotationKit.angleString(angle.measured),
-                                     anchor: anchor))
-        let width = 2.5 * 0.6 * Double(DrawingAnnotationKit.angleString(angle.measured).count)
+        let width = write(value, at: at, anchor: anchor, into: &out)
         let x = anchor == .start ? at.x + width / 2 : anchor == .end ? at.x - width / 2 : at.x
         return SIMD2(x, at.y + 1.25)
+    }
+
+    /// Writes a dimension's value from `at`, reading along `rotation`, placed
+    /// by `anchor` as one line of text would be: deviations and limits
+    /// stacked smaller, a basic value boxed. Returns its width, sheet mm.
+    @discardableResult
+    private static func write(_ pieces: [DrawingAnnotationKit.ValuePiece], at: SIMD2<Double>,
+                              anchor: DrawingText.Anchor, rotation: Double = 0, height: Double = 2.5,
+                              into out: inout DrawingLayout) -> Double {
+        let small = height * 0.7, pad = 0.7
+        func width(_ piece: DrawingAnnotationKit.ValuePiece) -> Double {
+            switch piece {
+            case .text(let s): DrawingAnnotationKit.textWidth(s, height: height)
+            case .stack(let u, let l): Swift.max(DrawingAnnotationKit.textWidth(u, height: small),
+                                                 DrawingAnnotationKit.textWidth(l, height: small)) + 0.4
+            case .boxed(let s): DrawingAnnotationKit.textWidth(s, height: height) + 2 * pad + 0.4
+            }
+        }
+        let total = pieces.reduce(0) { $0 + width($1) }
+        // One plain line is written as it always was, anchored as asked.
+        if pieces.count == 1, case .text(let s) = pieces[0] {
+            out.texts.append(DrawingText(position: at, height: height, string: s, anchor: anchor, rotation: rotation))
+            return total
+        }
+        let dir = SIMD2(cos(rotation), sin(rotation)), up = SIMD2(-dir.y, dir.x)
+        var x = anchor == .start ? 0 : anchor == .middle ? -total / 2 : -total
+        for piece in pieces {
+            let base = at + dir * x
+            switch piece {
+            case .text(let s):
+                out.texts.append(DrawingText(position: base, height: height, string: s, rotation: rotation))
+            case .stack(let u, let l):
+                out.texts.append(DrawingText(position: base + dir * 0.2 + up * (height * 0.55), height: small,
+                                             string: u, rotation: rotation))
+                out.texts.append(DrawingText(position: base + dir * 0.2 - up * (height * 0.2), height: small,
+                                             string: l, rotation: rotation))
+            case .boxed(let s):
+                out.texts.append(DrawingText(position: base + dir * (0.2 + pad), height: height, string: s,
+                                             rotation: rotation))
+                let w = width(piece) - 0.4
+                let corners = [base + dir * 0.2 - up * pad, base + dir * (0.2 + w) - up * pad,
+                               base + dir * (0.2 + w) + up * (height + pad),
+                               base + dir * 0.2 + up * (height + pad)]
+                for i in 0..<4 {
+                    out.lines.append(DrawingLine(a: corners[i], b: corners[(i + 1) % 4], style: .thin))
+                }
+            }
+            x += width(piece)
+        }
+        return total
     }
 
     /// A circle's centre mark: two chain lines crossing at the centre, 2 mm
@@ -579,7 +629,8 @@ nonisolated enum DrawingSheet {
     /// carried `offset` mm out to a short shoulder and the value. Returns the
     /// value's position (its handle).
     private static func circleDimension(center c: SIMD2<Double>, rim: SIMD2<Double>, diameter: Bool, offset: Double,
-                                        value: String, into out: inout DrawingLayout) -> SIMD2<Double> {
+                                        value: [DrawingAnnotationKit.ValuePiece],
+                                        into out: inout DrawingLayout) -> SIMD2<Double> {
         let r = simd_distance(c, rim)
         guard r > 1e-9 else { return c }
         let u = (rim - c) / r, side = SIMD2(-u.y, u.x)
@@ -597,7 +648,7 @@ nonisolated enum DrawingSheet {
         let shoulder = outside + SIMD2(right ? 4 : -4, 0)
         out.lines.append(DrawingLine(a: outside, b: shoulder, style: .thin))
         let at = shoulder + SIMD2(right ? 1 : -1, -0.9)
-        out.texts.append(DrawingText(position: at, height: 2.5, string: value, anchor: right ? .start : .end))
+        write(value, at: at, anchor: right ? .start : .end, into: &out)
         return shoulder + SIMD2(right ? 5 : -5, 0)
     }
 

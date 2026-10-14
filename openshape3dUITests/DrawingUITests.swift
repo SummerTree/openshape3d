@@ -139,6 +139,22 @@ final class DrawingUITests: XCTestCase {
         XCTAssertTrue(placed, "a dimension is placed on a view")
         XCTAssertTrue(app.segmentedControls["DrawingAnnotationOrientation"].exists)
 
+        // Its tolerance: Symmetrical brings the ± field; a suffix is typed.
+        XCTAssertFalse(app.textFields["DrawingToleranceUpper"].exists, "no tolerance to start with")
+        let tolerance = app.buttons["DrawingDimensionTolerance"].firstMatch
+        XCTAssertTrue(tolerance.waitForExistence(timeout: 3))
+        tolerance.tap()
+        XCTAssertTrue(app.buttons["Symmetrical"].waitForExistence(timeout: 3))
+        app.buttons["Symmetrical"].tap()
+        XCTAssertTrue(app.textFields["DrawingToleranceUpper"].waitForExistence(timeout: 3), "the ± field")
+        let suffix = app.textFields["DrawingDimensionSuffix"].firstMatch
+        suffix.tap()
+        suffix.typeText("TYP\n")
+        XCTAssertTrue(app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "±")).firstMatch
+            .waitForExistence(timeout: 3), "the list shows the tolerance")
+        let tolerant = XCTAttachment(screenshot: app.screenshot())
+        tolerant.name = "drawing-tolerance"; tolerant.lifetime = .keepAlways; add(tolerant)
+
         // Off the paper, a Note tap does nothing; on it, it places a note.
         tools.buttons["Note"].tap()
         let note = app.descendants(matching: .any)["DrawingAnnotation_note"]
