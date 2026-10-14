@@ -129,6 +129,9 @@ nonisolated struct DrawingLayout: Sendable {
     var strongSnapPoints: [String: [SIMD2<Double>]] = [:]
     /// The circles and arcs each view shows (view coordinates).
     var circles: [String: [DrawingCircle]] = [:]
+    /// Each view's straight edges — its long visible lines (view
+    /// coordinates) — for angle and edge-to-edge dimensions.
+    var edges: [String: [DrawingSegment]] = [:]
     /// Each annotation's handle (its text), sheet mm — to select or drag it.
     var annotationHandles: [UUID: SIMD2<Double>] = [:]
 
@@ -464,6 +467,8 @@ nonisolated enum DrawingSheet {
                     center: transform.sheet(annotation.a), rim: transform.sheet(annotation.b),
                     diameter: annotation.kind == .diameter, offset: annotation.offset,
                     value: prefix + formatLength(annotation.measured), into: &out)
+            case .angle:
+                out.annotationHandles[annotation.id] = angular(annotation, transform: transform, into: &out)
             }
         }
         appendFrame(into: &out, options: options, scale: scaleLabel(scale), date: date)
@@ -499,6 +504,65 @@ nonisolated enum DrawingSheet {
         let up = SIMD2(-sin(angle), cos(angle))
         out.texts.append(DrawingText(position: mid + up, height: 2.5, string: value, anchor: .middle, rotation: angle))
         return mid + up * 2
+    }
+
+    /// An angle: an arc of `offset` mm round where the edges meet, from one
+    /// edge to the other with an arrowhead at each, extension lines carrying
+    /// the edges out (or in) to it, and the value just outside its middle.
+    /// A negative offset puts the arc across the corner, the edges carried
+    /// on past it. Returns the value's position (its handle).
+    private static func angular(_ angle: DrawingAnnotation, transform t: DrawingViewTransform,
+                                into out: inout DrawingLayout) -> SIMD2<Double> {
+        let v = DrawingAnnotationKit.vertex(angle)
+        let c = t.sheet(v)
+        let across = angle.offset < 0
+        let r = Swift.max(abs(angle.offset), 3)
+        let e1 = angle.b - angle.a, e2 = angle.d - angle.c
+        guard simd_length(e1) > 1e-12, simd_length(e2) > 1e-12 else { return c }
+        let u1 = simd_normalize(across ? -e1 : e1), u2 = simd_normalize(across ? -e2 : e2)
+        let theta1 = atan2(u1.y, u1.x)
+        var sweep = atan2(u2.y, u2.x) - theta1
+        if sweep > .pi { sweep -= 2 * .pi } else if sweep < -.pi { sweep += 2 * .pi }
+        let n = Swift.max(8, Int((abs(sweep) * r).rounded(.up)))
+        var previous = c + u1 * r
+        for i in 1...n {
+            let th = theta1 + sweep * Double(i) / Double(n)
+            let p = c + SIMD2(cos(th), sin(th)) * r
+            out.lines.append(DrawingLine(a: previous, b: p, style: .thin))
+            previous = p
+        }
+        // Each edge carried to the arc where it falls short of it (or starts past it).
+        for (u, near, far) in [(u1, angle.a, angle.b), (u2, angle.c, angle.d)] {
+            let t0 = simd_distance(near, v) * t.k, t1 = simd_distance(far, v) * t.k
+            if across {
+                // From the edge's end nearest the corner, through it, out past the arc.
+                let start = t0 >= 1.5 ? -(t0 - 1.5) : Swift.min(1.5 - t0, r / 2)
+                out.lines.append(DrawingLine(a: c + u * start, b: c + u * (r + 2), style: .thin))
+            } else if r > t1 + 0.5 {
+                out.lines.append(DrawingLine(a: c + u * (t1 + 1.5), b: c + u * (r + 2), style: .thin))
+            } else if r < t0 - 0.5 {
+                out.lines.append(DrawingLine(a: c + u * Swift.max(r - 2, 0), b: c + u * (t0 - 1.5), style: .thin))
+            }
+        }
+        // Arrowheads at both ends, pointing out along the arc.
+        let arrow = Swift.min(2.5, abs(sweep) * r / 3)
+        let s = sweep >= 0 ? 1.0 : -1.0
+        for (u, into) in [(u1, s), (u2, -s)] {
+            let tip = c + u * r
+            let back = SIMD2(-u.y, u.x) * into
+            out.lines.append(DrawingLine(a: tip, b: tip + back * arrow + u * arrow * 0.35, style: .thin))
+            out.lines.append(DrawingLine(a: tip, b: tip + back * arrow - u * arrow * 0.35, style: .thin))
+        }
+        let mid = theta1 + sweep / 2
+        let bisector = SIMD2(cos(mid), sin(mid))
+        let edge = c + bisector * (r + 1.5)
+        let anchor: DrawingText.Anchor = bisector.x > 0.3 ? .start : bisector.x < -0.3 ? .end : .middle
+        let at = edge + SIMD2(0, bisector.y < -0.3 ? -2.5 : bisector.y > 0.3 ? 0 : -1.25)
+        out.texts.append(DrawingText(position: at, height: 2.5, string: DrawingAnnotationKit.angleString(angle.measured),
+                                     anchor: anchor))
+        let width = 2.5 * 0.6 * Double(DrawingAnnotationKit.angleString(angle.measured).count)
+        let x = anchor == .start ? at.x + width / 2 : anchor == .end ? at.x - width / 2 : at.x
+        return SIMD2(x, at.y + 1.25)
     }
 
     /// A circle's centre mark: two chain lines crossing at the centre, 2 mm
@@ -573,21 +637,37 @@ nonisolated enum DrawingSheet {
         let frame = (min: at, max: at + view.size * scale)
         out.placedViews[key] = frame
         out.viewTransforms[key] = DrawingViewTransform(at: at, min: view.min, k: scale)
-        // Line ends (corners, and the vertices of curves), each once.
+        // Line ends (corners, and the vertices of curves), each once. A
+        // straight line drawn in pieces (a circle seen edge-on) is one edge,
+        // with no points along it.
+        func cell(_ p: SIMD2<Double>) -> SIMD2<Int64> {
+            SIMD2<Int64>(Int64((p.x * 1e4).rounded()), Int64((p.y * 1e4).rounded()))
+        }
         var seen = Set<SIMD2<Int64>>(), seenStrong = Set<SIMD2<Int64>>()
         var snaps: [SIMD2<Double>] = [], strong: [SIMD2<Double>] = []
+        var edges: [DrawingSegment] = []
         // A curve is sampled into lines well under 2 sheet mm long.
         let long = 2 / Swift.max(scale, 1e-9)
+        var along = Set<SIMD2<Int64>>()
+        for run in DrawingCircleKit.straightRuns(view.visible) {
+            let isLong = simd_distance(run.line.a, run.line.b) >= long
+            if isLong {
+                edges.append(run.line)
+                for p in run.joins { along.insert(cell(p)) }
+            }
+            for p in [run.line.a, run.line.b] {
+                if isLong, seenStrong.insert(cell(p)).inserted { strong.append(p) }
+            }
+        }
         for s in view.visible {
-            let isLong = simd_distance(s.a, s.b) >= long
             for p in [s.a, s.b] {
-                let cell = SIMD2<Int64>(Int64((p.x * 1e4).rounded()), Int64((p.y * 1e4).rounded()))
-                if seen.insert(cell).inserted { snaps.append(p) }
-                if isLong, seenStrong.insert(cell).inserted { strong.append(p) }
+                let c = cell(p)
+                if !along.contains(c) || seenStrong.contains(c), seen.insert(c).inserted { snaps.append(p) }
             }
         }
         out.snapPoints[key] = snaps
         out.strongSnapPoints[key] = strong
+        out.edges[key] = edges
         out.circles[key] = DrawingCircleKit.circles(in: view.visible + (hidden ? view.hidden : []))
         out.texts.append(DrawingText(position: SIMD2((frame.min.x + frame.max.x) / 2, frame.max.y + 3),
                                      height: 2.5, string: label, anchor: .middle))

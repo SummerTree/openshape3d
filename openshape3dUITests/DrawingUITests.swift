@@ -126,7 +126,8 @@ final class DrawingUITests: XCTestCase {
         tools.buttons["Dimension"].tap()
 
         // Walk taps across the sheet: two in a row inside one view make a
-        // dimension (wherever the standard put the views).
+        // dimension (wherever the standard put the views) — two edges an
+        // angle, which the walk may place on the way.
         let dimension = app.descendants(matching: .any)["DrawingAnnotation_linear"]
         var placed = false
         outer: for y in stride(from: 0.25, through: 0.75, by: 0.1) {
@@ -153,8 +154,8 @@ final class DrawingUITests: XCTestCase {
 
         // Deleting removes it.
         let deletes = app.buttons.matching(identifier: "DrawingAnnotationDelete")
-        XCTAssertEqual(deletes.count, 2)
-        deletes.element(boundBy: 1).tap()
+        XCTAssertGreaterThanOrEqual(deletes.count, 2)
+        deletes.element(boundBy: deletes.count - 1).tap()
         XCTAssertTrue(note.waitForNonExistence(timeout: 3))
         XCTAssertTrue(dimension.exists)
     }

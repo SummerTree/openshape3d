@@ -214,11 +214,17 @@ struct DrawingSheetView: View {
                         c.rotate(by: .radians(-text.rotation))
                         c.draw(resolved, at: .zero, anchor: anchor)
                     }
-                    // A dimension's first point, and the selected annotation.
+                    // A dimension's first point or edge, and the selected annotation.
                     if let p = viewModel.drawingPendingSheetPoint {
                         let at = paper.point(p)
                         context.fill(Path(ellipseIn: CGRect(x: at.x - 4, y: at.y - 4, width: 8, height: 8)),
                                      with: .color(.accentColor))
+                    }
+                    if let edge = viewModel.drawingPendingSheetEdge {
+                        var path = Path()
+                        path.move(to: paper.point(edge.a))
+                        path.addLine(to: paper.point(edge.b))
+                        context.stroke(path, with: .color(.accentColor), style: StrokeStyle(lineWidth: 4, lineCap: .round))
                     }
                     if let id = viewModel.drawingSelectedAnnotation, let handle = layout.annotationHandles[id] {
                         let at = paper.point(handle), r = max(10, DrawingAnnotationKit.handleRadius * k)
@@ -337,7 +343,8 @@ struct DrawingSheetView: View {
                 VStack(alignment: .leading, spacing: 6) {
                     HStack {
                         Image(systemName: annotation.kind == .note ? "text.bubble"
-                              : annotation.kind == .linear ? "ruler" : "circle.dashed")
+                              : annotation.kind == .linear ? "ruler"
+                              : annotation.kind == .angle ? "angle" : "circle.dashed")
                             .foregroundStyle(.secondary)
                         Text(annotation.listTitle)
                             .font(.subheadline.weight(.semibold))

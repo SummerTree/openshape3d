@@ -6,8 +6,9 @@
 //  view and keeps its points in that view's own coordinates (model mm in
 //  the view's plane), so it moves and rescales with the view and measures
 //  the model, whatever the sheet scale. A dimension snaps to the corners
-//  and line ends of the view it is placed on; a note is free text with an
-//  optional leader to a point of the view.
+//  and line ends of the view it is placed on, or measures between its
+//  straight edges (the angle between two, the gap between parallel ones);
+//  a note is free text with an optional leader to a point of the view.
 //
 
 import Foundation
@@ -21,6 +22,9 @@ nonisolated struct DrawingAnnotation: Identifiable, Codable, Equatable, Sendable
         /// A circle's diameter or an arc's radius: `a` the centre, `b` the
         /// point of the outline the leader touches.
         case diameter, radius
+        /// The angle between two edges: `a`→`b` and `c`→`d` run out from
+        /// where the edges meet, each along the part of its edge measured.
+        case angle
     }
 
     enum Orientation: String, Codable, CaseIterable, Sendable {
@@ -43,9 +47,14 @@ nonisolated struct DrawingAnnotation: Identifiable, Codable, Equatable, Sendable
     /// tip (`b`). View coordinates.
     var a: SIMD2<Double>
     var b: SIMD2<Double>
+    /// An angle's second edge (view coordinates).
+    var c = SIMD2<Double>.zero
+    var d = SIMD2<Double>.zero
     var orientation: Orientation = .aligned
     /// How far the dimension line stands off the measured points, sheet mm:
-    /// + above / right (along the line's left-hand normal when aligned).
+    /// + above / right (along the line's left-hand normal when aligned); an
+    /// angle's arc radius (negative: the arc sits across the corner, between
+    /// the edges carried on past it — for a corner too small to hold it).
     var offset = 8.0
     /// A note's text (lines split on newlines).
     var text = ""
@@ -59,7 +68,7 @@ nonisolated struct DrawingAnnotation: Identifiable, Codable, Equatable, Sendable
         self.b = b
     }
 
-    private enum CodingKeys: String, CodingKey { case id, kind, view, a, b, orientation, offset, text, leader }
+    private enum CodingKeys: String, CodingKey { case id, kind, view, a, b, c, d, orientation, offset, text, leader }
 
     // Tolerant of drawings saved by other builds.
     init(from decoder: Decoder) throws {
@@ -69,6 +78,8 @@ nonisolated struct DrawingAnnotation: Identifiable, Codable, Equatable, Sendable
         view = try c.decodeIfPresent(String.self, forKey: .view) ?? ""
         a = try c.decodeIfPresent(SIMD2<Double>.self, forKey: .a) ?? .zero
         b = try c.decodeIfPresent(SIMD2<Double>.self, forKey: .b) ?? a
+        self.c = try c.decodeIfPresent(SIMD2<Double>.self, forKey: .c) ?? a
+        d = try c.decodeIfPresent(SIMD2<Double>.self, forKey: .d) ?? b
         orientation = (try? c.decodeIfPresent(Orientation.self, forKey: .orientation)) ?? .aligned
         offset = try c.decodeIfPresent(Double.self, forKey: .offset) ?? 8
         text = try c.decodeIfPresent(String.self, forKey: .text) ?? ""
@@ -76,19 +87,25 @@ nonisolated struct DrawingAnnotation: Identifiable, Codable, Equatable, Sendable
     }
 
     /// How the Dimensions & Notes list names it: "40 mm", "Ø8 mm", "R3 mm",
-    /// "Note".
+    /// "45°", "Note".
     @MainActor var listTitle: String {
         let value = { AppSettings.shared.unit.compactLengthString(fromMM: measured) }
         switch kind {
         case .linear: return value()
         case .diameter: return "Ø" + value()
         case .radius: return "R" + value()
+        case .angle: return DrawingAnnotationKit.angleString(measured)
         case .note: return "Note"
         }
     }
 
-    /// The model distance a dimension shows, mm.
+    /// The model distance a dimension shows, mm; an angle's degrees.
     var measured: Double {
+        if kind == .angle {
+            let u = b - a, v = d - c
+            guard simd_length(u) > 1e-12, simd_length(v) > 1e-12 else { return 0 }
+            return acos(Swift.min(1, Swift.max(-1, simd_dot(simd_normalize(u), simd_normalize(v))))) * 180 / .pi
+        }
         if kind == .diameter { return 2 * simd_distance(a, b) }
         if kind == .radius { return simd_distance(a, b) }
         switch orientation {
@@ -274,6 +291,149 @@ nonisolated enum DrawingAnnotationKit {
         }
         return best?.id
     }
+
+    // MARK: Edges
+
+    /// How close, sheet mm, a tap must be to a straight edge to pick it.
+    static let edgeRadius = 1.5
+
+    /// The straight edge (a long visible line) under `point`, in the
+    /// smallest view there; the isometric is left out, as for `pick`.
+    static func edge(at point: SIMD2<Double>, in layout: DrawingLayout) -> DrawingEdgePick? {
+        var best: (pick: DrawingEdgePick, distance: Double, area: Double)?
+        for (key, segments) in layout.edges where key != DrawingSheet.viewKey(.isometric) {
+            guard let t = layout.viewTransforms[key], let frame = layout.placedViews[key] else { continue }
+            let area = (frame.max.x - frame.min.x) * (frame.max.y - frame.min.y)
+            for s in segments {
+                let a = t.sheet(s.a), b = t.sheet(s.b), ab = b - a
+                let along = Swift.min(1, Swift.max(0, simd_dot(point - a, ab) / simd_length_squared(ab)))
+                let distance = simd_distance(a + ab * along, point)
+                guard distance <= edgeRadius else { continue }
+                if let best, best.area < area - 1e-9 || (abs(best.area - area) <= 1e-9 && best.distance <= distance) { continue }
+                best = (DrawingEdgePick(view: key, a: s.a, b: s.b, foot: s.a + (s.b - s.a) * along), distance, area)
+            }
+        }
+        return best?.pick
+    }
+
+    /// What a Dimension tap means: the corner `pick` snapped to, unless the
+    /// tap is on a straight edge well along from that corner (on an edge
+    /// shorter than the snap reach every tap is near a corner); else the
+    /// edge under it, over a bare point.
+    static func edge(at point: SIMD2<Double>, in layout: DrawingLayout,
+                     over pick: (view: String, point: SIMD2<Double>, snapped: Bool)?) -> DrawingEdgePick? {
+        guard let edge = edge(at: point, in: layout) else { return nil }
+        guard let pick, pick.snapped else { return edge }
+        guard let te = layout.viewTransforms[edge.view], let tp = layout.viewTransforms[pick.view] else { return nil }
+        let foot = te.sheet(edge.foot)
+        let along = simd_distance(foot, tp.sheet(pick.point)), off = simd_distance(foot, point)
+        return along >= 1.2 && along > 2 * off ? edge : nil
+    }
+
+    /// The dimension two picked edges make: the angle between them, or the
+    /// distance between them when they are parallel. Nil for one line.
+    static func dimension(_ first: DrawingEdgePick, _ second: DrawingEdgePick) -> DrawingAnnotation? {
+        guard first.view == second.view else { return nil }
+        let d1 = first.b - first.a, d2 = second.b - second.a
+        let l1 = simd_length(d1), l2 = simd_length(d2)
+        guard l1 > 1e-9, l2 > 1e-9 else { return nil }
+        let cross = d1.x * d2.y - d1.y * d2.x
+        if abs(cross) / (l1 * l2) < sin(0.5 * .pi / 180) {
+            // Parallel: from the first tap straight across to the second edge.
+            let u = d2 / l2
+            let across = second.a + u * simd_dot(first.foot - second.a, u)
+            guard simd_distance(across, first.foot) > 1e-6 else { return nil }
+            var dimension = DrawingAnnotation(kind: .linear, view: first.view, a: first.foot, b: across)
+            dimension.orientation = axisOrientation(d1)
+            return dimension
+        }
+        // Where the two lines meet, and each edge's run out from there,
+        // on the side that was tapped.
+        let w = second.a - first.a
+        let vertex = first.a + d1 * ((w.x * d2.y - w.y * d2.x) / cross)
+        func ray(_ e: DrawingEdgePick) -> (SIMD2<Double>, SIMD2<Double>)? {
+            var u = e.foot - vertex
+            if simd_length(u) < 1e-6 {
+                u = simd_distance(e.a, vertex) > simd_distance(e.b, vertex) ? e.a - vertex : e.b - vertex
+            }
+            guard simd_length(u) > 1e-9 else { return nil }
+            u = simd_normalize(u)
+            let ta = simd_dot(e.a - vertex, u), tb = simd_dot(e.b - vertex, u)
+            let t0 = Swift.max(0, Swift.min(ta, tb)), t1 = Swift.max(ta, tb)
+            guard t1 > 1e-9 else { return nil }
+            return (vertex + u * t0, vertex + u * t1)
+        }
+        guard let r1 = ray(first), let r2 = ray(second) else { return nil }
+        var dimension = DrawingAnnotation(kind: .angle, view: first.view, a: r1.0, b: r1.1)
+        dimension.c = r2.0
+        dimension.d = r2.1
+        return dimension
+    }
+
+    /// The distance from `point` straight across to an edge's line.
+    static func dimension(_ edge: DrawingEdgePick, point: SIMD2<Double>) -> DrawingAnnotation? {
+        let d = edge.b - edge.a
+        guard simd_length(d) > 1e-9 else { return nil }
+        let u = simd_normalize(d)
+        let foot = edge.a + u * simd_dot(point - edge.a, u)
+        guard simd_distance(foot, point) > 1e-6 else { return nil }
+        var dimension = DrawingAnnotation(kind: .linear, view: edge.view, a: foot, b: point)
+        dimension.orientation = axisOrientation(d)
+        return dimension
+    }
+
+    /// Square across an edge: vertical from a horizontal edge, horizontal
+    /// from a vertical one, aligned from a sloping one (so the value is
+    /// always the true gap).
+    private static func axisOrientation(_ edge: SIMD2<Double>) -> DrawingAnnotation.Orientation {
+        let u = simd_normalize(edge)
+        if abs(u.y) < 1e-6 { return .vertical }
+        if abs(u.x) < 1e-6 { return .horizontal }
+        return .aligned
+    }
+
+    /// Where an angle's edges meet (view coordinates).
+    static func vertex(_ angle: DrawingAnnotation) -> SIMD2<Double> {
+        let d1 = angle.b - angle.a, d2 = angle.d - angle.c
+        let cross = d1.x * d2.y - d1.y * d2.x
+        guard abs(cross) > 1e-12 else { return angle.a }
+        let w = angle.c - angle.a
+        return angle.a + d1 * ((w.x * d2.y - w.y * d2.x) / cross)
+    }
+
+    /// A new angle's arc radius, sheet mm: inside the shorter edge, 8–25 mm
+    /// — or, when the edges are too short to hold that, 8 mm across the corner.
+    static func defaultAngleRadius(_ angle: DrawingAnnotation, transform: DrawingViewTransform) -> Double {
+        let v = vertex(angle)
+        let reach = Swift.min(simd_distance(v, angle.b), simd_distance(v, angle.d)) * transform.k
+        return reach * 0.6 < 8 ? -8 : Swift.min(25, reach * 0.6)
+    }
+
+    /// Dragging an angle: its arc passes through `point` — across the
+    /// corner when the point is.
+    static func angleRadius(through point: SIMD2<Double>, _ angle: DrawingAnnotation,
+                            transform: DrawingViewTransform) -> Double {
+        let c = transform.sheet(vertex(angle))
+        let r = Swift.max(3, simd_distance(point, c))
+        let inside = simd_normalize(angle.b - angle.a) + simd_normalize(angle.d - angle.c)
+        return simd_dot(point - c, inside) < 0 ? -r : r
+    }
+
+    /// "45°", "22.5°".
+    static func angleString(_ degrees: Double) -> String {
+        let tenths = (degrees * 10).rounded()
+        return tenths.truncatingRemainder(dividingBy: 10) == 0
+            ? "\(Int(tenths / 10))°" : String(format: "%.1f°", tenths / 10)
+    }
+}
+
+/// A straight edge picked on a view: its ends and the point of it nearest
+/// the tap (view coordinates).
+nonisolated struct DrawingEdgePick: Equatable, Sendable {
+    var view: String
+    var a: SIMD2<Double>
+    var b: SIMD2<Double>
+    var foot: SIMD2<Double>
 }
 
 // MARK: - Circles
@@ -335,6 +495,40 @@ nonisolated enum DrawingCircleKit {
     /// The segments joined end to end into chains of points (a closed loop
     /// repeats its first point at the end). Chains break where more than two
     /// segments meet.
+    /// The straight lines a view is drawn with, each joined from the
+    /// collinear pieces it arrives in (a circle seen edge-on is a row of
+    /// short lines), with the points where the pieces met.
+    static func straightRuns(_ segments: [DrawingSegment], tolerance: Double = 1e-4)
+        -> [(line: DrawingSegment, joins: [SIMD2<Double>])] {
+        var out: [(line: DrawingSegment, joins: [SIMD2<Double>])] = []
+        for chain in chains(segments) {
+            var start = 0
+            while start < chain.count - 1 {
+                // Grow the run while every point stays on the line from its
+                // start to its newest point, running the same way.
+                var end = start + 1
+                while end + 1 < chain.count {
+                    let a = chain[start], b = chain[end + 1]
+                    let d = b - a, length = simd_length(d)
+                    guard length > 1e-12 else { break }
+                    let u = d / length, n = SIMD2(-u.y, u.x)
+                    var straight = true
+                    var along = 0.0
+                    for p in chain[(start + 1)...end] {
+                        let t = simd_dot(p - a, u)
+                        if abs(simd_dot(p - a, n)) > tolerance || t < along - tolerance { straight = false; break }
+                        along = t
+                    }
+                    guard straight, simd_dot(b - a, u) >= along - tolerance else { break }
+                    end += 1
+                }
+                out.append((DrawingSegment(a: chain[start], b: chain[end]), Array(chain[(start + 1)..<end])))
+                start = end
+            }
+        }
+        return out
+    }
+
     static func chains(_ segments: [DrawingSegment]) -> [[SIMD2<Double>]] {
         func cell(_ p: SIMD2<Double>) -> SIMD2<Int64> {
             SIMD2(Int64((p.x * 1e5).rounded()), Int64((p.y * 1e5).rounded()))

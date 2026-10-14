@@ -279,20 +279,29 @@ final class EditorViewModel {
     }
 
     /// The preview's tool, a dimension's first point (view, view
-    /// coordinates) and the selected annotation.
+    /// coordinates) or first edge, and the selected annotation.
     var drawingTool: DrawingTool = .move {
-        didSet { drawingPendingPoint = nil }
+        didSet {
+            drawingPendingPoint = nil
+            drawingPendingEdge = nil
+        }
     }
     var drawingPendingPoint: (view: String, point: SIMD2<Double>)?
+    var drawingPendingEdge: DrawingEdgePick?
     var drawingSelectedAnnotation: UUID?
 
     /// What the preview's tool does, under the tool picker.
     var drawingToolHint: String {
         switch drawingTool {
         case .move: "Drag views, dimensions and notes. Tap one to select it."
-        case .dimension: drawingPendingPoint == nil
-            ? "Tap a corner of a view, then another — or a circle's outline for its diameter."
-            : "Tap the second point, on the same view."
+        case .dimension:
+            if drawingPendingEdge != nil {
+                "Tap another edge for the angle between them, or a corner for the distance to it."
+            } else if drawingPendingPoint != nil {
+                "Tap the second point, or an edge, on the same view."
+            } else {
+                "Tap two corners or two edges of a view — or a circle's outline for its diameter."
+            }
         case .note: "Tap a line to point at it, or anywhere on the sheet for a free note."
         }
     }
@@ -304,10 +313,18 @@ final class EditorViewModel {
         return transform.sheet(pending.point)
     }
 
+    /// The first edge of a dimension being placed, on the sheet.
+    var drawingPendingSheetEdge: (a: SIMD2<Double>, b: SIMD2<Double>)? {
+        guard let edge = drawingPendingEdge,
+              let transform = drawingLayout().viewTransforms[edge.view] else { return nil }
+        return (transform.sheet(edge.a), transform.sheet(edge.b))
+    }
+
     /// A tap on the preview at `point` (sheet mm): Move selects the
     /// dimension or note under it; Dimension takes two points of one view
-    /// (snapping to its corners and line ends); Note places a note — with a
-    /// leader when tapped on a line of a view.
+    /// (snapping to its corners and line ends) or two of its edges (their
+    /// angle, or the gap between parallel ones) or an edge and a point;
+    /// Note places a note — with a leader when tapped on a line of a view.
     func drawingTap(at point: SIMD2<Double>) {
         guard activeDrawing != nil else { return }
         let layout = drawingLayout()
@@ -317,7 +334,8 @@ final class EditorViewModel {
         case .dimension:
             // A tap on a circle's outline, away from any corner, dimensions
             // the circle: its diameter, or an arc's radius.
-            if drawingPendingPoint == nil, !DrawingAnnotationKit.isNearStrongSnap(point, in: layout),
+            if drawingPendingPoint == nil, drawingPendingEdge == nil,
+               !DrawingAnnotationKit.isNearStrongSnap(point, in: layout),
                let hit = DrawingCircleKit.circle(at: point, in: layout),
                let transform = layout.viewTransforms[hit.view] {
                 let frame = layout.placedViews[hit.view] ?? (transform.at, transform.at)
@@ -329,23 +347,47 @@ final class EditorViewModel {
                 drawingSelectedAnnotation = dimension.id
                 return
             }
-            guard let pick = DrawingAnnotationKit.pick(point, in: layout) else {
-                drawingPendingPoint = nil
-                return
+            // A corner or line end first (unless the tap is right on a short
+            // edge); then a straight edge; then the bare point.
+            let pick = DrawingAnnotationKit.pick(point, in: layout)
+            let edge = DrawingAnnotationKit.edge(at: point, in: layout, over: pick)
+            var placed: DrawingAnnotation?
+            if let edge {
+                if let first = drawingPendingEdge {
+                    placed = DrawingAnnotationKit.dimension(first, edge)
+                } else if let first = drawingPendingPoint, first.view == edge.view {
+                    placed = DrawingAnnotationKit.dimension(edge, point: first.point)
+                }
+                if placed == nil {
+                    drawingPendingPoint = nil
+                    drawingPendingEdge = edge
+                    return
+                }
+            } else if let pick {
+                if let first = drawingPendingEdge, first.view == pick.view {
+                    placed = DrawingAnnotationKit.dimension(first, point: pick.point)
+                } else if let first = drawingPendingPoint, first.view == pick.view,
+                          simd_distance(first.point, pick.point) > 1e-6 {
+                    var dimension = DrawingAnnotation(kind: .linear, view: pick.view, a: first.point, b: pick.point)
+                    dimension.orientation = DrawingAnnotationKit.orientation(first.point, pick.point)
+                    placed = dimension
+                }
+                if placed == nil {
+                    drawingPendingEdge = nil
+                    drawingPendingPoint = (pick.view, pick.point)
+                    return
+                }
             }
-            guard let first = drawingPendingPoint, first.view == pick.view,
-                  simd_distance(first.point, pick.point) > 1e-6 else {
-                drawingPendingPoint = (pick.view, pick.point)
-                return
-            }
-            var dimension = DrawingAnnotation(kind: .linear, view: pick.view, a: first.point, b: pick.point)
-            dimension.orientation = DrawingAnnotationKit.orientation(first.point, pick.point)
-            if let transform = layout.viewTransforms[pick.view], let frame = layout.placedViews[pick.view] {
-                dimension.offset = DrawingAnnotationKit.defaultOffset(dimension, transform: transform, frame: frame)
+            drawingPendingPoint = nil
+            drawingPendingEdge = nil
+            guard var dimension = placed else { return }
+            if let transform = layout.viewTransforms[dimension.view], let frame = layout.placedViews[dimension.view] {
+                dimension.offset = dimension.kind == .angle
+                    ? DrawingAnnotationKit.defaultAngleRadius(dimension, transform: transform)
+                    : DrawingAnnotationKit.defaultOffset(dimension, transform: transform, frame: frame)
             }
             activeDrawing?.annotations.append(dimension)
             drawingSelectedAnnotation = dimension.id
-            drawingPendingPoint = nil
         case .note:
             var note: DrawingAnnotation
             if let pick = DrawingAnnotationKit.pick(point, in: layout, pictorial: true),
@@ -404,6 +446,9 @@ final class EditorViewModel {
                 transform: transform)
             activeDrawing?.annotations[index].b = leader.rim
             activeDrawing?.annotations[index].offset = leader.offset
+        case .angle:
+            activeDrawing?.annotations[index].offset = DrawingAnnotationKit.angleRadius(
+                through: point, annotation, transform: transform)
         }
     }
 

@@ -2192,11 +2192,20 @@ outline away from a corner gives its diameter ("Ø6 mm", across the circle)
 or an arc's radius ("R3 mm"), its leader up and away from the view's
 middle, out past the view, and it swings round when dragged. **Centre
 marks** (sheet option, on by default): chain-line crosses 2 mm past every
-full circle outside the isometric. Tests: `DrawingAnnotationsTests`,
-`DrawingUITests`, web `drawing-annotations-smoke.mjs`. Missing: free
+full circle outside the isometric. **Edges and angles:** a view's straight
+lines (collinear pieces joined — a circle seen edge-on is one edge, with
+nothing to snap to along it) can be tapped with Dimension: two edges give
+the angle between them ("63.4°", an arc round where their lines meet, on
+the tapped sides, edges carried out or in to it; across the corner, edges
+carried through, when the corner is too small to hold it — dragging the
+value through the corner flips it), two parallel edges the gap between
+them, an edge and a corner the distance square across. A corner wins near
+it unless the tap is right on a short edge, along from its ends. Tests:
+`DrawingAnnotationsTests`, `DrawingUITests`, web
+`drawing-annotations-smoke.mjs`. Missing: free
 placement of new views from any angle (custom projection angles, extra
 projected views), cutting lines through picked points / stepped sections,
-angle dimensions, tolerances, centerlines,
+tolerances, centerlines,
 title-block layouts, multiple sheets, DWG.
 **Feasibility:** [mesh-kernel OK] for a first version (orthographic
 projection + silhouette/hidden-line from meshes; associativity with the model
