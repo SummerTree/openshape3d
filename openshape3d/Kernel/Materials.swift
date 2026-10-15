@@ -11,6 +11,45 @@
 import Foundation
 import simd
 
+/// A pattern over a material's colour (spec §14 texture mapping): wood grain,
+/// brushed metal, carbon fibre… Computed in the shader from the body's own
+/// coordinates (`patternAlbedo` in Shaders.metal and renderer.ts), so it is
+/// fixed to the part as it moves, and needs no image or texture coordinates.
+nonisolated enum MaterialPattern: String, Codable, CaseIterable, Sendable {
+    case none, woodGrain, brushed, carbonFibre, knurl, speckle, marble
+
+    var title: String {
+        switch self {
+        case .none: "None"
+        case .woodGrain: "Wood Grain"
+        case .brushed: "Brushed"
+        case .carbonFibre: "Carbon Fibre"
+        case .knurl: "Knurl"
+        case .speckle: "Speckle"
+        case .marble: "Marble"
+        }
+    }
+
+    /// The shader's number for it.
+    var shaderValue: Float { Float(Self.allCases.firstIndex(of: self) ?? 0) }
+
+    /// One repeat, mm, when first chosen: ring spacing, weave, knurl pitch…
+    var defaultSize: Double {
+        switch self {
+        case .none: 10
+        case .woodGrain: 6
+        case .brushed: 20
+        case .carbonFibre: 4
+        case .knurl: 1.5
+        case .speckle: 3
+        case .marble: 20
+        }
+    }
+
+    /// Sizes the Size control offers, mm.
+    static let sizeRange = 0.05...2_000.0
+}
+
 /// Persisted appearance of a body. Backward compatible: absent on old
 /// documents (decodeIfPresent on the owning blob → nil keeps the legacy
 /// default look).
@@ -29,6 +68,12 @@ nonisolated struct BodyMaterialSpec: Codable, Equatable, Sendable {
     /// Glow (spec §14 emission): 0 lit normally; toward 1 the surface shows
     /// its own colour, brighter, whatever the light. Absent in older records.
     var emission: Double = 0
+    /// Texture mapping (spec §14): a pattern over the colour, how long one
+    /// repeat is (mm, on the part) and how it is turned (degrees). Written
+    /// only when there is a pattern, so plain records are unchanged.
+    var pattern: MaterialPattern = .none
+    var patternSize: Double = 10
+    var patternRotation: Double = 0
 
     /// The document default — identical to the pre-material body color and
     /// shading, so assigning it changes nothing visually.
@@ -37,15 +82,21 @@ nonisolated struct BodyMaterialSpec: Codable, Equatable, Sendable {
     )
 
     init(baseColor: SIMD4<Double>, metallic: Double = 0, roughness: Double = 0,
-         baseColorTexture: Data? = nil, emission: Double = 0) {
+         baseColorTexture: Data? = nil, emission: Double = 0,
+         pattern: MaterialPattern = .none, patternSize: Double? = nil, patternRotation: Double = 0) {
         self.baseColor = baseColor
         self.metallic = metallic
         self.roughness = roughness
         self.baseColorTexture = baseColorTexture
         self.emission = emission
+        self.pattern = pattern
+        self.patternSize = patternSize ?? pattern.defaultSize
+        self.patternRotation = patternRotation
     }
 
-    private enum CodingKeys: String, CodingKey { case baseColor, metallic, roughness, baseColorTexture, emission }
+    private enum CodingKeys: String, CodingKey {
+        case baseColor, metallic, roughness, baseColorTexture, emission, pattern, patternSize, patternRotation
+    }
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -54,6 +105,10 @@ nonisolated struct BodyMaterialSpec: Codable, Equatable, Sendable {
         roughness = try c.decodeIfPresent(Double.self, forKey: .roughness) ?? 0
         baseColorTexture = try c.decodeIfPresent(Data.self, forKey: .baseColorTexture)
         emission = try c.decodeIfPresent(Double.self, forKey: .emission) ?? 0
+        // A pattern this build doesn't know shows as none.
+        pattern = (try? c.decodeIfPresent(MaterialPattern.self, forKey: .pattern)) ?? MaterialPattern.none
+        patternSize = try c.decodeIfPresent(Double.self, forKey: .patternSize) ?? pattern.defaultSize
+        patternRotation = try c.decodeIfPresent(Double.self, forKey: .patternRotation) ?? 0
     }
 
     func encode(to encoder: Encoder) throws {
@@ -64,6 +119,11 @@ nonisolated struct BodyMaterialSpec: Codable, Equatable, Sendable {
         try c.encodeIfPresent(baseColorTexture, forKey: .baseColorTexture)
         // Written only when set, so a plain material's record is unchanged.
         if emission != 0 { try c.encode(emission, forKey: .emission) }
+        if pattern != .none {
+            try c.encode(pattern, forKey: .pattern)
+            try c.encode(patternSize, forKey: .patternSize)
+            try c.encode(patternRotation, forKey: .patternRotation)
+        }
     }
 
     /// Clamped copy: colors and factors pinned to 0…1 (slider/decode safety).
@@ -73,7 +133,12 @@ nonisolated struct BodyMaterialSpec: Codable, Equatable, Sendable {
             metallic: min(max(metallic, 0), 1),
             roughness: min(max(roughness, 0), 1),
             baseColorTexture: baseColorTexture,
-            emission: min(max(emission, 0), 1)
+            emission: min(max(emission, 0), 1),
+            pattern: pattern,
+            patternSize: patternSize.isFinite
+                ? min(max(patternSize, MaterialPattern.sizeRange.lowerBound), MaterialPattern.sizeRange.upperBound)
+                : pattern.defaultSize,
+            patternRotation: patternRotation.isFinite ? patternRotation.truncatingRemainder(dividingBy: 360) : 0
         )
     }
 }
@@ -308,11 +373,12 @@ nonisolated struct MaterialPreset: Identifiable, Sendable {
     }
 
     private init(_ name: String, _ category: Category, _ r: Double, _ g: Double, _ b: Double,
-                 metallic: Double = 0, roughness: Double, alpha: Double = 1, emission: Double = 0) {
+                 metallic: Double = 0, roughness: Double, alpha: Double = 1, emission: Double = 0,
+                 pattern: MaterialPattern = .none, size: Double? = nil) {
         self.name = name
         self.category = category
         spec = BodyMaterialSpec(baseColor: SIMD4(r, g, b, alpha), metallic: metallic, roughness: roughness,
-                                emission: emission)
+                                emission: emission, pattern: pattern, patternSize: size)
     }
 
     /// Flat-colour library. The first seven are the original starter set,
@@ -327,13 +393,16 @@ nonisolated struct MaterialPreset: Identifiable, Sendable {
         MaterialPreset("Wood", .wood, 0.55, 0.38, 0.22, roughness: 0.75),
         // Metals
         MaterialPreset("Stainless Steel", .metal, 0.70, 0.71, 0.72, metallic: 1, roughness: 0.18),
-        MaterialPreset("Brushed Aluminum", .metal, 0.78, 0.79, 0.80, metallic: 1, roughness: 0.45),
+        MaterialPreset("Brushed Aluminum", .metal, 0.78, 0.79, 0.80, metallic: 1, roughness: 0.45,
+                       pattern: .brushed),
         MaterialPreset("Chrome", .metal, 0.92, 0.93, 0.95, metallic: 1, roughness: 0.05),
         MaterialPreset("Copper", .metal, 0.86, 0.50, 0.33, metallic: 1, roughness: 0.28),
         MaterialPreset("Gold", .metal, 0.95, 0.76, 0.34, metallic: 1, roughness: 0.15),
         MaterialPreset("Titanium", .metal, 0.55, 0.53, 0.50, metallic: 1, roughness: 0.40),
         MaterialPreset("Cast Iron", .metal, 0.30, 0.30, 0.31, metallic: 1, roughness: 0.80),
         MaterialPreset("Anodized Black", .metal, 0.10, 0.10, 0.11, metallic: 1, roughness: 0.38),
+        MaterialPreset("Knurled Steel", .metal, 0.60, 0.62, 0.64, metallic: 1, roughness: 0.40, pattern: .knurl),
+        MaterialPreset("Carbon Fibre", .plastic, 0.10, 0.10, 0.11, roughness: 0.20, pattern: .carbonFibre),
         // Plastics
         MaterialPreset("ABS White", .plastic, 0.95, 0.95, 0.93, roughness: 0.55),
         MaterialPreset("ABS Black", .plastic, 0.07, 0.07, 0.08, roughness: 0.55),
@@ -346,19 +415,19 @@ nonisolated struct MaterialPreset: Identifiable, Sendable {
         MaterialPreset("Silicone Grey", .rubber, 0.55, 0.56, 0.57, roughness: 0.85),
         MaterialPreset("Rubber Red", .rubber, 0.62, 0.10, 0.08, roughness: 0.90),
         // Wood
-        MaterialPreset("Oak", .wood, 0.70, 0.53, 0.33, roughness: 0.70),
-        MaterialPreset("Walnut", .wood, 0.36, 0.24, 0.15, roughness: 0.65),
-        MaterialPreset("Maple", .wood, 0.87, 0.74, 0.55, roughness: 0.70),
-        MaterialPreset("Plywood", .wood, 0.80, 0.66, 0.45, roughness: 0.85),
+        MaterialPreset("Oak", .wood, 0.70, 0.53, 0.33, roughness: 0.70, pattern: .woodGrain),
+        MaterialPreset("Walnut", .wood, 0.36, 0.24, 0.15, roughness: 0.65, pattern: .woodGrain, size: 4),
+        MaterialPreset("Maple", .wood, 0.87, 0.74, 0.55, roughness: 0.70, pattern: .woodGrain, size: 9),
+        MaterialPreset("Plywood", .wood, 0.80, 0.66, 0.45, roughness: 0.85, pattern: .woodGrain, size: 14),
         // Glass
         MaterialPreset("Clear Glass", .glass, 0.88, 0.93, 0.96, roughness: 0.04, alpha: 0.30),
         MaterialPreset("Frosted Glass", .glass, 0.90, 0.92, 0.94, roughness: 0.55, alpha: 0.55),
         MaterialPreset("Tinted Glass", .glass, 0.30, 0.42, 0.45, roughness: 0.05, alpha: 0.45),
         MaterialPreset("Clear Acrylic", .glass, 0.94, 0.96, 0.98, roughness: 0.08, alpha: 0.38),
         // Stone
-        MaterialPreset("Concrete", .stone, 0.62, 0.61, 0.58, roughness: 0.92),
-        MaterialPreset("Marble", .stone, 0.93, 0.92, 0.90, roughness: 0.20),
-        MaterialPreset("Granite", .stone, 0.35, 0.34, 0.34, roughness: 0.45),
+        MaterialPreset("Concrete", .stone, 0.62, 0.61, 0.58, roughness: 0.92, pattern: .speckle, size: 2),
+        MaterialPreset("Marble", .stone, 0.93, 0.92, 0.90, roughness: 0.20, pattern: .marble),
+        MaterialPreset("Granite", .stone, 0.35, 0.34, 0.34, roughness: 0.45, pattern: .speckle, size: 4),
         // Ceramic
         MaterialPreset("Porcelain", .ceramic, 0.96, 0.96, 0.95, roughness: 0.10),
         MaterialPreset("Terracotta", .ceramic, 0.74, 0.40, 0.26, roughness: 0.85),

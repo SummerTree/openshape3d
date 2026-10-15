@@ -892,6 +892,9 @@ final class Renderer: NSObject, MTKViewDelegate {
             body.metallic = material.metallic
             body.roughness = material.roughness
             body.emission = material.emission
+            body.pattern = material.pattern
+            body.patternSize = material.patternSize
+            body.patternRotation = material.patternRotation
         }
         return body
     }

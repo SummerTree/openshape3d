@@ -84,7 +84,92 @@ struct LitOut {
     float4 position [[position]];
     float3 worldPosition;
     float3 worldNormal;
+    /// Body-local, mm: where a material pattern is computed.
+    float3 localPosition;
+    float3 localNormal;
 };
+
+// MARK: - Material patterns (spec §14 texture mapping)
+//
+// Computed from the body's own coordinates, so a pattern is fixed to the part.
+// Mirrored in renderer.ts (LIT_FS) — keep the two in step.
+
+static float patternHash(float3 p) {
+    p = fract(p * 0.3183099 + 0.1);
+    p *= 17.0;
+    return fract(p.x * p.y * p.z * (p.x + p.y + p.z));
+}
+
+static float patternNoise(float3 x) {
+    float3 i = floor(x);
+    float3 f = fract(x);
+    f = f * f * (3.0 - 2.0 * f);
+    return mix(mix(mix(patternHash(i + float3(0, 0, 0)), patternHash(i + float3(1, 0, 0)), f.x),
+                   mix(patternHash(i + float3(0, 1, 0)), patternHash(i + float3(1, 1, 0)), f.x), f.y),
+               mix(mix(patternHash(i + float3(0, 0, 1)), patternHash(i + float3(1, 0, 1)), f.x),
+                   mix(patternHash(i + float3(0, 1, 1)), patternHash(i + float3(1, 1, 1)), f.x), f.y), f.z);
+}
+
+static float patternFbm(float3 p) {
+    return patternNoise(p) * 0.5 + patternNoise(p * 2.03 + 1.7) * 0.3 + patternNoise(p * 4.01 + 3.1) * 0.2;
+}
+
+/// The albedo with `pattern` over it: 1 wood grain, 2 brushed, 3 carbon fibre,
+/// 4 knurl, 5 speckle, 6 marble (MaterialPattern.shaderValue); `size` is one
+/// repeat in mm, `rotation` radians.
+static float3 patternAlbedo(float3 albedo, float pattern, float size, float rotation, float3 P, float3 N) {
+    if (pattern < 0.5) return albedo;
+    float c = cos(rotation), s = sin(rotation);
+    float3 q = P / max(size, 1e-4);
+    // The plane the surface mostly faces, for flat patterns.
+    float3 a = abs(N);
+    float2 uv = (a.x > a.y && a.x > a.z) ? q.yz : ((a.y > a.z) ? q.xz : q.xy);
+    uv = float2(c * uv.x - s * uv.y, s * uv.x + c * uv.y);
+    float k = 1.0;
+    if (pattern < 1.5) {
+        // Rings round the part's (turned) vertical axis, wobbling, with fibres.
+        float3 r = float3(c * q.x - s * q.z, q.y, s * q.x + c * q.z);
+        float d = length(r.xz) + patternFbm(r * 0.35) * 1.2;
+        float ring = fract(d);
+        float early = smoothstep(0.0, 0.3, ring) * smoothstep(1.0, 0.6, ring);
+        float fibre = patternNoise(float3(r.x * 3.0, r.y * 40.0, r.z * 3.0));
+        k = mix(0.62, 1.06, early) * (0.92 + 0.14 * fibre);
+    } else if (pattern < 2.5) {
+        // Fine streaks along one direction.
+        float n = patternNoise(float3(uv.x * 0.6, uv.y * 120.0, 0.0)) * 0.6
+            + patternNoise(float3(uv.x * 2.0, uv.y * 400.0, 1.7)) * 0.4;
+        k = 0.86 + 0.24 * n;
+    } else if (pattern < 3.5) {
+        // 2×2 twill: tows across and along in diagonal steps, each with a sheen.
+        float2 g = uv * 2.0;
+        float2 cell = floor(g);
+        float2 f = g - cell;
+        float step2 = (cell.x + cell.y) * 0.25;
+        bool across = step2 - floor(step2) < 0.5;
+        float along = across ? f.x : f.y;
+        float sheen = 0.5 + 0.5 * sin(along * 3.14159265);
+        float fibres = patternNoise(float3((across ? f.y : f.x) * 60.0, cell.x, cell.y));
+        k = (0.55 + 0.75 * sheen) * (0.92 + 0.12 * fibres);
+    } else if (pattern < 4.5) {
+        // Diamond knurl: two crossing sets of ridges.
+        float d1 = abs(fract(uv.x + uv.y) - 0.5) * 2.0;
+        float d2 = abs(fract(uv.x - uv.y) - 0.5) * 2.0;
+        float h = min(d1, d2);
+        k = 0.5 + 0.7 * smoothstep(0.0, 0.7, h) + 0.08 * (d1 - d2);
+    } else if (pattern < 5.5) {
+        // Speckle: mottling with dark and light grains.
+        float mottle = patternNoise(q * 1.5);
+        float dark = step(0.78, patternNoise(q * 6.0 + 11.0));
+        float light = step(0.8, patternNoise(q * 7.0 + 23.0));
+        k = (0.88 + 0.22 * mottle) * (1.0 - 0.4 * dark) * (1.0 + 0.25 * light);
+    } else {
+        // Marble: thin wandering veins.
+        float v = sin((q.x + q.y * 0.5 + q.z * 0.3) * 6.2831853 + patternFbm(q * 1.5) * 5.0);
+        float vein = pow(1.0 - abs(v), 30.0);
+        k = (1.0 - 0.55 * vein) * (0.96 + 0.06 * patternNoise(q * 4.0));
+    }
+    return albedo * k;
+}
 
 vertex LitOut vertex_lit(
     uint vid [[vertex_id]],
@@ -100,6 +185,8 @@ vertex LitOut vertex_lit(
     // Uniform scale + rotation: transforming with the model matrix and
     // renormalizing is exact.
     out.worldNormal = normalize((body.modelMatrix * float4(normals[vid], 0.0)).xyz);
+    out.localPosition = positions[vid];
+    out.localNormal = normals[vid];
     return out;
 }
 
@@ -115,7 +202,8 @@ fragment float4 fragment_lit(
     float3 V = normalize(frame.cameraPosition.xyz - in.worldPosition);
     float3 L = normalize(-frame.keyLightDirection.xyz);
 
-    float3 albedo = body.baseColor.rgb;
+    float3 albedo = patternAlbedo(body.baseColor.rgb, body.pattern, body.patternSize, body.patternRotation,
+                                  in.localPosition, normalize(in.localNormal));
     float alpha = body.baseColor.a;
     if (body.selectionState == SelectionStateSelected) {
         albedo = mix(albedo, frame.accentColor.rgb, 0.45);

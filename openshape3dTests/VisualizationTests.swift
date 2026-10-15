@@ -187,4 +187,36 @@ final class VisualizationTests: XCTestCase {
         XCTAssertFalse(old.depthOfField)
         XCTAssertEqual(old.blur, 0.5)
     }
+
+    func testPatternsAreSavedOnlyWhenSetAndOldRecordsHaveNone() throws {
+        let plain = BodyMaterialSpec(baseColor: SIMD4(0.5, 0.5, 0.5, 1), roughness: 0.4)
+        let plainJSON = String(decoding: try JSONEncoder().encode(plain), as: UTF8.self)
+        XCTAssertFalse(plainJSON.contains("pattern"), "a plain material's record is unchanged")
+        XCTAssertEqual(try JSONDecoder().decode(BodyMaterialSpec.self, from: Data(plainJSON.utf8)).pattern, MaterialPattern.none)
+
+        let oak = try XCTUnwrap(MaterialPreset.library.first { $0.name == "Oak" }).spec
+        XCTAssertEqual(oak.pattern, .woodGrain)
+        XCTAssertEqual(oak.patternSize, MaterialPattern.woodGrain.defaultSize)
+        var turned = oak
+        turned.patternRotation = 30
+        turned.patternSize = 2.5
+        XCTAssertEqual(try JSONDecoder().decode(BodyMaterialSpec.self, from: JSONEncoder().encode(turned)), turned)
+
+        // A pattern a newer build added decodes as none.
+        let future = #"{"baseColor":[1,1,1,1],"pattern":"hologram","patternSize":3}"#
+        XCTAssertEqual(try JSONDecoder().decode(BodyMaterialSpec.self, from: Data(future.utf8)).pattern, MaterialPattern.none)
+    }
+
+    func testPatternValuesArePinnedAndReachTheRenderer() {
+        var spec = BodyMaterialSpec(baseColor: SIMD4(1, 1, 1, 1), pattern: .knurl)
+        XCTAssertEqual(spec.patternSize, 1.5, "a pattern starts at its own size")
+        spec.patternSize = 1e9
+        spec.patternRotation = 400
+        XCTAssertEqual(spec.clamped.patternSize, MaterialPattern.sizeRange.upperBound)
+        XCTAssertEqual(spec.clamped.patternRotation, 40, accuracy: 1e-9)
+        let render = BodyMaterial(spec: spec.clamped, meshHasTexcoords: false, revision: 1)
+        XCTAssertEqual(render.pattern, 4, "knurl is the shader's 4")
+        XCTAssertEqual(render.patternRotation, Float(40 * Double.pi / 180), accuracy: 1e-6)
+        XCTAssertEqual(MaterialPattern.allCases.map(\.shaderValue), [0, 1, 2, 3, 4, 5, 6])
+    }
 }
