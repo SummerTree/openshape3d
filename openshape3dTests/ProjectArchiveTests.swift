@@ -83,6 +83,15 @@ final class ProjectArchiveTests: XCTestCase {
         XCTAssertEqual(decoded.rollbackIndex, 1)
     }
 
+    func testArchivesWithoutAxesStillOpen() throws {
+        // Written before axes were archived: the field is simply absent.
+        let archive = try sampleArchive()
+        XCTAssertNil(archive.axes)
+        let decoded = try XCTUnwrap(ProjectArchive.decode(try XCTUnwrap(archive.encoded())))
+        XCTAssertNil(decoded.axes)
+        XCTAssertNil(decoded.remappingAllUUIDs().axes)
+    }
+
     func testDecodeRefusesNewerVersionsAndGarbage() throws {
         var archive = try sampleArchive()
         archive.version = ProjectArchive.currentVersion + 1
@@ -163,14 +172,16 @@ final class ProjectArchiveTests: XCTestCase {
     func testDoubleImportYieldsIndependentProjects() throws {
         let schema = Schema([
             Project.self, PersistedBody.self, PersistedSketch.self,
-            PersistedPlane.self, PersistedImage.self, PersistedSymbol.self,
+            PersistedPlane.self, PersistedAxis.self, PersistedImage.self, PersistedSymbol.self,
             PersistedFeature.self, PersistedVariable.self,
         ])
         let config = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)
         let container = try ModelContainer(for: schema, configurations: [config])
         let context = ModelContext(container)
 
-        let archive = try sampleArchive()
+        var archive = try sampleArchive()
+        let axis = try XCTUnwrap(ConstructionAxis(id: ConstructionAxisID(), origin: SIMD3(1, 2, 3), direction: SIMD3(0, 1, 0)))
+        archive.axes = [.init(id: axis.id.raw, data: try JSONEncoder().encode(axis))]
         archive.remappingAllUUIDs().insert(into: context, name: "Import 1")
         try context.save()
         archive.remappingAllUUIDs().insert(into: context, name: "Import 2")
@@ -185,6 +196,14 @@ final class ProjectArchiveTests: XCTestCase {
             XCTAssertEqual(project.features.count, 1)
             XCTAssertEqual(project.variables.count, 1)
             XCTAssertEqual(project.rollbackIndex, 1)
+            // Construction axes travel too, under fresh IDs.
+            XCTAssertEqual(project.axes.count, 1)
+            let stored = try JSONDecoder().decode(ConstructionAxis.self, from: try XCTUnwrap(project.axes.first?.axisData))
+            XCTAssertEqual(stored.origin, axis.origin)
+            XCTAssertEqual(stored.id.raw, project.axes.first?.axisID, "the blob's id follows the row's")
+            XCTAssertNotEqual(stored.id, axis.id)
+            // …and back out into an archive.
+            XCTAssertEqual(ProjectArchive.archive(from: project).axes?.count, 1)
         }
         XCTAssertNotEqual(projects[0].bodies.first?.bodyID,
                           projects[1].bodies.first?.bodyID,

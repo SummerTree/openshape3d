@@ -91,6 +91,9 @@ nonisolated struct ProjectArchive: Codable, Sendable {
     var bodies: [BodyRecord] = []
     var sketches: [BlobRecord] = []
     var planes: [BlobRecord] = []
+    /// Construction axes (spec §6.2); absent in archives written before
+    /// axes were archived (they were dropped then).
+    var axes: [BlobRecord]?
     var images: [ImageRecord] = []
     var symbols: [BlobRecord] = []
     var features: [FeatureRecord] = []
@@ -180,6 +183,7 @@ nonisolated extension ProjectArchive {
         }
         out.sketches = sketches.map { .init(id: mapped($0.id), data: rewritten($0.data)) }
         out.planes = planes.map { .init(id: mapped($0.id), data: rewritten($0.data)) }
+        out.axes = axes?.map { .init(id: mapped($0.id), data: rewritten($0.data)) }
         out.symbols = symbols.map { .init(id: mapped($0.id), data: rewritten($0.data)) }
         out.images = images.map { record in
             var r = record
@@ -230,6 +234,9 @@ extension ProjectArchive {
         }
         archive.planes = project.planes.map {
             BlobRecord(id: $0.planeID, data: $0.planeData)
+        }
+        archive.axes = project.axes.isEmpty ? nil : project.axes.map {
+            BlobRecord(id: $0.axisID, data: $0.axisData)
         }
         archive.images = project.images.map {
             ImageRecord(id: $0.imageID, info: $0.infoData, image: $0.imageData)
@@ -296,6 +303,11 @@ extension ProjectArchive {
         }
         for record in planes {
             let row = PersistedPlane(planeID: record.id, planeData: record.data)
+            row.project = project
+            context.insert(row)
+        }
+        for record in axes ?? [] {
+            let row = PersistedAxis(axisID: record.id, axisData: record.data)
             row.project = project
             context.insert(row)
         }
