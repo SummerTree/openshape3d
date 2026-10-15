@@ -27,6 +27,10 @@ final class PipelineStore {
     let grid: MTLRenderPipelineState
     let texturedQuad: MTLRenderPipelineState // Insert Image reference quads
     let blobShadow: MTLRenderPipelineState   // cheap planar ground shadows
+    /// Depth of field (spec §14): the scene texture blurred by its depth —
+    /// read from a single-sample or a multisample depth texture.
+    let depthOfField: MTLRenderPipelineState
+    let depthOfFieldMS: MTLRenderPipelineState
 
     // Depth-stencil states
     let depthReadWrite: MTLDepthStencilState
@@ -96,6 +100,12 @@ final class PipelineStore {
             ),
             let blobShadow = makePipeline(
                 vertex: "vertex_texturedQuad", fragment: "fragment_blobShadow", blended: true
+            ),
+            let depthOfField = makePipeline(
+                vertex: "vertex_fullscreen", fragment: "fragment_depthOfField", blended: false
+            ),
+            let depthOfFieldMS = makePipeline(
+                vertex: "vertex_fullscreen", fragment: "fragment_depthOfFieldMS", blended: false
             )
         else { return nil }
 
@@ -111,6 +121,8 @@ final class PipelineStore {
         self.grid = grid
         self.texturedQuad = texturedQuad
         self.blobShadow = blobShadow
+        self.depthOfField = depthOfField
+        self.depthOfFieldMS = depthOfFieldMS
 
         func makeDepthState(compare: MTLCompareFunction, write: Bool) -> MTLDepthStencilState? {
             let descriptor = MTLDepthStencilDescriptor()

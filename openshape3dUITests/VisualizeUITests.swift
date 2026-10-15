@@ -62,6 +62,15 @@ final class VisualizeUITests: XCTestCase {
         XCTAssertTrue(app.buttons["UsedMaterial_Copper"].exists, "the rest of the box keeps copper")
         let faced = XCTAttachment(screenshot: app.screenshot())
         faced.name = "visualize-face-material"; faced.lifetime = .keepAlways; add(faced)
+        // A see-through material on the face: the box shows through it.
+        search.tap()
+        search.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: 6) + "tinted")
+        let glass = app.buttons["Material_Tinted Glass"]
+        XCTAssertTrue(glass.waitForExistence(timeout: 3))
+        glass.tap()
+        XCTAssertTrue(app.buttons["UsedMaterial_Tinted Glass"].waitForExistence(timeout: 3), "the face wears glass")
+        let glassed = XCTAttachment(screenshot: app.screenshot())
+        glassed.name = "visualize-glass-face"; glassed.lifetime = .keepAlways; add(glassed)
         app.coordinate(withNormalizedOffset: CGVector(dx: 0.08, dy: 0.25)).tap()
         XCTAssertTrue(app.staticTexts["1 face selected"].waitForNonExistence(timeout: 3), "empty space clears the pick")
         let clean = XCTAttachment(screenshot: app.screenshot())
@@ -76,6 +85,21 @@ final class VisualizeUITests: XCTestCase {
         XCTAssertTrue(app.sliders["EnvironmentElevation"].exists)
         let shot = XCTAttachment(screenshot: app.screenshot())
         shot.name = "visualize-sunset"; shot.lifetime = .keepAlways; add(shot)
+
+        // Depth of field: on, then focused on a point picked on the box.
+        let dof = app.switches["EnvironmentDepthOfField"]
+        for _ in 0..<4 where !dof.isHittable {
+            panel.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.85))
+                .press(forDuration: 0.05, thenDragTo: panel.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.35)))
+        }
+        XCTAssertTrue(dof.isHittable, "\(dof.frame) in \(panel.frame)")
+        dof.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
+        XCTAssertTrue(app.sliders["EnvironmentBlur"].waitForExistence(timeout: 3), "depth of field brings its blur")
+        app.buttons["EnvironmentFocusPick"].tap()
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.45, dy: 0.5)).tap()
+        XCTAssertTrue(app.buttons["EnvironmentFocusReset"].waitForExistence(timeout: 3), "the tap set a focus point")
+        let blurred = XCTAttachment(screenshot: app.screenshot())
+        blurred.name = "visualize-depth-of-field"; blurred.lifetime = .keepAlways; add(blurred)
 
         app.buttons["VisualizeDone"].tap()
         XCTAssertTrue(panel.waitForNonExistence(timeout: 5))

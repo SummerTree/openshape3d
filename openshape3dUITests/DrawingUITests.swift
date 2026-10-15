@@ -122,6 +122,65 @@ final class DrawingUITests: XCTestCase {
         XCTAssertTrue(preview.waitForNonExistence(timeout: 5))
     }
 
+    /// Multiple sheets (spec §15): + under the preview adds a sheet with
+    /// nothing placed on it yet; each sheet keeps its own views; the sheets
+    /// are saved with the drawing; the extra sheet can be deleted.
+    func testSheetsAreAddedSwitchedAndDeleted() throws {
+        let app = XCUIApplication()
+        app.launchEnvironment["OS3D_FRESH"] = "1"
+        app.launchEnvironment["OS3D_RESET_STORE"] = "1"
+        app.launchEnvironment["OS3D_DEBUG_SEED_HOLE"] = "1"
+        app.launch()
+
+        func openDrawing() {
+            XCTAssertTrue(app.buttons["ExportMenu"].waitForExistence(timeout: 10))
+            app.buttons["ExportMenu"].tap()
+            XCTAssertTrue(app.buttons["NewDrawingButton"].waitForExistence(timeout: 3))
+            app.buttons["NewDrawingButton"].tap()
+        }
+        func reveal(_ element: XCUIElement) {
+            XCTAssertTrue(element.waitForExistence(timeout: 5))
+            for _ in 0..<8 where !element.isHittable {
+                app.collectionViews.firstMatch.swipeUp(velocity: .slow)
+            }
+            XCTAssertTrue(element.isHittable)
+        }
+
+        openDrawing()
+        let preview = app.descendants(matching: .any)["DrawingPreview"]
+        XCTAssertTrue(preview.waitForExistence(timeout: 10))
+        let addSection = app.buttons["DrawingAddSection"]
+        reveal(addSection)
+        addSection.tap()
+        XCTAssertEqual(preview.value as? String, "5 views", "sheet 1 has a section view")
+        XCTAssertFalse(app.buttons["DrawingSheetTab_2"].exists)
+
+        app.buttons["DrawingAddSheet"].tap()
+        let second = app.buttons["DrawingSheetTab_2"]
+        XCTAssertTrue(second.waitForExistence(timeout: 3))
+        XCTAssertTrue(second.isSelected, "the new sheet is shown")
+        XCTAssertEqual(preview.value as? String, "4 views", "a new sheet has the standard views only")
+        let shot = XCTAttachment(screenshot: app.screenshot())
+        shot.name = "drawing-sheet-2"; shot.lifetime = .keepAlways; add(shot)
+
+        app.buttons["DrawingSheetTab_1"].tap()
+        XCTAssertEqual(preview.value as? String, "5 views")
+        app.buttons["DrawingDone"].tap()
+        XCTAssertTrue(preview.waitForNonExistence(timeout: 5))
+
+        // Reopened, both sheets are there; sheet 2 goes again.
+        openDrawing()
+        XCTAssertTrue(second.waitForExistence(timeout: 10), "the sheets are saved with the drawing")
+        second.tap()
+        let delete = app.buttons["DrawingDeleteSheet"]
+        app.collectionViews.firstMatch.swipeDown(velocity: .fast)
+        XCTAssertTrue(delete.waitForExistence(timeout: 3))
+        delete.tap()
+        XCTAssertTrue(second.waitForNonExistence(timeout: 3))
+        XCTAssertEqual(preview.value as? String, "5 views", "back on sheet 1")
+        app.buttons["DrawingDone"].tap()
+    }
+
     /// Dimensions & notes (spec §15): the Dimension tool takes two points of
     /// a view, the Note tool places a note; both are listed and deletable.
     func testDimensionAndNoteArePlacedOnTheSheet() throws {

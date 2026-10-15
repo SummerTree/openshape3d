@@ -43,6 +43,12 @@ nonisolated struct VisualizationEnvironment: Codable, Equatable, Sendable {
     /// Linear RGB 0…1, for `.color`.
     var backgroundColor = SIMD3<Double>(1, 1, 1)
     var groundShadow = true
+    /// Depth of field: what is nearer or further than the focus point blurs.
+    var depthOfField = false
+    /// Where the camera focuses (world); nil focuses on what the view orbits.
+    var focusPoint: SIMD3<Double>?
+    /// How strongly out-of-focus parts blur, 0…1.
+    var blur = 0.5
 
     init() {}
 
@@ -54,7 +60,8 @@ nonisolated struct VisualizationEnvironment: Codable, Equatable, Sendable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case preset, lightRotation, sunElevation, lightIntensity, background, backgroundColor, groundShadow
+        case preset, lightRotation, sunElevation, lightIntensity, background, backgroundColor, groundShadow,
+             depthOfField, focusPoint, blur
     }
 
     // Every field optional on the way in: a design saved by a build with
@@ -70,6 +77,9 @@ nonisolated struct VisualizationEnvironment: Codable, Equatable, Sendable {
         backgroundColor = try c.decodeIfPresent(SIMD3<Double>.self, forKey: .backgroundColor)
             ?? fallback.backgroundColor
         groundShadow = try c.decodeIfPresent(Bool.self, forKey: .groundShadow) ?? fallback.groundShadow
+        depthOfField = try c.decodeIfPresent(Bool.self, forKey: .depthOfField) ?? fallback.depthOfField
+        focusPoint = try c.decodeIfPresent(SIMD3<Double>.self, forKey: .focusPoint)
+        blur = try c.decodeIfPresent(Double.self, forKey: .blur) ?? fallback.blur
     }
 
     var presetValue: EnvironmentPreset {
@@ -84,6 +94,8 @@ nonisolated struct VisualizationEnvironment: Codable, Equatable, Sendable {
         out.sunElevation = min(max(sunElevation, 0), 90)
         out.lightIntensity = min(max(lightIntensity, 0), 2)
         out.backgroundColor = simd_clamp(backgroundColor, SIMD3(repeating: 0), SIMD3(repeating: 1))
+        out.blur = blur.isFinite ? min(max(blur, 0), 1) : 0.5
+        if let point = focusPoint, !(point.x.isFinite && point.y.isFinite && point.z.isFinite) { out.focusPoint = nil }
         return out
     }
 }
@@ -136,6 +148,14 @@ nonisolated struct VisualizationLighting: Equatable, Sendable {
     var backgroundBottom: SIMD3<Float>
     /// The background is to be left out of captures.
     var transparentBackground: Bool
+    /// Depth of field, when on: the focus point (nil: the camera's orbit
+    /// target) and the blur strength 0…1.
+    var depthOfField: DepthOfField?
+
+    struct DepthOfField: Equatable, Sendable {
+        var focus: SIMD3<Float>?
+        var blur: Float
+    }
 
     init(_ environment: VisualizationEnvironment) {
         let env = environment.clamped
@@ -156,6 +176,31 @@ nonisolated struct VisualizationLighting: Equatable, Sendable {
             backgroundBottom = SIMD3<Float>(env.backgroundColor)
         }
         transparentBackground = env.background == .transparent
+        depthOfField = env.depthOfField && env.blur > 0
+            ? DepthOfField(focus: env.focusPoint.map { SIMD3<Float>($0) }, blur: Float(env.blur)) : nil
+    }
+}
+
+/// Depth of field (spec §14): how much each pixel blurs. The renderers
+/// (Metal `fragment_depthOfField`, WebGL `dof`) apply the same rule per pixel.
+nonisolated enum DepthOfFieldKit {
+    /// The widest blur, as a fraction of the image's height, at blur 1.
+    static let maxRadiusFraction: Float = 0.02
+    /// How fast the blur grows: the widest a third of the focus distance
+    /// off it — a part's own depth is a fair share of that in a close shot.
+    static let falloff: Float = 3
+
+    /// How far in front of the camera `focus` lies, along the view.
+    static func focusDistance(eye: SIMD3<Float>, viewDirection: SIMD3<Float>, focus: SIMD3<Float>) -> Float {
+        max(simd_dot(focus - eye, simd_normalize(viewDirection)), 1e-4)
+    }
+
+    /// The blur radius in pixels for a point `distance` in front of the
+    /// camera: none at the focus distance, growing with the distance from
+    /// it relative to the focus distance (`falloff`), up to the widest blur.
+    static func radius(distance: Float, focusDistance: Float, blur: Float, imageHeight: Float) -> Float {
+        let widest = blur * imageHeight * maxRadiusFraction
+        return widest * min(1, falloff * abs(distance - focusDistance) / max(focusDistance, 1e-4))
     }
 }
 

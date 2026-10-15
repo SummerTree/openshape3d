@@ -88,17 +88,28 @@ final class Renderer: NSObject, MTKViewDelegate {
         descriptor.colorAttachments[0].storeAction = .store
         descriptor.depthAttachment.storeAction = .dontCare
 
-        guard let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: descriptor) else {
-            return
-        }
-
         cache.sync(with: scene, device: context.device)
         quadTextures.sync(quads: scene.imageQuads, device: context.device)
         bodyTextures.sync(bodies: scene.bodies, device: context.device)
 
         var frame = makeFrameUniforms()
-        encodeScene(encoder: encoder, frame: &frame)
-        encoder.endEncoding()
+        if let target = descriptor.colorAttachments[0].texture,
+           var blur = depthOfFieldUniforms(frame, width: target.width, height: target.height),
+           let targets = liveDepthOfFieldTargets(width: target.width, height: target.height) {
+            // Depth of field: the scene into textures of its own, then blurred
+            // onto the screen.
+            guard encodeScene(into: targets, clearColor: descriptor.colorAttachments[0].clearColor,
+                              commandBuffer: commandBuffer, frame: &frame),
+                  let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: descriptor) else { return }
+            encodeDepthOfField(encoder: encoder, from: targets, uniforms: &blur)
+            encoder.endEncoding()
+        } else {
+            guard let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: descriptor) else {
+                return
+            }
+            encodeScene(encoder: encoder, frame: &frame)
+            encoder.endEncoding()
+        }
 
         // Overlays are never sectioned (they use the unclipped flat-color
         // fragment shader, but keep the uniforms honest too).
@@ -204,6 +215,12 @@ final class Renderer: NSObject, MTKViewDelegate {
             drawGroundShadows(encoder: encoder)
         }
 
+        // Face-material buffers of patches no longer in the scene go.
+        if !patchBuffers.isEmpty {
+            let live = Set(scene.facePatches.map(\.key))
+            patchBuffers = patchBuffers.filter { live.contains($0.key) }
+        }
+
         // 2. Opaque bodies. Wireframe swaps the fill for a depth-only prepass
         // so hidden lines stay hidden; x-ray defers every body to the
         // translucent pass (6).
@@ -213,12 +230,13 @@ final class Renderer: NSObject, MTKViewDelegate {
             for drawable in scene.bodies where !drawable.isSeeThrough {
                 drawBody(drawable, encoder: encoder, pipeline: pipelines.lit)
             }
-            drawFacePatches(encoder: encoder)
+            drawFacePatches(seeThrough: false, encoder: encoder, pipeline: pipelines.lit)
         case .wireframe:
             encoder.setDepthStencilState(pipelines.depthReadWrite)
             for drawable in scene.bodies where !drawable.isSeeThrough {
                 drawBody(drawable, encoder: encoder, pipeline: pipelines.depthOnly)
             }
+            drawFacePatches(seeThrough: false, encoder: encoder, pipeline: pipelines.depthOnly)
         case .xray:
             break
         }
@@ -313,6 +331,12 @@ final class Renderer: NSObject, MTKViewDelegate {
                 : mode == .xray ? 0.35 : nil
             drawBody(drawable, encoder: encoder, pipeline: pipelines.litBlended,
                      alphaOverride: alpha)
+        }
+        // …then see-through face materials (every patch in x-ray).
+        if mode != .wireframe {
+            encoder.setDepthStencilState(pipelines.depthReadOnly)
+            drawFacePatches(seeThrough: mode == .xray ? nil : true, encoder: encoder,
+                            pipeline: pipelines.litBlended, alphaOverride: mode == .xray ? 0.35 : nil)
         }
     }
 
@@ -419,6 +443,98 @@ final class Renderer: NSObject, MTKViewDelegate {
         }
     }
 
+    // MARK: - Depth of field (spec §14)
+
+    /// The scene's colour (multisample when anti-aliasing is on, with its
+    /// resolve) and depth, kept for the blur pass to read.
+    struct DepthOfFieldTargets {
+        var color: MTLTexture
+        var resolved: MTLTexture?
+        var depth: MTLTexture
+        var readable: MTLTexture { resolved ?? color }
+    }
+
+    private var depthOfFieldTargetCache: DepthOfFieldTargets?
+
+    private func liveDepthOfFieldTargets(width: Int, height: Int) -> DepthOfFieldTargets? {
+        if let cached = depthOfFieldTargetCache, cached.color.width == width, cached.color.height == height {
+            return cached
+        }
+        depthOfFieldTargetCache = makeDepthOfFieldTargets(width: width, height: height)
+        return depthOfFieldTargetCache
+    }
+
+    private func makeDepthOfFieldTargets(width: Int, height: Int) -> DepthOfFieldTargets? {
+        let device = context.device, samples = RenderContext.sampleCount
+        func texture(_ format: MTLPixelFormat, multisample: Bool, read: Bool) -> MTLTexture? {
+            let descriptor = MTLTextureDescriptor.texture2DDescriptor(
+                pixelFormat: format, width: width, height: height, mipmapped: false)
+            if multisample {
+                descriptor.textureType = .type2DMultisample
+                descriptor.sampleCount = samples
+            }
+            descriptor.usage = read ? [.renderTarget, .shaderRead] : [.renderTarget]
+            descriptor.storageMode = .private
+            return device.makeTexture(descriptor: descriptor)
+        }
+        let multisample = samples > 1
+        guard let color = texture(RenderContext.colorPixelFormat, multisample: multisample, read: !multisample),
+              let depth = texture(RenderContext.depthPixelFormat, multisample: multisample, read: true) else { return nil }
+        let resolved = multisample ? texture(RenderContext.colorPixelFormat, multisample: false, read: true) : nil
+        if multisample, resolved == nil { return nil }
+        return DepthOfFieldTargets(color: color, resolved: resolved, depth: depth)
+    }
+
+    /// The blur pass's uniforms for an image `width` × `height` drawn with
+    /// `frame`; nil when depth of field is off.
+    private func depthOfFieldUniforms(_ frame: FrameUniforms, width: Int, height: Int) -> DepthOfFieldUniforms? {
+        guard let dof = scene.visualization?.depthOfField, scene.displayMode != .wireframe else { return nil }
+        let eye = camera.position
+        let forward = simd_normalize(camera.target - eye)
+        var u = DepthOfFieldUniforms()
+        u.inverseViewProjection = simd_inverse(frame.viewProjectionMatrix)
+        u.cameraPosition = SIMD4(eye, 1)
+        u.viewDirection = SIMD4(forward, 0)
+        u.focusDistance = DepthOfFieldKit.focusDistance(eye: eye, viewDirection: forward, focus: dof.focus ?? camera.target)
+        u.widestRadius = dof.blur * Float(height) * DepthOfFieldKit.maxRadiusFraction
+        u.imageWidth = Float(width)
+        u.imageHeight = Float(height)
+        return u
+    }
+
+    /// The scene into `targets`, keeping its depth for the blur.
+    @discardableResult
+    private func encodeScene(into targets: DepthOfFieldTargets, clearColor: MTLClearColor,
+                             commandBuffer: MTLCommandBuffer, frame: inout FrameUniforms,
+                             drawBackground: Bool = true, drawGrid: Bool = true) -> Bool {
+        let pass = MTLRenderPassDescriptor()
+        pass.colorAttachments[0].texture = targets.color
+        pass.colorAttachments[0].resolveTexture = targets.resolved
+        pass.colorAttachments[0].loadAction = .clear
+        pass.colorAttachments[0].clearColor = clearColor
+        pass.colorAttachments[0].storeAction = targets.resolved != nil ? .multisampleResolve : .store
+        pass.depthAttachment.texture = targets.depth
+        pass.depthAttachment.loadAction = .clear
+        pass.depthAttachment.storeAction = .store
+        pass.depthAttachment.clearDepth = 1
+        guard let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: pass) else { return false }
+        encodeScene(encoder: encoder, frame: &frame, drawBackground: drawBackground, drawGrid: drawGrid)
+        encoder.endEncoding()
+        return true
+    }
+
+    private func encodeDepthOfField(encoder: MTLRenderCommandEncoder, from targets: DepthOfFieldTargets,
+                                    uniforms: inout DepthOfFieldUniforms) {
+        let pipelines = context.pipelines
+        encoder.setRenderPipelineState(targets.depth.textureType == .type2DMultisample
+                                       ? pipelines.depthOfFieldMS : pipelines.depthOfField)
+        encoder.setDepthStencilState(pipelines.depthIgnore)
+        encoder.setFragmentTexture(targets.readable, index: 0)
+        encoder.setFragmentTexture(targets.depth, index: 1)
+        encoder.setFragmentBytes(&uniforms, length: MemoryLayout<DepthOfFieldUniforms>.stride, index: 0)
+        encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
+    }
+
     // MARK: - Thumbnail capture
 
     /// Offscreen render of the current scene (no gizmo), returned as PNG data.
@@ -477,22 +593,32 @@ final class Renderer: NSObject, MTKViewDelegate {
         pass.depthAttachment.storeAction = .dontCare
         pass.depthAttachment.clearDepth = 1
 
-        guard let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: pass) else {
-            NSLog("[openshape3d] thumbnail: encoder creation failed")
-            return nil
-        }
-
         cache.sync(with: scene, device: context.device)
         quadTextures.sync(quads: scene.imageQuads, device: context.device)
         bodyTextures.sync(bodies: scene.bodies, device: context.device)
         var frame = makeFrameUniforms(viewportSize: CGSize(width: width, height: height))
-        encodeScene(
-            encoder: encoder,
-            frame: &frame,
-            drawBackground: !transparentBackground,
-            drawGrid: showGrid
-        )
-        encoder.endEncoding()
+        if var blur = depthOfFieldUniforms(frame, width: width, height: height),
+           let targets = makeDepthOfFieldTargets(width: width, height: height) {
+            // Depth of field: the scene first, then blurred into the capture.
+            guard encodeScene(into: targets, clearColor: pass.colorAttachments[0].clearColor,
+                              commandBuffer: commandBuffer, frame: &frame,
+                              drawBackground: !transparentBackground, drawGrid: showGrid),
+                  let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: pass) else { return nil }
+            encodeDepthOfField(encoder: encoder, from: targets, uniforms: &blur)
+            encoder.endEncoding()
+        } else {
+            guard let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: pass) else {
+                NSLog("[openshape3d] thumbnail: encoder creation failed")
+                return nil
+            }
+            encodeScene(
+                encoder: encoder,
+                frame: &frame,
+                drawBackground: !transparentBackground,
+                drawGrid: showGrid
+            )
+            encoder.endEncoding()
+        }
         commandBuffer.commit()
         commandBuffer.waitUntilCompleted()
 
@@ -535,7 +661,7 @@ final class Renderer: NSObject, MTKViewDelegate {
         pipeline: MTLRenderPipelineState,
         alphaOverride: Float? = nil
     ) {
-        guard let resources = cache.resources(for: drawable.id) else { return }
+        guard let resources = cache.resources(for: drawable.id), resources.indexCount > 0 else { return }
         // An imported body with a texture and texcoords shades through the
         // textured twin of the requested lit pipeline; depth-only and other
         // passes keep the pipeline they asked for.
@@ -667,17 +793,14 @@ final class Renderer: NSObject, MTKViewDelegate {
         return frame
     }
 
-    /// Face materials (spec §14): each patch over its body, pulled a little
-    /// toward the eye so it wins the body's own surface. Only over a body
-    /// drawn here (shaded, opaque) and only an opaque material — a see-through
-    /// one would show the body's face behind it.
-    private func drawFacePatches(encoder: MTLRenderCommandEncoder) {
-        let drawn = Set(scene.bodies.filter { !$0.isSeeThrough }.map(\.id))
-        var live = Set<String>()
-        encoder.setDepthBias(-1, slopeScale: -1, clamp: 0)
-        defer { encoder.setDepthBias(0, slopeScale: 0, clamp: 0) }
-        for patch in scene.facePatches where drawn.contains(patch.bodyID) && patch.material.baseColor.w >= 0.999 {
-            live.insert(patch.key)
+    /// Face materials (spec §14): the faces a body leaves out, each drawn in
+    /// its own material — opaque ones (`seeThrough` false) with the opaque
+    /// bodies, see-through ones (true) in the blended pass; nil draws all.
+    private func drawFacePatches(seeThrough: Bool?, encoder: MTLRenderCommandEncoder,
+                                 pipeline: MTLRenderPipelineState, alphaOverride: Float? = nil) {
+        let drawn = Set(scene.bodies.filter { !$0.isTranslucent }.map(\.id))
+        for patch in scene.facePatches where drawn.contains(patch.bodyID) {
+            if let seeThrough, (patch.material.baseColor.w < 0.999) != seeThrough { continue }
             if patchBuffers[patch.key] == nil {
                 let length = patch.positions.count * MemoryLayout<SIMD3<Float>>.stride
                 guard length > 0,
@@ -690,11 +813,12 @@ final class Renderer: NSObject, MTKViewDelegate {
                 patchBuffers[patch.key] = (positions, normals, patch.positions.count)
             }
             guard let buffers = patchBuffers[patch.key] else { continue }
-            encoder.setRenderPipelineState(context.pipelines.lit)
+            encoder.setRenderPipelineState(pipeline)
             var body = makeBodyUniforms(BodyDrawable(
                 id: patch.bodyID, renderMesh: RenderMesh(positions: [], normals: [], indices: []), edges: nil,
                 meshRevision: 0, modelMatrix: patch.modelMatrix, baseColor: patch.material.baseColor,
                 selectionState: patch.selectionState, material: patch.material))
+            if let alphaOverride { body.baseColor.w = alphaOverride }
             encoder.setVertexBuffer(buffers.positions, offset: 0, index: Int(BufferIndexPositions.rawValue))
             encoder.setVertexBuffer(buffers.normals, offset: 0, index: Int(BufferIndexNormals.rawValue))
             encoder.setVertexBytes(&body, length: MemoryLayout<BodyUniforms>.stride,
@@ -706,7 +830,6 @@ final class Renderer: NSObject, MTKViewDelegate {
                                      index: Int(BufferIndexFrameUniforms.rawValue))
             encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: buffers.count)
         }
-        patchBuffers = patchBuffers.filter { live.contains($0.key) }
     }
 
     private func makeBodyUniforms(_ drawable: BodyDrawable) -> BodyUniforms {

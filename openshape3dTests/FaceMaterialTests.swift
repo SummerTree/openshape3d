@@ -48,6 +48,24 @@ final class FaceMaterialTests: XCTestCase {
         XCTAssertEqual(FaceMaterialKit.resolve([face], in: box(width: 14).render).first?.count, 2)
     }
 
+    func testABodyIsDrawnWithoutItsFaceMaterialFaces() throws {
+        let mesh = box().render
+        let top = try XCTUnwrap(FaceMaterialKit.region(in: mesh, seedTriangle: try triangle(facing: SIMD3(0, 1, 0), in: mesh)))
+        XCTAssertNil(FaceMaterialKit.drawnIndices(of: mesh, without: [], revision: 7), "nothing left out: the whole mesh")
+        let drawn = try XCTUnwrap(FaceMaterialKit.drawnIndices(of: mesh, without: top, revision: 7))
+        XCTAssertEqual(drawn.indices.count, mesh.indices.count - top.count * 3)
+        // What is left is exactly the other triangles, in order.
+        let kept = (0..<mesh.triangleCount).filter { !top.contains($0) }.flatMap { mesh.indices[$0 * 3 ..< $0 * 3 + 3] }
+        XCTAssertEqual(drawn.indices, kept)
+        // Its own GPU revision: never a plain one, and changes with what is left out.
+        XCTAssertNotEqual(drawn.revision, 7)
+        XCTAssertGreaterThanOrEqual(drawn.revision, 1 << 63)
+        let side = try XCTUnwrap(FaceMaterialKit.region(in: mesh, seedTriangle: try triangle(facing: SIMD3(1, 0, 0), in: mesh)))
+        XCTAssertNotEqual(FaceMaterialKit.drawnIndices(of: mesh, without: top + side, revision: 7)?.revision, drawn.revision)
+        // Every face its own material: nothing of the body's own is drawn.
+        XCTAssertEqual(FaceMaterialKit.drawnIndices(of: mesh, without: Array(0..<mesh.triangleCount), revision: 7)?.indices, [])
+    }
+
     func testSettingReplacesAndClearsFaceMaterials() throws {
         let mesh = box().render
         func target(_ normal: SIMD3<Double>) throws -> (point: SIMD3<Double>, normal: SIMD3<Double>, triangles: [Int]) {

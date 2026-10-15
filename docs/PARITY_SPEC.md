@@ -2116,13 +2116,29 @@ step; a whole-body material clears them, undoably). Stored per body
 the material; `PersistedBody.faceMaterialsData`, the archive's
 `faceMaterials`), found again on the current mesh (`FaceMaterialKit`), so
 they follow the body and survive edits that leave the face in place; a
-face an edit moves away drops its material. Drawn as patches over the body
-(`ViewportScene.facePatches`, depth-biased; Metal and WebGL), opaque
-materials only. Missing: real PBR/IBL and HDR environments,
-transmission/IOR, see-through face materials,
+face an edit moves away drops its material. Drawn as patches
+(`ViewportScene.facePatches`; Metal and WebGL) in place of those faces:
+the body's drawable leaves their triangles out (`BodyDrawable.drawnIndices`,
+GPU-cached under a revision of its own; picking and section caps still use
+the whole mesh), opaque patches draw with the opaque bodies and
+see-through ones (glass, acrylic) in the blended pass, so a glass face
+shows the part's inside (2026-10-15). Missing: real PBR/IBL and HDR
+environments, transmission/IOR,
 decals, texture mapping controls (scale, rotation, auto-match), custom
-.GLB materials, emission bloom, depth of field and focus point, textured
+.GLB materials, emission bloom, textured
 USDZ / AR, Generative Render.
+**Depth of field (2026-10-15):** Environment ▸ Camera ▸ **Depth of Field**,
+with **Blur** (0–100 %) and **Pick Focus Point** (the next tap on the model
+sets where the camera focuses; **Focus on View Centre** goes back to the
+orbit target). Saved with the environment (`depthOfField`, `blur`,
+`focusPoint`). The scene is drawn into textures of its own with its depth,
+then blurred onto the screen before the overlays — and into captures —
+each pixel by its distance from the focus distance
+(`DepthOfFieldKit.radius`: none at the focus, the widest, 2 % of the image
+height × Blur, a third of the focus distance off it), a 48-tap disc that
+counts a tap only where its own blur or the centre's reaches it (Metal
+`fragment_depthOfField`, WebGL `DOF_FS`). Off in wireframe. Behind glass the
+blur follows what is behind it.
 **Feasibility:** PBR space, materials, decals, environments, DoF, capture
 [mesh-kernel OK] (pure Metal renderer work); the material *library content*
 itself is an asset-sourcing problem; Generative Render [platform/service]
@@ -2248,11 +2264,21 @@ company, part number, revision, material, drawn by, checked by — typed
 in the sheet's form; 180 × 36 mm) or None (border only, the views take
 the space). Values too long for their cell shrink to 60 %, then end in
 "..."; fields are kept while another layout is shown. The views' area
-now also keeps 3 mm under the border for the top views' names. Missing:
-free placement of new views from any angle (custom projection angles,
-extra projected views), cutting lines through picked points / stepped
-sections, centrelines spanning views, custom title-block templates
-(logos, own fields), multiple sheets in one drawing, DWG.
+now also keeps 3 mm under the border for the top views' names.
+**Multiple sheets (2026-10-15):** a drawing has one or more sheets — tabs
+under the preview, + adds a sheet after the one shown (same paper, scale,
+view choices and bodies, nothing placed on it yet), Delete Sheet removes
+the one shown (never the last). Each sheet has its own paper size, scale,
+view toggles, bodies, section / detail views, moved views and dimensions;
+the title, standard and title block are the drawing's. The title block's
+SHEET cell reads "A3, 2 of 3" once there are several; view letters stay
+unique across sheets. PDF export writes a page per sheet (each its own
+size); SVG and DXF write the sheet shown. The first sheet stays in the
+drawing's own fields, so older drawings open as one-sheet drawings.
+Missing: free placement of new views from any angle (custom projection
+angles, extra projected views), cutting lines through picked points /
+stepped sections, centrelines spanning views, custom title-block
+templates (logos, own fields), DWG.
 **Feasibility:** [mesh-kernel OK] for a first version (orthographic
 projection + silhouette/hidden-line from meshes; associativity with the model
 [needs history engine]; production-grade HLR quality benefits from a B-rep

@@ -297,21 +297,26 @@ nonisolated enum DrawingSheet {
         var detailMagnification: Double?
     }
 
-    /// Lay out `drawing` for `bodies`: the standard views, then its section
-    /// and detail views in a column to the right, each moved by the drawing's
-    /// view offsets. `formatFixed` writes a dimension set to a precision
-    /// (mm and decimal places in).
+    /// Lay out sheet `sheet` of `drawing` for `bodies` (that sheet's
+    /// bodies): the standard views, then its section and detail views in a
+    /// column to the right, each moved by the sheet's view offsets.
+    /// `formatFixed` writes a dimension set to a precision (mm and decimal
+    /// places in).
     static func layout(
-        bodies: [DrawingBodyInput], drawing: SavedDrawing,
+        bodies: [DrawingBodyInput], drawing whole: SavedDrawing, sheet sheetIndex: Int = 0,
         formatLength: (Double) -> String = { String(format: "%.2f", $0) },
         formatFixed: (Double, Int) -> String = DrawingAnnotationKit.fixedNumber,
         date: String = "", cache: DrawingViewCache = DrawingViewCache()
     ) -> DrawingLayout {
+        let drawing = whole.onSheet(sheetIndex)
         let options = drawing.options
+        let sheetLabel = whole.sheetCount > 1
+            ? "\(options.sheet.title), \(min(max(sheetIndex, 0), whole.sheetCount - 1) + 1) of \(whole.sheetCount)"
+            : options.sheet.title
         let paper = options.sheet.size
         var out = DrawingLayout(size: paper)
         guard !bodies.isEmpty else {
-            appendFrame(into: &out, options: options, scale: "", date: date)
+            appendFrame(into: &out, options: options, sheet: sheetLabel, scale: "", date: date)
             return out
         }
 
@@ -320,7 +325,7 @@ nonisolated enum DrawingSheet {
         }
         let front = project(.front)
         guard !front.isEmpty else {
-            appendFrame(into: &out, options: options, scale: "", date: date)
+            appendFrame(into: &out, options: options, sheet: sheetLabel, scale: "", date: date)
             return out
         }
         let top = project(.top)
@@ -554,7 +559,7 @@ nonisolated enum DrawingSheet {
                     value: DrawingAnnotationKit.valuePieces(annotation, format: formatLength, fixed: formatFixed), into: &out)
             }
         }
-        appendFrame(into: &out, options: options, scale: scaleLabel(scale), date: date)
+        appendFrame(into: &out, options: options, sheet: sheetLabel, scale: scaleLabel(scale), date: date)
         return out
     }
 
@@ -900,7 +905,7 @@ nonisolated enum DrawingSheet {
         return DrawingText(position: position, height: h, string: s)
     }
 
-    private static func appendFrame(into out: inout DrawingLayout, options: DrawingOptions,
+    private static func appendFrame(into out: inout DrawingLayout, options: DrawingOptions, sheet: String,
                                     scale: String, date: String) {
         let size = out.size
         let lo = SIMD2(margin, margin), hi = size - SIMD2(margin, margin)
@@ -940,7 +945,7 @@ nonisolated enum DrawingSheet {
             rule(SIMD2(tbLo.x, split), SIMD2(tbHi.x, split))
             out.texts.append(fitted(options.title, at: SIMD2(tbLo.x + 3, split + 5), height: 5, width: block.size.x - 6))
             let w = block.size.x / 4
-            row(tbLo.y, height: 14, [(w, "SCALE", scale), (w, "SHEET", options.sheet.title),
+            row(tbLo.y, height: 14, [(w, "SCALE", scale), (w, "SHEET", sheet),
                                      (w, "PROJECTION", projection), (w, "DATE", date)])
         case .detailed:
             // Company and title (14 mm) over who and what (11 mm) over the
@@ -959,7 +964,7 @@ nonisolated enum DrawingSheet {
                                   (40, DrawingTitleBlock.Field.checkedBy.label, options[.checkedBy]),
                                   (50, DrawingTitleBlock.Field.material.label, options[.material]),
                                   (50, DrawingTitleBlock.Field.partNumber.label, options[.partNumber])])
-            row(tbLo.y, height: 11, [(32, "SCALE", scale), (32, "SHEET", options.sheet.title),
+            row(tbLo.y, height: 11, [(32, "SCALE", scale), (32, "SHEET", sheet),
                                      (44, "PROJECTION", projection), (44, "DATE", date),
                                      (28, DrawingTitleBlock.Field.revision.label, options[.revision])])
         case .none:

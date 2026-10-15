@@ -238,6 +238,31 @@ struct VisualizationPanelView: View {
             Toggle("Ground Shadow", isOn: binding(\.groundShadow))
                 .font(.caption)
                 .accessibilityIdentifier("EnvironmentGroundShadow")
+            header("Camera")
+            Toggle("Depth of Field", isOn: binding(\.depthOfField))
+                .font(.caption)
+                .accessibilityIdentifier("EnvironmentDepthOfField")
+            if environment.depthOfField {
+                slider("Blur", \.blur, in: 0...1, format: { "\(Int(($0 * 100).rounded()))%" },
+                       id: "EnvironmentBlur")
+                Button {
+                    viewModel.visualizePicksFocus.toggle()
+                } label: {
+                    Label(viewModel.visualizePicksFocus ? "Tap the Model to Focus…" : "Pick Focus Point",
+                          systemImage: "scope")
+                        .font(.caption)
+                }
+                .accessibilityIdentifier("EnvironmentFocusPick")
+                if environment.focusPoint != nil {
+                    Button("Focus on View Centre") { viewModel.resetFocusPoint() }
+                        .font(.caption)
+                        .accessibilityIdentifier("EnvironmentFocusReset")
+                } else {
+                    Text("Focused on the point the view turns around.")
+                        .font(.caption)
+                        .foregroundStyle(Color.barLabel)
+                }
+            }
         }
     }
 

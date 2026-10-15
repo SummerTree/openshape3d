@@ -497,3 +497,65 @@ fragment float4 fragment_blobShadow(
     float alpha = (1.0 - smoothstep(0.45, 1.0, r)) * body.baseColor.a;
     return float4(body.baseColor.rgb, alpha);
 }
+
+// MARK: - Depth of field (spec §14)
+
+// The scene drawn first into a texture with its depth; this pass blurs each
+// pixel by how far it lies from the focus distance (DepthOfFieldKit.radius):
+// a disc of taps on a golden-angle spiral, each counted only where its own
+// blur reaches the centre, so a sharp subject does not smear onto a blurred
+// background and a blurred foreground still spreads over a sharp one.
+
+static float dofDepth(depth2d<float> depth, uint2 p) { return depth.read(p); }
+static float dofDepth(depth2d_ms<float> depth, uint2 p) { return depth.read(p, 0); }
+
+static float dofRadius(float depth, float2 pixel, constant DepthOfFieldUniforms &u) {
+    float2 ndc = float2((pixel.x + 0.5) / u.imageWidth * 2.0 - 1.0, 1.0 - (pixel.y + 0.5) / u.imageHeight * 2.0);
+    float4 world = u.inverseViewProjection * float4(ndc, depth, 1.0);
+    float distance = dot(world.xyz / world.w - u.cameraPosition.xyz, u.viewDirection.xyz);
+    // DepthOfFieldKit.radius (falloff 3).
+    return u.widestRadius * min(1.0, 3.0 * abs(distance - u.focusDistance) / max(u.focusDistance, 1e-4));
+}
+
+template <typename Depth>
+static float4 dofBlur(Depth depth, texture2d<float> color, float2 pixel, constant DepthOfFieldUniforms &u) {
+    uint2 size = uint2(color.get_width(), color.get_height());
+    uint2 centre = min(uint2(pixel), size - 1);
+    float radius = dofRadius(dofDepth(depth, centre), float2(centre), u);
+    float4 sum = color.read(centre);
+    float weight = 1.0;
+    if (radius < 0.5) return sum;
+    const int taps = 48;
+    for (int i = 1; i <= taps; i++) {
+        // Golden-angle spiral filling the widest disc.
+        float r = sqrt(float(i) / float(taps)) * u.widestRadius;
+        float a = float(i) * 2.39996323;
+        float2 at = pixel + float2(cos(a), sin(a)) * r;
+        if (at.x < 0 || at.y < 0 || at.x >= float(size.x) || at.y >= float(size.y)) continue;
+        uint2 q = uint2(at);
+        float own = dofRadius(dofDepth(depth, q), float2(q), u);
+        // A tap counts where its own blur, or the centre's, covers it.
+        float w = saturate(min(own, radius) - r + 1.0);
+        sum += color.read(q) * w;
+        weight += w;
+    }
+    return sum / weight;
+}
+
+fragment float4 fragment_depthOfField(
+    FullscreenOut in [[stage_in]],
+    texture2d<float> color [[texture(0)]],
+    depth2d<float> depth [[texture(1)]],
+    constant DepthOfFieldUniforms &u [[buffer(0)]]
+) {
+    return dofBlur(depth, color, in.position.xy, u);
+}
+
+fragment float4 fragment_depthOfFieldMS(
+    FullscreenOut in [[stage_in]],
+    texture2d<float> color [[texture(0)]],
+    depth2d_ms<float> depth [[texture(1)]],
+    constant DepthOfFieldUniforms &u [[buffer(0)]]
+) {
+    return dofBlur(depth, color, in.position.xy, u);
+}
