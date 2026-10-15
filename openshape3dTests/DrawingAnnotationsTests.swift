@@ -734,5 +734,50 @@ final class DrawingAnnotationsTests: XCTestCase {
 
     @MainActor func testACentrelineIsListedByName() {
         XCTAssertEqual(DrawingAnnotation(kind: .centerline, view: front, a: .zero, b: SIMD2(1, 0)).listTitle, "Centreline")
+        XCTAssertEqual(DrawingAnnotation(kind: .boltCircle, view: front, a: .zero, b: SIMD2(1, 0)).listTitle, "Bolt Circle")
+    }
+
+    // MARK: - Bolt circles
+
+    func testABoltCirclePassesThroughItsThreePoints() throws {
+        let p = SIMD2(30.0, 20), q = SIMD2(20.0, 30), r = SIMD2(10.0, 20)
+        let circle = try XCTUnwrap(DrawingAnnotationKit.boltCircle(view: front, p, q, r))
+        XCTAssertEqual(circle.kind, .boltCircle)
+        XCTAssertEqual(circle.a.x, 20, accuracy: 1e-9)
+        XCTAssertEqual(circle.a.y, 20, accuracy: 1e-9)
+        for point in [p, q, r] { XCTAssertEqual(simd_distance(circle.a, point), 10, accuracy: 1e-9) }
+        XCTAssertTrue(circle.isCenterline)
+
+        // In a line, or a point twice: no circle.
+        XCTAssertNil(DrawingAnnotationKit.boltCircle(view: front, .zero, SIMD2(5, 0), SIMD2(10, 0.01)))
+        XCTAssertNil(DrawingAnnotationKit.boltCircle(view: front, .zero, SIMD2(5, 5), SIMD2(5, 5)))
+    }
+
+    func testABoltCircleIsDrawnAsOneChainRun() throws {
+        var drawing = SavedDrawing()
+        drawing.options.showDimensions = false
+        drawing.options.showCenterMarks = false
+        let plain = layout(drawing)
+        let t = try XCTUnwrap(plain.viewTransforms[front])
+        let circle = try XCTUnwrap(DrawingAnnotationKit.boltCircle(view: front, SIMD2(1, 5), SIMD2(5, 9), SIMD2(9, 5)))
+        drawing.annotations = [circle]
+        let l = layout(drawing)
+        let chain = l.lines.filter { $0.style == .chain }
+        XCTAssertEqual(chain.count, 72)
+        let radius = 4 * t.k
+        for line in chain { XCTAssertEqual(simd_distance(line.a, t.sheet(SIMD2(5, 5))), radius, accuracy: 1e-6) }
+        let handle = try XCTUnwrap(l.annotationHandles[circle.id])
+        XCTAssertEqual(handle.y, t.sheet(SIMD2(5, 5)).y + radius, accuracy: 1e-6, "selected at its top")
+
+        // One run, so the dashes carry on round it: one subpath in the SVG,
+        // one polyline in the DXF.
+        XCTAssertEqual(DrawingExport.runs(chain).count, 1)
+        XCTAssertEqual(DrawingExport.runs(chain).first?.count, 73)
+        let svg = DrawingExport.svg(l)
+        let chainPath = try XCTUnwrap(svg.components(separatedBy: "\n").first { $0.contains("8 1.5 0.5 1.5") })
+        XCTAssertEqual(chainPath.filter { $0 == "M" }.count, 1)
+        let dxf = DrawingExport.dxf(l)
+        XCTAssertEqual(dxf.components(separatedBy: "\nPOLYLINE\n8\nCUTTING\n").count - 1, 1)
+        XCTAssertTrue(dxf.contains("POLYLINE\n8\nCUTTING\n66\n1\n10\n0\n20\n0\n30\n0\n70\n128\n"))
     }
 }

@@ -2219,10 +2219,17 @@ not draggable (a drag on it moves the view). Tests:
 dimension has a Precision picker — Auto (as the canvas writes it), 1, 0.1
 … 0.0001 — fixing its decimals with trailing zeros kept ("40.00 mm",
 "1.500\"", "26.565°"); the tolerance follows it ("±0.10"), a zero
-deviation stays "0". Saved per dimension, clamped 0–4 on load. Missing: free
+deviation stays "0". Saved per dimension, clamped 0–4 on load.
+**Bolt circles (2026-10-15):** a Bolt Circle tool: three holes (a
+circle's outline stands for its centre) or points of one view give the
+chain circle through them, listed as "Bolt Circle", selected at its top,
+not draggable; three points in a line start again. Dashed lines drawn as
+connected runs (`DrawingExport.runs`) — SVG / PDF subpaths, DXF
+POLYLINEs with continuous linetype (flag 128) — so a dash pattern flows
+round a curve instead of restarting on each short side. Missing: free
 placement of new views from any angle (custom projection angles, extra
 projected views), cutting lines through picked points / stepped sections,
-3-point / circular centrelines and centrelines spanning views,
+centrelines spanning views,
 title-block layouts, multiple sheets, DWG.
 **Feasibility:** [mesh-kernel OK] for a first version (orthographic
 projection + silhouette/hidden-line from meshes; associativity with the model

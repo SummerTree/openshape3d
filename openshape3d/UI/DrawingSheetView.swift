@@ -151,7 +151,7 @@ struct DrawingSheetView: View {
         }
     }
 
-    /// The preview under its tool bar: Move, Dimension, Note.
+    /// The preview under its tool bar: Move, Dimension, Note, Centreline, Bolt Circle.
     private func canvas(_ layout: DrawingLayout) -> some View {
         VStack(spacing: 0) {
             HStack(spacing: 12) {
@@ -159,7 +159,8 @@ struct DrawingSheetView: View {
                     ForEach(DrawingTool.allCases, id: \.self) { Text($0.title).tag($0) }
                 }
                 .pickerStyle(.segmented)
-                .frame(maxWidth: 300)
+                // Every tool's name in full; the hint takes what is left.
+                .fixedSize()
                 .accessibilityIdentifier("DrawingToolPicker")
                 Text(toolHint)
                     .font(.caption)
@@ -194,9 +195,9 @@ struct DrawingSheetView: View {
                     }
                     for style in DrawingLineStyle.drawOrder {
                         var path = Path()
-                        for line in layout.lines where line.style == style {
-                            path.move(to: paper.point(line.a))
-                            path.addLine(to: paper.point(line.b))
+                        for run in DrawingExport.runs(layout.lines.filter { $0.style == style }) {
+                            path.move(to: paper.point(run[0]))
+                            for p in run.dropFirst() { path.addLine(to: paper.point(p)) }
                         }
                         let width = max(0.5, DrawingExport.width(style) * k)
                         let dash = DrawingExport.dash(style).map { CGFloat($0 * k) }
@@ -215,7 +216,7 @@ struct DrawingSheetView: View {
                         c.draw(resolved, at: .zero, anchor: anchor)
                     }
                     // A dimension's first point or edge, and the selected annotation.
-                    if let p = viewModel.drawingPendingSheetPoint {
+                    for p in viewModel.drawingPendingSheetPoints {
                         let at = paper.point(p)
                         context.fill(Path(ellipseIn: CGRect(x: at.x - 4, y: at.y - 4, width: 8, height: 8)),
                                      with: .color(.accentColor))
@@ -345,7 +346,8 @@ struct DrawingSheetView: View {
                         Image(systemName: annotation.kind == .note ? "text.bubble"
                               : annotation.kind == .linear ? "ruler"
                               : annotation.kind == .angle ? "angle"
-                              : annotation.kind == .centerline ? "line.diagonal" : "circle.dashed")
+                              : annotation.kind == .centerline ? "line.diagonal"
+                              : annotation.kind == .boltCircle ? "circle.dotted" : "circle.dashed")
                             .foregroundStyle(.secondary)
                         Text(annotation.listTitle)
                             .font(.subheadline.weight(.semibold))
@@ -368,7 +370,7 @@ struct DrawingSheetView: View {
                         .pickerStyle(.segmented)
                         .accessibilityIdentifier("DrawingAnnotationOrientation")
                     }
-                    if annotation.kind == .centerline {
+                    if annotation.isCenterline {
                         EmptyView()
                     } else if annotation.kind != .note {
                         dimensionText($annotation)

@@ -188,7 +188,9 @@ final class DrawingTests: XCTestCase {
         let dxf = DrawingExport.dxf(layout)
         XCTAssertTrue(dxf.contains("HIDDEN"))
         XCTAssertTrue(dxf.hasSuffix("0\nEOF\n"))
-        XCTAssertEqual(dxf.components(separatedBy: "\nLINE\n").count - 1, layout.lines.count)
+        func count(_ entity: String) -> Int { dxf.components(separatedBy: "\n\(entity)\n").count - 1 }
+        XCTAssertEqual(count("LINE") + count("VERTEX") - count("POLYLINE"), layout.lines.count,
+                       "every line, alone or in a polyline's run")
     }
 
     func testIsoDate() {

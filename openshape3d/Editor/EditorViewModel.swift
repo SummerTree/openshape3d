@@ -283,10 +283,13 @@ final class EditorViewModel {
     var drawingTool: DrawingTool = .move {
         didSet {
             drawingPendingPoint = nil
+            drawingPendingSecondPoint = nil
             drawingPendingEdge = nil
         }
     }
     var drawingPendingPoint: (view: String, point: SIMD2<Double>)?
+    /// A bolt circle's second point.
+    var drawingPendingSecondPoint: (view: String, point: SIMD2<Double>)?
     var drawingPendingEdge: DrawingEdgePick?
     var drawingSelectedAnnotation: UUID?
 
@@ -311,14 +314,23 @@ final class EditorViewModel {
             } else {
                 "Tap two parallel edges for the centreline between them, or two points or circles for the line through them."
             }
+        case .boltCircle:
+            if drawingPendingSecondPoint != nil {
+                "Tap the third hole or point."
+            } else if drawingPendingPoint != nil {
+                "Tap the second hole or point on the same view."
+            } else {
+                "Tap three holes or points of a view for the circle through their centres."
+            }
         }
     }
 
-    /// The first point of a dimension being placed, on the sheet.
-    var drawingPendingSheetPoint: SIMD2<Double>? {
-        guard let pending = drawingPendingPoint,
-              let transform = drawingLayout().viewTransforms[pending.view] else { return nil }
-        return transform.sheet(pending.point)
+    /// The points picked so far for a dimension, centreline or bolt circle, on the sheet.
+    var drawingPendingSheetPoints: [SIMD2<Double>] {
+        let layout = drawingLayout()
+        return [drawingPendingPoint, drawingPendingSecondPoint].compactMap { pending in
+            pending.flatMap { p in layout.viewTransforms[p.view].map { $0.sheet(p.point) } }
+        }
     }
 
     /// The first edge of a dimension being placed, on the sheet.
@@ -417,7 +429,42 @@ final class EditorViewModel {
             drawingTool = .move
         case .centerline:
             drawingCenterlineTap(at: point, in: layout)
+        case .boltCircle:
+            drawingBoltCircleTap(at: point, in: layout)
         }
+    }
+
+    /// Bolt circle: three holes (a circle's outline stands for its centre)
+    /// or points of one view. A tap on another view, or a third point in
+    /// line with the first two, starts again from it.
+    private func drawingBoltCircleTap(at point: SIMD2<Double>, in layout: DrawingLayout) {
+        let target: (view: String, point: SIMD2<Double>)
+        if !DrawingAnnotationKit.isNearStrongSnap(point, in: layout),
+           let hit = DrawingCircleKit.circle(at: point, in: layout) {
+            target = (hit.view, hit.circle.center)
+        } else if let pick = DrawingAnnotationKit.pick(point, in: layout) {
+            target = (pick.view, pick.point)
+        } else {
+            return
+        }
+        guard let first = drawingPendingPoint, first.view == target.view else {
+            drawingPendingPoint = target
+            drawingPendingSecondPoint = nil
+            return
+        }
+        guard let second = drawingPendingSecondPoint else {
+            if simd_distance(first.point, target.point) > 1e-6 { drawingPendingSecondPoint = target }
+            return
+        }
+        drawingPendingSecondPoint = nil
+        guard let placed = DrawingAnnotationKit.boltCircle(view: target.view, first.point, second.point,
+                                                           target.point) else {
+            drawingPendingPoint = target
+            return
+        }
+        drawingPendingPoint = nil
+        activeDrawing?.annotations.append(placed)
+        drawingSelectedAnnotation = placed.id
     }
 
     /// Centreline: a circle's outline stands for its centre; two parallel
@@ -469,7 +516,7 @@ final class EditorViewModel {
               let id = DrawingAnnotationKit.annotation(at: point, in: drawingLayout()),
               let handle = drawingLayout().annotationHandles[id],
               // A centreline stays on its features: the drag moves the view.
-              drawingAnnotations.first(where: { $0.id == id })?.kind != .centerline else { return false }
+              drawingAnnotations.first(where: { $0.id == id })?.isCenterline != true else { return false }
         drawingAnnotationGrab = (id, handle - point)
         drawingSelectedAnnotation = id
         return true
@@ -500,7 +547,7 @@ final class EditorViewModel {
         case .angle:
             activeDrawing?.annotations[index].offset = DrawingAnnotationKit.angleRadius(
                 through: point, annotation, transform: transform)
-        case .centerline:
+        case .centerline, .boltCircle:
             break
         }
     }

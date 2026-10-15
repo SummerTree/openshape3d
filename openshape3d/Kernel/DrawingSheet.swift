@@ -476,6 +476,11 @@ nonisolated enum DrawingSheet {
                 let u = simd_normalize(b - a), over = DrawingAnnotationKit.centerlineOverrun
                 out.lines.append(DrawingLine(a: a - u * over, b: b + u * over, style: .chain))
                 out.annotationHandles[annotation.id] = (a + b) / 2
+            case .boltCircle:
+                let c = transform.sheet(annotation.a), r = simd_distance(transform.sheet(annotation.b), c)
+                guard r > 1e-9 else { continue }
+                circle(center: c, radius: r, style: .chain, into: &out)
+                out.annotationHandles[annotation.id] = c + SIMD2(0, r)
             case .angle:
                 out.annotationHandles[annotation.id] = angular(
                     annotation, transform: transform,

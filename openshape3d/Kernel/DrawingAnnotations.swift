@@ -28,6 +28,9 @@ nonisolated struct DrawingAnnotation: Identifiable, Codable, Equatable, Sendable
         /// A chain line from `a` to `b`, carried a little past each end: the
         /// axis between two parallel edges, or through two points (circle centres).
         case centerline
+        /// A chain circle centred on `a` through `b`: the circle through
+        /// three points (a bolt circle through its holes' centres).
+        case boltCircle
     }
 
     enum Orientation: String, Codable, CaseIterable, Sendable {
@@ -135,10 +138,15 @@ nonisolated struct DrawingAnnotation: Identifiable, Codable, Equatable, Sendable
     @MainActor var listTitle: String {
         guard kind != .note else { return "Note" }
         guard kind != .centerline else { return "Centreline" }
+        guard kind != .boltCircle else { return "Bolt Circle" }
         let unit = AppSettings.shared.unit
         return DrawingAnnotationKit.valueString(self, format: { unit.compactLengthString(fromMM: $0) },
                                                 fixed: { unit.fixedLengthString(fromMM: $0, decimals: $1) })
     }
+
+    /// A centreline or bolt circle: drawn on its features, nothing to set,
+    /// not dragged.
+    var isCenterline: Bool { kind == .centerline || kind == .boltCircle }
 
     /// What goes before a dimension's number: "Ø" for a diameter, "R" for a radius.
     var symbol: String {
@@ -185,6 +193,8 @@ nonisolated enum DrawingTool: String, CaseIterable, Sendable {
     /// Two parallel edges (visible or hidden): the axis between them; two
     /// points or circles: the line through them.
     case centerline
+    /// Three points or circles: the chain circle through them.
+    case boltCircle
 
     var title: String {
         switch self {
@@ -192,6 +202,7 @@ nonisolated enum DrawingTool: String, CaseIterable, Sendable {
         case .dimension: "Dimension"
         case .note: "Note"
         case .centerline: "Centreline"
+        case .boltCircle: "Bolt Circle"
         }
     }
 }
@@ -453,6 +464,21 @@ nonisolated enum DrawingAnnotationKit {
     /// The centreline through two points of one view.
     static func centerline(view: String, _ p: SIMD2<Double>, _ q: SIMD2<Double>) -> DrawingAnnotation? {
         simd_distance(p, q) > 1e-6 ? DrawingAnnotation(kind: .centerline, view: view, a: p, b: q) : nil
+    }
+
+    /// The circle through three points of one view: its centre `a`, `b` the
+    /// first point. Nil when they are (nearly) in a line.
+    static func boltCircle(view: String, _ p: SIMD2<Double>, _ q: SIMD2<Double>,
+                           _ r: SIMD2<Double>) -> DrawingAnnotation? {
+        let u = q - p, v = r - p
+        let lu = simd_length(u), lv = simd_length(v)
+        let cross = u.x * v.y - u.y * v.x
+        guard lu > 1e-6, lv > 1e-6, simd_distance(q, r) > 1e-6,
+              abs(cross) / (lu * lv) > sin(0.5 * .pi / 180) else { return nil }
+        // The circumcentre, from p.
+        let uu = simd_dot(u, u), vv = simd_dot(v, v)
+        let center = p + SIMD2(v.y * uu - u.y * vv, u.x * vv - v.x * uu) / (2 * cross)
+        return DrawingAnnotation(kind: .boltCircle, view: view, a: center, b: p)
     }
 
     /// The distance from `point` straight across to an edge's line.
