@@ -50,6 +50,13 @@ struct CommandShortcutsView: View {
     private static let letters = "abcdefghijklmnopqrstuvwxyz".map(String.init)
 
     var body: some View {
+        // Settings ▸ Keyboard Shortcuts: reading the customization re-registers
+        // the chords when it changes, and recording a new one takes the keys.
+        let _ = AppSettings.shared.shortcuts
+        if !ShortcutRecording.shared.active { shortcuts }
+    }
+
+    private var shortcuts: some View {
         ZStack {
             if viewModel.canTypeRectangleBaseline {
                 ForEach(Array("0123456789."), id: \.self) { character in

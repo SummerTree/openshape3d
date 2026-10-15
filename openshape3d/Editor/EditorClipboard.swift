@@ -83,6 +83,7 @@ extension EditorViewModel {
                 clone.euclid = body.euclid
                 clone.brep = body.brep
                 clone.material = body.material
+                clone.faceMaterials = body.faceMaterials
                 clone.edges = body.edges
                 names.bodies.append(clone) // so the next name is unique too
                 commands.append(AddBodyCommand(body: clone, title: "Paste"))

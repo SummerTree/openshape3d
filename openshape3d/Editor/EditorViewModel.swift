@@ -89,6 +89,11 @@ final class EditorViewModel {
     /// it, and area selects add instead of replace. Boolean tool picking
     /// has its own always-additive tap flow and is unaffected.
     var selectionAdditive = false
+    /// Shift is held for the tap being handled (set by the viewport around
+    /// one tap). With Settings ▸ Selection Extension it decides whether the
+    /// tap extends the selection.
+    @ObservationIgnored
+    var tapShiftHeld = false
 
     weak var cameraControl: (any ViewportCameraControl)?
 
@@ -267,6 +272,306 @@ final class EditorViewModel {
         set { activeDrawing?.viewOffsets = newValue }
     }
 
+    /// The active drawing's dimensions and notes.
+    var drawingAnnotations: [DrawingAnnotation] {
+        get { activeDrawing?.annotations ?? [] }
+        set { activeDrawing?.annotations = newValue }
+    }
+
+    /// The preview's tool, a dimension's first point (view, view
+    /// coordinates) or first edge, and the selected annotation.
+    var drawingTool: DrawingTool = .move {
+        didSet {
+            drawingPendingPoint = nil
+            drawingPendingSecondPoint = nil
+            drawingPendingEdge = nil
+        }
+    }
+    var drawingPendingPoint: (view: String, point: SIMD2<Double>)?
+    /// A bolt circle's second point.
+    var drawingPendingSecondPoint: (view: String, point: SIMD2<Double>)?
+    var drawingPendingEdge: DrawingEdgePick?
+    var drawingSelectedAnnotation: UUID?
+
+    /// What the preview's tool does, under the tool picker.
+    var drawingToolHint: String {
+        switch drawingTool {
+        case .move: "Drag views, dimensions and notes. Tap one to select it."
+        case .dimension:
+            if drawingPendingEdge != nil {
+                "Tap another edge for the angle between them, or a corner for the distance to it."
+            } else if drawingPendingPoint != nil {
+                "Tap the second point, or an edge, on the same view."
+            } else {
+                "Tap two corners or two edges of a view — or a circle's outline for its diameter."
+            }
+        case .note: "Tap a line to point at it, or anywhere on the sheet for a free note."
+        case .centerline:
+            if drawingPendingEdge != nil {
+                "Tap the edge parallel to it."
+            } else if drawingPendingPoint != nil {
+                "Tap the second point or circle on the same view."
+            } else {
+                "Tap two parallel edges for the centreline between them, or two points or circles for the line through them."
+            }
+        case .boltCircle:
+            if drawingPendingSecondPoint != nil {
+                "Tap the third hole or point."
+            } else if drawingPendingPoint != nil {
+                "Tap the second hole or point on the same view."
+            } else {
+                "Tap three holes or points of a view for the circle through their centres."
+            }
+        }
+    }
+
+    /// The points picked so far for a dimension, centreline or bolt circle, on the sheet.
+    var drawingPendingSheetPoints: [SIMD2<Double>] {
+        let layout = drawingLayout()
+        return [drawingPendingPoint, drawingPendingSecondPoint].compactMap { pending in
+            pending.flatMap { p in layout.viewTransforms[p.view].map { $0.sheet(p.point) } }
+        }
+    }
+
+    /// The first edge of a dimension being placed, on the sheet.
+    var drawingPendingSheetEdge: (a: SIMD2<Double>, b: SIMD2<Double>)? {
+        guard let edge = drawingPendingEdge,
+              let transform = drawingLayout().viewTransforms[edge.view] else { return nil }
+        return (transform.sheet(edge.a), transform.sheet(edge.b))
+    }
+
+    /// A tap on the preview at `point` (sheet mm): Move selects the
+    /// dimension or note under it; Dimension takes two points of one view
+    /// (snapping to its corners and line ends) or two of its edges (their
+    /// angle, or the gap between parallel ones) or an edge and a point;
+    /// Note places a note — with a leader when tapped on a line of a view.
+    func drawingTap(at point: SIMD2<Double>) {
+        guard activeDrawing != nil else { return }
+        let layout = drawingLayout()
+        switch drawingTool {
+        case .move:
+            drawingSelectedAnnotation = DrawingAnnotationKit.annotation(at: point, in: layout)
+        case .dimension:
+            // A tap on a circle's outline, away from any corner, dimensions
+            // the circle: its diameter, or an arc's radius.
+            if drawingPendingPoint == nil, drawingPendingEdge == nil,
+               !DrawingAnnotationKit.isNearStrongSnap(point, in: layout),
+               let hit = DrawingCircleKit.circle(at: point, in: layout),
+               let transform = layout.viewTransforms[hit.view] {
+                let frame = layout.placedViews[hit.view] ?? (transform.at, transform.at)
+                let leader = DrawingAnnotationKit.defaultCircleLeader(hit.circle, transform: transform, frame: frame)
+                var dimension = DrawingAnnotation(kind: hit.circle.full ? .diameter : .radius, view: hit.view,
+                                                  a: hit.circle.center, b: leader.rim)
+                dimension.offset = leader.offset
+                activeDrawing?.annotations.append(dimension)
+                drawingSelectedAnnotation = dimension.id
+                return
+            }
+            // A corner or line end first (unless the tap is right on a short
+            // edge); then a straight edge; then the bare point.
+            let pick = DrawingAnnotationKit.pick(point, in: layout)
+            let edge = DrawingAnnotationKit.edge(at: point, in: layout, over: pick)
+            var placed: DrawingAnnotation?
+            if let edge {
+                if let first = drawingPendingEdge {
+                    placed = DrawingAnnotationKit.dimension(first, edge)
+                } else if let first = drawingPendingPoint, first.view == edge.view {
+                    placed = DrawingAnnotationKit.dimension(edge, point: first.point)
+                }
+                if placed == nil {
+                    drawingPendingPoint = nil
+                    drawingPendingEdge = edge
+                    return
+                }
+            } else if let pick {
+                if let first = drawingPendingEdge, first.view == pick.view {
+                    placed = DrawingAnnotationKit.dimension(first, point: pick.point)
+                } else if let first = drawingPendingPoint, first.view == pick.view,
+                          simd_distance(first.point, pick.point) > 1e-6 {
+                    var dimension = DrawingAnnotation(kind: .linear, view: pick.view, a: first.point, b: pick.point)
+                    dimension.orientation = DrawingAnnotationKit.orientation(first.point, pick.point)
+                    placed = dimension
+                }
+                if placed == nil {
+                    drawingPendingEdge = nil
+                    drawingPendingPoint = (pick.view, pick.point)
+                    return
+                }
+            }
+            drawingPendingPoint = nil
+            drawingPendingEdge = nil
+            guard var dimension = placed else { return }
+            if let transform = layout.viewTransforms[dimension.view], let frame = layout.placedViews[dimension.view] {
+                dimension.offset = dimension.kind == .angle
+                    ? DrawingAnnotationKit.defaultAngleRadius(dimension, transform: transform)
+                    : DrawingAnnotationKit.defaultOffset(dimension, transform: transform, frame: frame)
+            }
+            activeDrawing?.annotations.append(dimension)
+            drawingSelectedAnnotation = dimension.id
+        case .note:
+            var note: DrawingAnnotation
+            if let pick = DrawingAnnotationKit.pick(point, in: layout, pictorial: true),
+               let transform = layout.viewTransforms[pick.view] {
+                note = DrawingAnnotation(kind: .note, view: pick.view, a: pick.point, b: pick.point)
+                if pick.snapped {
+                    // On a line: the text up and to the right, pointing back.
+                    note.leader = true
+                    note.a = transform.view(transform.sheet(pick.point) + SIMD2(10, 8))
+                }
+            } else {
+                // The bare sheet — not the grey around it.
+                guard point.x >= 0, point.y >= 0, point.x <= layout.size.x, point.y <= layout.size.y else { return }
+                note = DrawingAnnotation(kind: .note, view: "", a: point, b: point)
+            }
+            note.text = "Note"
+            activeDrawing?.annotations.append(note)
+            drawingSelectedAnnotation = note.id
+            drawingTool = .move
+        case .centerline:
+            drawingCenterlineTap(at: point, in: layout)
+        case .boltCircle:
+            drawingBoltCircleTap(at: point, in: layout)
+        }
+    }
+
+    /// Bolt circle: three holes (a circle's outline stands for its centre)
+    /// or points of one view. A tap on another view, or a third point in
+    /// line with the first two, starts again from it.
+    private func drawingBoltCircleTap(at point: SIMD2<Double>, in layout: DrawingLayout) {
+        let target: (view: String, point: SIMD2<Double>)
+        if !DrawingAnnotationKit.isNearStrongSnap(point, in: layout),
+           let hit = DrawingCircleKit.circle(at: point, in: layout) {
+            target = (hit.view, hit.circle.center)
+        } else if let pick = DrawingAnnotationKit.pick(point, in: layout) {
+            target = (pick.view, pick.point)
+        } else {
+            return
+        }
+        guard let first = drawingPendingPoint, first.view == target.view else {
+            drawingPendingPoint = target
+            drawingPendingSecondPoint = nil
+            return
+        }
+        guard let second = drawingPendingSecondPoint else {
+            if simd_distance(first.point, target.point) > 1e-6 { drawingPendingSecondPoint = target }
+            return
+        }
+        drawingPendingSecondPoint = nil
+        guard let placed = DrawingAnnotationKit.boltCircle(view: target.view, first.point, second.point,
+                                                           target.point) else {
+            drawingPendingPoint = target
+            return
+        }
+        drawingPendingPoint = nil
+        activeDrawing?.annotations.append(placed)
+        drawingSelectedAnnotation = placed.id
+    }
+
+    /// Centreline: a circle's outline stands for its centre; two parallel
+    /// edges (hidden ones too) give the axis between them, two points the
+    /// line through them.
+    private func drawingCenterlineTap(at point: SIMD2<Double>, in layout: DrawingLayout) {
+        var placed: DrawingAnnotation?
+        var target: (view: String, point: SIMD2<Double>)?
+        var edge: DrawingEdgePick?
+        if !DrawingAnnotationKit.isNearStrongSnap(point, in: layout),
+           let hit = DrawingCircleKit.circle(at: point, in: layout) {
+            target = (hit.view, hit.circle.center)
+        } else {
+            let pick = DrawingAnnotationKit.pick(point, in: layout)
+            edge = DrawingAnnotationKit.edge(at: point, in: layout, over: pick, hidden: true)
+            if let pick { target = (pick.view, pick.point) }
+        }
+        if let edge {
+            if let first = drawingPendingEdge { placed = DrawingAnnotationKit.centerline(first, edge) }
+            if placed == nil {
+                drawingPendingPoint = nil
+                drawingPendingEdge = edge
+                return
+            }
+        } else if let target {
+            if let first = drawingPendingPoint, first.view == target.view {
+                placed = DrawingAnnotationKit.centerline(view: target.view, first.point, target.point)
+            }
+            if placed == nil {
+                drawingPendingEdge = nil
+                drawingPendingPoint = target
+                return
+            }
+        }
+        drawingPendingPoint = nil
+        drawingPendingEdge = nil
+        guard let placed else { return }
+        activeDrawing?.annotations.append(placed)
+        drawingSelectedAnnotation = placed.id
+    }
+
+    @ObservationIgnored
+    private var drawingAnnotationGrab: (id: UUID, offset: SIMD2<Double>)?
+
+    /// A drag starting at `point` grabs the dimension or note there (Move
+    /// tool). False when there is none — the drag moves a view instead.
+    func drawingAnnotationDragBegan(at point: SIMD2<Double>) -> Bool {
+        guard drawingTool == .move,
+              let id = DrawingAnnotationKit.annotation(at: point, in: drawingLayout()),
+              let handle = drawingLayout().annotationHandles[id],
+              // A centreline stays on its features: the drag moves the view.
+              drawingAnnotations.first(where: { $0.id == id })?.isCenterline != true else { return false }
+        drawingAnnotationGrab = (id, handle - point)
+        drawingSelectedAnnotation = id
+        return true
+    }
+
+    /// Drag the grabbed annotation: a dimension's line follows the finger
+    /// out from the part; a note's text follows it.
+    func drawingAnnotationDragged(to point: SIMD2<Double>) {
+        guard let grab = drawingAnnotationGrab,
+              let index = drawingAnnotations.firstIndex(where: { $0.id == grab.id }) else { return }
+        let layout = drawingLayout()
+        let annotation = drawingAnnotations[index]
+        guard let transform = layout.viewTransforms[annotation.view] else { return }
+        switch annotation.kind {
+        case .linear:
+            activeDrawing?.annotations[index].offset = DrawingAnnotationKit.offset(
+                through: point, a: transform.sheet(annotation.a), b: transform.sheet(annotation.b),
+                orientation: annotation.orientation)
+        case .note:
+            let handleToText = SIMD2(0, 3.5 / 2)
+            activeDrawing?.annotations[index].a = transform.view(point + grab.offset - handleToText)
+        case .diameter, .radius:
+            let leader = DrawingAnnotationKit.circleLeader(
+                through: point, center: annotation.a, radius: simd_distance(annotation.a, annotation.b),
+                transform: transform)
+            activeDrawing?.annotations[index].b = leader.rim
+            activeDrawing?.annotations[index].offset = leader.offset
+        case .angle:
+            activeDrawing?.annotations[index].offset = DrawingAnnotationKit.angleRadius(
+                through: point, annotation, transform: transform)
+        case .centerline, .boltCircle:
+            break
+        }
+    }
+
+    func drawingAnnotationDragEnded() { drawingAnnotationGrab = nil }
+
+    func deleteDrawingAnnotation(_ id: UUID) {
+        activeDrawing?.annotations.removeAll { $0.id == id }
+        if drawingSelectedAnnotation == id { drawingSelectedAnnotation = nil }
+    }
+
+    /// The view an annotation sits on, by name ("Front", "Section A-A", …).
+    func drawingViewName(_ key: String) -> String {
+        if key.isEmpty { return "Sheet" }
+        if let direction = DrawingViewDirection(rawValue: key) { return direction.title }
+        if let section = drawingSections.first(where: { DrawingSheet.viewKey(section: $0.id) == key }) {
+            return "Section \(section.label)-\(section.label)"
+        }
+        if let detail = drawingDetails.first(where: { DrawingSheet.viewKey(detail: $0.id) == key }) {
+            return "Detail \(detail.label)"
+        }
+        return "Removed View"
+    }
+
     /// Add a section view cutting the front view through its middle.
     func addDrawingSection() {
         guard let drawing = activeDrawing else { return }
@@ -316,6 +621,7 @@ final class EditorViewModel {
         commitActiveDrawing()
         activeDrawing = drawing
         lastDrawingID = id
+        resetDrawingTool()
     }
 
     /// Delete the drawing on the sheet; the sheet moves to another drawing,
@@ -343,6 +649,12 @@ final class EditorViewModel {
     func closeDrawing() {
         commitActiveDrawing()
         showDrawingSheet = false
+        resetDrawingTool()
+    }
+
+    private func resetDrawingTool() {
+        drawingTool = .move
+        drawingSelectedAnnotation = nil
     }
 
     @ObservationIgnored
@@ -373,6 +685,7 @@ final class EditorViewModel {
         let layout = DrawingSheet.layout(
             bodies: drawingBodies(drawing).map(DrawingBodyInput.init(body:)), drawing: drawing,
             formatLength: { unit.compactLengthString(fromMM: $0) },
+            formatFixed: { unit.fixedLengthString(fromMM: $0, decimals: $1) },
             date: DrawingSheet.isoDate(Date()), cache: drawingViews)
         drawingCache = (key, layout)
         return layout
@@ -822,6 +1135,7 @@ final class EditorViewModel {
                                 revision: preview.meshRevision)
         }
 
+        var patches: [FacePatchDrawable] = []
         // Isolate (spec §16.2): a transient override hides everything outside
         // the isolated set without touching persisted visibility.
         for body in session.document.bodies
@@ -854,8 +1168,10 @@ final class EditorViewModel {
                                  revision: body.meshRevision)
                 }
             ))
+            patches += facePatches(body, selectionState: selectionState)
         }
         var scene = ViewportScene(bodies: drawables)
+        scene.facePatches = patches
         scene.gridPlane = activeSketch?.plane ?? (gridPosition == .zx ? nil : gridPosition.plane)
         scene.lockedGridSpacing = lockedGridSpacing
         scene.surfaceAnalysis = surfaceAnalysis
@@ -1048,6 +1364,36 @@ final class EditorViewModel {
                     triangles: triangles,
                     color: SIMD4(0.16, 0.55, 1.0, 0.72)
                 ))
+            }
+        }
+
+        // Faces picked while visualizing: a light tint, so a material put on
+        // them shows through, and an outline, so the pick shows on a body
+        // of any colour. Found again from where they were picked, in case
+        // the mesh changed since (undo).
+        if visualizeActive, !visualizeFaces.isEmpty {
+            var triangles: [SIMD3<Float>] = []
+            var outline: [SIMD3<Float>] = []
+            for face in visualizeFaces {
+                guard let body = session.document.body(with: face.bodyID) else { continue }
+                let mesh = body.render
+                let matrix = body.transform.matrixFloat
+                func world(_ p: SIMD3<Float>) -> SIMD3<Float> {
+                    let w = matrix * SIMD4(p, 1)
+                    return SIMD3(w.x, w.y, w.z)
+                }
+                let picked = FaceMaterialKit.seed(in: mesh, point: face.point, normal: face.normal)
+                    .flatMap { FaceMaterialKit.region(in: mesh, seedTriangle: $0) } ?? []
+                for t in picked {
+                    for k in 0..<3 { triangles.append(world(mesh.positions[Int(mesh.indices[t * 3 + k])])) }
+                }
+                for (a, b) in FaceMaterialKit.boundary(of: picked, in: mesh) {
+                    outline += [world(a), world(b)]
+                }
+            }
+            if !triangles.isEmpty {
+                scene.profileFills.append(SketchFillBatch(triangles: triangles, color: SIMD4(0.16, 0.55, 1.0, 0.22)))
+                scene.sketchLines.append(SketchLineBatch(segments: outline, color: SIMD4(0.16, 0.55, 1.0, 1)))
             }
         }
 
@@ -2206,6 +2552,7 @@ final class EditorViewModel {
                 transform: transform, render: render,
                 edges: s.previewEdges, revision: revision)
             preview.material = document.bodies[index].material   // not grey mid-drag
+            preview.faceMaterials = document.bodies[index].faceMaterials
             document.bodies[index] = preview
         }
     }
@@ -2355,6 +2702,7 @@ final class EditorViewModel {
                 transform: transform, primitive: nil,
                 euclidMesh: rotated, revision: revision)
             preview.material = document.bodies[index].material   // not grey mid-drag
+            preview.faceMaterials = document.bodies[index].faceMaterials
             document.bodies[index] = preview
         }
     }
@@ -2569,6 +2917,7 @@ final class EditorViewModel {
                 // The fresh body has no material: carry the source's, or a
                 // painted part turns the default grey for the whole drag.
                 preview.material = document.bodies[index].material
+                preview.faceMaterials = document.bodies[index].faceMaterials
                 document.bodies[index] = preview
             }
             return
@@ -6388,6 +6737,7 @@ final class EditorViewModel {
 
     func exitVisualize() {
         commitEnvironment()
+        visualizePicksFaces = false
         visualizeActive = false
     }
 
@@ -6421,11 +6771,12 @@ final class EditorViewModel {
         setEnvironment(environment)
     }
 
-    /// Materials on the design's bodies, most used first, each once.
+    /// Materials on the design's bodies and faces, most used first, each once.
     var usedMaterials: [BodyMaterialSpec] {
         var counts: [(spec: BodyMaterialSpec, count: Int)] = []
-        for body in session.document.bodies {
-            var spec = body.material ?? .default
+        let all = session.document.bodies.flatMap { [$0.material ?? .default] + $0.faceMaterials.map(\.material) }
+        for material in all {
+            var spec = material
             spec.baseColorTexture = nil
             if let i = counts.firstIndex(where: { $0.spec == spec }) {
                 counts[i].count += 1
@@ -6438,10 +6789,124 @@ final class EditorViewModel {
             .map(\.element.spec)
     }
 
-    /// Reset the selected bodies to the default look.
+    /// Reset the selected bodies to the default look — or, picking faces,
+    /// the picked faces to their body's material.
     func resetMaterial() {
+        if visualizePicksFaces { setFaceMaterial(nil); return }
         guard !selection.isEmpty else { return }
         session.perform(SetMaterialCommand(bodyIDs: selection, material: nil, document: session.document))
+    }
+
+    // MARK: - Face materials (spec §14)
+
+    /// A face picked while visualizing: where it is remembered and, when
+    /// picked, its triangles.
+    struct VisualizeFace: Equatable {
+        var bodyID: BodyID
+        var point: SIMD3<Double>
+        var normal: SIMD3<Double>
+        var triangles: [Int]
+    }
+
+    /// Visualize picks single faces rather than whole bodies: a material
+    /// then dresses just them.
+    var visualizePicksFaces = false {
+        didSet {
+            guard visualizePicksFaces != oldValue else { return }
+            selection = []
+            visualizeFaces = []
+            mode = .idle
+        }
+    }
+    private(set) var visualizeFaces: [VisualizeFace] = []
+
+    /// Something to put a material on: picked faces, or selected bodies.
+    var visualizeHasSelection: Bool { visualizePicksFaces ? !visualizeFaces.isEmpty : !selection.isEmpty }
+
+    /// "1 face selected", "3 bodies selected".
+    var visualizeSelectionSummary: String {
+        let n = visualizePicksFaces ? visualizeFaces.count : selection.count
+        let noun = visualizePicksFaces ? (n == 1 ? "face" : "faces") : (n == 1 ? "body" : "bodies")
+        return "\(n) \(noun) selected"
+    }
+
+    /// A tap while picking faces: the face under it (Shift/⌘ adds or
+    /// removes it); empty space clears the pick.
+    private func visualizeFaceTap(_ hit: PickHit?) {
+        guard let hit, let body = session.document.body(with: hit.bodyID),
+              let triangles = FaceMaterialKit.region(in: body.render, seedTriangle: hit.triangleIndex),
+              let anchor = FaceMaterialKit.anchor(in: body.render, triangle: hit.triangleIndex) else {
+            if !selectionAdditive { visualizeFaces = [] }
+            return
+        }
+        let face = VisualizeFace(bodyID: body.id, point: anchor.point, normal: anchor.normal, triangles: triangles)
+        if let i = visualizeFaces.firstIndex(where: { $0.bodyID == body.id && $0.triangles.contains(hit.triangleIndex) }) {
+            if selectionAdditive { visualizeFaces.remove(at: i) } else { visualizeFaces = [face] }
+        } else {
+            visualizeFaces = selectionAdditive ? visualizeFaces + [face] : [face]
+        }
+    }
+
+    /// Put `material` on the picked faces (nil: back to the body's own), one undo step.
+    private func setFaceMaterial(_ material: BodyMaterialSpec?) {
+        guard !visualizeFaces.isEmpty else { return }
+        var after: [BodyID: [FaceMaterial]] = [:]
+        for face in visualizeFaces where after[face.bodyID] == nil {
+            guard let body = session.document.body(with: face.bodyID) else { continue }
+            let targets = visualizeFaces.filter { $0.bodyID == body.id }.map { ($0.point, $0.normal, $0.triangles) }
+            after[body.id] = FaceMaterialKit.setting(material, on: targets, in: body.faceMaterials, mesh: body.render)
+        }
+        let changed = after.filter { session.document.body(with: $0.key)?.faceMaterials != $0.value }
+        guard !changed.isEmpty else { return }
+        session.perform(SetFaceMaterialsCommand(after: changed, document: session.document))
+    }
+
+    @ObservationIgnored
+    private var faceMaterialCache: [BodyID: (revision: UInt64, faces: [FaceMaterial], triangles: [[Int]])] = [:]
+
+    /// Each face material's triangles on `body`, worked out once per mesh revision.
+    func faceMaterialTriangles(_ body: Body) -> [[Int]] {
+        if let cached = faceMaterialCache[body.id], cached.revision == body.meshRevision,
+           cached.faces == body.faceMaterials {
+            return cached.triangles
+        }
+        let triangles = FaceMaterialKit.resolve(body.faceMaterials, in: body.render)
+        faceMaterialCache[body.id] = (body.meshRevision, body.faceMaterials, triangles)
+        return triangles
+    }
+
+    /// A body's face materials as patches over it: one per material.
+    private func facePatches(_ body: Body, selectionState: UInt32) -> [FacePatchDrawable] {
+        guard !body.faceMaterials.isEmpty else { return [] }
+        let resolved = faceMaterialTriangles(body)
+        var groups: [(material: BodyMaterialSpec, triangles: [Int])] = []
+        for (face, triangles) in zip(body.faceMaterials, resolved) where !triangles.isEmpty {
+            if let i = groups.firstIndex(where: { $0.material == face.material }) {
+                groups[i].triangles += triangles
+            } else {
+                groups.append((face.material, triangles))
+            }
+        }
+        let mesh = body.render
+        return groups.map { group in
+            var positions: [SIMD3<Float>] = [], normals: [SIMD3<Float>] = []
+            positions.reserveCapacity(group.triangles.count * 3)
+            normals.reserveCapacity(group.triangles.count * 3)
+            for t in group.triangles.sorted() {
+                for k in 0..<3 {
+                    let index = Int(mesh.indices[t * 3 + k])
+                    positions.append(mesh.positions[index])
+                    normals.append(index < mesh.normals.count ? mesh.normals[index] : SIMD3(0, 0, 1))
+                }
+            }
+            var hasher = Hasher()
+            hasher.combine(group.triangles.sorted())
+            return FacePatchDrawable(
+                bodyID: body.id, key: "\(body.id.raw.uuidString):\(body.meshRevision):\(hasher.finalize())",
+                positions: positions, normals: normals, modelMatrix: body.transform.matrixFloat,
+                material: BodyMaterial(spec: group.material, meshHasTexcoords: false, revision: body.meshRevision),
+                selectionState: selectionState)
+        }
     }
 
     // MARK: - Materials (plan §B15)
@@ -6449,17 +6914,25 @@ final class EditorViewModel {
     /// Material sheet presentation flag (Material palette action).
     var showMaterialSheet = false
 
-    /// The material the sheet opens on: the first selected body's, or the
-    /// document default.
+    /// The material the sheet opens on: the first picked face's, or the
+    /// first selected body's, or the document default.
     var materialForSelection: BodyMaterialSpec {
+        if visualizePicksFaces, let face = visualizeFaces.first,
+           let body = session.document.body(with: face.bodyID) {
+            let resolved = faceMaterialTriangles(body)
+            let covering = zip(body.faceMaterials, resolved).filter { $0.1.contains(where: face.triangles.contains) }
+            return covering.last?.0.material ?? body.material ?? .default
+        }
         for body in session.document.bodies where selection.contains(body.id) {
             return body.material ?? .default
         }
         return .default
     }
 
-    /// Material sheet Apply: one undo step over the whole selection.
+    /// Material sheet Apply: one undo step over the whole selection — or
+    /// over the picked faces.
     func applyMaterial(_ spec: BodyMaterialSpec) {
+        if visualizeActive, visualizePicksFaces { setFaceMaterial(spec.clamped); return }
         guard !selection.isEmpty else { return }
         session.perform(SetMaterialCommand(
             bodyIDs: selection, material: spec.clamped, document: session.document
@@ -6738,10 +7211,30 @@ final class EditorViewModel {
         // Items plane selection.
         axisEntryPart = nil
         selectedPlaneID = nil
+        // Selection Extension (spec §8.1): Shift-click — or, set to "Click
+        // Adds", a plain click — extends the selection the way the Select
+        // chip does. A click on empty space still clears, unless Shift asks
+        // to extend.
+        var extending = false
+        switch mode {
+        case .idle, .editingPrimitive, .selected, .faceSelected:
+            extending = !selectModeActive
+                && AppSettings.shared.selectionExtension.extends(shift: tapShiftHeld)
+                && (tapShiftHeld || HitTester.pickBody(ray: ray, in: scene) != nil)
+        default:
+            break
+        }
+        let savedAdditive = selectionAdditive
+        if extending { selectionAdditive = true }
+        defer { selectionAdditive = savedAdditive }
         // Visualization dresses whole bodies (spec §14): a tap selects the
-        // body under it (Shift/⌘ adds or removes it), never a face, and
-        // empty space clears the selection.
+        // body under it (Shift/⌘ adds or removes it) — or, picking faces, the
+        // face — and empty space clears the selection.
         if visualizeActive {
+            if visualizePicksFaces {
+                visualizeFaceTap(HitTester.pickBody(ray: ray, in: scene))
+                return
+            }
             if let hit = HitTester.pickBody(ray: ray, in: scene) {
                 if selectionAdditive {
                     if selection.contains(hit.bodyID) { selection.remove(hit.bodyID) } else { selection.insert(hit.bodyID) }
@@ -9470,8 +9963,9 @@ final class EditorViewModel {
     // MARK: - Spline tool (spec §1.4)
 
     /// Fit Point (the curve runs through each tap) or Control Point (the taps
-    /// are a control polygon). See `SplineConstruction`.
-    private(set) var splineType: SplineType = .fit
+    /// are a control polygon). See `SplineConstruction`. Starts as Settings ▸
+    /// Default Spline Type; the Spline bar switches it for the session.
+    private(set) var splineType: SplineType = AppSettings.shared.defaultSplineType
     /// Points placed so far, in sketch-plane coordinates.
     private(set) var splinePlacedPoints: [SIMD2<Double>] = []
     private var splineHoverPoint: SIMD2<Double>?

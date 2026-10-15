@@ -46,6 +46,11 @@ struct SettingsView: View {
                     .accessibilityIdentifier("SettingsCircularAnnotations")
                     Text("Choose radius or diameter readouts for circles without resizing them.")
                         .font(.caption).foregroundStyle(.secondary)
+                    Picker("Default Spline Type", selection: $settings.defaultSplineType) {
+                        Text("Fit Point").tag(SplineType.fit)
+                        Text("Control Point").tag(SplineType.control)
+                    }
+                    .accessibilityIdentifier("SettingsDefaultSplineType")
                 }
 
                 SnappingSettingsSection(settings: settings)
@@ -82,6 +87,28 @@ struct SettingsView: View {
                          + "⌘ shortcuts work either way.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
+
+                    Picker("Selection Extension", selection: $settings.selectionExtension) {
+                        ForEach(SelectionExtension.allCases, id: \.self) { Text($0.title).tag($0) }
+                    }
+                    .pickerStyle(.segmented)
+                    .accessibilityIdentifier("SettingsSelectionExtension")
+                    Text(settings.selectionExtension == .click
+                         ? "Each click adds to the selection or takes away; Shift-click selects just that one."
+                         : "A click selects one item; Shift-click adds to the selection or takes away.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+
+                    Toggle("Menu Button Labels", isOn: $settings.menuButtonLabels)
+                        .accessibilityIdentifier("SettingsMenuButtonLabels")
+
+                    Picker("Start With", selection: $settings.startWith) {
+                        ForEach(StartWith.allCases, id: \.self) { Text($0.title).tag($0) }
+                    }
+                    .accessibilityIdentifier("SettingsStartWith")
+
+                    NavigationLink("Keyboard Shortcuts") { KeyboardShortcutsView(settings: settings) }
+                        .accessibilityIdentifier("SettingsKeyboardShortcuts")
                 }
 
                 Section("Graphics") {
@@ -130,6 +157,12 @@ struct SettingsView: View {
                     Text(settings.navigationPreset.summary + " The mouse wheel zooms; a trackpad pans with two fingers and pinches to zoom.")
                 }
 
+                // The Mac and the web read a SpaceMouse; iPadOS gives apps no
+                // access to one (DEBUG keeps the section so it can be tested).
+                #if targetEnvironment(macCatalyst) || DEBUG
+                SpaceMouseSettingsSection(settings: settings, driver: SpaceMouseDriver.shared)
+                #endif
+
                 Section {
                     Toggle("Display Touches and Clicks", isOn: $settings.showTouches)
                         .accessibilityIdentifier("SettingsShowTouches")
@@ -152,5 +185,44 @@ struct SettingsView: View {
             }
         }
         .presentationDetents([.medium, .large])
+    }
+}
+
+/// Settings ▸ SpaceMouse (spec §7.5).
+private struct SpaceMouseSettingsSection: View {
+    @Bindable var settings: AppSettings
+    var driver: SpaceMouseDriver
+
+    var body: some View {
+        Section {
+            LabeledContent("Device", value: driver.deviceName ?? "Not Connected")
+                .accessibilityIdentifier("SpaceMouseDevice")
+            VStack(alignment: .leading) {
+                LabeledContent("Speed", value: String(format: "%.2g×", settings.spaceMouse.speed))
+                // Logarithmic, so ½× and 2× sit equally either side of 1×.
+                Slider(value: Binding(
+                    get: { log2(settings.spaceMouse.speed) },
+                    set: { settings.spaceMouse.speed = pow(2, ($0 * 4).rounded() / 4) }),
+                       in: -2...2)
+                    .accessibilityIdentifier("SpaceMouseSpeed")
+            }
+            Toggle("Rotation", isOn: $settings.spaceMouse.rotation)
+                .accessibilityIdentifier("SpaceMouseRotation")
+            Toggle("Pan and Zoom", isOn: $settings.spaceMouse.panZoom)
+                .accessibilityIdentifier("SpaceMousePanZoom")
+            Toggle("Dominant Axis Only", isOn: $settings.spaceMouse.dominantAxis)
+                .accessibilityIdentifier("SpaceMouseDominant")
+            Toggle("Invert Pan Left/Right", isOn: $settings.spaceMouse.invertPanX)
+            Toggle("Invert Pan Up/Down", isOn: $settings.spaceMouse.invertPanY)
+            Toggle("Invert Zoom", isOn: $settings.spaceMouse.invertZoom)
+                .accessibilityIdentifier("SpaceMouseInvertZoom")
+            Toggle("Invert Tilt", isOn: $settings.spaceMouse.invertTilt)
+            Toggle("Invert Spin", isOn: $settings.spaceMouse.invertSpin)
+        } header: {
+            Text("SpaceMouse")
+        } footer: {
+            Text("Move the cap as if holding the model: push, lift and twist it and the model follows. "
+                 + "The buttons fit the view (Fit) and jump to the standard views.")
+        }
     }
 }

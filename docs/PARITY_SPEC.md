@@ -1579,7 +1579,22 @@ conversions, grid lock, grid on other planes.
 SpaceMouse Settings under the Views menu; Wacom pen displays/tablets act as
 pen input on desktop (pen draws/selects, touch/mouse navigates — same split
 as Apple Pencil).
-**Status:** ❌ not implemented — no external-controller or tablet input path.
+**Status:** 🟡 partial — **SpaceMouse built 2026-10-13** on the Mac and the
+web: `Interaction/SpaceMouse.swift` parses the HID reports (six-axis report
+1, older split 1 + 2, buttons 3; or IOKit element values) and integrates
+them each frame into turntable motion in 3Dconnexion's object mode (push =
+pan, pull/push = zoom, tilt = elevation, twist = spin; roll left out so the
+view stays upright), with a dead zone and a precision curve. Buttons: Menu =
+Isometric, Fit = Fit View, the view keys = the standard views. Settings ▸
+SpaceMouse: speed, Rotation / Pan and Zoom, Dominant Axis Only, an Invert
+per axis; Views ▸ SpaceMouse Settings… while one is connected. The Mac reads
+it through IOKit HID (`App/SpaceMouseHIDMonitor.swift`; USB and Bluetooth
+sandbox entitlements), the web through WebHID (Chrome/Edge,
+`editor/spacemouse.ts`). iPadOS gives apps no access to the device, so the
+iPad has none. Tests: `SpaceMouseTests`, `/v1/spacemouse` (DEBUG),
+web `spacemouse-smoke.mjs`. Directions are set from the HID convention, not
+yet confirmed on a physical device — each axis can be inverted. Missing:
+Wacom (pen input on the desktop).
 **Feasibility:** [platform/service] (3Dconnexion/Wacom SDK + OS integration)
 
 ---
@@ -1593,7 +1608,7 @@ sketch element); tapping a body selects the planar face under the finger;
 double-tap/double-click selects the whole body/connected group. Selected items
 stay visible (highlighted through occluders). Deselect: tap empty space /
 Escape / Cmd+. . Shift+click multi-selects (macOS Selection Extension setting
-can invert this). Selecting a sketch element from 3D jumps straight into
+can invert this — built 2026-10-13, Settings ▸ Interface; §17). Selecting a sketch element from 3D jumps straight into
 editing that sketch without rotating the camera.
 **Status:** 🟡 partial — tap = planar face selection with orange highlight
 (`selectFaceOrBody` + `FaceTopology`), fallback to whole body on curved
@@ -1672,7 +1687,16 @@ what makes the spec's own examples work: "p3" → "Add Plane - 3 Points" and
 "pre-selection scopes results". `cheatSheet` groups the bound commands for the
 long-press-⌘ sheet. Covered by `CommandRegistryTests`.
 **Missing:** the UIKit key-command wiring and the launcher/cheat-sheet UI,
-user-customizable shortcuts, and the three-finger undo/redo swipe.
+and the three-finger undo/redo swipe.
+**Customizable shortcuts (built 2026-10-13):** Settings ▸ Interface ▸ Keyboard Shortcuts lists
+every command a key can run, by category, with search. Tap one and press the new keys (Delete
+removes, Escape cancels); a chord another command had moves over and the page names the command
+that lost it; Reset to Default / Reset All. The system's chords (⌘Q ⌘W ⌘H ⌘M ⌘, ⌘T ⌘R ⌘L) and
+bare digits (they type values) are refused. Stored as the difference from the shipped keys
+(`ShortcutCustomization`), so later default changes still arrive; `CommandRegistry.all` is the
+customized catalog every path reads — key commands, Command Search, the web. Web: the same sheet;
+the page records keys and takes only the ⌘ keys the catalog uses. Tests: `KeyboardShortcutsTests`,
+`KeyboardShortcutsUITests`, web `shortcuts-smoke.mjs`.
 **Feasibility:** [mesh-kernel OK]
 
 ---
@@ -2079,8 +2103,23 @@ renderer swaps the camera headlight for the world-fixed sun
 with a firmer terminator and a sky/ground reflection on polished and metal
 surfaces. **Capture** opens the Screenshot sheet with the grid off and a
 transparent background when the environment asks for one. The web app
-mirrors all of it (panel, lighting in the WebGL shaders). Missing: real
-PBR/IBL and HDR environments, transmission/IOR, per-FACE materials,
+mirrors all of it (panel, lighting in the WebGL shaders).
+**Per-face materials (2026-10-15):** the Materials tab's **Apply To:
+Bodies | Faces**. Picking faces, a tap takes the face under it (Shift/⌘
+adds or removes; empty space clears) — a flat face alone, or a curve's
+connected facets short of the flat faces (within one smooth region a flat
+face is told from a curve's facets by size, so a filleted plate's top,
+fillets and sides are separate), shown with a light tint and an outline —
+and a material, Edit… or Reset then dresses just those faces (one undo
+step; a whole-body material clears them, undoably). Stored per body
+(`Body.faceMaterials`: a point on the face and its normal, body-local, plus
+the material; `PersistedBody.faceMaterialsData`, the archive's
+`faceMaterials`), found again on the current mesh (`FaceMaterialKit`), so
+they follow the body and survive edits that leave the face in place; a
+face an edit moves away drops its material. Drawn as patches over the body
+(`ViewportScene.facePatches`, depth-biased; Metal and WebGL), opaque
+materials only. Missing: real PBR/IBL and HDR environments,
+transmission/IOR, see-through face materials,
 decals, texture mapping controls (scale, rotation, auto-match), custom
 .GLB materials, emission bloom, depth of field and focus point, textured
 USDZ / AR, Generative Render.
@@ -2150,11 +2189,70 @@ SVG and DXF (layers VISIBLE, HIDDEN with a HIDDEN linetype, CUTTING with a
 CENTER linetype, HATCH, DIMENSIONS, BORDER, TEXT) written by the app itself
 (`DrawingExport`), so iPad, Mac and web files match. Drawings are
 regenerated from the model whenever shown; projections are cached between
-option changes and drags. Missing: free placement of new views from any
-angle (custom projection angles, extra projected views), cutting lines
-through picked points / stepped sections, interactive dimensions and
-annotations, centerlines and marks, title-block layouts, multiple sheets,
-DWG.
+option changes and drags. **Dimensions & notes (2026-10-13):** tools over
+the preview — Move, Dimension, Note (`DrawingAnnotations.swift`). Dimension
+takes two taps on one view, snapping to the ends of its long lines (true
+corners, where a straight edge meets a curve) before the samples of curves;
+it measures the model in that view's plane (horizontal, vertical or
+aligned — chosen from the points, changeable), starts outside the view
+clear of its name, and its line drags out from the part. The isometric is
+not dimensioned (foreshortened). Note places text, with a leader when tapped
+on a line, or free on the sheet; its text is edited in the form. Both keep
+their points in the view's own coordinates, so they move and rescale with
+it, are saved with the drawing, listed under "Dimensions & Notes", and
+exported to PDF / SVG / DXF. **Circles:** each view's lines are joined into
+chains and circles fitted to them (`DrawingCircleKit`: every vertex on the
+fit, turning one way, pieces of one circle merged); a Dimension tap on an
+outline away from a corner gives its diameter ("Ø6 mm", across the circle)
+or an arc's radius ("R3 mm"), its leader up and away from the view's
+middle, out past the view, and it swings round when dragged. **Centre
+marks** (sheet option, on by default): chain-line crosses 2 mm past every
+full circle outside the isometric. **Edges and angles:** a view's straight
+lines (collinear pieces joined — a circle seen edge-on is one edge, with
+nothing to snap to along it) can be tapped with Dimension: two edges give
+the angle between them ("63.4°", an arc round where their lines meet, on
+the tapped sides, edges carried out or in to it; across the corner, edges
+carried through, when the corner is too small to hold it — dragging the
+value through the corner flips it), two parallel edges the gap between
+them, an edge and a corner the distance square across. A corner wins near
+it unless the tap is right on a short edge, along from its ends.
+**Tolerances (2026-10-14):** every dimension has Prefix and Suffix text
+("2× Ø6 mm THRU") and a Tolerance — None, Symmetrical ("40 ±0.1 mm"),
+Deviation (+upper / −lower stacked small after the value), Limits (the two
+limits stacked in place of the value) or Basic (the value boxed); the
+deviations are typed in the display unit (an angle's in degrees) and kept
+when the style changes. The list shows the value on one line ("40
++0.1/-0.05 mm"). PDF text now keeps Ø, °, ± and × (WinAnsi codes; they
+were written as "?"). **Centrelines (2026-10-15):** a Centreline tool:
+two parallel edges — visible, or the hidden sides of a hole seen side-on —
+give the axis midway between them along both; two points or circles (a
+circle's outline stands for its centre) the line through them. Drawn as a
+chain line 3 mm past its ends, listed as "Centreline", follows its view,
+not draggable (a drag on it moves the view). Tests:
+`DrawingAnnotationsTests`, `DrawingUITests`, web
+`drawing-annotations-smoke.mjs`. **Precision (2026-10-15):** each
+dimension has a Precision picker — Auto (as the canvas writes it), 1, 0.1
+… 0.0001 — fixing its decimals with trailing zeros kept ("40.00 mm",
+"1.500\"", "26.565°"); the tolerance follows it ("±0.10"), a zero
+deviation stays "0". Saved per dimension, clamped 0–4 on load.
+**Bolt circles (2026-10-15):** a Bolt Circle tool: three holes (a
+circle's outline stands for its centre) or points of one view give the
+chain circle through them, listed as "Bolt Circle", selected at its top,
+not draggable; three points in a line start again. Dashed lines drawn as
+connected runs (`DrawingExport.runs`) — SVG / PDF subpaths, DXF
+POLYLINEs with continuous linetype (flag 128) — so a dash pattern flows
+round a curve instead of restarting on each short side.
+**Title blocks (2026-10-15):** a Title Block layout per drawing — Simple
+(title over scale, sheet, projection, date; 120 × 28 mm), Detailed (adds
+company, part number, revision, material, drawn by, checked by — typed
+in the sheet's form; 180 × 36 mm) or None (border only, the views take
+the space). Values too long for their cell shrink to 60 %, then end in
+"..."; fields are kept while another layout is shown. The views' area
+now also keeps 3 mm under the border for the top views' names. Missing:
+free placement of new views from any angle (custom projection angles,
+extra projected views), cutting lines through picked points / stepped
+sections, centrelines spanning views, custom title-block templates
+(logos, own fields), multiple sheets in one drawing, DWG.
 **Feasibility:** [mesh-kernel OK] for a first version (orthographic
 projection + silhouette/hidden-line from meshes; associativity with the model
 [needs history engine]; production-grade HLR quality benefits from a B-rep
@@ -2290,8 +2388,18 @@ Control) and Reverse Scroll Direction; the mouse wheel now zooms and a
 trackpad's two-finger scroll pans on iPad and Mac. Graphics ▸ Tessellation
 Quality (applies at the next launch). Tutorial Mode ▸ Display Touches and
 Clicks / Display Keyboard Shortcuts. All but Tessellation Quality on the web
-too. Still missing: interface language, customizable shortcuts, start-with,
-menu button labels, selection extension.
+too.
+**Added (2026-10-13):** Interface ▸ **Selection Extension** (Shift-Click
+Adds — the default — or Click Adds, where Shift-click selects just the one;
+Shift-click itself is new on the iPad with a keyboard, the Mac and the web),
+Interface ▸ **Menu Button Labels** (names under the toolbar icons; the bar
+ignores label styles, so the titled form is drawn as its own stack and the
+"…" overflow still lists every button), Interface ▸ **Start With** (Designs
+Gallery, Last Opened Design, New Design — the first-run welcome and test
+hooks come first; a deleted last design falls back to the gallery), and
+Sketch Annotations ▸ **Default Spline Type** (Fit Point / Control Point).
+All four on the web too (Start With remembers the last design in the
+browser). Keyboard Shortcuts built 2026-10-13 (§8.4). Still missing: interface language.
 **Status:** 🟡 partial — a Settings surface ships (`AppSettings`, Phase F
 tranche 1): display Units (mm/cm/m/in/ft), Theme System/Light/Dark, Interface
 Left/Right, and Anti-Aliasing (Disabled | 2x | 4x MSAA), persisted across

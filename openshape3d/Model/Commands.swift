@@ -1502,6 +1502,7 @@ struct ResizePrimitiveCommand: DocumentCommand {
         // its material (2026-08-25 review round 2).
         rebuilt.isHidden = old.isHidden
         rebuilt.material = old.material
+        rebuilt.faceMaterials = old.faceMaterials
         // Rebuild the analytic B-rep too, mirroring FeatureGraph.evalPrimitive:
         // resizing an OCCT-rendered cylinder must not degrade it to the 48-gon
         // Euclid mesh (2026-08-25 review, C4). Curved primitives take the OCCT
@@ -1530,20 +1531,25 @@ struct ResizePrimitiveCommand: DocumentCommand {
 // MARK: - Materials (plan §B15)
 
 /// Assigns one material to a set of bodies (Material sheet Apply). Per-body
-/// before-snapshots restore mixed prior materials on undo.
+/// before-snapshots restore mixed prior materials on undo. The whole body
+/// takes it: its face materials go (and come back on undo).
 struct SetMaterialCommand: DocumentCommand {
     let title = "Material"
     /// Prior material per body (nil value = legacy default look).
     let before: [BodyID: BodyMaterialSpec?]
+    let beforeFaces: [BodyID: [FaceMaterial]]
     /// The material applied to every targeted body.
     let after: BodyMaterialSpec?
 
     init(bodyIDs: Set<BodyID>, material: BodyMaterialSpec?, document: DesignDocument) {
         var snapshots: [BodyID: BodyMaterialSpec?] = [:]
+        var faces: [BodyID: [FaceMaterial]] = [:]
         for body in document.bodies where bodyIDs.contains(body.id) {
             snapshots[body.id] = body.material
+            faces[body.id] = body.faceMaterials
         }
         self.before = snapshots
+        self.beforeFaces = faces
         self.after = material
     }
 
@@ -1551,6 +1557,7 @@ struct SetMaterialCommand: DocumentCommand {
         for id in before.keys {
             if let index = document.bodyIndex(of: id) {
                 document.bodies[index].material = after
+                document.bodies[index].faceMaterials = []
             }
         }
     }
@@ -1559,7 +1566,37 @@ struct SetMaterialCommand: DocumentCommand {
         for (id, material) in before {
             if let index = document.bodyIndex(of: id) {
                 document.bodies[index].material = material
+                document.bodies[index].faceMaterials = beforeFaces[id] ?? []
             }
+        }
+    }
+}
+
+/// Sets the face materials of some bodies (spec §14): applying a material to
+/// picked faces, or resetting them. One undo step.
+struct SetFaceMaterialsCommand: DocumentCommand {
+    let title = "Face Material"
+    let before: [BodyID: [FaceMaterial]]
+    let after: [BodyID: [FaceMaterial]]
+
+    init(after: [BodyID: [FaceMaterial]], document: DesignDocument) {
+        var snapshots: [BodyID: [FaceMaterial]] = [:]
+        for body in document.bodies where after[body.id] != nil {
+            snapshots[body.id] = body.faceMaterials
+        }
+        self.before = snapshots
+        self.after = after.filter { snapshots[$0.key] != nil }
+    }
+
+    func apply(to document: inout DesignDocument) {
+        for (id, faces) in after {
+            if let index = document.bodyIndex(of: id) { document.bodies[index].faceMaterials = faces }
+        }
+    }
+
+    func revert(in document: inout DesignDocument) {
+        for (id, faces) in before {
+            if let index = document.bodyIndex(of: id) { document.bodies[index].faceMaterials = faces }
         }
     }
 }

@@ -46,6 +46,21 @@ nonisolated enum DrawingExport {
         }
     }
 
+    /// `lines` as connected runs: a line starting where the one before it
+    /// ended carries on its run, so a dash pattern flows round a curve (a
+    /// circle's short sides would each restart it — and draw solid).
+    static func runs(_ lines: [DrawingLine]) -> [[SIMD2<Double>]] {
+        var out: [[SIMD2<Double>]] = []
+        for line in lines {
+            if let end = out.last?.last, simd_distance(end, line.a) < 1e-6 {
+                out[out.count - 1].append(line.b)
+            } else {
+                out.append([line.a, line.b])
+            }
+        }
+        return out
+    }
+
     // MARK: - SVG
 
     static func svg(_ layout: DrawingLayout) -> String {
@@ -63,8 +78,9 @@ nonisolated enum DrawingExport {
             let pattern = dash(style)
             let dash = pattern.isEmpty ? "" : " stroke-dasharray=\"\(pattern.map(num).joined(separator: " "))\""
             out += "<path stroke-width=\"\(num(width(style)))\"\(dash) d=\""
-            for line in lines {
-                out += "M\(num(line.a.x)) \(num(h - line.a.y))L\(num(line.b.x)) \(num(h - line.b.y))"
+            for run in runs(lines) {
+                out += "M\(num(run[0].x)) \(num(h - run[0].y))"
+                for p in run.dropFirst() { out += "L\(num(p.x)) \(num(h - p.y))" }
             }
             out += "\"/>\n"
         }
@@ -90,8 +106,10 @@ nonisolated enum DrawingExport {
             guard !lines.isEmpty else { continue }
             content += "\(num(width(style) * k)) w\n"
             content += "[\(dash(style).map { num($0 * k) }.joined(separator: " "))] 0 d\n"
-            for line in lines {
-                content += "\(num(line.a.x * k)) \(num(line.a.y * k)) m \(num(line.b.x * k)) \(num(line.b.y * k)) l\n"
+            for run in runs(lines) {
+                content += "\(num(run[0].x * k)) \(num(run[0].y * k)) m"
+                for p in run.dropFirst() { content += " \(num(p.x * k)) \(num(p.y * k)) l" }
+                content += "\n"
             }
             content += "S\n"
         }
@@ -171,9 +189,9 @@ nonisolated enum DrawingExport {
         pair(0, "ENDSEC")
 
         pair(0, "SECTION"); pair(2, "ENTITIES")
-        for line in layout.lines {
+        for style in DrawingLineStyle.drawOrder {
             let layer: String
-            switch line.style {
+            switch style {
             case .visible: layer = "VISIBLE"
             case .hidden: layer = "HIDDEN"
             case .thin: layer = "DIMENSIONS"
@@ -181,9 +199,23 @@ nonisolated enum DrawingExport {
             case .chain: layer = "CUTTING"
             case .hatch: layer = "HATCH"
             }
-            pair(0, "LINE"); pair(8, layer)
-            pair(10, num(line.a.x)); pair(20, num(line.a.y)); pair(30, "0")
-            pair(11, num(line.b.x)); pair(21, num(line.b.y)); pair(31, "0")
+            for run in runs(layout.lines.filter { $0.style == style }) {
+                if run.count == 2 {
+                    pair(0, "LINE"); pair(8, layer)
+                    pair(10, num(run[0].x)); pair(20, num(run[0].y)); pair(30, "0")
+                    pair(11, num(run[1].x)); pair(21, num(run[1].y)); pair(31, "0")
+                    continue
+                }
+                // A curve: one polyline, its linetype carried on round the
+                // vertices (flag 128) rather than restarted at each.
+                pair(0, "POLYLINE"); pair(8, layer); pair(66, "1")
+                pair(10, "0"); pair(20, "0"); pair(30, "0"); pair(70, "128")
+                for p in run {
+                    pair(0, "VERTEX"); pair(8, layer)
+                    pair(10, num(p.x)); pair(20, num(p.y)); pair(30, "0")
+                }
+                pair(0, "SEQEND"); pair(8, layer)
+            }
         }
         for text in layout.texts {
             pair(0, "TEXT"); pair(8, "TEXT")
@@ -217,13 +249,16 @@ nonisolated enum DrawingExport {
     }
 
     /// PDF literal string: escape the delimiters, and keep to the font's
-    /// Latin range (anything else becomes "?").
-    private static func pdfEscaped(_ s: String) -> String {
+    /// Latin range — Ø, °, ±, × as WinAnsi codes, written in octal so the
+    /// stream stays ASCII (anything else becomes "?").
+    static func pdfEscaped(_ s: String) -> String {
         var out = ""
         for ch in s.unicodeScalars {
-            switch ch {
-            case "(", ")", "\\": out += "\\" + String(ch)
-            default: out += ch.value < 0x80 && ch.value >= 0x20 ? String(ch) : "?"
+            switch ch.value {
+            case 0x28, 0x29, 0x5C: out += "\\" + String(ch)
+            case 0x20..<0x7F: out += String(ch)
+            case 0xA0...0xFF: out += "\\" + String(ch.value, radix: 8)
+            default: out += "?"
             }
         }
         return out

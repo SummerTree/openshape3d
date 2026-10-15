@@ -151,6 +151,9 @@ nonisolated struct Body: Identifiable, Sendable {
     /// Visualization-lite appearance (plan §B15); nil keeps the legacy
     /// default look exactly.
     var material: BodyMaterialSpec?
+    /// Materials on single faces over the body's own (spec §14), later ones
+    /// winning a face two share.
+    var faceMaterials: [FaceMaterial] = []
     /// Euclid source mesh, if this body was just built/booleaned in-session.
     /// Nil after loading from disk; use `euclidMesh()` which rebuilds on demand.
     var euclid: Euclid.Mesh?
@@ -237,6 +240,7 @@ nonisolated struct Body: Identifiable, Sendable {
     nonisolated func keepingAppearance(of live: Body) -> Body {
         var body = self
         body.material = live.material
+        body.faceMaterials = live.faceMaterials
         body.isHidden = live.isHidden
         return body
     }

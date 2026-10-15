@@ -82,6 +82,7 @@ final class DocumentSession {
         /// blob must not be overwritten by the nil we decoded to.
         var bodyPrimitive: Set<UUID> = []
         var bodyMaterial: Set<UUID> = []
+        var bodyFaceMaterials: Set<UUID> = []
         var bodyBrep: Set<UUID> = []
         /// The Items-folder blob failed to decode — leave the column alone.
         var itemFolders = false
@@ -98,7 +99,7 @@ final class DocumentSession {
         }
         /// Bodies present in the document but missing some detail.
         var partialBodyCount: Int {
-            bodyPrimitive.union(bodyMaterial).union(bodyBrep).count
+            bodyPrimitive.union(bodyMaterial).union(bodyFaceMaterials).union(bodyBrep).count
         }
         var count: Int { rowCount + partialBodyCount }
     }
@@ -724,6 +725,13 @@ final class DocumentSession {
                 if decoded == nil { unreadableRows.bodyMaterial.insert(persisted.bodyID) }
                 return decoded
             }
+            if let data = persisted.faceMaterialsData {
+                if let decoded = try? JSONDecoder().decode([FaceMaterial].self, from: data) {
+                    body.faceMaterials = decoded
+                } else {
+                    unreadableRows.bodyFaceMaterials.insert(persisted.bodyID)
+                }
+            }
             // Restore the analytic B-rep so a reloaded cylinder stays round and
             // can still compose booleans. An unreadable blob (truncated, or
             // written by a newer OCCT) leaves the body Euclid-only for this
@@ -985,6 +993,7 @@ final class DocumentSession {
             let primitiveData = body.primitive.flatMap { try? JSONEncoder().encode($0) }
             let meshData = MeshBlob.encode(body.render)
             let materialData = body.material.flatMap { try? JSONEncoder().encode($0) }
+            let faceMaterialsData = body.faceMaterials.isEmpty ? nil : try? JSONEncoder().encode(body.faceMaterials)
             // Analytic geometry, when this body has it — so roundness and boolean
             // composability survive a reload instead of degrading to triangles.
             let brepData = body.brep.flatMap { OCCTKernel.serialize($0) }
@@ -1029,6 +1038,9 @@ final class DocumentSession {
                 if !preserve(unreadableRows.bodyMaterial, materialData) {
                     persisted.materialData = materialData
                 }
+                if !preserve(unreadableRows.bodyFaceMaterials, faceMaterialsData) {
+                    persisted.faceMaterialsData = faceMaterialsData
+                }
                 if !(preserve(unreadableRows.bodyBrep, brepData) && meshUnchanged) {
                     persisted.brepData = brepData
                 }
@@ -1042,6 +1054,7 @@ final class DocumentSession {
                 )
                 persisted.isHidden = body.isHidden
                 persisted.materialData = materialData
+                persisted.faceMaterialsData = faceMaterialsData
                 persisted.brepData = brepData
                 persisted.project = project
                 modelContext.insert(persisted)

@@ -48,6 +48,8 @@ nonisolated struct ProjectArchive: Codable, Sendable {
         var mesh: Data
         var isHidden: Bool
         var material: Data?
+        /// JSON [FaceMaterial]; absent when the body has none, and in older archives.
+        var faceMaterials: Data? = nil
         /// OCCT brep blob (v2+); nil for Euclid-only bodies and v1 archives.
         ///
         /// STILL WRITTEN, NEVER READ BACK (2026-08-25 review round 3 fuzzing).
@@ -221,7 +223,7 @@ extension ProjectArchive {
                 id: $0.bodyID, name: $0.name, transform: $0.transformData,
                 primitive: $0.primitiveData, mesh: $0.meshData,
                 isHidden: $0.isHidden, material: $0.materialData,
-                brep: $0.brepData)
+                faceMaterials: $0.faceMaterialsData, brep: $0.brepData)
         }
         archive.sketches = project.sketches.map {
             BlobRecord(id: $0.sketchID, data: $0.sketchData)
@@ -275,6 +277,7 @@ extension ProjectArchive {
                 primitiveData: record.primitive, meshData: record.mesh)
             row.isHidden = record.isHidden
             row.materialData = record.material
+            row.faceMaterialsData = record.faceMaterials
             // DELIBERATELY NOT IMPORTED — see the note on `BodyRecord.brep`.
             // An archive is untrusted input; OCCT's BREP reader is not
             // hardened against hostile bytes (fuzzing: 34% of malformed blobs

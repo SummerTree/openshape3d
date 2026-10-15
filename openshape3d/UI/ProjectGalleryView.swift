@@ -194,6 +194,7 @@ struct ProjectGalleryView: View {
                     }
                 }
                 #endif
+                applyStartWith()
             }
             .alert("Rename Design", isPresented: renameProjectBinding) {
                 TextField("Name", text: $renameText)
@@ -770,6 +771,25 @@ extension ProjectGalleryView {
         where environment[hook] != nil { return false }
         #endif
         return !hasSeenWelcome
+    }
+
+    /// Settings ▸ Start With, once per launch: stay in the gallery, reopen the
+    /// last design, or start a new one. The welcome sheet and the automation
+    /// hooks come first.
+    func applyStartWith() {
+        var hookActive = false
+        #if DEBUG
+        let environment = ProcessInfo.processInfo.environment
+        hookActive = ["OS3D_FRESH", "OS3D_AUTO_OPEN", "OS3D_RESET_STORE"].contains { environment[$0] != nil }
+        #endif
+        let settings = AppSettings.shared
+        let last = settings.lastOpenedDesign.flatMap { date in projects.first { $0.createdAt == date } }
+        switch settings.startWith.launch(hasLastDesign: last != nil, welcomeShowing: showWelcome,
+                                         hookActive: hookActive) {
+        case .open: if let last { path.append(last.persistentModelID) }
+        case .create: createProject()
+        case .stay: break
+        }
     }
 
     /// Install the bundled samples into the Demos folder and show it.

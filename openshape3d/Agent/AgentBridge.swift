@@ -149,6 +149,26 @@ final class AgentBridge {
             return section(bodyID: bodyID, origin: origin, normal: normal,
                            xAxisHint: xAxisHint, deflection: deflection, on: viewModel)
 
+        case let .spaceMouse(axes, seconds, buttons):
+            // Exactly what the device sends: report 1 with all six axes,
+            // ticked at 60 Hz, released, then report 3 for the buttons.
+            let driver = SpaceMouseDriver.shared
+            func report(_ values: [Double]) -> [UInt8] {
+                values.flatMap { value -> [UInt8] in
+                    let bits = UInt16(bitPattern: Int16(clamping: Int(value.rounded())))
+                    return [UInt8(bits & 0xFF), UInt8(bits >> 8)]
+                }
+            }
+            driver.receive(reportID: 1, payload: report(axes))
+            for _ in 0..<Int((seconds * 60).rounded()) { driver.tick(dt: 1.0 / 60) }
+            driver.receive(reportID: 1, payload: report(Array(repeating: 0, count: 6)))
+            if buttons != 0 {
+                let mask = UInt32(truncatingIfNeeded: buttons)
+                driver.receive(reportID: 3, payload: (0..<4).map { UInt8(truncatingIfNeeded: mask >> (8 * $0)) })
+                driver.receive(reportID: 3, payload: [0, 0, 0, 0])
+            }
+            return .ok(["device": driver.deviceName ?? NSNull(), "ticks": Int((seconds * 60).rounded())])
+
         case let .capture(note):
             let analytic = viewModel.session.document.bodies.compactMap { body in
                 body.brep.map { (label: body.name, handle: $0) }

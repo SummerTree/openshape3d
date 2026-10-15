@@ -131,6 +131,10 @@ nonisolated enum AgentRoute: Sendable, Equatable {
     /// the drawing view, for checking a rebuild section-for-section.
     case section(bodyID: String, origin: SIMD3<Double>, normal: SIMD3<Double>,
                  xAxisHint: SIMD3<Double>?, deflection: Double)
+    /// Development: drive the camera as a SpaceMouse held at `axes` (raw
+    /// device counts tx, ty, tz, rx, ry, rz) for `seconds`, then press
+    /// `buttons` — the whole report-to-camera path, without the device.
+    case spaceMouse(axes: [Double], seconds: Double, buttons: Int)
     /// Already-decided replies.
     case reply(status: Int, error: String, message: String)
 
@@ -138,7 +142,7 @@ nonisolated enum AgentRoute: Sendable, Equatable {
     var needsEditor: Bool {
         switch self {
         case .state, .runCommand, .exec, .screenshot, .check, .capture,
-             .edges, .faces, .sketches, .project, .section, .archive, .export:
+             .edges, .faces, .sketches, .project, .section, .archive, .export, .spaceMouse:
             return true
         case .health, .commands, .reply: return false
         }
@@ -252,6 +256,17 @@ nonisolated enum AgentRouter {
                               message: "POST to /v1/capture (optional JSON body {\"note\":\"…\"}).")
             }
             return .capture(note: request.jsonBody?["note"] as? String ?? "")
+
+        case "/v1/spacemouse":
+            guard developerRoutes else { return developerOnly(request.path) }
+            guard request.method == "POST",
+                  let axes = request.jsonBody?["axes"] as? [Double], axes.count == 6 else {
+                return .reply(status: 400, error: "bad_spacemouse",
+                              message: #"POST {"axes":[tx,ty,tz,rx,ry,rz],"seconds":0.5,"buttons":0} "#
+                                     + "(raw counts, ±350 = full deflection; buttons a bit mask).")
+            }
+            let seconds = min(max(request.jsonBody?["seconds"] as? Double ?? 0.5, 0), 10)
+            return .spaceMouse(axes: axes, seconds: seconds, buttons: request.jsonBody?["buttons"] as? Int ?? 0)
 
         case "/v1/command":
             guard request.method == "POST" else {

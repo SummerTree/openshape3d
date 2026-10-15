@@ -304,7 +304,11 @@ struct EditorView: View {
             if let viewModel { AgentBridge.shared.register(viewModel, documentName: project.name) }
         }
         .navigationTitle(project.name)
-        .onAppear { MacWindowTitle.want(project.name) }
+        .onAppear {
+            MacWindowTitle.want(project.name)
+            // Settings ▸ Start With ▸ Last Opened Design finds it by this.
+            AppSettings.shared.lastOpenedDesign = project.createdAt
+        }
         .onChange(of: project.name) { _, name in MacWindowTitle.want(name) }
         .navigationBarTitleDisplayMode(.inline)
         .onDisappear {
@@ -984,7 +988,7 @@ struct EditorView: View {
             }
             .accessibilityIdentifier("InsertImageFiles")
         } label: {
-            Label("Import", systemImage: "square.and.arrow.down")
+            ToolbarLabel("Import", systemImage: "square.and.arrow.down")
         }
         .accessibilityIdentifier("ImportMenu")
     }
@@ -1152,7 +1156,7 @@ struct EditorView: View {
                 .accessibilityIdentifier("ARPreviewButton")
             }
         } label: {
-            Label("Export", systemImage: "square.and.arrow.up")
+            ToolbarLabel("Export", systemImage: "square.and.arrow.up")
         }
         .accessibilityIdentifier("ExportMenu")
     }
@@ -1902,7 +1906,7 @@ struct EditorView: View {
                     Button {
                         viewModel.fitView()
                     } label: {
-                        Label("Fit View", systemImage: "arrow.up.left.and.arrow.down.right")
+                        ToolbarLabel("Fit View", systemImage: "arrow.up.left.and.arrow.down.right")
                     }
 
                     // Views popover (spec §7.3): standard views + projection,
@@ -1968,6 +1972,11 @@ struct EditorView: View {
                         }
                         Button("Field of View…") { viewModel.showFieldOfViewSheet = true }
                             .accessibilityIdentifier("FieldOfViewButton")
+                        // Spec §7.5: under Views while a SpaceMouse is connected.
+                        if SpaceMouseDriver.shared.deviceName != nil {
+                            Button("SpaceMouse Settings…") { showSettings = true }
+                                .accessibilityIdentifier("SpaceMouseSettingsButton")
+                        }
                         Menu("Grid") {
                             Picker("Grid Position", selection: Binding(
                                 get: { viewModel.gridPosition },
@@ -2035,28 +2044,28 @@ struct EditorView: View {
                             }
                         }
                     } label: {
-                        Label("Views", systemImage: "square.stack.3d.up")
+                        ToolbarLabel("Views", systemImage: "square.stack.3d.up")
                     }
                     .accessibilityIdentifier("ViewsMenu")
 
                     Button {
                         viewModel.showHistoryPanel.toggle()
                     } label: {
-                        Label("History", systemImage: "clock.arrow.circlepath")
+                        ToolbarLabel("History", systemImage: "clock.arrow.circlepath")
                     }
                     .accessibilityIdentifier("HistoryButton")
 
                     Button {
                         viewModel.showVariablesPanel.toggle()
                     } label: {
-                        Label("Variables", systemImage: "function")
+                        ToolbarLabel("Variables", systemImage: "function")
                     }
                     .accessibilityIdentifier("VariablesButton")
 
                     Button {
                         showItemsPanel.toggle()
                     } label: {
-                        Label("Items", systemImage: "sidebar.trailing")
+                        ToolbarLabel("Items", systemImage: "sidebar.trailing")
                     }
                     .accessibilityIdentifier("ItemsButton")
 
@@ -2064,21 +2073,21 @@ struct EditorView: View {
                     Button {
                         if viewModel.visualizeActive { viewModel.exitVisualize() } else { viewModel.enterVisualize() }
                     } label: {
-                        Label("Visualize", systemImage: viewModel.visualizeActive ? "paintpalette.fill" : "paintpalette")
+                        ToolbarLabel("Visualize", systemImage: viewModel.visualizeActive ? "paintpalette.fill" : "paintpalette")
                     }
                     .accessibilityIdentifier("VisualizeButton")
 
                     importMenu(viewModel)
-
+    
                     exportMenu(viewModel)
-
+    
                     // Command Search (spec §8.4). A toolbar button, not just
                     // the X / ⌘F chords: without one the launcher would be
                     // unreachable on a touch-only iPad, which is most of them.
                     Button {
                         viewModel.openCommandSearch()
                     } label: {
-                        Label("Command Search", systemImage: "magnifyingglass")
+                        ToolbarLabel("Command Search", systemImage: "magnifyingglass")
                     }
                     .accessibilityIdentifier("CommandSearchButton")
 
@@ -2088,7 +2097,7 @@ struct EditorView: View {
                         bugReportDraft = nil
                         showBugReport = true
                     } label: {
-                        Label("Report a Bug", systemImage: "ladybug")
+                        ToolbarLabel("Report a Bug", systemImage: "ladybug")
                     }
                     .accessibilityIdentifier("BugReportButton")
 
@@ -2427,5 +2436,38 @@ struct EditorView: View {
                         "Saving failed — recent changes may not be stored. (\(saveError))")
                 }
             }
+    }
+}
+
+/// A toolbar button's label. Settings ▸ Interface ▸ Menu Button Labels puts
+/// the name under the icon; otherwise it is the usual icon-only `Label`. The
+/// bar turns any `Label` into a bare icon whatever its style, so the titled
+/// form is a plain stack — with a `Text`, so the "…" overflow menu still
+/// lists the button by name (gotcha 58).
+private struct ToolbarLabel: View {
+    let title: String
+    let systemImage: String
+
+    init(_ title: String, systemImage: String) {
+        self.title = title
+        self.systemImage = systemImage
+    }
+
+    var body: some View {
+        if AppSettings.shared.menuButtonLabels {
+            VStack(spacing: 0) {
+                Image(systemName: systemImage)
+                    .font(.system(size: 15))
+                    .frame(height: 20)
+                Text(title)
+                    .font(.system(size: 9, weight: .medium))
+                    .lineLimit(1)
+                    .fixedSize()
+            }
+            .padding(.horizontal, 2)
+            .accessibilityElement(children: .combine)
+        } else {
+            Label(title, systemImage: systemImage)
+        }
     }
 }

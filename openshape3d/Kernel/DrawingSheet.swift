@@ -46,6 +46,61 @@ nonisolated enum DrawingStandard: String, CaseIterable, Codable, Sendable {
     var title: String { self == .ansi ? "ANSI (third angle)" : "ISO (first angle)" }
 }
 
+/// The title block in the sheet's bottom-right corner.
+nonisolated enum DrawingTitleBlock: String, CaseIterable, Codable, Sendable {
+    /// The title over scale, sheet, projection and date.
+    case simple
+    /// Adds company, part number, revision, material, drawn and checked by.
+    case detailed
+    /// The border alone.
+    case none
+
+    var title: String {
+        switch self {
+        case .simple: "Simple"
+        case .detailed: "Detailed"
+        case .none: "None"
+        }
+    }
+
+    /// Width × height, mm.
+    var size: SIMD2<Double> {
+        switch self {
+        case .simple: SIMD2(120, 28)
+        case .detailed: SIMD2(180, 36)
+        case .none: .zero
+        }
+    }
+
+    /// The text fields a detailed block carries, typed in by hand.
+    enum Field: String, CaseIterable, Codable, Sendable {
+        case company, partNumber, revision, material, drawnBy, checkedBy
+
+        var title: String {
+            switch self {
+            case .company: "Company"
+            case .partNumber: "Part Number"
+            case .revision: "Revision"
+            case .material: "Material"
+            case .drawnBy: "Drawn By"
+            case .checkedBy: "Checked By"
+            }
+        }
+
+        /// As the block heads its cell.
+        var label: String {
+            switch self {
+            case .company: "COMPANY"
+            case .partNumber: "PART NO."
+            case .revision: "REV"
+            case .material: "MATERIAL"
+            case .drawnBy: "DRAWN BY"
+            case .checkedBy: "CHECKED BY"
+            }
+        }
+    }
+}
+
 nonisolated struct DrawingOptions: Equatable, Codable, Sendable {
     var title = "Drawing"
     var sheet: DrawingSheetSize = .a4
@@ -56,6 +111,41 @@ nonisolated struct DrawingOptions: Equatable, Codable, Sendable {
     /// Sheet scale as drawn ÷ real (0.5 = 1:2); nil picks the largest
     /// standard scale that fits.
     var scale: Double?
+    /// A cross of chain lines through the centre of every circle seen end on.
+    var showCenterMarks = true
+    var titleBlock: DrawingTitleBlock = .simple
+    /// The detailed title block's fields, by `DrawingTitleBlock.Field` raw
+    /// value (a field this build lacks is kept, not dropped).
+    var titleFields: [String: String] = [:]
+
+    init(title: String = "Drawing") { self.title = title }
+
+    subscript(field: DrawingTitleBlock.Field) -> String {
+        get { titleFields[field.rawValue] ?? "" }
+        set { titleFields[field.rawValue] = newValue.isEmpty ? nil : newValue }
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case title, sheet, standard, includeIsometric, showHiddenLines, showDimensions, scale, showCenterMarks,
+             titleBlock, titleFields
+    }
+
+    // Every field optional on the way in: drawings saved before a setting
+    // existed still open.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        let d = DrawingOptions()
+        title = try c.decodeIfPresent(String.self, forKey: .title) ?? d.title
+        sheet = (try? c.decodeIfPresent(DrawingSheetSize.self, forKey: .sheet)) ?? d.sheet
+        standard = (try? c.decodeIfPresent(DrawingStandard.self, forKey: .standard)) ?? d.standard
+        includeIsometric = try c.decodeIfPresent(Bool.self, forKey: .includeIsometric) ?? d.includeIsometric
+        showHiddenLines = try c.decodeIfPresent(Bool.self, forKey: .showHiddenLines) ?? d.showHiddenLines
+        showDimensions = try c.decodeIfPresent(Bool.self, forKey: .showDimensions) ?? d.showDimensions
+        scale = try c.decodeIfPresent(Double.self, forKey: .scale)
+        showCenterMarks = try c.decodeIfPresent(Bool.self, forKey: .showCenterMarks) ?? d.showCenterMarks
+        titleBlock = (try? c.decodeIfPresent(DrawingTitleBlock.self, forKey: .titleBlock)) ?? d.titleBlock
+        titleFields = (try? c.decodeIfPresent([String: String].self, forKey: .titleFields)) ?? [:]
+    }
 }
 
 nonisolated enum DrawingLineStyle: String, Sendable {
@@ -96,6 +186,23 @@ nonisolated struct DrawingLayout: Sendable {
     /// Every placed view — standard, section and detail — by
     /// `DrawingSheet.viewKey`, for dragging views on the sheet.
     var placedViews: [String: (min: SIMD2<Double>, max: SIMD2<Double>)] = [:]
+    /// How each placed view maps onto the sheet, and the corners and line
+    /// ends a dimension snaps to (view coordinates) — for placing
+    /// annotations on the preview.
+    var viewTransforms: [String: DrawingViewTransform] = [:]
+    var snapPoints: [String: [SIMD2<Double>]] = [:]
+    /// The ends of a view's long lines — true corners and where a straight
+    /// edge meets a curve — which win over the points a curve is sampled at.
+    var strongSnapPoints: [String: [SIMD2<Double>]] = [:]
+    /// The circles and arcs each view shows (view coordinates).
+    var circles: [String: [DrawingCircle]] = [:]
+    /// Each view's straight edges — its long visible lines (view
+    /// coordinates) — for angle and edge-to-edge dimensions.
+    var edges: [String: [DrawingSegment]] = [:]
+    /// Each view's long hidden lines, where it shows them — for centrelines.
+    var hiddenEdges: [String: [DrawingSegment]] = [:]
+    /// Each annotation's handle (its text), sheet mm — to select or drag it.
+    var annotationHandles: [UUID: SIMD2<Double>] = [:]
 
     var isEmpty: Bool { viewFrames.isEmpty }
 }
@@ -147,7 +254,6 @@ nonisolated enum DrawingSheet {
     }
 
     static let margin = 10.0
-    static let titleBlockSize = SIMD2<Double>(120, 28)
     static let viewGap = 18.0
 
     /// Lay out a sheet for `bodies`. `formatLength` writes a dimension value
@@ -193,10 +299,12 @@ nonisolated enum DrawingSheet {
 
     /// Lay out `drawing` for `bodies`: the standard views, then its section
     /// and detail views in a column to the right, each moved by the drawing's
-    /// view offsets.
+    /// view offsets. `formatFixed` writes a dimension set to a precision
+    /// (mm and decimal places in).
     static func layout(
         bodies: [DrawingBodyInput], drawing: SavedDrawing,
         formatLength: (Double) -> String = { String(format: "%.2f", $0) },
+        formatFixed: (Double, Int) -> String = DrawingAnnotationKit.fixedNumber,
         date: String = "", cache: DrawingViewCache = DrawingViewCache()
     ) -> DrawingLayout {
         let options = drawing.options
@@ -257,11 +365,12 @@ nonisolated enum DrawingSheet {
         }
 
         // Drawing area: inside the border, above the title block's height.
-        let areaMin = SIMD2(margin + 6, margin + titleBlockSize.y + 6)
+        let areaMin = SIMD2(margin + 6, margin + options.titleBlock.size.y + 6)
         // A vertical cutting line lifts its view's name (see below): keep
         // room for it under the border.
         let liftRoom = cuts.contains { $0.section.cut == .vertical } ? 5.0 : 0
-        let areaMax = paper - SIMD2(margin + 6, margin + 6 + liftRoom)
+        // The top views' names sit 3 mm over their frames: room for them too.
+        let areaMax = paper - SIMD2(margin + 6, margin + 6 + 3 + liftRoom)
         let area = areaMax - areaMin
         let dimRoom = options.showDimensions ? 14.0 : 0
         // A 2×2 grid: Front's column also holds Top, the side view's column
@@ -403,8 +512,249 @@ nonisolated enum DrawingSheet {
             dimension(from: SIMD2(s.min.x, s.min.y), to: SIMD2(s.max.x, s.min.y), offset: offset(.right, .vertical),
                       value: formatLength(side.size.x), into: &out)
         }
+        if options.showCenterMarks {
+            for (key, circles) in out.circles where key != viewKey(.isometric) {
+                guard let t = out.viewTransforms[key] else { continue }
+                for circle in circles where circle.full {
+                    centerMark(at: t.sheet(circle.center), radius: circle.radius * t.k, into: &out)
+                }
+            }
+        }
+        // Notes on the bare sheet are kept in sheet mm.
+        out.viewTransforms[""] = DrawingViewTransform(at: .zero, min: .zero, k: 1)
+        for annotation in drawing.annotations {
+            guard let transform = out.viewTransforms[annotation.view] else { continue }
+            switch annotation.kind {
+            case .linear:
+                out.annotationHandles[annotation.id] = linear(
+                    from: transform.sheet(annotation.a), to: transform.sheet(annotation.b),
+                    orientation: annotation.orientation, offset: annotation.offset,
+                    value: DrawingAnnotationKit.valuePieces(annotation, format: formatLength, fixed: formatFixed), into: &out)
+            case .note:
+                out.annotationHandles[annotation.id] = note(annotation, transform: transform, into: &out)
+            case .diameter, .radius:
+                out.annotationHandles[annotation.id] = circleDimension(
+                    center: transform.sheet(annotation.a), rim: transform.sheet(annotation.b),
+                    diameter: annotation.kind == .diameter, offset: annotation.offset,
+                    value: DrawingAnnotationKit.valuePieces(annotation, format: formatLength, fixed: formatFixed), into: &out)
+            case .centerline:
+                let a = transform.sheet(annotation.a), b = transform.sheet(annotation.b)
+                guard simd_distance(a, b) > 1e-9 else { continue }
+                let u = simd_normalize(b - a), over = DrawingAnnotationKit.centerlineOverrun
+                out.lines.append(DrawingLine(a: a - u * over, b: b + u * over, style: .chain))
+                out.annotationHandles[annotation.id] = (a + b) / 2
+            case .boltCircle:
+                let c = transform.sheet(annotation.a), r = simd_distance(transform.sheet(annotation.b), c)
+                guard r > 1e-9 else { continue }
+                circle(center: c, radius: r, style: .chain, into: &out)
+                out.annotationHandles[annotation.id] = c + SIMD2(0, r)
+            case .angle:
+                out.annotationHandles[annotation.id] = angular(
+                    annotation, transform: transform,
+                    value: DrawingAnnotationKit.valuePieces(annotation, format: formatLength, fixed: formatFixed), into: &out)
+            }
+        }
         appendFrame(into: &out, options: options, scale: scaleLabel(scale), date: date)
         return out
+    }
+
+    /// A placed dimension between two sheet points; returns where its value
+    /// sits (the handle that drags it).
+    private static func linear(from a: SIMD2<Double>, to b: SIMD2<Double>,
+                               orientation: DrawingAnnotation.Orientation, offset: Double,
+                               value: [DrawingAnnotationKit.ValuePiece], into out: inout DrawingLayout) -> SIMD2<Double> {
+        let (l0, l1) = DrawingAnnotationKit.dimensionLine(a, b, orientation: orientation, offset: offset)
+        let mid = (l0 + l1) / 2
+        let length = simd_distance(l0, l1)
+        guard length > 1e-6 else { return mid }
+        // Extension lines: a small gap at the part, 2 mm past the line.
+        for (p, q) in [(a, l0), (b, l1)] {
+            let d = q - p, len = simd_length(d)
+            guard len > 1e-6 else { continue }
+            let u = d / len
+            out.lines.append(DrawingLine(a: p + u * Swift.min(1.5, len), b: q + u * 2, style: .thin))
+        }
+        out.lines.append(DrawingLine(a: l0, b: l1, style: .thin))
+        let dir = (l1 - l0) / length
+        let arrow = Swift.min(2.5, length / 4), side = SIMD2(-dir.y, dir.x)
+        for (tip, back) in [(l0, dir), (l1, -dir)] {
+            out.lines.append(DrawingLine(a: tip, b: tip + back * arrow + side * arrow * 0.35, style: .thin))
+            out.lines.append(DrawingLine(a: tip, b: tip + back * arrow - side * arrow * 0.35, style: .thin))
+        }
+        // The value reads along the line, never upside down, just off it.
+        var angle = atan2(dir.y, dir.x)
+        if angle > .pi / 2 + 1e-9 { angle -= .pi } else if angle <= -.pi / 2 + 1e-9 { angle += .pi }
+        let up = SIMD2(-sin(angle), cos(angle))
+        write(value, at: mid + up, anchor: .middle, rotation: angle, into: &out)
+        return mid + up * 2
+    }
+
+    /// An angle: an arc of `offset` mm round where the edges meet, from one
+    /// edge to the other with an arrowhead at each, extension lines carrying
+    /// the edges out (or in) to it, and the value just outside its middle.
+    /// A negative offset puts the arc across the corner, the edges carried
+    /// on past it. Returns the value's position (its handle).
+    private static func angular(_ angle: DrawingAnnotation, transform t: DrawingViewTransform,
+                                value: [DrawingAnnotationKit.ValuePiece],
+                                into out: inout DrawingLayout) -> SIMD2<Double> {
+        let v = DrawingAnnotationKit.vertex(angle)
+        let c = t.sheet(v)
+        let across = angle.offset < 0
+        let r = Swift.max(abs(angle.offset), 3)
+        let e1 = angle.b - angle.a, e2 = angle.d - angle.c
+        guard simd_length(e1) > 1e-12, simd_length(e2) > 1e-12 else { return c }
+        let u1 = simd_normalize(across ? -e1 : e1), u2 = simd_normalize(across ? -e2 : e2)
+        let theta1 = atan2(u1.y, u1.x)
+        var sweep = atan2(u2.y, u2.x) - theta1
+        if sweep > .pi { sweep -= 2 * .pi } else if sweep < -.pi { sweep += 2 * .pi }
+        let n = Swift.max(8, Int((abs(sweep) * r).rounded(.up)))
+        var previous = c + u1 * r
+        for i in 1...n {
+            let th = theta1 + sweep * Double(i) / Double(n)
+            let p = c + SIMD2(cos(th), sin(th)) * r
+            out.lines.append(DrawingLine(a: previous, b: p, style: .thin))
+            previous = p
+        }
+        // Each edge carried to the arc where it falls short of it (or starts past it).
+        for (u, near, far) in [(u1, angle.a, angle.b), (u2, angle.c, angle.d)] {
+            let t0 = simd_distance(near, v) * t.k, t1 = simd_distance(far, v) * t.k
+            if across {
+                // From the edge's end nearest the corner, through it, out past the arc.
+                let start = t0 >= 1.5 ? -(t0 - 1.5) : Swift.min(1.5 - t0, r / 2)
+                out.lines.append(DrawingLine(a: c + u * start, b: c + u * (r + 2), style: .thin))
+            } else if r > t1 + 0.5 {
+                out.lines.append(DrawingLine(a: c + u * (t1 + 1.5), b: c + u * (r + 2), style: .thin))
+            } else if r < t0 - 0.5 {
+                out.lines.append(DrawingLine(a: c + u * Swift.max(r - 2, 0), b: c + u * (t0 - 1.5), style: .thin))
+            }
+        }
+        // Arrowheads at both ends, pointing out along the arc.
+        let arrow = Swift.min(2.5, abs(sweep) * r / 3)
+        let s = sweep >= 0 ? 1.0 : -1.0
+        for (u, into) in [(u1, s), (u2, -s)] {
+            let tip = c + u * r
+            let back = SIMD2(-u.y, u.x) * into
+            out.lines.append(DrawingLine(a: tip, b: tip + back * arrow + u * arrow * 0.35, style: .thin))
+            out.lines.append(DrawingLine(a: tip, b: tip + back * arrow - u * arrow * 0.35, style: .thin))
+        }
+        let mid = theta1 + sweep / 2
+        let bisector = SIMD2(cos(mid), sin(mid))
+        let edge = c + bisector * (r + 1.5)
+        let anchor: DrawingText.Anchor = bisector.x > 0.3 ? .start : bisector.x < -0.3 ? .end : .middle
+        let at = edge + SIMD2(0, bisector.y < -0.3 ? -2.5 : bisector.y > 0.3 ? 0 : -1.25)
+        let width = write(value, at: at, anchor: anchor, into: &out)
+        let x = anchor == .start ? at.x + width / 2 : anchor == .end ? at.x - width / 2 : at.x
+        return SIMD2(x, at.y + 1.25)
+    }
+
+    /// Writes a dimension's value from `at`, reading along `rotation`, placed
+    /// by `anchor` as one line of text would be: deviations and limits
+    /// stacked smaller, a basic value boxed. Returns its width, sheet mm.
+    @discardableResult
+    private static func write(_ pieces: [DrawingAnnotationKit.ValuePiece], at: SIMD2<Double>,
+                              anchor: DrawingText.Anchor, rotation: Double = 0, height: Double = 2.5,
+                              into out: inout DrawingLayout) -> Double {
+        let small = height * 0.7, pad = 0.7
+        func width(_ piece: DrawingAnnotationKit.ValuePiece) -> Double {
+            switch piece {
+            case .text(let s): DrawingAnnotationKit.textWidth(s, height: height)
+            case .stack(let u, let l): Swift.max(DrawingAnnotationKit.textWidth(u, height: small),
+                                                 DrawingAnnotationKit.textWidth(l, height: small)) + 0.4
+            case .boxed(let s): DrawingAnnotationKit.textWidth(s, height: height) + 2 * pad + 0.4
+            }
+        }
+        let total = pieces.reduce(0) { $0 + width($1) }
+        // One plain line is written as it always was, anchored as asked.
+        if pieces.count == 1, case .text(let s) = pieces[0] {
+            out.texts.append(DrawingText(position: at, height: height, string: s, anchor: anchor, rotation: rotation))
+            return total
+        }
+        let dir = SIMD2(cos(rotation), sin(rotation)), up = SIMD2(-dir.y, dir.x)
+        var x = anchor == .start ? 0 : anchor == .middle ? -total / 2 : -total
+        for piece in pieces {
+            let base = at + dir * x
+            switch piece {
+            case .text(let s):
+                out.texts.append(DrawingText(position: base, height: height, string: s, rotation: rotation))
+            case .stack(let u, let l):
+                out.texts.append(DrawingText(position: base + dir * 0.2 + up * (height * 0.55), height: small,
+                                             string: u, rotation: rotation))
+                out.texts.append(DrawingText(position: base + dir * 0.2 - up * (height * 0.2), height: small,
+                                             string: l, rotation: rotation))
+            case .boxed(let s):
+                out.texts.append(DrawingText(position: base + dir * (0.2 + pad), height: height, string: s,
+                                             rotation: rotation))
+                let w = width(piece) - 0.4
+                let corners = [base + dir * 0.2 - up * pad, base + dir * (0.2 + w) - up * pad,
+                               base + dir * (0.2 + w) + up * (height + pad),
+                               base + dir * 0.2 + up * (height + pad)]
+                for i in 0..<4 {
+                    out.lines.append(DrawingLine(a: corners[i], b: corners[(i + 1) % 4], style: .thin))
+                }
+            }
+            x += width(piece)
+        }
+        return total
+    }
+
+    /// A circle's centre mark: two chain lines crossing at the centre, 2 mm
+    /// past the outline (a plain small cross on a circle too small for dashes).
+    private static func centerMark(at c: SIMD2<Double>, radius r: Double, into out: inout DrawingLayout) {
+        let reach = r + 2
+        let style: DrawingLineStyle = r >= 4 ? .chain : .thin
+        out.lines.append(DrawingLine(a: c - SIMD2(reach, 0), b: c + SIMD2(reach, 0), style: style))
+        out.lines.append(DrawingLine(a: c - SIMD2(0, reach), b: c + SIMD2(0, reach), style: style))
+    }
+
+    /// A diameter (across the circle, through the centre) or radius (from the
+    /// centre) dimension, its arrow touching the outline at `rim`, the line
+    /// carried `offset` mm out to a short shoulder and the value. Returns the
+    /// value's position (its handle).
+    private static func circleDimension(center c: SIMD2<Double>, rim: SIMD2<Double>, diameter: Bool, offset: Double,
+                                        value: [DrawingAnnotationKit.ValuePiece],
+                                        into out: inout DrawingLayout) -> SIMD2<Double> {
+        let r = simd_distance(c, rim)
+        guard r > 1e-9 else { return c }
+        let u = (rim - c) / r, side = SIMD2(-u.y, u.x)
+        let outside = rim + u * Swift.max(offset, 3)
+        out.lines.append(DrawingLine(a: diameter ? c - u * r : c, b: outside, style: .thin))
+        let arrow = Swift.min(2.5, r)
+        // Arrowheads point out at the outline: at `rim`, and across a diameter.
+        var tips = [(rim, -u)]
+        if diameter { tips.append((c - u * r, u)) }
+        for (tip, back) in tips {
+            out.lines.append(DrawingLine(a: tip, b: tip + back * arrow + side * arrow * 0.35, style: .thin))
+            out.lines.append(DrawingLine(a: tip, b: tip + back * arrow - side * arrow * 0.35, style: .thin))
+        }
+        let right = u.x >= 0
+        let shoulder = outside + SIMD2(right ? 4 : -4, 0)
+        out.lines.append(DrawingLine(a: outside, b: shoulder, style: .thin))
+        let at = shoulder + SIMD2(right ? 1 : -1, -0.9)
+        write(value, at: at, anchor: right ? .start : .end, into: &out)
+        return shoulder + SIMD2(right ? 5 : -5, 0)
+    }
+
+    /// A note: its lines of text at `a`, and a leader with an arrowhead to
+    /// `b`. Returns the text's position (its handle).
+    private static func note(_ note: DrawingAnnotation, transform: DrawingViewTransform,
+                             into out: inout DrawingLayout) -> SIMD2<Double> {
+        let at = transform.sheet(note.a)
+        let height = 3.5
+        let tip = transform.sheet(note.b)
+        let pointsLeft = note.leader && tip.x < at.x
+        let lines = note.text.isEmpty ? ["Note"] : note.text.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        for (i, line) in lines.enumerated() {
+            out.texts.append(DrawingText(position: at - SIMD2(0, Double(i) * height * 1.4), height: height,
+                                         string: line, anchor: pointsLeft || !note.leader ? .start : .end))
+        }
+        if note.leader, simd_distance(at, tip) > 1 {
+            let start = at + SIMD2(pointsLeft ? -1 : 1, height * 0.35)
+            out.lines.append(DrawingLine(a: start, b: tip, style: .thin))
+            let d = start - tip, u = d / simd_length(d), side = SIMD2(-u.y, u.x)
+            out.lines.append(DrawingLine(a: tip, b: tip + u * 2.5 + side * 0.9, style: .thin))
+            out.lines.append(DrawingLine(a: tip, b: tip + u * 2.5 - side * 0.9, style: .thin))
+        }
+        return at + SIMD2(0, height / 2)
     }
 
     /// Draw a projected view with its lower-left corner at `at`, `scale`
@@ -419,6 +769,43 @@ nonisolated enum DrawingSheet {
         }
         let frame = (min: at, max: at + view.size * scale)
         out.placedViews[key] = frame
+        out.viewTransforms[key] = DrawingViewTransform(at: at, min: view.min, k: scale)
+        // Line ends (corners, and the vertices of curves), each once. A
+        // straight line drawn in pieces (a circle seen edge-on) is one edge,
+        // with no points along it.
+        func cell(_ p: SIMD2<Double>) -> SIMD2<Int64> {
+            SIMD2<Int64>(Int64((p.x * 1e4).rounded()), Int64((p.y * 1e4).rounded()))
+        }
+        var seen = Set<SIMD2<Int64>>(), seenStrong = Set<SIMD2<Int64>>()
+        var snaps: [SIMD2<Double>] = [], strong: [SIMD2<Double>] = []
+        var edges: [DrawingSegment] = []
+        // A curve is sampled into lines well under 2 sheet mm long.
+        let long = 2 / Swift.max(scale, 1e-9)
+        var along = Set<SIMD2<Int64>>()
+        for run in DrawingCircleKit.straightRuns(view.visible) {
+            let isLong = simd_distance(run.line.a, run.line.b) >= long
+            if isLong {
+                edges.append(run.line)
+                for p in run.joins { along.insert(cell(p)) }
+            }
+            for p in [run.line.a, run.line.b] {
+                if isLong, seenStrong.insert(cell(p)).inserted { strong.append(p) }
+            }
+        }
+        for s in view.visible {
+            for p in [s.a, s.b] {
+                let c = cell(p)
+                if !along.contains(c) || seenStrong.contains(c), seen.insert(c).inserted { snaps.append(p) }
+            }
+        }
+        out.snapPoints[key] = snaps
+        out.strongSnapPoints[key] = strong
+        out.edges[key] = edges
+        if hidden {
+            out.hiddenEdges[key] = DrawingCircleKit.straightRuns(view.hidden).map(\.line)
+                .filter { simd_distance($0.a, $0.b) >= long }
+        }
+        out.circles[key] = DrawingCircleKit.circles(in: view.visible + (hidden ? view.hidden : []))
         out.texts.append(DrawingText(position: SIMD2((frame.min.x + frame.max.x) / 2, frame.max.y + 3),
                                      height: 2.5, string: label, anchor: .middle))
     }
@@ -501,6 +888,18 @@ nonisolated enum DrawingSheet {
     }
 
     /// Border and title block.
+    /// `string` at `position`, shrunk (to no less than 60 %) to fit `width`,
+    /// then cut short with "..." if it still does not.
+    static func fitted(_ string: String, at position: SIMD2<Double>, height: Double, width: Double) -> DrawingText {
+        var h = height, s = string
+        let natural = DrawingAnnotationKit.textWidth(s, height: h)
+        if natural > width { h = Swift.max(height * 0.6, h * width / natural) }
+        while s.count > 1, DrawingAnnotationKit.textWidth(s, height: h) > width {
+            s = String(s.dropLast(s.hasSuffix("...") ? 4 : 1)).trimmingCharacters(in: .whitespaces) + "..."
+        }
+        return DrawingText(position: position, height: h, string: s)
+    }
+
     private static func appendFrame(into out: inout DrawingLayout, options: DrawingOptions,
                                     scale: String, date: String) {
         let size = out.size
@@ -512,23 +911,59 @@ nonisolated enum DrawingSheet {
             out.lines.append(DrawingLine(a: SIMD2(a.x, b.y), b: a, style: style))
         }
         rect(lo, hi, .border)
-        let tbLo = SIMD2(hi.x - titleBlockSize.x, lo.y), tbHi = SIMD2(hi.x, lo.y + titleBlockSize.y)
+        let block = options.titleBlock
+        guard block != .none else { return }
+        let tbLo = SIMD2(hi.x - block.size.x, lo.y), tbHi = SIMD2(hi.x, lo.y + block.size.y)
         rect(tbLo, tbHi, .border)
-        // Rows: title (14 mm) over a row of four fields (14 mm).
-        let split = tbLo.y + 14
-        out.lines.append(DrawingLine(a: SIMD2(tbLo.x, split), b: SIMD2(tbHi.x, split), style: .thin))
-        let fieldWidth = titleBlockSize.x / 4
-        for i in 1..<4 {
-            let x = tbLo.x + fieldWidth * Double(i)
-            out.lines.append(DrawingLine(a: SIMD2(x, tbLo.y), b: SIMD2(x, split), style: .thin))
+        let projection = options.standard == .ansi ? "Third angle" : "First angle"
+        func rule(_ a: SIMD2<Double>, _ b: SIMD2<Double>) { out.lines.append(DrawingLine(a: a, b: b, style: .thin)) }
+        /// A row of cells from `y`, `height` tall: each a small label over its
+        /// value (smaller in an 11 mm row, so the two keep apart).
+        func row(_ y: Double, height: Double, _ cells: [(width: Double, label: String, value: String)]) {
+            let roomy = height >= 14
+            var x = tbLo.x
+            for (i, cell) in cells.enumerated() {
+                if i > 0 { rule(SIMD2(x, y), SIMD2(x, y + height)) }
+                out.texts.append(DrawingText(position: SIMD2(x + 2, y + height - (roomy ? 4.5 : 3)), height: roomy ? 1.8 : 1.6,
+                                             string: cell.label))
+                if !cell.value.isEmpty {
+                    out.texts.append(fitted(cell.value, at: SIMD2(x + 2, y + (roomy ? 3.5 : 1.8)),
+                                            height: roomy ? 3 : 2.5, width: cell.width - 4))
+                }
+                x += cell.width
+            }
         }
-        out.texts.append(DrawingText(position: SIMD2(tbLo.x + 3, split + 5), height: 5, string: options.title))
-        let fields = [("SCALE", scale), ("SHEET", options.sheet.title),
-                      ("PROJECTION", options.standard == .ansi ? "Third angle" : "First angle"), ("DATE", date)]
-        for (i, field) in fields.enumerated() {
-            let x = tbLo.x + fieldWidth * Double(i) + 2
-            out.texts.append(DrawingText(position: SIMD2(x, tbLo.y + 9.5), height: 1.8, string: field.0))
-            out.texts.append(DrawingText(position: SIMD2(x, tbLo.y + 3.5), height: 3, string: field.1))
+        switch block {
+        case .simple:
+            // Rows: title (14 mm) over a row of four fields (14 mm).
+            let split = tbLo.y + 14
+            rule(SIMD2(tbLo.x, split), SIMD2(tbHi.x, split))
+            out.texts.append(fitted(options.title, at: SIMD2(tbLo.x + 3, split + 5), height: 5, width: block.size.x - 6))
+            let w = block.size.x / 4
+            row(tbLo.y, height: 14, [(w, "SCALE", scale), (w, "SHEET", options.sheet.title),
+                                     (w, "PROJECTION", projection), (w, "DATE", date)])
+        case .detailed:
+            // Company and title (14 mm) over who and what (11 mm) over the
+            // sheet's own fields (11 mm).
+            let mid = tbLo.y + 11, upper = tbLo.y + 22
+            rule(SIMD2(tbLo.x, mid), SIMD2(tbHi.x, mid))
+            rule(SIMD2(tbLo.x, upper), SIMD2(tbHi.x, upper))
+            rule(SIMD2(tbLo.x + 60, upper), SIMD2(tbLo.x + 60, tbHi.y))
+            out.texts.append(DrawingText(position: SIMD2(tbLo.x + 2, tbHi.y - 4.5), height: 1.8,
+                                         string: DrawingTitleBlock.Field.company.label))
+            if !options[.company].isEmpty {
+                out.texts.append(fitted(options[.company], at: SIMD2(tbLo.x + 2, upper + 3), height: 3.5, width: 56))
+            }
+            out.texts.append(fitted(options.title, at: SIMD2(tbLo.x + 63, upper + 4.5), height: 5, width: 114))
+            row(mid, height: 11, [(40, DrawingTitleBlock.Field.drawnBy.label, options[.drawnBy]),
+                                  (40, DrawingTitleBlock.Field.checkedBy.label, options[.checkedBy]),
+                                  (50, DrawingTitleBlock.Field.material.label, options[.material]),
+                                  (50, DrawingTitleBlock.Field.partNumber.label, options[.partNumber])])
+            row(tbLo.y, height: 11, [(32, "SCALE", scale), (32, "SHEET", options.sheet.title),
+                                     (44, "PROJECTION", projection), (44, "DATE", date),
+                                     (28, DrawingTitleBlock.Field.revision.label, options[.revision])])
+        case .none:
+            break
         }
         out.texts.append(DrawingText(position: SIMD2(tbHi.x - 2, tbHi.y + 2), height: 1.8,
                                      string: "openshape3d", anchor: .end))

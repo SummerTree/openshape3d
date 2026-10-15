@@ -197,7 +197,9 @@ final class DrawingViewsTests: XCTestCase {
 
         let dxf = DrawingExport.dxf(layout)
         XCTAssertTrue(dxf.contains("CUTTING") && dxf.contains("HATCH") && dxf.contains("CENTER"))
-        XCTAssertEqual(dxf.components(separatedBy: "\nLINE\n").count - 1, layout.lines.count)
+        func count(_ entity: String) -> Int { dxf.components(separatedBy: "\n\(entity)\n").count - 1 }
+        XCTAssertEqual(count("LINE") + count("VERTEX") - count("POLYLINE"), layout.lines.count,
+                       "every line, alone or in a polyline's run")
         XCTAssertTrue(DrawingExport.svg(layout).contains("stroke-dasharray=\"8 1.5 0.5 1.5\""))
     }
 

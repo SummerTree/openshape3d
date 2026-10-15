@@ -78,6 +78,203 @@ nonisolated struct BodyMaterialSpec: Codable, Equatable, Sendable {
     }
 }
 
+/// A material on one face of a body (spec §14, per-face materials). The face
+/// is found again by a point on it and its outward normal, in the body's own
+/// coordinates — so it follows the body as it moves, survives edits that
+/// leave the face where it is, and works for imported meshes, which have no
+/// feature history. A face a later edit moves away simply drops its material.
+nonisolated struct FaceMaterial: Codable, Equatable, Sendable {
+    var point: SIMD3<Double>
+    var normal: SIMD3<Double>
+    var material: BodyMaterialSpec
+}
+
+nonisolated enum FaceMaterialKit {
+    /// The face a tap on `seedTriangle` means: a flat face, or the curved
+    /// surface (a cylinder wall, a blend) under it. Surfaces that meet
+    /// smoothly — a plate's top, its fillets and its sides — are told apart
+    /// by size: within one smooth region a flat face is far bigger than the
+    /// thin facets a curve is drawn with, so it stands alone, and a curve is
+    /// the connected run of facets between the flat faces.
+    static func region(in mesh: RenderMesh, seedTriangle: Int) -> [Int]? {
+        let flat = FaceTopology.planarFace(in: mesh, seedTriangle: seedTriangle)
+        guard let smooth = FaceTopology.smoothRegion(in: mesh, seedTriangle: seedTriangle), smooth.isCurved,
+              flat.map({ $0.triangles.count < smooth.triangles.count }) ?? true else {
+            return flat?.triangles
+        }
+        let triangles = smooth.triangles
+        let neighbours = adjacency(of: triangles, in: mesh)
+        // Coplanar patches within the region, and their areas.
+        var patchOf: [Int: Int] = [:]
+        var patches: [[Int]] = []
+        for start in triangles where patchOf[start] == nil {
+            guard let base = plane(mesh, start) else { patchOf[start] = -1; continue }
+            let id = patches.count
+            var patch = [start], queue = [start]
+            patchOf[start] = id
+            while let t = queue.popLast() {
+                for n in neighbours[t] ?? [] where patchOf[n] == nil {
+                    guard let other = plane(mesh, n), simd_dot(other.normal, base.normal) > 0.99995 else { continue }
+                    patchOf[n] = id
+                    patch.append(n)
+                    queue.append(n)
+                }
+            }
+            patches.append(patch)
+        }
+        let areas = patches.map { $0.reduce(0) { $0 + area(mesh, $1) } }
+        let median = areas.sorted()[areas.count / 2]
+        let isFlatFace = areas.map { $0 > 4 * median }
+        if let seedPatch = patchOf[seedTriangle], seedPatch >= 0, isFlatFace[seedPatch] {
+            return patches[seedPatch].sorted()
+        }
+        // On a curve: its facets connected to the seed, short of the flat faces.
+        var picked: Set<Int> = [seedTriangle], queue = [seedTriangle]
+        while let t = queue.popLast() {
+            for n in neighbours[t] ?? [] where !picked.contains(n) {
+                if let p = patchOf[n], p >= 0, isFlatFace[p] { continue }
+                picked.insert(n)
+                queue.append(n)
+            }
+        }
+        return picked.sorted()
+    }
+
+    /// The outline of a set of triangles: the edges only one of them has.
+    static func boundary(of triangles: [Int], in mesh: RenderMesh) -> [(SIMD3<Float>, SIMD3<Float>)] {
+        struct Edge: Hashable { var a: SIMD3<Float>, b: SIMD3<Float> }
+        var count: [Edge: Int] = [:]
+        var order: [Edge] = []
+        for t in triangles where t < mesh.triangleCount {
+            let p = (0..<3).map { mesh.positions[Int(mesh.indices[t * 3 + $0])] }
+            for (i, j) in [(0, 1), (1, 2), (2, 0)] {
+                let e = (p[i].x, p[i].y, p[i].z) < (p[j].x, p[j].y, p[j].z) ? Edge(a: p[i], b: p[j]) : Edge(a: p[j], b: p[i])
+                if count[e] == nil { order.append(e) }
+                count[e, default: 0] += 1
+            }
+        }
+        return order.filter { count[$0] == 1 }.map { ($0.a, $0.b) }
+    }
+
+    /// Triangles of `triangles` sharing an edge, by corner position.
+    private static func adjacency(of triangles: [Int], in mesh: RenderMesh) -> [Int: [Int]] {
+        struct Edge: Hashable { var a: SIMD3<Float>, b: SIMD3<Float> }
+        func edge(_ p: SIMD3<Float>, _ q: SIMD3<Float>) -> Edge {
+            (p.x, p.y, p.z) < (q.x, q.y, q.z) ? Edge(a: p, b: q) : Edge(a: q, b: p)
+        }
+        var byEdge: [Edge: [Int]] = [:]
+        for t in triangles {
+            let p = (0..<3).map { mesh.positions[Int(mesh.indices[t * 3 + $0])] }
+            for (i, j) in [(0, 1), (1, 2), (2, 0)] { byEdge[edge(p[i], p[j]), default: []].append(t) }
+        }
+        var out: [Int: [Int]] = [:]
+        for shared in byEdge.values where shared.count > 1 {
+            for t in shared { out[t, default: []] += shared.filter { $0 != t } }
+        }
+        return out
+    }
+
+    private static func plane(_ mesh: RenderMesh, _ t: Int) -> (normal: SIMD3<Double>, point: SIMD3<Double>)? {
+        guard let (a, b, c) = corners(mesh, t) else { return nil }
+        let n = simd_cross(b - a, c - a)
+        guard simd_length(n) > 1e-12 else { return nil }
+        return (simd_normalize(n), a)
+    }
+
+    private static func area(_ mesh: RenderMesh, _ t: Int) -> Double {
+        guard let (a, b, c) = corners(mesh, t) else { return 0 }
+        return simd_length(simd_cross(b - a, c - a)) / 2
+    }
+
+    /// Where a face is remembered: the tapped triangle's centre and normal.
+    static func anchor(in mesh: RenderMesh, triangle: Int) -> (point: SIMD3<Double>, normal: SIMD3<Double>)? {
+        guard let (a, b, c) = corners(mesh, triangle) else { return nil }
+        let n = simd_cross(b - a, c - a)
+        guard simd_length(n) > 1e-12 else { return nil }
+        return ((a + b + c) / 3, simd_normalize(n))
+    }
+
+    /// The triangle an anchor lands on: the nearest one facing its way,
+    /// within a small tolerance of the body's size. Nil when the face has
+    /// moved away.
+    static func seed(in mesh: RenderMesh, point: SIMD3<Double>, normal: SIMD3<Double>) -> Int? {
+        let box = mesh.localAABB
+        let size = simd_length(SIMD3<Double>(box.max) - SIMD3<Double>(box.min))
+        let tolerance = Swift.max(0.05, size * 0.002)
+        var best: (triangle: Int, distance: Double)?
+        for t in 0..<mesh.triangleCount {
+            guard let (a, b, c) = corners(mesh, t) else { continue }
+            let n = simd_cross(b - a, c - a)
+            let length = simd_length(n)
+            // Facing the same way (a curved face's facets turn a little).
+            guard length > 1e-12, simd_dot(n / length, normal) > 0.8 else { continue }
+            let d = simd_distance(point, closestPoint(point, a, b, c))
+            if d <= tolerance, d < (best?.distance ?? .infinity) { best = (t, d) }
+        }
+        return best?.triangle
+    }
+
+    /// Each face material's triangles on `mesh`, in order (a later one wins
+    /// a triangle two share); empty for a face no longer found.
+    static func resolve(_ faces: [FaceMaterial], in mesh: RenderMesh) -> [[Int]] {
+        var owner = [Int](repeating: -1, count: mesh.triangleCount)
+        for (i, face) in faces.enumerated() {
+            guard let seed = seed(in: mesh, point: face.point, normal: face.normal),
+                  let triangles = region(in: mesh, seedTriangle: seed) else { continue }
+            for t in triangles where t < owner.count { owner[t] = i }
+        }
+        var out = [[Int]](repeating: [], count: faces.count)
+        for (t, i) in owner.enumerated() where i >= 0 { out[i].append(t) }
+        return out
+    }
+
+    /// `faces` with a material set on the faces whose triangles are `targets`
+    /// (nil clears them): any face material already covering one of those
+    /// triangles is replaced.
+    static func setting(_ material: BodyMaterialSpec?, on targets: [(point: SIMD3<Double>, normal: SIMD3<Double>,
+                                                                     triangles: [Int])],
+                        in faces: [FaceMaterial], mesh: RenderMesh) -> [FaceMaterial] {
+        let covered = Set(targets.flatMap(\.triangles))
+        let resolved = resolve(faces, in: mesh)
+        var out = faces.indices.filter { !resolved[$0].contains(where: covered.contains) }.map { faces[$0] }
+        if let material {
+            out += targets.map { FaceMaterial(point: $0.point, normal: $0.normal, material: material) }
+        }
+        return out
+    }
+
+    private static func corners(_ mesh: RenderMesh, _ t: Int)
+        -> (SIMD3<Double>, SIMD3<Double>, SIMD3<Double>)? {
+        guard t >= 0, t < mesh.triangleCount else { return nil }
+        let i = mesh.indices[t * 3], j = mesh.indices[t * 3 + 1], k = mesh.indices[t * 3 + 2]
+        guard Int(Swift.max(i, j, k)) < mesh.positions.count else { return nil }
+        return (SIMD3<Double>(mesh.positions[Int(i)]), SIMD3<Double>(mesh.positions[Int(j)]),
+                SIMD3<Double>(mesh.positions[Int(k)]))
+    }
+
+    /// The point of triangle abc nearest `p` (Ericson, Real-Time Collision Detection 5.1.5).
+    private static func closestPoint(_ p: SIMD3<Double>, _ a: SIMD3<Double>, _ b: SIMD3<Double>,
+                                     _ c: SIMD3<Double>) -> SIMD3<Double> {
+        let ab = b - a, ac = c - a, ap = p - a
+        let d1 = simd_dot(ab, ap), d2 = simd_dot(ac, ap)
+        if d1 <= 0, d2 <= 0 { return a }
+        let bp = p - b
+        let d3 = simd_dot(ab, bp), d4 = simd_dot(ac, bp)
+        if d3 >= 0, d4 <= d3 { return b }
+        let vc = d1 * d4 - d3 * d2
+        if vc <= 0, d1 >= 0, d3 <= 0 { return a + ab * (d1 / (d1 - d3)) }
+        let cp = p - c
+        let d5 = simd_dot(ab, cp), d6 = simd_dot(ac, cp)
+        if d6 >= 0, d5 <= d6 { return c }
+        let vb = d5 * d2 - d1 * d6
+        if vb <= 0, d2 >= 0, d6 <= 0 { return a + ac * (d2 / (d2 - d6)) }
+        let va = d3 * d6 - d5 * d4
+        if va <= 0, d4 - d3 >= 0, d5 - d6 >= 0 { return b + (c - b) * ((d4 - d3) / ((d4 - d3) + (d5 - d6))) }
+        let denom = 1 / (va + vb + vc)
+        return a + ab * (vb * denom) + ac * (vc * denom)
+    }
+}
+
 /// A named entry in the material library (spec §14), by category.
 nonisolated struct MaterialPreset: Identifiable, Sendable {
     var name: String

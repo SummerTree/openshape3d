@@ -22,6 +22,8 @@ nonisolated struct SavedDrawing: Identifiable, Codable, Equatable, Sendable {
     /// How far each view was dragged from where the layout put it (sheet
     /// mm), keyed by `DrawingSheet.viewKey`.
     var viewOffsets: [String: SIMD2<Double>] = [:]
+    /// Dimensions and notes placed on the views.
+    var annotations: [DrawingAnnotation] = []
 
     var name: String { options.title }
 
@@ -33,7 +35,7 @@ nonisolated struct SavedDrawing: Identifiable, Codable, Equatable, Sendable {
 
     // Every field but the id is optional on the way in, so drawings written
     // by an older build — or a newer one with fields this build lacks — load.
-    private enum CodingKeys: String, CodingKey { case id, options, bodyIDs, sections, details, viewOffsets }
+    private enum CodingKeys: String, CodingKey { case id, options, bodyIDs, sections, details, viewOffsets, annotations }
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -43,6 +45,7 @@ nonisolated struct SavedDrawing: Identifiable, Codable, Equatable, Sendable {
         sections = try c.decodeIfPresent([DrawingSectionView].self, forKey: .sections) ?? []
         details = try c.decodeIfPresent([DrawingDetailView].self, forKey: .details) ?? []
         viewOffsets = try c.decodeIfPresent([String: SIMD2<Double>].self, forKey: .viewOffsets) ?? [:]
+        annotations = try c.decodeIfPresent([DrawingAnnotation].self, forKey: .annotations) ?? []
     }
 
     /// The next free view letter. Drafting skips I, O and Q (they read as

@@ -34,7 +34,7 @@ struct ViewportView: UIViewRepresentable {
 }
 
 @MainActor
-final class ViewportCoordinator: NSObject, ViewportGestureDelegate, ViewportCameraControl {
+final class ViewportCoordinator: NSObject, ViewportGestureDelegate, ViewportCameraControl, SpaceMouseTarget {
     let viewModel: EditorViewModel
     private(set) var renderer: Renderer?
     private let gestures = ViewportGestureController()
@@ -85,6 +85,8 @@ final class ViewportCoordinator: NSObject, ViewportGestureDelegate, ViewportCame
         // (gestures and animated flights both move the camera).
         gestures.cameraChanged = { [weak self] in self?.cameraDidMove() }
         cameraAnimator?.cameraChanged = { [weak self] in self?.cameraDidMove() }
+        // The viewport opened last takes the SpaceMouse (spec §7.5).
+        SpaceMouseDriver.shared.target = self
         renderer.camera.projection = viewModel.orthographicEnabled
             ? .orthographic
             : .perspective(fovY: TurntableCamera.defaultFovY)
@@ -184,6 +186,12 @@ final class ViewportCoordinator: NSObject, ViewportGestureDelegate, ViewportCame
     private var pivotDragOrigin = SIMD3<Float>.zero
     private var pivotDragGrab = SIMD3<Float>.zero
     private var pivotDragNormal = SIMD3<Float>(0, 0, 1)
+
+    func gestureTapped(at point: CGPoint, shift: Bool) {
+        viewModel.tapShiftHeld = shift
+        defer { viewModel.tapShiftHeld = false }
+        gestureTapped(at: point)
+    }
 
     func gestureTapped(at point: CGPoint) {
         // Orientation cube first: taps on it never reach the model.
@@ -908,6 +916,23 @@ final class ViewportCoordinator: NSObject, ViewportGestureDelegate, ViewportCame
         renderer.centerOffset = offset
         view.setNeedsDisplay()
         return true
+    }
+
+    // MARK: - SpaceMouse (spec §7.5)
+
+    func spaceMouseMove(_ motion: SpaceMouseNavigation.Motion, dt: Double) {
+        guard let renderer, let view else { return }
+        cameraAnimator?.stop()
+        SpaceMouseNavigation.apply(motion, dt: dt, to: &renderer.camera, viewportSize: view.bounds.size)
+        cameraDidMove()
+        view.setNeedsDisplay()
+    }
+
+    func spaceMouseButton(_ action: SpaceMouseNavigation.ButtonAction) {
+        switch action {
+        case .fit: fitScene()
+        case .view(let standard): animateToStandardView(standard)
+        }
     }
 
     func animateToStandardView(_ standard: StandardView) {
