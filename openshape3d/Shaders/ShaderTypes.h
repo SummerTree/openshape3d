@@ -61,6 +61,9 @@ typedef struct {
     float roughness;                   // 0 (default) = legacy fixed highlight; >0 mapped
     float lineHalfWidthPx;             // thick-line pipeline: half stroke width
     float emission;                    // Glow (spec §14): 0 lit, 1 self-lit and brightened
+    float pattern;                     // MaterialPattern.shaderValue (0 none)
+    float patternSize;                 // one repeat, mm (body-local)
+    float patternRotation;             // radians
 } BodyUniforms;
 
 // A decal (spec §14): its box in world space (DecalDrawable).

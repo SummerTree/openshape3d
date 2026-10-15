@@ -22,6 +22,10 @@ struct BodyMaterial: Equatable {
     /// Decoded into an MTLTexture keyed by (body id, textureRevision).
     var textureData: Data? = nil
     var textureRevision: UInt64 = 0
+    /// Texture mapping: `MaterialPattern.shaderValue`, one repeat (mm), turn (radians).
+    var pattern: Float = 0
+    var patternSize: Float = 10
+    var patternRotation: Float = 0
 }
 
 extension BodyMaterial {
@@ -38,7 +42,10 @@ extension BodyMaterial {
             roughness: Float(spec.roughness),
             emission: Float(spec.emission),
             textureData: meshHasTexcoords ? spec.baseColorTexture : nil,
-            textureRevision: revision
+            textureRevision: revision,
+            pattern: spec.pattern.shaderValue,
+            patternSize: Float(spec.patternSize),
+            patternRotation: Float(spec.patternRotation * .pi / 180)
         )
     }
 }

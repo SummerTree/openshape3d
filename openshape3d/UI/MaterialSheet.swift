@@ -3,8 +3,10 @@
 //  openshape3d
 //
 //  Body material dialog (plan §B15): preset grid + custom color picker +
-//  metallic/roughness/opacity/glow sliders. Apply commits one SetMaterialCommand over the
-//  whole selection (EditorViewModel.applyMaterial).
+//  metallic/roughness/opacity/glow sliders, and texture mapping — a pattern
+//  (wood grain, brushed, carbon fibre…) with its size and rotation. Apply
+//  commits one SetMaterialCommand over the whole selection
+//  (EditorViewModel.applyMaterial).
 //
 
 import SwiftUI
@@ -15,6 +17,9 @@ struct MaterialSheet: View {
     @State private var roughness: Double
     @State private var opacity: Double
     @State private var emission: Double
+    @State private var pattern: MaterialPattern
+    @State private var patternSize: Double
+    @State private var patternRotation: Double
 
     @Environment(\.dismiss) private var dismiss
     let onApply: (BodyMaterialSpec) -> Void
@@ -28,6 +33,9 @@ struct MaterialSheet: View {
         _roughness = State(initialValue: spec.roughness)
         _opacity = State(initialValue: spec.baseColor.w)
         _emission = State(initialValue: spec.emission)
+        _pattern = State(initialValue: spec.pattern)
+        _patternSize = State(initialValue: spec.patternSize)
+        _patternRotation = State(initialValue: spec.patternRotation)
         self.onApply = onApply
     }
 
@@ -68,6 +76,37 @@ struct MaterialSheet: View {
                         valueID: "MaterialGlowValue"
                     )
                 }
+                Section("Texture Mapping") {
+                    Picker("Pattern", selection: Binding(get: { pattern }, set: { next in
+                        // A new pattern starts at its own size.
+                        if next != pattern { patternSize = next.defaultSize }
+                        pattern = next
+                    })) {
+                        ForEach(MaterialPattern.allCases, id: \.self) { Text($0.title).tag($0) }
+                    }
+                    .accessibilityIdentifier("MaterialPatternPicker")
+                    if pattern != .none {
+                        HStack {
+                            Text("Size")
+                            Slider(value: Binding(get: { log10(patternSize) }, set: { patternSize = DecalKit.tidyWidth(pow(10, $0)) }),
+                                   in: log10(MaterialPattern.sizeRange.lowerBound)...log10(MaterialPattern.sizeRange.upperBound))
+                                .accessibilityIdentifier("MaterialPatternSize")
+                            Text(AppSettings.shared.unit.compactLengthString(fromMM: patternSize))
+                                .font(.callout.monospacedDigit())
+                                .foregroundStyle(.secondary)
+                                .frame(minWidth: 60, alignment: .trailing)
+                        }
+                        HStack {
+                            Text("Rotation")
+                            Slider(value: $patternRotation, in: -180...180, step: 1)
+                                .accessibilityIdentifier("MaterialPatternRotation")
+                            Text("\(Int(patternRotation.rounded()))°")
+                                .font(.callout.monospacedDigit())
+                                .foregroundStyle(.secondary)
+                                .frame(minWidth: 44, alignment: .trailing)
+                        }
+                    }
+                }
             }
             .navigationTitle("Material")
             .onDisappear { MacWindowTitle.restore() }
@@ -99,6 +138,9 @@ struct MaterialSheet: View {
             roughness = spec.roughness
             opacity = spec.baseColor.w
             emission = spec.emission
+            pattern = spec.pattern
+            patternSize = spec.patternSize
+            patternRotation = spec.patternRotation
         } label: {
             VStack(spacing: 4) {
                 RoundedRectangle(cornerRadius: 8)
@@ -149,7 +191,10 @@ struct MaterialSheet: View {
             baseColor: SIMD4(Double(r), Double(g), Double(b), max(opacity, 0.05)),
             metallic: metallic,
             roughness: roughness,
-            emission: emission
+            emission: emission,
+            pattern: pattern,
+            patternSize: patternSize,
+            patternRotation: patternRotation
         ).clamped
     }
 }

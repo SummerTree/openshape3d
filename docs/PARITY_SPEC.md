@@ -2140,9 +2140,22 @@ the whole mesh), opaque patches draw with the opaque bodies and
 see-through ones (glass, acrylic) in the blended pass, so a glass face
 shows the part's inside (2026-10-15). Missing: real PBR/IBL and HDR
 environments, transmission/IOR,
-texture mapping controls (scale, rotation, auto-match), custom
+image textures for library materials, auto-match mapping, custom
 .GLB materials, emission bloom, textured
 USDZ / AR, Generative Render.
+**Texture mapping (2026-10-15):** a material can carry a pattern — Wood
+Grain, Brushed, Carbon Fibre, Knurl, Speckle, Marble — with its **Size**
+(one repeat, mm on the part) and **Rotation**, set in the Material sheet's
+Texture Mapping section (a new pattern starts at its own size). Patterns
+are computed in the shader from the body's own coordinates
+(`patternAlbedo` in Shaders.metal and renderer.ts, kept in step), so they
+are fixed to the part as it moves and need no image or UVs: wood grain
+rings round the part's vertical axis with fibres along it, the flat
+patterns are laid on the plane each surface mostly faces. Library: Oak,
+Walnut, Maple, Plywood (wood grain), Brushed Aluminum, Knurled Steel,
+Carbon Fibre, Concrete and Granite (speckle), Marble. Saved with the
+material only when set (`BodyMaterialSpec.pattern`, `patternSize`,
+`patternRotation`).
 **Decals (2026-10-15):** Visualize ▸ **Decals**: Add Decal (Photos or
 Files on the iPad, the file picker on the web; images kept at most 2048 px a
 side, PNG), then a tap on a body puts it there — centred on the tap, facing
