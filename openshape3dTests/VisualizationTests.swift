@@ -149,4 +149,42 @@ final class VisualizationTests: XCTestCase {
         else { return XCTFail("bad elevation refused") }
         XCTAssertEqual(bad.code, "bad_sunElevation")
     }
+
+    func testDepthOfFieldBlursByDistanceFromTheFocus() {
+        let eye = SIMD3<Float>(0, 0, 10), forward = SIMD3<Float>(0, 0, -1)
+        // Focus 10 in front of the camera, whatever its sideways offset.
+        XCTAssertEqual(DepthOfFieldKit.focusDistance(eye: eye, viewDirection: forward, focus: SIMD3(3, -2, 0)), 10, accuracy: 1e-5)
+        // Behind the camera clamps to a sliver, never negative.
+        XCTAssertGreaterThan(DepthOfFieldKit.focusDistance(eye: eye, viewDirection: forward, focus: SIMD3(0, 0, 20)), 0)
+        func radius(_ d: Float, blur: Float = 1) -> Float {
+            DepthOfFieldKit.radius(distance: d, focusDistance: 10, blur: blur, imageHeight: 1000)
+        }
+        XCTAssertEqual(radius(10), 0, "sharp at the focus")
+        XCTAssertEqual(radius(11), 6, accuracy: 1e-4, "a tenth of the focus distance away: 0.3 of the widest 20 px")
+        XCTAssertEqual(radius(9), radius(11), accuracy: 1e-4, "as much in front as behind")
+        XCTAssertEqual(radius(14), 20, accuracy: 1e-4, "a third away: the widest")
+        XCTAssertEqual(radius(100), 20, accuracy: 1e-4, "never past the widest blur")
+        XCTAssertEqual(radius(100, blur: 0.25), 5, accuracy: 1e-4)
+    }
+
+    func testDepthOfFieldSettingsAreSavedAndReachTheRenderer() throws {
+        var environment = VisualizationEnvironment()
+        XCTAssertNil(VisualizationLighting(environment).depthOfField, "off by default")
+        environment.depthOfField = true
+        environment.blur = 0.7
+        XCTAssertEqual(VisualizationLighting(environment).depthOfField, .init(focus: nil, blur: 0.7))
+        environment.focusPoint = SIMD3(1, 2, 3)
+        XCTAssertEqual(VisualizationLighting(environment).depthOfField?.focus, SIMD3<Float>(1, 2, 3))
+        let back = try JSONDecoder().decode(VisualizationEnvironment.self, from: JSONEncoder().encode(environment))
+        XCTAssertEqual(back, environment)
+        // Out of range on the way in: pinned.
+        environment.blur = 4
+        environment.focusPoint = SIMD3(.nan, 0, 0)
+        XCTAssertEqual(environment.clamped.blur, 1)
+        XCTAssertNil(environment.clamped.focusPoint)
+        // Saved before depth of field existed: off.
+        let old = try JSONDecoder().decode(VisualizationEnvironment.self, from: Data(#"{"preset":"Studio"}"#.utf8))
+        XCTAssertFalse(old.depthOfField)
+        XCTAssertEqual(old.blur, 0.5)
+    }
 }

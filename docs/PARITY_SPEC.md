@@ -2125,8 +2125,20 @@ see-through ones (glass, acrylic) in the blended pass, so a glass face
 shows the part's inside (2026-10-15). Missing: real PBR/IBL and HDR
 environments, transmission/IOR,
 decals, texture mapping controls (scale, rotation, auto-match), custom
-.GLB materials, emission bloom, depth of field and focus point, textured
+.GLB materials, emission bloom, textured
 USDZ / AR, Generative Render.
+**Depth of field (2026-10-15):** Environment ▸ Camera ▸ **Depth of Field**,
+with **Blur** (0–100 %) and **Pick Focus Point** (the next tap on the model
+sets where the camera focuses; **Focus on View Centre** goes back to the
+orbit target). Saved with the environment (`depthOfField`, `blur`,
+`focusPoint`). The scene is drawn into textures of its own with its depth,
+then blurred onto the screen before the overlays — and into captures —
+each pixel by its distance from the focus distance
+(`DepthOfFieldKit.radius`: none at the focus, the widest, 2 % of the image
+height × Blur, a third of the focus distance off it), a 48-tap disc that
+counts a tap only where its own blur or the centre's reaches it (Metal
+`fragment_depthOfField`, WebGL `DOF_FS`). Off in wireframe. Behind glass the
+blur follows what is behind it.
 **Feasibility:** PBR space, materials, decals, environments, DoF, capture
 [mesh-kernel OK] (pure Metal renderer work); the material *library content*
 itself is an asset-sourcing problem; Generative Render [platform/service]

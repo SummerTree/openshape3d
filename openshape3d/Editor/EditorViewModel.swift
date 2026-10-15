@@ -6797,6 +6797,7 @@ final class EditorViewModel {
 
     func exitVisualize() {
         commitEnvironment()
+        visualizePicksFocus = false
         visualizePicksFaces = false
         visualizeActive = false
     }
@@ -6813,6 +6814,26 @@ final class EditorViewModel {
         let old = session.document.visualization
         guard value != old else { return }
         session.perform(SetVisualizationEnvironmentCommand(old: old, new: value))
+    }
+
+    /// Depth of field's Pick Focus Point: the next tap on the model sets
+    /// where the camera focuses (and turns depth of field on).
+    var visualizePicksFocus = false
+
+    private func visualizeFocusTap(_ hit: PickHit?) {
+        visualizePicksFocus = false
+        guard let hit else { return }
+        var environment = visualizationEnvironment
+        environment.focusPoint = SIMD3<Double>(hit.worldPoint)
+        environment.depthOfField = true
+        setEnvironment(environment)
+    }
+
+    /// Focus back on what the view orbits.
+    func resetFocusPoint() {
+        var environment = visualizationEnvironment
+        environment.focusPoint = nil
+        setEnvironment(environment)
     }
 
     /// Save a dragged slider's value.
@@ -7305,6 +7326,10 @@ final class EditorViewModel {
         // body under it (Shift/⌘ adds or removes it) — or, picking faces, the
         // face — and empty space clears the selection.
         if visualizeActive {
+            if visualizePicksFocus {
+                visualizeFocusTap(HitTester.pickBody(ray: ray, in: scene))
+                return
+            }
             if visualizePicksFaces {
                 visualizeFaceTap(HitTester.pickBody(ray: ray, in: scene))
                 return

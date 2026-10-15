@@ -62,4 +62,16 @@ typedef struct {
     float emission;                    // Glow (spec §14): 0 lit, 1 self-lit and brightened
 } BodyUniforms;
 
+// Depth of field (spec §14): the scene's colour and depth, blurred by each
+// pixel's distance from the focus (DepthOfFieldKit).
+typedef struct {
+    matrix_float4x4 inverseViewProjection;
+    vector_float4 cameraPosition;      // xyz
+    vector_float4 viewDirection;       // xyz, unit
+    float focusDistance;
+    float widestRadius;                // pixels, at the blur strength
+    float imageWidth;
+    float imageHeight;
+} DepthOfFieldUniforms;
+
 #endif /* ShaderTypes_h */

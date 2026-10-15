@@ -86,6 +86,21 @@ final class VisualizeUITests: XCTestCase {
         let shot = XCTAttachment(screenshot: app.screenshot())
         shot.name = "visualize-sunset"; shot.lifetime = .keepAlways; add(shot)
 
+        // Depth of field: on, then focused on a point picked on the box.
+        let dof = app.switches["EnvironmentDepthOfField"]
+        for _ in 0..<4 where !dof.isHittable {
+            panel.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.85))
+                .press(forDuration: 0.05, thenDragTo: panel.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.35)))
+        }
+        XCTAssertTrue(dof.isHittable, "\(dof.frame) in \(panel.frame)")
+        dof.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
+        XCTAssertTrue(app.sliders["EnvironmentBlur"].waitForExistence(timeout: 3), "depth of field brings its blur")
+        app.buttons["EnvironmentFocusPick"].tap()
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.45, dy: 0.5)).tap()
+        XCTAssertTrue(app.buttons["EnvironmentFocusReset"].waitForExistence(timeout: 3), "the tap set a focus point")
+        let blurred = XCTAttachment(screenshot: app.screenshot())
+        blurred.name = "visualize-depth-of-field"; blurred.lifetime = .keepAlways; add(blurred)
+
         app.buttons["VisualizeDone"].tap()
         XCTAssertTrue(panel.waitForNonExistence(timeout: 5))
     }

@@ -88,17 +88,28 @@ final class Renderer: NSObject, MTKViewDelegate {
         descriptor.colorAttachments[0].storeAction = .store
         descriptor.depthAttachment.storeAction = .dontCare
 
-        guard let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: descriptor) else {
-            return
-        }
-
         cache.sync(with: scene, device: context.device)
         quadTextures.sync(quads: scene.imageQuads, device: context.device)
         bodyTextures.sync(bodies: scene.bodies, device: context.device)
 
         var frame = makeFrameUniforms()
-        encodeScene(encoder: encoder, frame: &frame)
-        encoder.endEncoding()
+        if let target = descriptor.colorAttachments[0].texture,
+           var blur = depthOfFieldUniforms(frame, width: target.width, height: target.height),
+           let targets = liveDepthOfFieldTargets(width: target.width, height: target.height) {
+            // Depth of field: the scene into textures of its own, then blurred
+            // onto the screen.
+            guard encodeScene(into: targets, clearColor: descriptor.colorAttachments[0].clearColor,
+                              commandBuffer: commandBuffer, frame: &frame),
+                  let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: descriptor) else { return }
+            encodeDepthOfField(encoder: encoder, from: targets, uniforms: &blur)
+            encoder.endEncoding()
+        } else {
+            guard let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: descriptor) else {
+                return
+            }
+            encodeScene(encoder: encoder, frame: &frame)
+            encoder.endEncoding()
+        }
 
         // Overlays are never sectioned (they use the unclipped flat-color
         // fragment shader, but keep the uniforms honest too).
@@ -432,6 +443,98 @@ final class Renderer: NSObject, MTKViewDelegate {
         }
     }
 
+    // MARK: - Depth of field (spec §14)
+
+    /// The scene's colour (multisample when anti-aliasing is on, with its
+    /// resolve) and depth, kept for the blur pass to read.
+    struct DepthOfFieldTargets {
+        var color: MTLTexture
+        var resolved: MTLTexture?
+        var depth: MTLTexture
+        var readable: MTLTexture { resolved ?? color }
+    }
+
+    private var depthOfFieldTargetCache: DepthOfFieldTargets?
+
+    private func liveDepthOfFieldTargets(width: Int, height: Int) -> DepthOfFieldTargets? {
+        if let cached = depthOfFieldTargetCache, cached.color.width == width, cached.color.height == height {
+            return cached
+        }
+        depthOfFieldTargetCache = makeDepthOfFieldTargets(width: width, height: height)
+        return depthOfFieldTargetCache
+    }
+
+    private func makeDepthOfFieldTargets(width: Int, height: Int) -> DepthOfFieldTargets? {
+        let device = context.device, samples = RenderContext.sampleCount
+        func texture(_ format: MTLPixelFormat, multisample: Bool, read: Bool) -> MTLTexture? {
+            let descriptor = MTLTextureDescriptor.texture2DDescriptor(
+                pixelFormat: format, width: width, height: height, mipmapped: false)
+            if multisample {
+                descriptor.textureType = .type2DMultisample
+                descriptor.sampleCount = samples
+            }
+            descriptor.usage = read ? [.renderTarget, .shaderRead] : [.renderTarget]
+            descriptor.storageMode = .private
+            return device.makeTexture(descriptor: descriptor)
+        }
+        let multisample = samples > 1
+        guard let color = texture(RenderContext.colorPixelFormat, multisample: multisample, read: !multisample),
+              let depth = texture(RenderContext.depthPixelFormat, multisample: multisample, read: true) else { return nil }
+        let resolved = multisample ? texture(RenderContext.colorPixelFormat, multisample: false, read: true) : nil
+        if multisample, resolved == nil { return nil }
+        return DepthOfFieldTargets(color: color, resolved: resolved, depth: depth)
+    }
+
+    /// The blur pass's uniforms for an image `width` × `height` drawn with
+    /// `frame`; nil when depth of field is off.
+    private func depthOfFieldUniforms(_ frame: FrameUniforms, width: Int, height: Int) -> DepthOfFieldUniforms? {
+        guard let dof = scene.visualization?.depthOfField, scene.displayMode != .wireframe else { return nil }
+        let eye = camera.position
+        let forward = simd_normalize(camera.target - eye)
+        var u = DepthOfFieldUniforms()
+        u.inverseViewProjection = simd_inverse(frame.viewProjectionMatrix)
+        u.cameraPosition = SIMD4(eye, 1)
+        u.viewDirection = SIMD4(forward, 0)
+        u.focusDistance = DepthOfFieldKit.focusDistance(eye: eye, viewDirection: forward, focus: dof.focus ?? camera.target)
+        u.widestRadius = dof.blur * Float(height) * DepthOfFieldKit.maxRadiusFraction
+        u.imageWidth = Float(width)
+        u.imageHeight = Float(height)
+        return u
+    }
+
+    /// The scene into `targets`, keeping its depth for the blur.
+    @discardableResult
+    private func encodeScene(into targets: DepthOfFieldTargets, clearColor: MTLClearColor,
+                             commandBuffer: MTLCommandBuffer, frame: inout FrameUniforms,
+                             drawBackground: Bool = true, drawGrid: Bool = true) -> Bool {
+        let pass = MTLRenderPassDescriptor()
+        pass.colorAttachments[0].texture = targets.color
+        pass.colorAttachments[0].resolveTexture = targets.resolved
+        pass.colorAttachments[0].loadAction = .clear
+        pass.colorAttachments[0].clearColor = clearColor
+        pass.colorAttachments[0].storeAction = targets.resolved != nil ? .multisampleResolve : .store
+        pass.depthAttachment.texture = targets.depth
+        pass.depthAttachment.loadAction = .clear
+        pass.depthAttachment.storeAction = .store
+        pass.depthAttachment.clearDepth = 1
+        guard let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: pass) else { return false }
+        encodeScene(encoder: encoder, frame: &frame, drawBackground: drawBackground, drawGrid: drawGrid)
+        encoder.endEncoding()
+        return true
+    }
+
+    private func encodeDepthOfField(encoder: MTLRenderCommandEncoder, from targets: DepthOfFieldTargets,
+                                    uniforms: inout DepthOfFieldUniforms) {
+        let pipelines = context.pipelines
+        encoder.setRenderPipelineState(targets.depth.textureType == .type2DMultisample
+                                       ? pipelines.depthOfFieldMS : pipelines.depthOfField)
+        encoder.setDepthStencilState(pipelines.depthIgnore)
+        encoder.setFragmentTexture(targets.readable, index: 0)
+        encoder.setFragmentTexture(targets.depth, index: 1)
+        encoder.setFragmentBytes(&uniforms, length: MemoryLayout<DepthOfFieldUniforms>.stride, index: 0)
+        encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
+    }
+
     // MARK: - Thumbnail capture
 
     /// Offscreen render of the current scene (no gizmo), returned as PNG data.
@@ -490,22 +593,32 @@ final class Renderer: NSObject, MTKViewDelegate {
         pass.depthAttachment.storeAction = .dontCare
         pass.depthAttachment.clearDepth = 1
 
-        guard let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: pass) else {
-            NSLog("[openshape3d] thumbnail: encoder creation failed")
-            return nil
-        }
-
         cache.sync(with: scene, device: context.device)
         quadTextures.sync(quads: scene.imageQuads, device: context.device)
         bodyTextures.sync(bodies: scene.bodies, device: context.device)
         var frame = makeFrameUniforms(viewportSize: CGSize(width: width, height: height))
-        encodeScene(
-            encoder: encoder,
-            frame: &frame,
-            drawBackground: !transparentBackground,
-            drawGrid: showGrid
-        )
-        encoder.endEncoding()
+        if var blur = depthOfFieldUniforms(frame, width: width, height: height),
+           let targets = makeDepthOfFieldTargets(width: width, height: height) {
+            // Depth of field: the scene first, then blurred into the capture.
+            guard encodeScene(into: targets, clearColor: pass.colorAttachments[0].clearColor,
+                              commandBuffer: commandBuffer, frame: &frame,
+                              drawBackground: !transparentBackground, drawGrid: showGrid),
+                  let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: pass) else { return nil }
+            encodeDepthOfField(encoder: encoder, from: targets, uniforms: &blur)
+            encoder.endEncoding()
+        } else {
+            guard let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: pass) else {
+                NSLog("[openshape3d] thumbnail: encoder creation failed")
+                return nil
+            }
+            encodeScene(
+                encoder: encoder,
+                frame: &frame,
+                drawBackground: !transparentBackground,
+                drawGrid: showGrid
+            )
+            encoder.endEncoding()
+        }
         commandBuffer.commit()
         commandBuffer.waitUntilCompleted()
 
