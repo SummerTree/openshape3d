@@ -173,7 +173,46 @@ struct DrawingSheetView: View {
             .padding(.vertical, 8)
             .background(Color(white: 0.9))
             preview(layout)
+            sheetTabs
         }
+    }
+
+    /// The drawing's sheets, under the preview: tap one to show it, + adds one.
+    private var sheetTabs: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 6) {
+                ForEach(0..<(viewModel.activeDrawing?.sheetCount ?? 1), id: \.self) { index in
+                    let selected = index == viewModel.activeSheet
+                    Button {
+                        viewModel.selectDrawingSheet(index)
+                    } label: {
+                        Text("Sheet \(index + 1)")
+                            .font(.subheadline.weight(selected ? .semibold : .regular))
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 6)
+                            .background(selected ? Color.white : Color.clear, in: RoundedRectangle(cornerRadius: 7))
+                            .foregroundStyle(Color.primary)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityIdentifier("DrawingSheetTab_\(index + 1)")
+                    .accessibilityAddTraits(selected ? .isSelected : [])
+                }
+                Button {
+                    viewModel.addDrawingSheet()
+                } label: {
+                    Image(systemName: "plus")
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(Color.accentColor)
+                .accessibilityLabel("Add Sheet")
+                .accessibilityIdentifier("DrawingAddSheet")
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+        }
+        .background(Color(white: 0.84))
     }
 
     private var toolHint: String { viewModel.drawingToolHint }
@@ -285,9 +324,11 @@ struct DrawingSheetView: View {
 
     // MARK: - Options
 
+    private var sheetCount: Int { viewModel.activeDrawing?.sheetCount ?? 1 }
+
     private var options: some View {
         Form {
-            Section("Sheet") {
+            Section {
                 TextField("Title", text: $viewModel.drawingOptions.title)
                     .accessibilityIdentifier("DrawingTitleField")
                 Picker("Size", selection: $viewModel.drawingOptions.sheet) {
@@ -305,6 +346,18 @@ struct DrawingSheetView: View {
                     }
                 }
                 .accessibilityIdentifier("DrawingScalePicker")
+                if sheetCount > 1 {
+                    Button("Delete Sheet \(viewModel.activeSheet + 1)", role: .destructive) {
+                        viewModel.deleteDrawingSheet()
+                    }
+                    .accessibilityIdentifier("DrawingDeleteSheet")
+                }
+            } header: {
+                Text(sheetCount > 1 ? "Sheet \(viewModel.activeSheet + 1) of \(sheetCount)" : "Sheet")
+            } footer: {
+                if sheetCount > 1 {
+                    Text("The title, standard and title block are shared by every sheet; size, scale, views and bodies are this sheet's own.")
+                }
             }
             Section("Title Block") {
                 Picker("Layout", selection: $viewModel.drawingOptions.titleBlock) {

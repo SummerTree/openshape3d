@@ -98,40 +98,49 @@ nonisolated enum DrawingExport {
     // MARK: - PDF
 
     /// A one-page PDF 1.4: vector lines and Helvetica text.
-    static func pdf(_ layout: DrawingLayout) -> Data {
+    static func pdf(_ layout: DrawingLayout) -> Data { pdf([layout]) }
+
+    /// A PDF 1.4 with a page per sheet, each its own paper size.
+    static func pdf(_ sheets: [DrawingLayout]) -> Data {
         let k = 72 / 25.4 // mm → points
-        var content = "q\n1 J 1 j\n"
-        for style in DrawingLineStyle.drawOrder {
-            let lines = layout.lines.filter { $0.style == style }
-            guard !lines.isEmpty else { continue }
-            content += "\(num(width(style) * k)) w\n"
-            content += "[\(dash(style).map { num($0 * k) }.joined(separator: " "))] 0 d\n"
-            for run in runs(lines) {
-                content += "\(num(run[0].x * k)) \(num(run[0].y * k)) m"
-                for p in run.dropFirst() { content += " \(num(p.x * k)) \(num(p.y * k)) l" }
-                content += "\n"
+        func content(_ layout: DrawingLayout) -> String {
+            var content = "q\n1 J 1 j\n"
+            for style in DrawingLineStyle.drawOrder {
+                let lines = layout.lines.filter { $0.style == style }
+                guard !lines.isEmpty else { continue }
+                content += "\(num(width(style) * k)) w\n"
+                content += "[\(dash(style).map { num($0 * k) }.joined(separator: " "))] 0 d\n"
+                for run in runs(lines) {
+                    content += "\(num(run[0].x * k)) \(num(run[0].y * k)) m"
+                    for p in run.dropFirst() { content += " \(num(p.x * k)) \(num(p.y * k)) l" }
+                    content += "\n"
+                }
+                content += "S\n"
             }
-            content += "S\n"
-        }
-        content += "Q\n"
-        for text in layout.texts {
-            let size = text.height * 1.4 * k
-            let width = estimatedWidth(text.string, size: size)
-            let shift = text.anchor == .start ? 0 : text.anchor == .middle ? -width / 2 : -width
-            let c = cos(text.rotation), s = sin(text.rotation)
-            let x = text.position.x * k + shift * c, y = text.position.y * k + shift * s
-            content += "BT /F1 \(num(size)) Tf \(num(c)) \(num(s)) \(num(-s)) \(num(c)) \(num(x)) \(num(y)) Tm (\(pdfEscaped(text.string))) Tj ET\n"
+            content += "Q\n"
+            for text in layout.texts {
+                let size = text.height * 1.4 * k
+                let width = estimatedWidth(text.string, size: size)
+                let shift = text.anchor == .start ? 0 : text.anchor == .middle ? -width / 2 : -width
+                let c = cos(text.rotation), s = sin(text.rotation)
+                let x = text.position.x * k + shift * c, y = text.position.y * k + shift * s
+                content += "BT /F1 \(num(size)) Tf \(num(c)) \(num(s)) \(num(-s)) \(num(c)) \(num(x)) \(num(y)) Tm (\(pdfEscaped(text.string))) Tj ET\n"
+            }
+            return content
         }
 
-        let page = layout.size * k
-        let objects = [
+        // 1 catalog, 2 pages, 3 font, then a page and its contents per sheet.
+        var objects = [
             "<< /Type /Catalog /Pages 2 0 R >>",
-            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
-            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 \(num(page.x)) \(num(page.y))] "
-                + "/Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>",
+            "<< /Type /Pages /Kids [\(sheets.indices.map { "\(4 + $0 * 2) 0 R" }.joined(separator: " "))] /Count \(sheets.count) >>",
             "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>",
-            "<< /Length \(content.utf8.count) >>\nstream\n\(content)endstream",
         ]
+        for (i, layout) in sheets.enumerated() {
+            let page = layout.size * k, stream = content(layout)
+            objects.append("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 \(num(page.x)) \(num(page.y))] "
+                + "/Resources << /Font << /F1 3 0 R >> >> /Contents \(5 + i * 2) 0 R >>")
+            objects.append("<< /Length \(stream.utf8.count) >>\nstream\n\(stream)endstream")
+        }
         var data = Data("%PDF-1.4\n".utf8)
         var offsets: [Int] = []
         for (i, body) in objects.enumerated() {

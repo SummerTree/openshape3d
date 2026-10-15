@@ -2248,11 +2248,21 @@ company, part number, revision, material, drawn by, checked by — typed
 in the sheet's form; 180 × 36 mm) or None (border only, the views take
 the space). Values too long for their cell shrink to 60 %, then end in
 "..."; fields are kept while another layout is shown. The views' area
-now also keeps 3 mm under the border for the top views' names. Missing:
-free placement of new views from any angle (custom projection angles,
-extra projected views), cutting lines through picked points / stepped
-sections, centrelines spanning views, custom title-block templates
-(logos, own fields), multiple sheets in one drawing, DWG.
+now also keeps 3 mm under the border for the top views' names.
+**Multiple sheets (2026-10-15):** a drawing has one or more sheets — tabs
+under the preview, + adds a sheet after the one shown (same paper, scale,
+view choices and bodies, nothing placed on it yet), Delete Sheet removes
+the one shown (never the last). Each sheet has its own paper size, scale,
+view toggles, bodies, section / detail views, moved views and dimensions;
+the title, standard and title block are the drawing's. The title block's
+SHEET cell reads "A3, 2 of 3" once there are several; view letters stay
+unique across sheets. PDF export writes a page per sheet (each its own
+size); SVG and DXF write the sheet shown. The first sheet stays in the
+drawing's own fields, so older drawings open as one-sheet drawings.
+Missing: free placement of new views from any angle (custom projection
+angles, extra projected views), cutting lines through picked points /
+stepped sections, centrelines spanning views, custom title-block
+templates (logos, own fields), DWG.
 **Feasibility:** [mesh-kernel OK] for a first version (orthographic
 projection + silhouette/hidden-line from meshes; associativity with the model
 [needs history engine]; production-grade HLR quality benefits from a B-rep

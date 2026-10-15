@@ -246,36 +246,69 @@ final class EditorViewModel {
     /// drawings, written back as one undo step ("Edit Drawing") when the
     /// sheet closes or another drawing is opened.
     var activeDrawing: SavedDrawing?
+    /// The sheet of the active drawing on screen (0 is the first).
+    var activeSheet = 0
 
-    /// The active drawing's sheet options (what the options form edits).
+    /// The active drawing as its active sheet shows it; edits go back to
+    /// that sheet (and the drawing-wide title, standard and title block).
+    private var shownDrawing: SavedDrawing? {
+        get { activeDrawing?.onSheet(activeSheet) }
+        set { if let newValue { activeDrawing?.setSheet(activeSheet, from: newValue) } }
+    }
+
+    /// The active sheet's options (what the options form edits).
     var drawingOptions: DrawingOptions {
-        get { activeDrawing?.options ?? DrawingOptions() }
-        set { activeDrawing?.options = newValue }
+        get { shownDrawing?.options ?? DrawingOptions() }
+        set { shownDrawing?.options = newValue }
+    }
+
+    /// Add a sheet after the active one (same paper and bodies, nothing on
+    /// it yet) and show it.
+    func addDrawingSheet() {
+        guard var pages = activeDrawing?.pages else { return }
+        let at = min(activeSheet, pages.count - 1) + 1
+        pages.insert(DrawingPage(following: pages[at - 1]), at: at)
+        activeDrawing?.pages = pages
+        selectDrawingSheet(at)
+    }
+
+    /// Remove the active sheet; the last one cannot go.
+    func deleteDrawingSheet() {
+        guard var pages = activeDrawing?.pages, pages.count > 1 else { return }
+        pages.remove(at: min(activeSheet, pages.count - 1))
+        activeDrawing?.pages = pages
+        selectDrawingSheet(min(activeSheet, pages.count - 1))
+    }
+
+    func selectDrawingSheet(_ index: Int) {
+        guard let count = activeDrawing?.sheetCount, (0..<count).contains(index) else { return }
+        if index != activeSheet { resetDrawingTool() }
+        activeSheet = index
     }
 
     /// The active drawing's section views, detail views, chosen bodies and
     /// moved views (what the sheet's controls edit).
     var drawingSections: [DrawingSectionView] {
-        get { activeDrawing?.sections ?? [] }
-        set { activeDrawing?.sections = newValue }
+        get { shownDrawing?.sections ?? [] }
+        set { shownDrawing?.sections = newValue }
     }
     var drawingDetails: [DrawingDetailView] {
-        get { activeDrawing?.details ?? [] }
-        set { activeDrawing?.details = newValue }
+        get { shownDrawing?.details ?? [] }
+        set { shownDrawing?.details = newValue }
     }
     var drawingBodyIDs: [BodyID] {
-        get { activeDrawing?.bodyIDs ?? [] }
-        set { activeDrawing?.bodyIDs = newValue }
+        get { shownDrawing?.bodyIDs ?? [] }
+        set { shownDrawing?.bodyIDs = newValue }
     }
     var drawingViewOffsets: [String: SIMD2<Double>] {
-        get { activeDrawing?.viewOffsets ?? [:] }
-        set { activeDrawing?.viewOffsets = newValue }
+        get { shownDrawing?.viewOffsets ?? [:] }
+        set { shownDrawing?.viewOffsets = newValue }
     }
 
     /// The active drawing's dimensions and notes.
     var drawingAnnotations: [DrawingAnnotation] {
-        get { activeDrawing?.annotations ?? [] }
-        set { activeDrawing?.annotations = newValue }
+        get { shownDrawing?.annotations ?? [] }
+        set { shownDrawing?.annotations = newValue }
     }
 
     /// The preview's tool, a dimension's first point (view, view
@@ -363,7 +396,7 @@ final class EditorViewModel {
                 var dimension = DrawingAnnotation(kind: hit.circle.full ? .diameter : .radius, view: hit.view,
                                                   a: hit.circle.center, b: leader.rim)
                 dimension.offset = leader.offset
-                activeDrawing?.annotations.append(dimension)
+                shownDrawing?.annotations.append(dimension)
                 drawingSelectedAnnotation = dimension.id
                 return
             }
@@ -406,7 +439,7 @@ final class EditorViewModel {
                     ? DrawingAnnotationKit.defaultAngleRadius(dimension, transform: transform)
                     : DrawingAnnotationKit.defaultOffset(dimension, transform: transform, frame: frame)
             }
-            activeDrawing?.annotations.append(dimension)
+            shownDrawing?.annotations.append(dimension)
             drawingSelectedAnnotation = dimension.id
         case .note:
             var note: DrawingAnnotation
@@ -424,7 +457,7 @@ final class EditorViewModel {
                 note = DrawingAnnotation(kind: .note, view: "", a: point, b: point)
             }
             note.text = "Note"
-            activeDrawing?.annotations.append(note)
+            shownDrawing?.annotations.append(note)
             drawingSelectedAnnotation = note.id
             drawingTool = .move
         case .centerline:
@@ -463,7 +496,7 @@ final class EditorViewModel {
             return
         }
         drawingPendingPoint = nil
-        activeDrawing?.annotations.append(placed)
+        shownDrawing?.annotations.append(placed)
         drawingSelectedAnnotation = placed.id
     }
 
@@ -502,7 +535,7 @@ final class EditorViewModel {
         drawingPendingPoint = nil
         drawingPendingEdge = nil
         guard let placed else { return }
-        activeDrawing?.annotations.append(placed)
+        shownDrawing?.annotations.append(placed)
         drawingSelectedAnnotation = placed.id
     }
 
@@ -532,20 +565,20 @@ final class EditorViewModel {
         guard let transform = layout.viewTransforms[annotation.view] else { return }
         switch annotation.kind {
         case .linear:
-            activeDrawing?.annotations[index].offset = DrawingAnnotationKit.offset(
+            shownDrawing?.annotations[index].offset = DrawingAnnotationKit.offset(
                 through: point, a: transform.sheet(annotation.a), b: transform.sheet(annotation.b),
                 orientation: annotation.orientation)
         case .note:
             let handleToText = SIMD2(0, 3.5 / 2)
-            activeDrawing?.annotations[index].a = transform.view(point + grab.offset - handleToText)
+            shownDrawing?.annotations[index].a = transform.view(point + grab.offset - handleToText)
         case .diameter, .radius:
             let leader = DrawingAnnotationKit.circleLeader(
                 through: point, center: annotation.a, radius: simd_distance(annotation.a, annotation.b),
                 transform: transform)
-            activeDrawing?.annotations[index].b = leader.rim
-            activeDrawing?.annotations[index].offset = leader.offset
+            shownDrawing?.annotations[index].b = leader.rim
+            shownDrawing?.annotations[index].offset = leader.offset
         case .angle:
-            activeDrawing?.annotations[index].offset = DrawingAnnotationKit.angleRadius(
+            shownDrawing?.annotations[index].offset = DrawingAnnotationKit.angleRadius(
                 through: point, annotation, transform: transform)
         case .centerline, .boltCircle:
             break
@@ -555,7 +588,7 @@ final class EditorViewModel {
     func drawingAnnotationDragEnded() { drawingAnnotationGrab = nil }
 
     func deleteDrawingAnnotation(_ id: UUID) {
-        activeDrawing?.annotations.removeAll { $0.id == id }
+        shownDrawing?.annotations.removeAll { $0.id == id }
         if drawingSelectedAnnotation == id { drawingSelectedAnnotation = nil }
     }
 
@@ -575,13 +608,13 @@ final class EditorViewModel {
     /// Add a section view cutting the front view through its middle.
     func addDrawingSection() {
         guard let drawing = activeDrawing else { return }
-        activeDrawing?.sections.append(DrawingSectionView(label: drawing.nextLabel()))
+        shownDrawing?.sections.append(DrawingSectionView(label: drawing.nextLabel()))
     }
 
     /// Add a detail view of the front view's centre, at 2:1 the sheet scale.
     func addDrawingDetail() {
         guard let drawing = activeDrawing else { return }
-        activeDrawing?.details.append(DrawingDetailView(label: drawing.nextLabel()))
+        shownDrawing?.details.append(DrawingDetailView(label: drawing.nextLabel()))
     }
 
     /// Export ▸ Drawing…: the last drawing opened, or a new one when the
@@ -596,6 +629,7 @@ final class EditorViewModel {
             newDrawing(designName: designName)
             return
         }
+        activeSheet = 0
         lastDrawingID = activeDrawing?.id
         showDrawingSheet = true
     }
@@ -610,6 +644,7 @@ final class EditorViewModel {
         let drawing = SavedDrawing(options: options, bodyIDs: bodies)
         session.perform(AddDrawingCommand(drawing: drawing))
         activeDrawing = drawing
+        activeSheet = 0
         lastDrawingID = drawing.id
         showDrawingSheet = true
     }
@@ -620,6 +655,7 @@ final class EditorViewModel {
               let drawing = session.document.drawings.first(where: { $0.id == id }) else { return }
         commitActiveDrawing()
         activeDrawing = drawing
+        activeSheet = 0
         lastDrawingID = id
         resetDrawingTool()
     }
@@ -632,6 +668,7 @@ final class EditorViewModel {
         session.perform(DeleteDrawingCommand(drawing: session.document.drawings[index], index: index))
         let rest = session.document.drawings
         activeDrawing = rest.isEmpty ? nil : rest[min(index, rest.count - 1)]
+        activeSheet = 0
         lastDrawingID = activeDrawing?.id
         if activeDrawing == nil { showDrawingSheet = false }
     }
@@ -674,25 +711,35 @@ final class EditorViewModel {
     /// changes and view drags (projection is the slow part).
     func drawingLayout() -> DrawingLayout {
         let drawing = activeDrawing ?? SavedDrawing()
-        let unit = AppSettings.shared.unit
-        let key = DrawingCacheKey(drawing: drawing, revision: session.changeCount, unit: unit.rawValue)
+        let sheet = min(activeSheet, drawing.sheetCount - 1)
+        let key = DrawingCacheKey(drawing: drawing, sheet: sheet, revision: session.changeCount,
+                                  unit: AppSettings.shared.unit.rawValue)
         if let cached = drawingCache, cached.key == key { return cached.layout }
-        let projectionKey = DrawingProjectionKey(revision: session.changeCount, bodyIDs: drawing.bodyIDs)
+        let projectionKey = DrawingProjectionKey(revision: session.changeCount,
+                                                 bodyIDs: drawing.onSheet(sheet).bodyIDs)
         if projectionKey != drawingProjectionKey {
             drawingViews.removeAll()
             drawingProjectionKey = projectionKey
         }
-        let layout = DrawingSheet.layout(
-            bodies: drawingBodies(drawing).map(DrawingBodyInput.init(body:)), drawing: drawing,
-            formatLength: { unit.compactLengthString(fromMM: $0) },
-            formatFixed: { unit.fixedLengthString(fromMM: $0, decimals: $1) },
-            date: DrawingSheet.isoDate(Date()), cache: drawingViews)
+        let layout = drawingLayout(drawing, sheet: sheet, cache: drawingViews)
         drawingCache = (key, layout)
         return layout
     }
 
+    /// Sheet `sheet` of `drawing`, laid out.
+    private func drawingLayout(_ drawing: SavedDrawing, sheet: Int, cache: DrawingViewCache) -> DrawingLayout {
+        let unit = AppSettings.shared.unit
+        return DrawingSheet.layout(
+            bodies: drawingBodies(drawing.onSheet(sheet)).map(DrawingBodyInput.init(body:)),
+            drawing: drawing, sheet: sheet,
+            formatLength: { unit.compactLengthString(fromMM: $0) },
+            formatFixed: { unit.fixedLengthString(fromMM: $0, decimals: $1) },
+            date: DrawingSheet.isoDate(Date()), cache: cache)
+    }
+
     private struct DrawingCacheKey: Equatable {
         let drawing: SavedDrawing
+        let sheet: Int
         let revision: Int
         let unit: String
     }
@@ -707,7 +754,8 @@ final class EditorViewModel {
     @ObservationIgnored
     private var drawingProjectionKey: DrawingProjectionKey?
 
-    /// The sheet as a file; nil (with an error) when nothing is drawn.
+    /// The drawing as a file — every sheet in a PDF, the sheet on screen
+    /// in SVG and DXF; nil (with an error) when nothing is drawn.
     func exportDrawing(_ format: DrawingFileFormat) -> Data? {
         let layout = drawingLayout()
         guard !layout.isEmpty else {
@@ -715,7 +763,12 @@ final class EditorViewModel {
             return nil
         }
         switch format {
-        case .pdf: return DrawingExport.pdf(layout)
+        case .pdf:
+            guard let drawing = activeDrawing, drawing.sheetCount > 1 else { return DrawingExport.pdf(layout) }
+            return DrawingExport.pdf((0..<drawing.sheetCount).map { sheet in
+                sheet == min(activeSheet, drawing.sheetCount - 1)
+                    ? layout : drawingLayout(drawing, sheet: sheet, cache: DrawingViewCache())
+            })
         case .svg: return Data(DrawingExport.svg(layout).utf8)
         case .dxf: return Data(DrawingExport.dxf(layout).utf8)
         }
