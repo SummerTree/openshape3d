@@ -2140,9 +2140,24 @@ the whole mesh), opaque patches draw with the opaque bodies and
 see-through ones (glass, acrylic) in the blended pass, so a glass face
 shows the part's inside (2026-10-15). Missing: real PBR/IBL and HDR
 environments, transmission/IOR,
-decals, texture mapping controls (scale, rotation, auto-match), custom
+texture mapping controls (scale, rotation, auto-match), custom
 .GLB materials, emission bloom, textured
 USDZ / AR, Generative Render.
+**Decals (2026-10-15):** Visualize ▸ **Decals**: Add Decal (Photos or
+Files on the iPad, the file picker on the web; images kept at most 2048 px a
+side, PNG), then a tap on a body puts it there — centred on the tap, facing
+out of the surface, a tidy third of the body's size. Each decal is listed
+with Move on the Surface (the next tap moves it), Remove, and — selected —
+Size, Rotation and Opacity sliders (live while dragging, one undo step on
+release). A decal is projected along the surface normal where it was placed
+(`DecalKit.frame`: upright on a wall, away from the viewer on a top face),
+so it lies flat on a flat face and wraps a curved one, fading where the
+surface turns away; it is drawn by drawing its body again — its own
+triangles and its face-material patches — through `fragment_decal` /
+`DECAL_FS`, which keeps what falls in its box. Decals are the document's
+(`DesignDocument.decals`, `Project.decalsData`, the archive's `decals`),
+each naming its body, so they survive rebuilds; merges and Paste copy them
+with their bodies. Missing: dragging a decal by hand, tiling.
 **Depth of field (2026-10-15):** Environment ▸ Camera ▸ **Depth of Field**,
 with **Blur** (0–100 %) and **Pick Focus Point** (the next tap on the model
 sets where the camera focuses; **Focus on View Centre** goes back to the

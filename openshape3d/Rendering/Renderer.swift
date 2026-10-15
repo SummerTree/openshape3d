@@ -27,6 +27,7 @@ final class Renderer: NSObject, MTKViewDelegate {
     /// Face-material patches' vertex buffers, by patch key.
     private var patchBuffers: [String: (positions: MTLBuffer, normals: MTLBuffer, count: Int)] = [:]
     private let quadTextures = ImageQuadTextureCache()
+    private let decalTextures = ImageQuadTextureCache()
     private let bodyTextures = BodyTextureCache()
     private let gizmoRenderer = GizmoRenderer()
     #if DEBUG
@@ -231,6 +232,7 @@ final class Renderer: NSObject, MTKViewDelegate {
                 drawBody(drawable, encoder: encoder, pipeline: pipelines.lit)
             }
             drawFacePatches(seeThrough: false, encoder: encoder, pipeline: pipelines.lit)
+            drawDecals(encoder: encoder)
         case .wireframe:
             encoder.setDepthStencilState(pipelines.depthReadWrite)
             for drawable in scene.bodies where !drawable.isSeeThrough {
@@ -791,6 +793,52 @@ final class Renderer: NSObject, MTKViewDelegate {
             }
         }
         return frame
+    }
+
+    /// Decals (spec §14): each decal's body drawn again — its own triangles
+    /// and its face-material patches — through the decal shader, which keeps
+    /// what falls in the decal's box; pulled toward the eye to win the surface.
+    private func drawDecals(encoder: MTLRenderCommandEncoder) {
+        guard !scene.decals.isEmpty else { return }
+        decalTextures.sync(images: scene.decals.map { ($0.id, 0, $0.image) }, device: context.device)
+        let pipelines = context.pipelines
+        encoder.setDepthStencilState(pipelines.depthReadOnly)
+        encoder.setDepthBias(-2, slopeScale: -2, clamp: 0)
+        defer { encoder.setDepthBias(0, slopeScale: 0, clamp: 0) }
+        var frame = makeFrameUniforms()
+        for decal in scene.decals {
+            guard let drawable = scene.bodies.first(where: { $0.id == decal.bodyID }), !drawable.isTranslucent,
+                  let resources = cache.resources(for: decal.bodyID),
+                  let texture = decalTextures.texture(for: decal.id) else { continue }
+            encoder.setRenderPipelineState(pipelines.decal)
+            var body = makeBodyUniforms(drawable)
+            var u = DecalUniforms()
+            u.center = SIMD4(decal.center, 1)
+            u.axisU = SIMD4(decal.u, decal.halfWidth)
+            u.axisV = SIMD4(decal.v, decal.halfHeight)
+            u.normal = SIMD4(decal.n, decal.depth)
+            u.opacity = decal.opacity
+            u.selected = decal.isSelected ? 1 : 0
+            encoder.setVertexBytes(&body, length: MemoryLayout<BodyUniforms>.stride,
+                                   index: Int(BufferIndexBodyUniforms.rawValue))
+            encoder.setFragmentBytes(&frame, length: MemoryLayout<FrameUniforms>.stride,
+                                     index: Int(BufferIndexFrameUniforms.rawValue))
+            encoder.setFragmentBytes(&u, length: MemoryLayout<DecalUniforms>.stride,
+                                     index: Int(BufferIndexDecal.rawValue))
+            encoder.setFragmentTexture(texture, index: 0)
+            if resources.indexCount > 0 {
+                encoder.setVertexBuffer(resources.positionBuffer, offset: 0, index: Int(BufferIndexPositions.rawValue))
+                encoder.setVertexBuffer(resources.normalBuffer, offset: 0, index: Int(BufferIndexNormals.rawValue))
+                encoder.drawIndexedPrimitives(type: .triangle, indexCount: resources.indexCount, indexType: .uint32,
+                                              indexBuffer: resources.indexBuffer, indexBufferOffset: 0)
+            }
+            for patch in scene.facePatches where patch.bodyID == decal.bodyID {
+                guard let buffers = patchBuffers[patch.key] else { continue }
+                encoder.setVertexBuffer(buffers.positions, offset: 0, index: Int(BufferIndexPositions.rawValue))
+                encoder.setVertexBuffer(buffers.normals, offset: 0, index: Int(BufferIndexNormals.rawValue))
+                encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: buffers.count)
+            }
+        }
     }
 
     /// Face materials (spec §14): the faces a body leaves out, each drawn in

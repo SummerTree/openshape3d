@@ -229,7 +229,7 @@ struct EditorView: View {
     /// one in the chain (found 2026-08-29 while wiring STEP: "Image from
     /// Files…" presented, the three above it did not).
     private enum ImportRequest: Equatable {
-        case stl, dxf, step, iges, mesh, image
+        case stl, dxf, step, iges, mesh, image, decal
 
         var contentTypes: [UTType] {
             switch self {
@@ -244,7 +244,7 @@ struct EditorView: View {
             // glTF/GLB, USDZ, OBJ (+MTL/textures) and zips of them. `.data`
             // again: .glb/.gltf/.obj have no system UTI worth trusting.
             case .mesh: [ExportDocument.usdzType, .zip, .data]
-            case .image: [.png, .jpeg, .image]
+            case .image, .decal: [.png, .jpeg, .image]
             }
         }
     }
@@ -254,6 +254,8 @@ struct EditorView: View {
     /// Insert Image (plan §B10): Photos picker + image file importer.
     @State private var showPhotoPicker = false
     @State private var photoPickerItem: PhotosPickerItem?
+    /// The Photos picker is choosing a decal (Visualize ▸ Decals), not an image to insert.
+    @State private var photoPickerForDecal = false
     /// Screenshot captured by the options sheet; promoted to `exportDocument`
     /// once the sheet has dismissed (two presentations can't overlap).
     @State private var pendingScreenshot: Data?
@@ -1023,6 +1025,7 @@ struct EditorView: View {
             // Insert Image (plan §B10, spec §6.3): the picked
             // picture waits for a plane tap (ground by default).
             Button("Image from Photos…") {
+                photoPickerForDecal = false
                 showPhotoPicker = true
             }
             .accessibilityIdentifier("InsertImagePhotos")
@@ -1347,7 +1350,16 @@ struct EditorView: View {
             .overlay(alignment: .topTrailing) {
                 // Visualization panel (spec §14) in place of the Items panel.
                 if viewModel.visualizeActive {
-                    VisualizationPanelView(viewModel: viewModel) { showScreenshotOptions = true }
+                    VisualizationPanelView(viewModel: viewModel, onCapture: { showScreenshotOptions = true },
+                                           onAddDecal: { fromPhotos in
+                        if fromPhotos {
+                            photoPickerForDecal = true
+                            showPhotoPicker = true
+                        } else {
+                            importRequest = .decal
+                            showImporter = true
+                        }
+                    })
                         .padding(.trailing, 14)
                         .padding(.top, 8)
                 } else if showItemsPanel {
@@ -2216,7 +2228,7 @@ struct EditorView: View {
         guard let data = try? Data(contentsOf: url) else {
             // Keep the image wording the image importer had before these were
             // merged — "file" would be a small step backwards for that entry.
-            viewModel.errorMessage = importRequest == .image
+            viewModel.errorMessage = importRequest == .image || importRequest == .decal
                 ? "Couldn't read the selected image."
                 : "Couldn't read the selected file."
             return
@@ -2233,7 +2245,17 @@ struct EditorView: View {
         case .step: viewModel.importSTEP(data: data, fileName: name)
         case .iges: viewModel.importSTEP(data: data, fileName: name, format: .iges)
         case .image: viewModel.beginInsertImage(data: data)
+        case .decal: beginDecal(data, name: (name as NSString).deletingPathExtension, viewModel: viewModel)
         }
+    }
+
+    /// A picked picture as a decal waiting for its tap (spec §14).
+    private func beginDecal(_ data: Data, name: String, viewModel: EditorViewModel) {
+        guard let prepared = DecalImage.prepare(data) else {
+            viewModel.errorMessage = "Couldn't read the selected image."
+            return
+        }
+        viewModel.beginDecal(name: name.isEmpty ? "Decal" : name, image: prepared.image, aspect: prepared.aspect)
     }
 
     @ViewBuilder
@@ -2281,9 +2303,15 @@ struct EditorView: View {
             .onChange(of: photoPickerItem) { _, item in
                 guard let item else { return }
                 photoPickerItem = nil
+                let forDecal = photoPickerForDecal
+                photoPickerForDecal = false
                 Task {
                     if let data = try? await item.loadTransferable(type: Data.self) {
-                        viewModel.beginInsertImage(data: data)
+                        if forDecal {
+                            beginDecal(data, name: "Photo", viewModel: viewModel)
+                        } else {
+                            viewModel.beginInsertImage(data: data)
+                        }
                     } else {
                         viewModel.errorMessage = "Couldn't read the selected image."
                     }

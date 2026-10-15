@@ -257,6 +257,47 @@ fragment float4 fragment_litTextured(
     return float4(color, alpha);
 }
 
+// MARK: - Decals (spec §14)
+
+/// A body drawn again (`vertex_lit`) keeping only what falls inside a
+/// decal's box: projected along the decal's normal, faded where the surface
+/// turns away from it, lit like a matte print on the surface.
+fragment float4 fragment_decal(
+    LitOut in [[stage_in]],
+    constant FrameUniforms &frame [[buffer(BufferIndexFrameUniforms)]],
+    constant DecalUniforms &decal [[buffer(BufferIndexDecal)]],
+    texture2d<float> tex [[texture(0)]]
+) {
+    if (sectionClipped(in.worldPosition, frame)) {
+        discard_fragment();
+    }
+    float3 d = in.worldPosition - decal.center.xyz;
+    float s = dot(d, decal.axisU.xyz) / decal.axisU.w;
+    float t = dot(d, decal.axisV.xyz) / decal.axisV.w;
+    float3 N = normalize(in.worldNormal);
+    float facing = dot(N, decal.normal.xyz);
+    if (abs(s) > 1.0 || abs(t) > 1.0 || abs(dot(d, decal.normal.xyz)) > decal.normal.w || facing < 0.1) {
+        discard_fragment();
+    }
+    constexpr sampler clampSampler(mag_filter::linear, min_filter::linear, address::clamp_to_edge);
+    float4 texel = tex.sample(clampSampler, float2(s * 0.5 + 0.5, 0.5 - t * 0.5));
+    float3 albedo = texel.rgb;
+    if (decal.selected > 0.5) {
+        albedo = mix(albedo, frame.accentColor.rgb, 0.25);
+    }
+    float3 V = normalize(frame.cameraPosition.xyz - in.worldPosition);
+    float3 L = normalize(-frame.keyLightDirection.xyz);
+    float wrap = keyLightWrap(frame);
+    float ndl = saturate(dot(N, L)) * (1.0 - wrap) + wrap;
+    float3 hemi = mix(frame.groundColor.rgb, frame.skyColor.rgb, N.y * 0.5 + 0.5);
+    float3 H = normalize(L + V);
+    float3 sun = keyLightColor(frame);
+    float3 spec = pow(saturate(dot(N, H)), 12.0) * 0.08 * sun;
+    float3 color = albedo * (hemi * 0.45 + ndl * 0.70 * sun) + spec;
+    float alpha = texel.a * decal.opacity * smoothstep(0.1, 0.3, facing);
+    return float4(color, alpha);
+}
+
 // MARK: - Unlit flat color (gizmo, generic lines)
 
 struct UnlitOut {

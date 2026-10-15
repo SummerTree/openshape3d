@@ -71,6 +71,7 @@ extension EditorViewModel {
             var commands: [DocumentCommand] = []
             var pasted: Set<BodyID> = []
             var names = session.document
+            var decals = session.document.decals
             for body in bodies {
                 var clone = Body(
                     id: BodyID(),
@@ -85,9 +86,19 @@ extension EditorViewModel {
                 clone.material = body.material
                 clone.faceMaterials = body.faceMaterials
                 clone.edges = body.edges
+                // The original's decals come along (while it is still here).
+                for decal in session.document.decals where decal.bodyID == body.id {
+                    var copy = decal
+                    copy.id = UUID()
+                    copy.bodyID = clone.id
+                    decals.append(copy)
+                }
                 names.bodies.append(clone) // so the next name is unique too
                 commands.append(AddBodyCommand(body: clone, title: "Paste"))
                 pasted.insert(clone.id)
+            }
+            if decals != session.document.decals {
+                commands.append(SetDecalsCommand(title: "Paste", old: session.document.decals, new: decals))
             }
             cancelTool()
             session.perform(commands.count == 1 ? commands[0] : CompositeCommand(title: "Paste", commands: commands))

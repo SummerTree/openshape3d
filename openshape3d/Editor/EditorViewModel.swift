@@ -1232,6 +1232,7 @@ final class EditorViewModel {
         }
         var scene = ViewportScene(bodies: drawables)
         scene.facePatches = patches
+        scene.decals = decalDrawables(drawn: Set(drawables.map(\.id)))
         scene.gridPlane = activeSketch?.plane ?? (gridPosition == .zx ? nil : gridPosition.plane)
         scene.lockedGridSpacing = lockedGridSpacing
         scene.surfaceAnalysis = surfaceAnalysis
@@ -6770,7 +6771,7 @@ final class EditorViewModel {
     // MARK: - Visualization workspace (spec §14)
 
     enum VisualizationTab: String, CaseIterable {
-        case materials = "Materials", environment = "Environment"
+        case materials = "Materials", decals = "Decals", environment = "Environment"
     }
 
     /// Tools ▸ Visualize: the design is lit by its environment, without grid
@@ -6797,6 +6798,9 @@ final class EditorViewModel {
 
     func exitVisualize() {
         commitEnvironment()
+        commitDecals()
+        pendingDecal = nil
+        movingDecalID = nil
         visualizePicksFocus = false
         visualizePicksFaces = false
         visualizeActive = false
@@ -6815,6 +6819,17 @@ final class EditorViewModel {
         guard value != old else { return }
         session.perform(SetVisualizationEnvironmentCommand(old: old, new: value))
     }
+
+    // MARK: Decals (spec §14) — state; the editing is in DecalEditing.swift.
+
+    /// An image picked with Add Decal…, waiting for a tap to place it.
+    var pendingDecal: (name: String, image: Data, aspect: Double)?
+    /// The decal whose next tap moves it (Move on the Surface).
+    var movingDecalID: UUID?
+    var selectedDecalID: UUID?
+    /// The decals while a slider is being dragged (committed — one undo
+    /// step — when the drag ends).
+    var decalsDraft: [Decal]?
 
     /// Depth of field's Pick Focus Point: the next tap on the model sets
     /// where the camera focuses (and turns depth of field on).
@@ -7326,6 +7341,10 @@ final class EditorViewModel {
         // body under it (Shift/⌘ adds or removes it) — or, picking faces, the
         // face — and empty space clears the selection.
         if visualizeActive {
+            if pendingDecal != nil || movingDecalID != nil {
+                decalTap(HitTester.pickBody(ray: ray, in: scene))
+                return
+            }
             if visualizePicksFocus {
                 visualizeFocusTap(HitTester.pickBody(ray: ray, in: scene))
                 return

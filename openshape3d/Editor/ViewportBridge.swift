@@ -87,6 +87,25 @@ struct FacePatchDrawable {
     var selectionState: UInt32
 }
 
+/// A decal (spec §14) as drawn: its image and its box in world space — the
+/// body's triangles are drawn again, keeping what falls inside the box.
+struct DecalDrawable: Identifiable {
+    var id: UUID
+    var bodyID: BodyID
+    var image: Data
+    var center: SIMD3<Float>
+    /// Unit axes: along the width, up the height, out of the surface.
+    var u: SIMD3<Float>
+    var v: SIMD3<Float>
+    var n: SIMD3<Float>
+    var halfWidth: Float
+    var halfHeight: Float
+    /// How far in and out of the surface it reaches.
+    var depth: Float
+    var opacity: Float
+    var isSelected: Bool
+}
+
 /// A snapshot of what the viewport should draw. Value type, rebuilt cheaply
 /// by the editor on any model change (mesh arrays are CoW references).
 /// A batch of world-space line segments drawn in one color (sketch entities,
@@ -188,6 +207,7 @@ struct PullArrowState: Equatable {
 
 struct ViewportScene {
     var bodies: [BodyDrawable] = []
+    var decals: [DecalDrawable] = []
     var facePatches: [FacePatchDrawable] = []
     /// Active sketch grid; nil keeps the modeling view's ground grid.
     var gridPlane: SketchPlane?
