@@ -111,6 +111,9 @@ final class PersistedBody {
     /// JSON-encoded BodyMaterialSpec (plan §B15); nil (pre-B15 stores) keeps
     /// the legacy default look.
     var materialData: Data?
+    /// JSON-encoded [FaceMaterial] (spec §14 per-face materials); nil when
+    /// the body has none, and in every older store.
+    var faceMaterialsData: Data? = nil
     /// OCCT BRep blob for bodies built through the B-rep path, so analytic
     /// geometry (round cylinders, boolean composability) survives a reload.
     /// Nil for Euclid-only bodies and every pre-OCCT store — those keep the

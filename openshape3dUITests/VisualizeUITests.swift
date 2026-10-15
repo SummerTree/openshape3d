@@ -48,6 +48,26 @@ final class VisualizeUITests: XCTestCase {
         XCTAssertTrue(app.buttons["UsedMaterial_Copper"].waitForExistence(timeout: 3),
                       "the box wears it, so it is a used material")
 
+        // Faces: a tap picks the face under it, and a material dresses just that face.
+        app.segmentedControls["VisualizeApplyTo"].buttons["Faces"].tap()
+        XCTAssertTrue(edit.waitForNonExistence(timeout: 3), "switching to faces clears the pick")
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.45, dy: 0.5)).tap()
+        XCTAssertTrue(app.staticTexts["1 face selected"].waitForExistence(timeout: 3))
+        search.tap()
+        search.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: 6) + "rubber")
+        let rubber = app.buttons["Material_Rubber"]
+        XCTAssertTrue(rubber.waitForExistence(timeout: 3))
+        rubber.tap()
+        XCTAssertTrue(app.buttons["UsedMaterial_Rubber"].waitForExistence(timeout: 3), "the face wears it")
+        XCTAssertTrue(app.buttons["UsedMaterial_Copper"].exists, "the rest of the box keeps copper")
+        let faced = XCTAttachment(screenshot: app.screenshot())
+        faced.name = "visualize-face-material"; faced.lifetime = .keepAlways; add(faced)
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.08, dy: 0.25)).tap()
+        XCTAssertTrue(app.staticTexts["1 face selected"].waitForNonExistence(timeout: 3), "empty space clears the pick")
+        let clean = XCTAttachment(screenshot: app.screenshot())
+        clean.name = "visualize-face-material-unpicked"; clean.lifetime = .keepAlways; add(clean)
+        app.segmentedControls["VisualizeApplyTo"].buttons["Bodies"].tap()
+
         app.buttons["Environment"].tap()
         let sunset = app.buttons["Environment_Sunset"]
         XCTAssertTrue(sunset.waitForExistence(timeout: 3))

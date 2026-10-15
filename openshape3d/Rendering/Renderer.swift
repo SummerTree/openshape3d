@@ -24,6 +24,8 @@ final class Renderer: NSObject, MTKViewDelegate {
     var scene = ViewportScene()
 
     private let cache = GPUResourceCache()
+    /// Face-material patches' vertex buffers, by patch key.
+    private var patchBuffers: [String: (positions: MTLBuffer, normals: MTLBuffer, count: Int)] = [:]
     private let quadTextures = ImageQuadTextureCache()
     private let bodyTextures = BodyTextureCache()
     private let gizmoRenderer = GizmoRenderer()
@@ -211,6 +213,7 @@ final class Renderer: NSObject, MTKViewDelegate {
             for drawable in scene.bodies where !drawable.isSeeThrough {
                 drawBody(drawable, encoder: encoder, pipeline: pipelines.lit)
             }
+            drawFacePatches(encoder: encoder)
         case .wireframe:
             encoder.setDepthStencilState(pipelines.depthReadWrite)
             for drawable in scene.bodies where !drawable.isSeeThrough {
@@ -662,6 +665,48 @@ final class Renderer: NSObject, MTKViewDelegate {
             }
         }
         return frame
+    }
+
+    /// Face materials (spec §14): each patch over its body, pulled a little
+    /// toward the eye so it wins the body's own surface. Only over a body
+    /// drawn here (shaded, opaque) and only an opaque material — a see-through
+    /// one would show the body's face behind it.
+    private func drawFacePatches(encoder: MTLRenderCommandEncoder) {
+        let drawn = Set(scene.bodies.filter { !$0.isSeeThrough }.map(\.id))
+        var live = Set<String>()
+        encoder.setDepthBias(-1, slopeScale: -1, clamp: 0)
+        defer { encoder.setDepthBias(0, slopeScale: 0, clamp: 0) }
+        for patch in scene.facePatches where drawn.contains(patch.bodyID) && patch.material.baseColor.w >= 0.999 {
+            live.insert(patch.key)
+            if patchBuffers[patch.key] == nil {
+                let length = patch.positions.count * MemoryLayout<SIMD3<Float>>.stride
+                guard length > 0,
+                      let positions = patch.positions.withUnsafeBytes({
+                          context.device.makeBuffer(bytes: $0.baseAddress!, length: length, options: .storageModeShared)
+                      }),
+                      let normals = patch.normals.withUnsafeBytes({
+                          context.device.makeBuffer(bytes: $0.baseAddress!, length: length, options: .storageModeShared)
+                      }) else { continue }
+                patchBuffers[patch.key] = (positions, normals, patch.positions.count)
+            }
+            guard let buffers = patchBuffers[patch.key] else { continue }
+            encoder.setRenderPipelineState(context.pipelines.lit)
+            var body = makeBodyUniforms(BodyDrawable(
+                id: patch.bodyID, renderMesh: RenderMesh(positions: [], normals: [], indices: []), edges: nil,
+                meshRevision: 0, modelMatrix: patch.modelMatrix, baseColor: patch.material.baseColor,
+                selectionState: patch.selectionState, material: patch.material))
+            encoder.setVertexBuffer(buffers.positions, offset: 0, index: Int(BufferIndexPositions.rawValue))
+            encoder.setVertexBuffer(buffers.normals, offset: 0, index: Int(BufferIndexNormals.rawValue))
+            encoder.setVertexBytes(&body, length: MemoryLayout<BodyUniforms>.stride,
+                                   index: Int(BufferIndexBodyUniforms.rawValue))
+            encoder.setFragmentBytes(&body, length: MemoryLayout<BodyUniforms>.stride,
+                                     index: Int(BufferIndexBodyUniforms.rawValue))
+            var frame = makeFrameUniforms()
+            encoder.setFragmentBytes(&frame, length: MemoryLayout<FrameUniforms>.stride,
+                                     index: Int(BufferIndexFrameUniforms.rawValue))
+            encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: buffers.count)
+        }
+        patchBuffers = patchBuffers.filter { live.contains($0.key) }
     }
 
     private func makeBodyUniforms(_ drawable: BodyDrawable) -> BodyUniforms {

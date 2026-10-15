@@ -63,13 +63,20 @@ struct VisualizationPanelView: View {
 
     private var materials: some View {
         Group {
-            if viewModel.selection.isEmpty {
-                Text("Select bodies, then tap a material to apply it.")
+            Picker("Apply To", selection: $viewModel.visualizePicksFaces) {
+                Text("Bodies").tag(false)
+                Text("Faces").tag(true)
+            }
+            .pickerStyle(.segmented)
+            .accessibilityIdentifier("VisualizeApplyTo")
+            if !viewModel.visualizeHasSelection {
+                Text(viewModel.visualizePicksFaces ? "Tap faces, then tap a material to apply it."
+                     : "Select bodies, then tap a material to apply it.")
                     .font(.caption)
                     .foregroundStyle(Color.barLabel)
             } else {
                 HStack {
-                    Text(viewModel.selection.count == 1 ? "1 body selected" : "\(viewModel.selection.count) bodies selected")
+                    Text(viewModel.visualizeSelectionSummary)
                         .font(.caption)
                         .foregroundStyle(Color.barLabel)
                     Spacer()
@@ -131,8 +138,8 @@ struct VisualizationPanelView: View {
                     }
                 }
                 .buttonStyle(.plain)
-                .disabled(viewModel.selection.isEmpty)
-                .opacity(viewModel.selection.isEmpty ? 0.6 : 1)
+                .disabled(!viewModel.visualizeHasSelection)
+                .opacity(viewModel.visualizeHasSelection ? 1 : 0.6)
                 .accessibilityIdentifier("\(idPrefix)_\(item.name)")
                 .accessibilityLabel(item.name)
             }

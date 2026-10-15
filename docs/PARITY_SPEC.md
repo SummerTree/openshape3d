@@ -2103,8 +2103,23 @@ renderer swaps the camera headlight for the world-fixed sun
 with a firmer terminator and a sky/ground reflection on polished and metal
 surfaces. **Capture** opens the Screenshot sheet with the grid off and a
 transparent background when the environment asks for one. The web app
-mirrors all of it (panel, lighting in the WebGL shaders). Missing: real
-PBR/IBL and HDR environments, transmission/IOR, per-FACE materials,
+mirrors all of it (panel, lighting in the WebGL shaders).
+**Per-face materials (2026-10-15):** the Materials tab's **Apply To:
+Bodies | Faces**. Picking faces, a tap takes the face under it (Shift/⌘
+adds or removes; empty space clears) — a flat face alone, or a curve's
+connected facets short of the flat faces (within one smooth region a flat
+face is told from a curve's facets by size, so a filleted plate's top,
+fillets and sides are separate), shown with a light tint and an outline —
+and a material, Edit… or Reset then dresses just those faces (one undo
+step; a whole-body material clears them, undoably). Stored per body
+(`Body.faceMaterials`: a point on the face and its normal, body-local, plus
+the material; `PersistedBody.faceMaterialsData`, the archive's
+`faceMaterials`), found again on the current mesh (`FaceMaterialKit`), so
+they follow the body and survive edits that leave the face in place; a
+face an edit moves away drops its material. Drawn as patches over the body
+(`ViewportScene.facePatches`, depth-biased; Metal and WebGL), opaque
+materials only. Missing: real PBR/IBL and HDR environments,
+transmission/IOR, see-through face materials,
 decals, texture mapping controls (scale, rotation, auto-match), custom
 .GLB materials, emission bloom, depth of field and focus point, textured
 USDZ / AR, Generative Render.

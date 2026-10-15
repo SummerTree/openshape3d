@@ -63,6 +63,21 @@ struct BodyDrawable: Identifiable {
     var isSeeThrough: Bool { isTranslucent || (material?.baseColor.w ?? 1) < 0.999 }
 }
 
+/// Materials on single faces (spec §14): some of a body's triangles drawn
+/// again over it, in its own coordinates, with a little depth bias so they
+/// win. Drawn only where the body itself is drawn, shaded and opaque.
+struct FacePatchDrawable {
+    var bodyID: BodyID
+    /// Changes whenever the triangles do: GPU buffers are cached on it.
+    var key: String
+    /// Three corners per triangle, with the body's (smooth) vertex normals.
+    var positions: [SIMD3<Float>]
+    var normals: [SIMD3<Float>]
+    var modelMatrix: simd_float4x4
+    var material: BodyMaterial
+    var selectionState: UInt32
+}
+
 /// A snapshot of what the viewport should draw. Value type, rebuilt cheaply
 /// by the editor on any model change (mesh arrays are CoW references).
 /// A batch of world-space line segments drawn in one color (sketch entities,
@@ -164,6 +179,7 @@ struct PullArrowState: Equatable {
 
 struct ViewportScene {
     var bodies: [BodyDrawable] = []
+    var facePatches: [FacePatchDrawable] = []
     /// Active sketch grid; nil keeps the modeling view's ground grid.
     var gridPlane: SketchPlane?
     /// View ▸ Lock Grid Size: the minor spacing frozen at lock time; nil
