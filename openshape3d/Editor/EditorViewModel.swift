@@ -303,6 +303,14 @@ final class EditorViewModel {
                 "Tap two corners or two edges of a view — or a circle's outline for its diameter."
             }
         case .note: "Tap a line to point at it, or anywhere on the sheet for a free note."
+        case .centerline:
+            if drawingPendingEdge != nil {
+                "Tap the edge parallel to it."
+            } else if drawingPendingPoint != nil {
+                "Tap the second point or circle on the same view."
+            } else {
+                "Tap two parallel edges for the centreline between them, or two points or circles for the line through them."
+            }
         }
     }
 
@@ -407,7 +415,48 @@ final class EditorViewModel {
             activeDrawing?.annotations.append(note)
             drawingSelectedAnnotation = note.id
             drawingTool = .move
+        case .centerline:
+            drawingCenterlineTap(at: point, in: layout)
         }
+    }
+
+    /// Centreline: a circle's outline stands for its centre; two parallel
+    /// edges (hidden ones too) give the axis between them, two points the
+    /// line through them.
+    private func drawingCenterlineTap(at point: SIMD2<Double>, in layout: DrawingLayout) {
+        var placed: DrawingAnnotation?
+        var target: (view: String, point: SIMD2<Double>)?
+        var edge: DrawingEdgePick?
+        if !DrawingAnnotationKit.isNearStrongSnap(point, in: layout),
+           let hit = DrawingCircleKit.circle(at: point, in: layout) {
+            target = (hit.view, hit.circle.center)
+        } else {
+            let pick = DrawingAnnotationKit.pick(point, in: layout)
+            edge = DrawingAnnotationKit.edge(at: point, in: layout, over: pick, hidden: true)
+            if let pick { target = (pick.view, pick.point) }
+        }
+        if let edge {
+            if let first = drawingPendingEdge { placed = DrawingAnnotationKit.centerline(first, edge) }
+            if placed == nil {
+                drawingPendingPoint = nil
+                drawingPendingEdge = edge
+                return
+            }
+        } else if let target {
+            if let first = drawingPendingPoint, first.view == target.view {
+                placed = DrawingAnnotationKit.centerline(view: target.view, first.point, target.point)
+            }
+            if placed == nil {
+                drawingPendingEdge = nil
+                drawingPendingPoint = target
+                return
+            }
+        }
+        drawingPendingPoint = nil
+        drawingPendingEdge = nil
+        guard let placed else { return }
+        activeDrawing?.annotations.append(placed)
+        drawingSelectedAnnotation = placed.id
     }
 
     @ObservationIgnored
@@ -418,7 +467,9 @@ final class EditorViewModel {
     func drawingAnnotationDragBegan(at point: SIMD2<Double>) -> Bool {
         guard drawingTool == .move,
               let id = DrawingAnnotationKit.annotation(at: point, in: drawingLayout()),
-              let handle = drawingLayout().annotationHandles[id] else { return false }
+              let handle = drawingLayout().annotationHandles[id],
+              // A centreline stays on its features: the drag moves the view.
+              drawingAnnotations.first(where: { $0.id == id })?.kind != .centerline else { return false }
         drawingAnnotationGrab = (id, handle - point)
         drawingSelectedAnnotation = id
         return true
@@ -449,6 +500,8 @@ final class EditorViewModel {
         case .angle:
             activeDrawing?.annotations[index].offset = DrawingAnnotationKit.angleRadius(
                 through: point, annotation, transform: transform)
+        case .centerline:
+            break
         }
     }
 

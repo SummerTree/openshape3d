@@ -2208,12 +2208,18 @@ limits stacked in place of the value) or Basic (the value boxed); the
 deviations are typed in the display unit (an angle's in degrees) and kept
 when the style changes. The list shows the value on one line ("40
 +0.1/-0.05 mm"). PDF text now keeps Ø, °, ± and × (WinAnsi codes; they
-were written as "?"). Tests:
+were written as "?"). **Centrelines (2026-10-15):** a Centreline tool:
+two parallel edges — visible, or the hidden sides of a hole seen side-on —
+give the axis midway between them along both; two points or circles (a
+circle's outline stands for its centre) the line through them. Drawn as a
+chain line 3 mm past its ends, listed as "Centreline", follows its view,
+not draggable (a drag on it moves the view). Tests:
 `DrawingAnnotationsTests`, `DrawingUITests`, web
 `drawing-annotations-smoke.mjs`. Missing: free
 placement of new views from any angle (custom projection angles, extra
 projected views), cutting lines through picked points / stepped sections,
-precision per dimension, centerlines,
+precision per dimension, 3-point / circular centrelines and centrelines
+spanning views,
 title-block layouts, multiple sheets, DWG.
 **Feasibility:** [mesh-kernel OK] for a first version (orthographic
 projection + silhouette/hidden-line from meshes; associativity with the model

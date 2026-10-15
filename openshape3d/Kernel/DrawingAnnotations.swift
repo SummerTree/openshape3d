@@ -25,6 +25,9 @@ nonisolated struct DrawingAnnotation: Identifiable, Codable, Equatable, Sendable
         /// The angle between two edges: `a`→`b` and `c`→`d` run out from
         /// where the edges meet, each along the part of its edge measured.
         case angle
+        /// A chain line from `a` to `b`, carried a little past each end: the
+        /// axis between two parallel edges, or through two points (circle centres).
+        case centerline
     }
 
     enum Orientation: String, Codable, CaseIterable, Sendable {
@@ -126,6 +129,7 @@ nonisolated struct DrawingAnnotation: Identifiable, Codable, Equatable, Sendable
     /// "R3 mm", "45°", "Note".
     @MainActor var listTitle: String {
         guard kind != .note else { return "Note" }
+        guard kind != .centerline else { return "Centreline" }
         let unit = AppSettings.shared.unit
         return DrawingAnnotationKit.valueString(self, format: { unit.compactLengthString(fromMM: $0) })
     }
@@ -172,12 +176,16 @@ nonisolated enum DrawingTool: String, CaseIterable, Sendable {
     case move
     case dimension
     case note
+    /// Two parallel edges (visible or hidden): the axis between them; two
+    /// points or circles: the line through them.
+    case centerline
 
     var title: String {
         switch self {
         case .move: "Move"
         case .dimension: "Dimension"
         case .note: "Note"
+        case .centerline: "Centreline"
         }
     }
 }
@@ -337,11 +345,14 @@ nonisolated enum DrawingAnnotationKit {
     /// How close, sheet mm, a tap must be to a straight edge to pick it.
     static let edgeRadius = 1.5
 
-    /// The straight edge (a long visible line) under `point`, in the
-    /// smallest view there; the isometric is left out, as for `pick`.
-    static func edge(at point: SIMD2<Double>, in layout: DrawingLayout) -> DrawingEdgePick? {
+    /// The straight edge (a long visible line — or hidden, when `hidden`)
+    /// under `point`, in the smallest view there; the isometric is left
+    /// out, as for `pick`.
+    static func edge(at point: SIMD2<Double>, in layout: DrawingLayout, hidden: Bool = false) -> DrawingEdgePick? {
         var best: (pick: DrawingEdgePick, distance: Double, area: Double)?
-        for (key, segments) in layout.edges where key != DrawingSheet.viewKey(.isometric) {
+        var all = layout.edges
+        if hidden { all.merge(layout.hiddenEdges) { $0 + $1 } }
+        for (key, segments) in all where key != DrawingSheet.viewKey(.isometric) {
             guard let t = layout.viewTransforms[key], let frame = layout.placedViews[key] else { continue }
             let area = (frame.max.x - frame.min.x) * (frame.max.y - frame.min.y)
             for s in segments {
@@ -361,8 +372,9 @@ nonisolated enum DrawingAnnotationKit {
     /// shorter than the snap reach every tap is near a corner); else the
     /// edge under it, over a bare point.
     static func edge(at point: SIMD2<Double>, in layout: DrawingLayout,
-                     over pick: (view: String, point: SIMD2<Double>, snapped: Bool)?) -> DrawingEdgePick? {
-        guard let edge = edge(at: point, in: layout) else { return nil }
+                     over pick: (view: String, point: SIMD2<Double>, snapped: Bool)?,
+                     hidden: Bool = false) -> DrawingEdgePick? {
+        guard let edge = edge(at: point, in: layout, hidden: hidden) else { return nil }
         guard let pick, pick.snapped else { return edge }
         guard let te = layout.viewTransforms[edge.view], let tp = layout.viewTransforms[pick.view] else { return nil }
         let foot = te.sheet(edge.foot)
@@ -408,6 +420,33 @@ nonisolated enum DrawingAnnotationKit {
         dimension.c = r2.0
         dimension.d = r2.1
         return dimension
+    }
+
+    // MARK: Centrelines
+
+    /// How far, sheet mm, a centreline runs on past what it was drawn between.
+    static let centerlineOverrun = 3.0
+
+    /// The centreline midway between two parallel edges, along the length
+    /// of both. Nil unless they are parallel and apart, on one view.
+    static func centerline(_ first: DrawingEdgePick, _ second: DrawingEdgePick) -> DrawingAnnotation? {
+        guard first.view == second.view else { return nil }
+        let d1 = first.b - first.a, d2 = second.b - second.a
+        let l1 = simd_length(d1), l2 = simd_length(d2)
+        guard l1 > 1e-9, l2 > 1e-9, abs(d1.x * d2.y - d1.y * d2.x) / (l1 * l2) < sin(0.5 * .pi / 180) else { return nil }
+        let u = d1 / l1
+        let w = second.a - first.a
+        let gap = w - u * simd_dot(w, u)
+        guard simd_length(gap) > 1e-6 else { return nil }
+        let origin = first.a + gap / 2
+        let ts = [first.a, first.b, second.a, second.b].map { simd_dot($0 - origin, u) }
+        return DrawingAnnotation(kind: .centerline, view: first.view,
+                                 a: origin + u * ts.min()!, b: origin + u * ts.max()!)
+    }
+
+    /// The centreline through two points of one view.
+    static func centerline(view: String, _ p: SIMD2<Double>, _ q: SIMD2<Double>) -> DrawingAnnotation? {
+        simd_distance(p, q) > 1e-6 ? DrawingAnnotation(kind: .centerline, view: view, a: p, b: q) : nil
     }
 
     /// The distance from `point` straight across to an edge's line.

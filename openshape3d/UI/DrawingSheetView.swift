@@ -344,7 +344,8 @@ struct DrawingSheetView: View {
                     HStack {
                         Image(systemName: annotation.kind == .note ? "text.bubble"
                               : annotation.kind == .linear ? "ruler"
-                              : annotation.kind == .angle ? "angle" : "circle.dashed")
+                              : annotation.kind == .angle ? "angle"
+                              : annotation.kind == .centerline ? "line.diagonal" : "circle.dashed")
                             .foregroundStyle(.secondary)
                         Text(annotation.listTitle)
                             .font(.subheadline.weight(.semibold))
@@ -367,7 +368,9 @@ struct DrawingSheetView: View {
                         .pickerStyle(.segmented)
                         .accessibilityIdentifier("DrawingAnnotationOrientation")
                     }
-                    if annotation.kind != .note {
+                    if annotation.kind == .centerline {
+                        EmptyView()
+                    } else if annotation.kind != .note {
                         dimensionText($annotation)
                     } else {
                         TextField("Text", text: $annotation.text, axis: .vertical)

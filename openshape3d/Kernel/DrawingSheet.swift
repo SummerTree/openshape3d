@@ -132,6 +132,8 @@ nonisolated struct DrawingLayout: Sendable {
     /// Each view's straight edges — its long visible lines (view
     /// coordinates) — for angle and edge-to-edge dimensions.
     var edges: [String: [DrawingSegment]] = [:]
+    /// Each view's long hidden lines, where it shows them — for centrelines.
+    var hiddenEdges: [String: [DrawingSegment]] = [:]
     /// Each annotation's handle (its text), sheet mm — to select or drag it.
     var annotationHandles: [UUID: SIMD2<Double>] = [:]
 
@@ -466,6 +468,12 @@ nonisolated enum DrawingSheet {
                     center: transform.sheet(annotation.a), rim: transform.sheet(annotation.b),
                     diameter: annotation.kind == .diameter, offset: annotation.offset,
                     value: DrawingAnnotationKit.valuePieces(annotation, format: formatLength), into: &out)
+            case .centerline:
+                let a = transform.sheet(annotation.a), b = transform.sheet(annotation.b)
+                guard simd_distance(a, b) > 1e-9 else { continue }
+                let u = simd_normalize(b - a), over = DrawingAnnotationKit.centerlineOverrun
+                out.lines.append(DrawingLine(a: a - u * over, b: b + u * over, style: .chain))
+                out.annotationHandles[annotation.id] = (a + b) / 2
             case .angle:
                 out.annotationHandles[annotation.id] = angular(
                     annotation, transform: transform,
@@ -719,6 +727,10 @@ nonisolated enum DrawingSheet {
         out.snapPoints[key] = snaps
         out.strongSnapPoints[key] = strong
         out.edges[key] = edges
+        if hidden {
+            out.hiddenEdges[key] = DrawingCircleKit.straightRuns(view.hidden).map(\.line)
+                .filter { simd_distance($0.a, $0.b) >= long }
+        }
         out.circles[key] = DrawingCircleKit.circles(in: view.visible + (hidden ? view.hidden : []))
         out.texts.append(DrawingText(position: SIMD2((frame.min.x + frame.max.x) / 2, frame.max.y + 3),
                                      height: 2.5, string: label, anchor: .middle))

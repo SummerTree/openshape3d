@@ -624,4 +624,63 @@ final class DrawingAnnotationsTests: XCTestCase {
         XCTAssertEqual(plain.upper, 0.1)
         XCTAssertEqual(plain.lower, -0.1)
     }
+
+    // MARK: - Centrelines
+
+    func testAHiddenHoleGetsTheCentrelineBetweenItsSides() throws {
+        var drawing = SavedDrawing()
+        drawing.options.showDimensions = false
+        drawing.options.showCenterMarks = false
+        let l = DrawingSheet.layout(bodies: [boxWithHole], drawing: drawing, formatLength: { String(format: "%.1f", $0) })
+        let t = try XCTUnwrap(l.viewTransforms[front])
+        // The hole's sides, dashed in the front view: two vertical hidden lines 4 apart.
+        let sides = try XCTUnwrap(l.hiddenEdges[front]).filter { abs($0.a.x - $0.b.x) < 1e-6 }
+        XCTAssertEqual(sides.count, 2, "\(l.hiddenEdges[front] ?? [])")
+        XCTAssertEqual(abs(sides[0].a.x - sides[1].a.x), 4, accuracy: 0.05)
+        XCTAssertNil(DrawingAnnotationKit.edge(at: t.sheet((sides[0].a + sides[0].b) / 2), in: l),
+                     "a Dimension tap does not pick hidden lines")
+        func pick(_ s: DrawingSegment) throws -> DrawingEdgePick {
+            try XCTUnwrap(DrawingAnnotationKit.edge(at: t.sheet((s.a + s.b) / 2) + SIMD2(0.4, 0), in: l, hidden: true))
+        }
+        let line = try XCTUnwrap(DrawingAnnotationKit.centerline(try pick(sides[0]), try pick(sides[1])))
+        XCTAssertEqual(line.kind, .centerline)
+        XCTAssertEqual(line.a.x, (sides[0].a.x + sides[1].a.x) / 2, accuracy: 1e-6, "midway")
+        XCTAssertEqual(line.b.x, line.a.x, accuracy: 1e-6)
+        XCTAssertEqual(abs(line.b.y - line.a.y), 10, accuracy: 0.05, "the length of the hole")
+
+        // Drawn as a chain line carried 3 mm past each end.
+        drawing.annotations = [line]
+        let drawn = DrawingSheet.layout(bodies: [boxWithHole], drawing: drawing, formatLength: { String(format: "%.1f", $0) })
+        let chain = drawn.lines.filter { $0.style == .chain }
+        XCTAssertEqual(chain.count, l.lines.filter { $0.style == .chain }.count + 1)
+        let mine = try XCTUnwrap(chain.last)
+        XCTAssertEqual(simd_distance(mine.a, mine.b), simd_distance(t.sheet(line.a), t.sheet(line.b)) + 6, accuracy: 1e-6)
+        XCTAssertNotNil(drawn.annotationHandles[line.id])
+        XCTAssertEqual(DrawingAnnotationKit.annotation(at: (mine.a + mine.b) / 2, in: drawn), line.id)
+    }
+
+    func testCentrelinesNeedParallelEdgesOrTwoPoints() throws {
+        let l = wedgeLayout()
+        let edges = try wedgeEdges(l)
+        // The wedge's slope and its base are not parallel.
+        XCTAssertNil(DrawingAnnotationKit.centerline(try tap(edges.slope, in: l), try tap(edges.bottom, in: l)))
+        // One line tapped twice is not two.
+        XCTAssertNil(DrawingAnnotationKit.centerline(try tap(edges.bottom, in: l), try tap(edges.bottom, at: 0.3, in: l)))
+        // Its two sides: upright, midway, as long as the taller.
+        let middle = try XCTUnwrap(DrawingAnnotationKit.centerline(try tap(edges.left, in: l), try tap(edges.right, in: l)))
+        XCTAssertEqual(middle.a.x, (edges.left.a.x + edges.right.a.x) / 2, accuracy: 1e-6)
+        XCTAssertEqual(middle.b.x, middle.a.x, accuracy: 1e-6)
+        let tallest = Swift.max(abs(edges.left.b.y - edges.left.a.y), abs(edges.right.b.y - edges.right.a.y))
+        XCTAssertEqual(abs(middle.b.y - middle.a.y), tallest, accuracy: 1e-6)
+        let through = try XCTUnwrap(DrawingAnnotationKit.centerline(view: front, SIMD2(1, 1), SIMD2(5, 1)))
+        XCTAssertEqual(through.a, SIMD2(1, 1))
+        XCTAssertEqual(through.b, SIMD2(5, 1))
+        XCTAssertNil(DrawingAnnotationKit.centerline(view: front, SIMD2(1, 1), SIMD2(1, 1)))
+        let back = try JSONDecoder().decode(DrawingAnnotation.self, from: JSONEncoder().encode(through))
+        XCTAssertEqual(back, through)
+    }
+
+    @MainActor func testACentrelineIsListedByName() {
+        XCTAssertEqual(DrawingAnnotation(kind: .centerline, view: front, a: .zero, b: SIMD2(1, 0)).listTitle, "Centreline")
+    }
 }
