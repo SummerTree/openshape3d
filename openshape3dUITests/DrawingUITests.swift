@@ -152,6 +152,15 @@ final class DrawingUITests: XCTestCase {
         suffix.typeText("TYP\n")
         XCTAssertTrue(app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "±")).firstMatch
             .waitForExistence(timeout: 3), "the list shows the tolerance")
+
+        // Its precision: 0.01 writes two decimals.
+        let precision = app.buttons["DrawingDimensionPrecision"].firstMatch
+        XCTAssertTrue(precision.waitForExistence(timeout: 3))
+        precision.tap()
+        XCTAssertTrue(app.buttons["0.01"].waitForExistence(timeout: 3))
+        app.buttons["0.01"].tap()
+        XCTAssertTrue(app.staticTexts.containing(NSPredicate(format: "label MATCHES %@", ".*\\.\\d\\d ±0\\.10.*"))
+            .firstMatch.waitForExistence(timeout: 3), "the list shows two decimals")
         let tolerant = XCTAttachment(screenshot: app.screenshot())
         tolerant.name = "drawing-tolerance"; tolerant.lifetime = .keepAlways; add(tolerant)
 

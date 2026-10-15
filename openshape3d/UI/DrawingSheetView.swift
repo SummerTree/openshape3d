@@ -391,7 +391,7 @@ struct DrawingSheetView: View {
         }
     }
 
-    /// A dimension's prefix and suffix text and its tolerance.
+    /// A dimension's prefix and suffix text, its precision and its tolerance.
     @ViewBuilder
     private func dimensionText(_ annotation: Binding<DrawingAnnotation>) -> some View {
         let kind: ExpressionValueField.Kind = annotation.wrappedValue.kind == .angle ? .plain : .length
@@ -402,6 +402,12 @@ struct DrawingSheetView: View {
             TextField("Suffix", text: annotation.suffix)
                 .accessibilityIdentifier("DrawingDimensionSuffix")
         }
+        Picker("Precision", selection: annotation.precision) {
+            ForEach(DrawingAnnotationKit.precisionChoices, id: \.self) {
+                Text(DrawingAnnotationKit.precisionTitle($0)).tag($0)
+            }
+        }
+        .accessibilityIdentifier("DrawingDimensionPrecision")
         Picker("Tolerance", selection: annotation.tolerance) {
             ForEach(DrawingAnnotation.Tolerance.allCases, id: \.self) { Text($0.title).tag($0) }
         }

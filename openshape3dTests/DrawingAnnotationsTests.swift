@@ -556,6 +556,58 @@ final class DrawingAnnotationsTests: XCTestCase {
         XCTAssertEqual(DrawingAnnotationKit.valuePieces(angle, format: format), [.text("90 ±0.25°")])
     }
 
+    func testPrecisionFixesTheDecimals() throws {
+        var dim = DrawingAnnotation(kind: .linear, view: front, a: .zero, b: SIMD2(40, 0))
+        func pieces() -> [DrawingAnnotationKit.ValuePiece] { DrawingAnnotationKit.valuePieces(dim, format: format) }
+        dim.precision = 2
+        XCTAssertEqual(pieces(), [.text("40.00")], "trailing zeros kept (no unit from the bare default)")
+        let mm: (Double, Int) -> String = { DisplayUnit.millimeters.fixedLengthString(fromMM: $0, decimals: $1) }
+        XCTAssertEqual(DrawingAnnotationKit.valuePieces(dim, format: format, fixed: mm), [.text("40.00 mm")])
+        dim.tolerance = .symmetrical
+        XCTAssertEqual(DrawingAnnotationKit.valuePieces(dim, format: format, fixed: mm), [.text("40.00 ±0.10 mm")],
+                       "the tolerance to the same places")
+        dim.tolerance = .deviation
+        dim.lower = 0
+        XCTAssertEqual(DrawingAnnotationKit.valuePieces(dim, format: format, fixed: mm),
+                       [.text("40.00"), .stack("+0.10", "0"), .text(" mm")], "a zero deviation stays bare")
+        dim.tolerance = .limits
+        dim.precision = 0
+        XCTAssertEqual(DrawingAnnotationKit.valuePieces(dim, format: format, fixed: mm),
+                       [.stack("40", "40"), .text(" mm")])
+
+        // Inches, and an angle's degrees.
+        XCTAssertEqual(DisplayUnit.inches.fixedLengthString(fromMM: 25.4, decimals: 3), "1.000\"")
+        var angle = DrawingAnnotation(kind: .angle, view: front, a: .zero, b: SIMD2(10, 0))
+        angle.c = .zero
+        angle.d = SIMD2(10, 5)
+        angle.precision = 3
+        XCTAssertEqual(DrawingAnnotationKit.valuePieces(angle, format: format), [.text("26.565°")])
+        angle.precision = nil
+        XCTAssertEqual(DrawingAnnotationKit.valuePieces(angle, format: format), [.text("26.6°")])
+
+        XCTAssertEqual(DrawingAnnotationKit.precisionChoices.map(DrawingAnnotationKit.precisionTitle),
+                       ["Auto", "1", "0.1", "0.01", "0.001", "0.0001"])
+        XCTAssertEqual(DrawingAnnotationKit.fixedNumber(-0.0001, 2), "0.00", "never -0")
+
+        // Saved with the drawing; out-of-range values clamped on load.
+        dim.precision = 3
+        let back = try JSONDecoder().decode(DrawingAnnotation.self, from: JSONEncoder().encode(dim))
+        XCTAssertEqual(back.precision, 3)
+        let wild = Data(#"{"kind":"linear","view":"front","a":[0,0],"b":[1,0],"precision":9}"#.utf8)
+        XCTAssertEqual(try JSONDecoder().decode(DrawingAnnotation.self, from: wild).precision, 4)
+        let old = Data(#"{"kind":"linear","view":"front","a":[0,0],"b":[1,0]}"#.utf8)
+        XCTAssertNil(try JSONDecoder().decode(DrawingAnnotation.self, from: old).precision)
+
+        // The sheet writes it.
+        var drawing = SavedDrawing()
+        drawing.options.showDimensions = false
+        let (a, b) = bottomCorners(layout(drawing))
+        var placed = DrawingAnnotation(kind: .linear, view: front, a: a, b: b)
+        placed.precision = 3
+        drawing.annotations = [placed]
+        XCTAssertTrue(layout(drawing).texts.contains { $0.string == "10.000" })
+    }
+
     @MainActor func testTheListShowsTheTolerance() {
         var dim = DrawingAnnotation(kind: .radius, view: front, a: .zero, b: SIMD2(3, 0))
         XCTAssertFalse(dim.listTitle.contains("±"))

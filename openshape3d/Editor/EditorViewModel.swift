@@ -638,6 +638,7 @@ final class EditorViewModel {
         let layout = DrawingSheet.layout(
             bodies: drawingBodies(drawing).map(DrawingBodyInput.init(body:)), drawing: drawing,
             formatLength: { unit.compactLengthString(fromMM: $0) },
+            formatFixed: { unit.fixedLengthString(fromMM: $0, decimals: $1) },
             date: DrawingSheet.isoDate(Date()), cache: drawingViews)
         drawingCache = (key, layout)
         return layout

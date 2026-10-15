@@ -233,10 +233,12 @@ nonisolated enum DrawingSheet {
 
     /// Lay out `drawing` for `bodies`: the standard views, then its section
     /// and detail views in a column to the right, each moved by the drawing's
-    /// view offsets.
+    /// view offsets. `formatFixed` writes a dimension set to a precision
+    /// (mm and decimal places in).
     static func layout(
         bodies: [DrawingBodyInput], drawing: SavedDrawing,
         formatLength: (Double) -> String = { String(format: "%.2f", $0) },
+        formatFixed: (Double, Int) -> String = DrawingAnnotationKit.fixedNumber,
         date: String = "", cache: DrawingViewCache = DrawingViewCache()
     ) -> DrawingLayout {
         let options = drawing.options
@@ -460,14 +462,14 @@ nonisolated enum DrawingSheet {
                 out.annotationHandles[annotation.id] = linear(
                     from: transform.sheet(annotation.a), to: transform.sheet(annotation.b),
                     orientation: annotation.orientation, offset: annotation.offset,
-                    value: DrawingAnnotationKit.valuePieces(annotation, format: formatLength), into: &out)
+                    value: DrawingAnnotationKit.valuePieces(annotation, format: formatLength, fixed: formatFixed), into: &out)
             case .note:
                 out.annotationHandles[annotation.id] = note(annotation, transform: transform, into: &out)
             case .diameter, .radius:
                 out.annotationHandles[annotation.id] = circleDimension(
                     center: transform.sheet(annotation.a), rim: transform.sheet(annotation.b),
                     diameter: annotation.kind == .diameter, offset: annotation.offset,
-                    value: DrawingAnnotationKit.valuePieces(annotation, format: formatLength), into: &out)
+                    value: DrawingAnnotationKit.valuePieces(annotation, format: formatLength, fixed: formatFixed), into: &out)
             case .centerline:
                 let a = transform.sheet(annotation.a), b = transform.sheet(annotation.b)
                 guard simd_distance(a, b) > 1e-9 else { continue }
@@ -477,7 +479,7 @@ nonisolated enum DrawingSheet {
             case .angle:
                 out.annotationHandles[annotation.id] = angular(
                     annotation, transform: transform,
-                    value: DrawingAnnotationKit.valuePieces(annotation, format: formatLength), into: &out)
+                    value: DrawingAnnotationKit.valuePieces(annotation, format: formatLength, fixed: formatFixed), into: &out)
             }
         }
         appendFrame(into: &out, options: options, scale: scaleLabel(scale), date: date)

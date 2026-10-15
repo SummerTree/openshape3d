@@ -93,6 +93,9 @@ nonisolated struct DrawingAnnotation: Identifiable, Codable, Equatable, Sendable
     /// The deviations from the value, signed: mm, an angle's degrees.
     var upper = 0.1
     var lower = -0.1
+    /// Decimal places the value (and its tolerance) is written to, trailing
+    /// zeros kept — "40.00 mm"; nil writes it as the canvas does.
+    var precision: Int?
 
     init(kind: Kind, view: String, a: SIMD2<Double>, b: SIMD2<Double>) {
         self.kind = kind
@@ -102,7 +105,7 @@ nonisolated struct DrawingAnnotation: Identifiable, Codable, Equatable, Sendable
     }
 
     private enum CodingKeys: String, CodingKey { case id, kind, view, a, b, c, d, orientation, offset, text, leader,
-                                                    prefix, suffix, tolerance, upper, lower }
+                                                    prefix, suffix, tolerance, upper, lower, precision }
 
     // Tolerant of drawings saved by other builds.
     init(from decoder: Decoder) throws {
@@ -123,6 +126,8 @@ nonisolated struct DrawingAnnotation: Identifiable, Codable, Equatable, Sendable
         tolerance = (try? c.decodeIfPresent(Tolerance.self, forKey: .tolerance)) ?? .none
         upper = try c.decodeIfPresent(Double.self, forKey: .upper) ?? 0.1
         lower = try c.decodeIfPresent(Double.self, forKey: .lower) ?? -0.1
+        precision = (try? c.decodeIfPresent(Int.self, forKey: .precision)).flatMap { $0 }
+            .map { Swift.min(Swift.max($0, 0), DrawingAnnotationKit.maxPrecision) }
     }
 
     /// How the Dimensions & Notes list names it: "40 mm", "Ø8 mm ±0.1",
@@ -131,7 +136,8 @@ nonisolated struct DrawingAnnotation: Identifiable, Codable, Equatable, Sendable
         guard kind != .note else { return "Note" }
         guard kind != .centerline else { return "Centreline" }
         let unit = AppSettings.shared.unit
-        return DrawingAnnotationKit.valueString(self, format: { unit.compactLengthString(fromMM: $0) })
+        return DrawingAnnotationKit.valueString(self, format: { unit.compactLengthString(fromMM: $0) },
+                                                fixed: { unit.fixedLengthString(fromMM: $0, decimals: $1) })
     }
 
     /// What goes before a dimension's number: "Ø" for a diameter, "R" for a radius.
@@ -507,6 +513,24 @@ nonisolated enum DrawingAnnotationKit {
 
     // MARK: Values
 
+    /// The most decimal places a dimension can be set to.
+    static let maxPrecision = 4
+    /// The precision choices, Auto first.
+    static let precisionChoices: [Int?] = [nil] + Array(0...maxPrecision)
+
+    /// "Auto", "1", "0.1", "0.01" …
+    static func precisionTitle(_ precision: Int?) -> String {
+        guard let p = precision else { return "Auto" }
+        return p == 0 ? "1" : "0." + String(repeating: "0", count: p - 1) + "1"
+    }
+
+    /// `v` to exactly `decimals` places, never "-0.00".
+    static func fixedNumber(_ v: Double, _ decimals: Int) -> String {
+        let scale = pow(10.0, Double(decimals))
+        let r = (v * scale).rounded() / scale
+        return String(format: "%.\(decimals)f", r == 0 ? 0 : r)
+    }
+
     /// A piece of a dimension's value, written left to right.
     enum ValuePiece: Equatable, Sendable {
         case text(String)
@@ -518,14 +542,20 @@ nonisolated enum DrawingAnnotationKit {
 
     /// A dimension's value as written: prefix, symbol and number (or its two
     /// limits), tolerance, unit and suffix. `format` writes a length (or an
-    /// angle) with its unit — "40 mm", "1.5\"", "63.4°".
-    static func valuePieces(_ dim: DrawingAnnotation, format: (Double) -> String) -> [ValuePiece] {
+    /// angle) with its unit — "40 mm", "1.5\"", "63.4°"; `fixed` a length
+    /// to the dimension's precision, when it has one — "40.00 mm".
+    static func valuePieces(_ dim: DrawingAnnotation, format: (Double) -> String,
+                            fixed: (Double, Int) -> String = fixedNumber) -> [ValuePiece] {
         let value = dim.measured
         let angle = dim.kind == .angle
-        func write(_ v: Double) -> String { angle ? angleString(v) : format(v) }
+        func write(_ v: Double) -> String {
+            if let p = dim.precision { return angle ? fixedNumber(v, p) + "°" : fixed(v, p) }
+            return angle ? angleString(v) : format(v)
+        }
         // A deviation's own precision: an angle's to hundredths of a degree.
         func deviation(_ v: Double) -> String {
-            angle ? String(format: "%g", (v * 100).rounded() / 100) + "°" : format(v)
+            if dim.precision != nil { return write(v) }
+            return angle ? String(format: "%g", (v * 100).rounded() / 100) + "°" : format(v)
         }
         let prefix = dim.prefix.trimmingCharacters(in: .whitespacesAndNewlines)
         let suffix = dim.suffix.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -534,7 +564,8 @@ nonisolated enum DrawingAnnotationKit {
         let (number, unit) = splitUnit(write(value))
         func signed(_ d: Double) -> String {
             let n = splitUnit(deviation(abs(d))).number
-            return n == "0" ? "0" : (d > 0 ? "+" : "-") + n
+            // Zero is written bare, whatever the precision.
+            return n.allSatisfy { $0 == "0" || $0 == "." } ? "0" : (d > 0 ? "+" : "-") + n
         }
         var pieces: [ValuePiece]
         switch dim.tolerance {
@@ -554,8 +585,9 @@ nonisolated enum DrawingAnnotationKit {
     }
 
     /// The value on one line, for lists: stacks as "upper/lower", a box in brackets.
-    static func valueString(_ dim: DrawingAnnotation, format: (Double) -> String) -> String {
-        valuePieces(dim, format: format).map {
+    static func valueString(_ dim: DrawingAnnotation, format: (Double) -> String,
+                            fixed: (Double, Int) -> String = fixedNumber) -> String {
+        valuePieces(dim, format: format, fixed: fixed).map {
             switch $0 {
             case .text(let s): s
             case .stack(let u, let l): " \(u)/\(l)"

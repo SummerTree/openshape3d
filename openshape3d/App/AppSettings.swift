@@ -68,10 +68,19 @@ nonisolated enum DisplayUnit: String, CaseIterable, Codable, Sendable {
         return "\(text) \(symbol)"
     }
 
+    /// "40.00 mm", "1.500\"": exactly `decimals` places (a drawing dimension
+    /// set to a precision), grouped like the canvas.
+    func fixedLengthString(fromMM value: Double, decimals: Int) -> String {
+        let text = Self.groupedNumber(display(fromMM: value), maxFractionDigits: decimals, minFractionDigits: decimals)
+        if self == .inches { return text + "\"" }
+        if self == .feet { return text + "'" }
+        return "\(text) \(symbol)"
+    }
+
     /// Schoolbook rounding to `maxFractionDigits`, trailing zeros trimmed,
     /// thousands grouped with a comma whatever the locale (the canvas is
     /// read against native's, which groups the same way).
-    static func groupedNumber(_ value: Double, maxFractionDigits: Int) -> String {
+    static func groupedNumber(_ value: Double, maxFractionDigits: Int, minFractionDigits: Int = 0) -> String {
         let scale = pow(10.0, Double(maxFractionDigits))
         var rounded = (value * scale).rounded() / scale
         if rounded == 0 { rounded = 0 } // never "-0"
@@ -82,7 +91,7 @@ nonisolated enum DisplayUnit: String, CaseIterable, Codable, Sendable {
         formatter.groupingSeparator = ","
         formatter.decimalSeparator = "."
         formatter.maximumFractionDigits = maxFractionDigits
-        formatter.minimumFractionDigits = 0
+        formatter.minimumFractionDigits = minFractionDigits
         return formatter.string(from: NSNumber(value: rounded)) ?? String(rounded)
     }
 
