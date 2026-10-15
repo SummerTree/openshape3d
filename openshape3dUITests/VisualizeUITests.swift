@@ -62,6 +62,15 @@ final class VisualizeUITests: XCTestCase {
         XCTAssertTrue(app.buttons["UsedMaterial_Copper"].exists, "the rest of the box keeps copper")
         let faced = XCTAttachment(screenshot: app.screenshot())
         faced.name = "visualize-face-material"; faced.lifetime = .keepAlways; add(faced)
+        // A see-through material on the face: the box shows through it.
+        search.tap()
+        search.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: 6) + "tinted")
+        let glass = app.buttons["Material_Tinted Glass"]
+        XCTAssertTrue(glass.waitForExistence(timeout: 3))
+        glass.tap()
+        XCTAssertTrue(app.buttons["UsedMaterial_Tinted Glass"].waitForExistence(timeout: 3), "the face wears glass")
+        let glassed = XCTAttachment(screenshot: app.screenshot())
+        glassed.name = "visualize-glass-face"; glassed.lifetime = .keepAlways; add(glassed)
         app.coordinate(withNormalizedOffset: CGVector(dx: 0.08, dy: 0.25)).tap()
         XCTAssertTrue(app.staticTexts["1 face selected"].waitForNonExistence(timeout: 3), "empty space clears the pick")
         let clean = XCTAttachment(screenshot: app.screenshot())

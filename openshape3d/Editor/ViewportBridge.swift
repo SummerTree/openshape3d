@@ -57,15 +57,24 @@ struct BodyDrawable: Identifiable {
     /// Optional appearance override; when set its baseColor/metallic/roughness
     /// replace `baseColor` and the default shading response.
     var material: BodyMaterial?
+    /// The triangles drawn (indices into `renderMesh`) when the body leaves
+    /// some out — faces wearing their own material, drawn as patches.
+    /// Picking and section caps still use the whole `renderMesh`.
+    var drawnIndices: [UInt32]?
+    /// The GPU cache key for `drawnIndices`.
+    var drawnRevision: UInt64?
+
+    /// What the GPU buffers are cached on: the drawn triangles' revision.
+    var gpuRevision: UInt64 { drawnRevision ?? meshRevision }
 
     /// Drawn in the blended pass: a tool preview, or a body whose material
     /// is see-through (glass, acrylic).
     var isSeeThrough: Bool { isTranslucent || (material?.baseColor.w ?? 1) < 0.999 }
 }
 
-/// Materials on single faces (spec §14): some of a body's triangles drawn
-/// again over it, in its own coordinates, with a little depth bias so they
-/// win. Drawn only where the body itself is drawn, shaded and opaque.
+/// Materials on single faces (spec §14): the triangles a body's drawable
+/// leaves out, drawn in their own material in the body's coordinates —
+/// opaque ones with the opaque bodies, see-through ones in the blended pass.
 struct FacePatchDrawable {
     var bodyID: BodyID
     /// Changes whenever the triangles do: GPU buffers are cached on it.

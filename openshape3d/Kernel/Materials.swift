@@ -90,6 +90,26 @@ nonisolated struct FaceMaterial: Codable, Equatable, Sendable {
 }
 
 nonisolated enum FaceMaterialKit {
+    /// `mesh`'s indices without `triangles` (the faces that wear their own
+    /// material, drawn as patches) and a revision for them that differs
+    /// from every plain mesh revision and changes with the set left out;
+    /// nil when nothing is left out.
+    static func drawnIndices(of mesh: RenderMesh, without triangles: [Int],
+                             revision: UInt64) -> (indices: [UInt32], revision: UInt64)? {
+        let out = Set(triangles)
+        guard !out.isEmpty else { return nil }
+        var indices: [UInt32] = []
+        indices.reserveCapacity(max(0, mesh.indices.count - out.count * 3))
+        for t in 0..<mesh.triangleCount where !out.contains(t) {
+            indices += mesh.indices[t * 3 ..< t * 3 + 3]
+        }
+        var hasher = Hasher()
+        hasher.combine(revision)
+        hasher.combine(out.sorted())
+        // The top bit set: plain revisions are counters and never reach it.
+        return (indices, UInt64(bitPattern: Int64(hasher.finalize())) | (1 << 63))
+    }
+
     /// The face a tap on `seedTriangle` means: a flat face, or the curved
     /// surface (a cylinder wall, a blend) under it. Surfaces that meet
     /// smoothly — a plate's top, its fillets and its sides — are told apart

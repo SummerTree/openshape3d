@@ -2116,10 +2116,14 @@ step; a whole-body material clears them, undoably). Stored per body
 the material; `PersistedBody.faceMaterialsData`, the archive's
 `faceMaterials`), found again on the current mesh (`FaceMaterialKit`), so
 they follow the body and survive edits that leave the face in place; a
-face an edit moves away drops its material. Drawn as patches over the body
-(`ViewportScene.facePatches`, depth-biased; Metal and WebGL), opaque
-materials only. Missing: real PBR/IBL and HDR environments,
-transmission/IOR, see-through face materials,
+face an edit moves away drops its material. Drawn as patches
+(`ViewportScene.facePatches`; Metal and WebGL) in place of those faces:
+the body's drawable leaves their triangles out (`BodyDrawable.drawnIndices`,
+GPU-cached under a revision of its own; picking and section caps still use
+the whole mesh), opaque patches draw with the opaque bodies and
+see-through ones (glass, acrylic) in the blended pass, so a glass face
+shows the part's inside (2026-10-15). Missing: real PBR/IBL and HDR
+environments, transmission/IOR,
 decals, texture mapping controls (scale, rotation, auto-match), custom
 .GLB materials, emission bloom, depth of field and focus point, textured
 USDZ / AR, Generative Render.

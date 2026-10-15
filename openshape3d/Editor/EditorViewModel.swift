@@ -1208,7 +1208,9 @@ final class EditorViewModel {
             if case .faceSelected(let faceBodyID) = mode, faceBodyID == body.id {
                 selectionState = SelectionStateNone.rawValue
             }
-            drawables.append(BodyDrawable(
+            // Faces with their own material are drawn by their patches, so
+            // the body leaves them out (a glass face is then see-through).
+            var drawable = BodyDrawable(
                 id: body.id,
                 renderMesh: body.render,
                 edges: body.edges,
@@ -1220,7 +1222,12 @@ final class EditorViewModel {
                     BodyMaterial(spec: $0, meshHasTexcoords: body.render.texcoords != nil,
                                  revision: body.meshRevision)
                 }
-            ))
+            )
+            if let drawn = faceMaterialDrawnIndices(body) {
+                drawable.drawnIndices = drawn.indices
+                drawable.drawnRevision = drawn.revision
+            }
+            drawables.append(drawable)
             patches += facePatches(body, selectionState: selectionState)
         }
         var scene = ViewportScene(bodies: drawables)
@@ -6915,17 +6922,31 @@ final class EditorViewModel {
     }
 
     @ObservationIgnored
-    private var faceMaterialCache: [BodyID: (revision: UInt64, faces: [FaceMaterial], triangles: [[Int]])] = [:]
+    private var faceMaterialCache: [BodyID: (revision: UInt64, faces: [FaceMaterial], triangles: [[Int]],
+                                             drawn: (indices: [UInt32], revision: UInt64)?)] = [:]
 
     /// Each face material's triangles on `body`, worked out once per mesh revision.
     func faceMaterialTriangles(_ body: Body) -> [[Int]] {
+        faceMaterialEntry(body).triangles
+    }
+
+    /// The triangles the viewport draws of `body`: all but the faces that
+    /// wear their own material (their patches draw them); nil for all.
+    func faceMaterialDrawnIndices(_ body: Body) -> (indices: [UInt32], revision: UInt64)? {
+        guard !body.faceMaterials.isEmpty else { return nil }
+        return faceMaterialEntry(body).drawn
+    }
+
+    private func faceMaterialEntry(_ body: Body) -> (triangles: [[Int]], drawn: (indices: [UInt32], revision: UInt64)?) {
         if let cached = faceMaterialCache[body.id], cached.revision == body.meshRevision,
            cached.faces == body.faceMaterials {
-            return cached.triangles
+            return (cached.triangles, cached.drawn)
         }
         let triangles = FaceMaterialKit.resolve(body.faceMaterials, in: body.render)
-        faceMaterialCache[body.id] = (body.meshRevision, body.faceMaterials, triangles)
-        return triangles
+        let drawn = FaceMaterialKit.drawnIndices(of: body.render, without: triangles.flatMap { $0 },
+                                                 revision: body.meshRevision)
+        faceMaterialCache[body.id] = (body.meshRevision, body.faceMaterials, triangles, drawn)
+        return (triangles, drawn)
     }
 
     /// A body's face materials as patches over it: one per material.

@@ -29,7 +29,10 @@ final class BodyGPUResources {
         guard !mesh.positions.isEmpty, !mesh.indices.isEmpty else { return nil }
         let positionLength = mesh.positions.count * MemoryLayout<SIMD3<Float>>.stride
         let normalLength = mesh.normals.count * MemoryLayout<SIMD3<Float>>.stride
-        let indexLength = mesh.indices.count * MemoryLayout<UInt32>.stride
+        let drawn = drawable.drawnIndices ?? mesh.indices
+        // Every face may be a face material's patch: no triangles of its own,
+        // but its edges still draw (a one-index buffer stands in, unused).
+        let indexLength = max(1, drawn.count) * MemoryLayout<UInt32>.stride
         guard
             let positions = mesh.positions.withUnsafeBytes({ raw in
                 device.makeBuffer(bytes: raw.baseAddress!, length: positionLength, options: .storageModeShared)
@@ -37,16 +40,16 @@ final class BodyGPUResources {
             let normals = mesh.normals.withUnsafeBytes({ raw in
                 device.makeBuffer(bytes: raw.baseAddress!, length: normalLength, options: .storageModeShared)
             }),
-            let indices = mesh.indices.withUnsafeBytes({ raw in
+            let indices = (drawn.isEmpty ? [0] : drawn).withUnsafeBytes({ raw in
                 device.makeBuffer(bytes: raw.baseAddress!, length: indexLength, options: .storageModeShared)
             })
         else { return nil }
 
-        meshRevision = drawable.meshRevision
+        meshRevision = drawable.gpuRevision
         positionBuffer = positions
         normalBuffer = normals
         indexBuffer = indices
-        indexCount = mesh.indices.count
+        indexCount = drawn.count
         if let texcoords = mesh.texcoords, texcoords.count == mesh.positions.count {
             let length = texcoords.count * MemoryLayout<SIMD2<Float>>.stride
             texcoordBuffer = texcoords.withUnsafeBytes { raw in
@@ -76,7 +79,7 @@ final class GPUResourceCache {
         var liveIDs = Set<BodyID>()
         for drawable in scene.bodies {
             liveIDs.insert(drawable.id)
-            if let existing = cache[drawable.id], existing.meshRevision == drawable.meshRevision {
+            if let existing = cache[drawable.id], existing.meshRevision == drawable.gpuRevision {
                 continue
             }
             cache[drawable.id] = BodyGPUResources(drawable: drawable, device: device)
