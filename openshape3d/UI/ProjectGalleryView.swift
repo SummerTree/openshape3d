@@ -23,6 +23,8 @@ struct ProjectGalleryView: View {
     @State private var history = FolderNavigationHistory()
     @State private var expandedFolders: Set<UUID> = []
     @State private var renamingProject: Project?
+    /// Versions… (spec §13.3) is up for this design.
+    @State private var versionsProject: Project?
     @State private var renamingFolder: ProjectFolder?
     @State private var renameText = ""
     @State private var creatingFolder = false
@@ -245,6 +247,11 @@ struct ProjectGalleryView: View {
                                       lastAction: nil),
                     attachmentProvider: nil)
             }
+            .sheet(item: $versionsProject) { project in
+                ProjectVersionsView(project: project,
+                                    onRestore: { restoreVersion($0, of: project) },
+                                    onCopy: { openVersionCopy($0, of: project) })
+            }
             .sheet(item: $moveRequest) { request in
                 FolderPickerSheet(
                     tree: tree,
@@ -373,6 +380,11 @@ struct ProjectGalleryView: View {
                     Label("Duplicate", systemImage: "plus.square.on.square")
                 }
                 Button {
+                    versionsProject = project
+                } label: {
+                    Label("Versions…", systemImage: "clock.arrow.circlepath")
+                }
+                Button {
                     moveRequest = MoveRequest(
                         projectIDs: [project.persistentModelID], folderIDs: [],
                         currentFolder: listedFolderID(of: project), disabledFolders: [])
@@ -380,6 +392,7 @@ struct ProjectGalleryView: View {
                     Label("Move to Folder…", systemImage: "folder")
                 }
                 Button(role: .destructive) {
+                    ProjectVersionStore.shared.removeAll(project.versionsKey)
                     modelContext.delete(project)
                 } label: {
                     Label("Delete", systemImage: "trash")
@@ -595,6 +608,7 @@ struct ProjectGalleryView: View {
         let doomed = Set([folder.folderID] + tree.descendants(of: folder.folderID).map(\.id))
         let survivor = tree.parent(of: folder.folderID)
         for project in projects where listedFolderID(of: project).map(doomed.contains) ?? false {
+            ProjectVersionStore.shared.removeAll(project.versionsKey)
             modelContext.delete(project)
         }
         for row in folders where doomed.contains(row.folderID) {
@@ -686,6 +700,7 @@ struct ProjectGalleryView: View {
         // row was deleted elsewhere (another window, sync) can trap while
         // faulting, and `as?` cannot catch a trap.
         for project in projects where selectedProjectIDs.contains(project.persistentModelID) {
+            ProjectVersionStore.shared.removeAll(project.versionsKey)
             modelContext.delete(project)
         }
         do {
@@ -732,6 +747,40 @@ struct ProjectGalleryView: View {
             nameSuffix: " Copy",
             folderID: listedFolderID(of: project)
         )
+    }
+
+    /// Versions ▸ Restore as Latest (spec §13.3): the version becomes the
+    /// design again — same name, folder, place in Start With and versions —
+    /// and what it was a moment before is kept as a version first. Versions
+    /// are the app's own files, so their analytic solids come back too.
+    private func restoreVersion(_ number: Int, of project: Project) {
+        let store = ProjectVersionStore.shared
+        guard let key = project.versionsKey, let archive = store.archive(key, number: number) else { return }
+        store.record(ProjectArchive.archive(from: project), key: key, note: "Before restoring version \(number)")
+        let restored = archive.remappingAllUUIDs().insert(into: modelContext, name: project.name, trustingBRep: true)
+        restored.folderID = project.folderID
+        restored.createdAt = project.createdAt
+        restored.versionsKey = key
+        modelContext.delete(project)
+        try? modelContext.save()
+        store.record(ProjectArchive.archive(from: restored), key: key, note: "Restored from version \(number)")
+    }
+
+    /// Versions ▸ Open as Copy: the version as a new design beside this one.
+    private func openVersionCopy(_ number: Int, of project: Project) {
+        guard let key = project.versionsKey,
+              let archive = ProjectVersionStore.shared.archive(key, number: number) else { return }
+        let base = "\(project.name) (Version \(number))"
+        let existing = Set(projects.map(\.name))
+        var name = base
+        var n = 2
+        while existing.contains(name) {
+            name = "\(base) \(n)"
+            n += 1
+        }
+        let copy = archive.remappingAllUUIDs().insert(into: modelContext, name: name, trustingBRep: true)
+        copy.folderID = project.folderID
+        try? modelContext.save()
     }
 
     /// Insert an archive as a new project under a unique name and save.

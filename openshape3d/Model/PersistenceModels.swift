@@ -89,6 +89,11 @@ final class Project {
     /// stores migrate lightly.
     var visualizationData: Data? = nil
 
+    /// Where this design's versions are kept (`ProjectVersionStore`, spec
+    /// §13.3); `nil` until its first version. A restored design keeps it.
+    /// Defaulted, so stores migrate lightly.
+    var versionsKey: UUID? = nil
+
     init(name: String) {
         self.name = name
         self.createdAt = Date()

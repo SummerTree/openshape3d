@@ -2015,7 +2015,23 @@ fully offline.
 
 **Spec:** Auto-tracked versions per project; browse with metadata (version #,
 "Copy of", edited-by, created, synced, client); "Restore as Latest".
-**Status:** ❌ not implemented.
+**Status:** 🟡 partial — **local versions built 2026-10-15** (iPad, Mac and
+web). The editor keeps the design as a version when it opens with none, then
+— after edits — when you leave it, when the app goes to the background and
+at most every ten minutes while you work; one identical to the latest
+(thumbnail aside) is skipped, and the newest 50 are kept. Gallery ▸ a
+design's menu ▸ **Versions…** lists them newest first (thumbnail, number,
+date, body count, why: "Before restoring version 3" / "Restored from
+version 3"); **Restore as Latest** makes one the design again (same name,
+folder and versions; the current state is kept as a version first) and
+**Open as Copy** adds it beside the design as "Name (Version 3)". iPad/Mac:
+files under Application Support/ProjectVersions (`ProjectVersionStore`,
+keyed by `Project.versionsKey`), deleted with the design; restored bodies
+keep their analytic solids (the app's own files). Web: an IndexedDB
+`versions` store. Missing: edited-by / client metadata and syncing (no
+accounts). Also fixed with it: the .os3d archive now carries construction
+axes (`ProjectArchive.axes`) — export, Duplicate, Open on the Web and every
+web save used to drop them.
 **Feasibility:** [platform/service] (local snapshots feasible without cloud)
 
 ### 13.4 Sharing & Published Versions

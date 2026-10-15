@@ -277,6 +277,10 @@ struct EditorView: View {
     @State private var symbolNameDraft = ""
     /// Temp USDZ shown by the AR preview sheet (plan §B14).
     @State private var arPreviewURL: URL?
+    /// Project Versions (spec §13.3): the session's change count when the
+    /// design was last kept as a version, and when.
+    @State private var versionedChangeCount: Int?
+    @State private var lastVersionAt = Date()
 
     var body: some View {
         Group {
@@ -302,6 +306,26 @@ struct EditorView: View {
             // weak reference. Deliberately outside the `viewModel == nil` guard
             // so returning to an already-built document re-attaches too.
             if let viewModel { AgentBridge.shared.register(viewModel, documentName: project.name) }
+            // Versions: a first one for a design that has none (once the
+            // viewport has drawn, for its thumbnail), then one at most every
+            // ten minutes while it is being changed.
+            if versionedChangeCount == nil {
+                try? await Task.sleep(for: .seconds(1.5))
+                guard !Task.isCancelled else { return }
+            }
+            if let viewModel, versionedChangeCount == nil {
+                if project.versionsKey.map({ ProjectVersionStore.shared.versions($0).isEmpty }) ?? true,
+                   !viewModel.session.document.bodies.isEmpty || !viewModel.session.document.sketches.isEmpty {
+                    recordVersion(viewModel, force: true)
+                }
+                versionedChangeCount = viewModel.session.changeCount
+            }
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(60))
+                if let viewModel, Date().timeIntervalSince(lastVersionAt) >= ProjectVersionStore.interval {
+                    recordVersion(viewModel)
+                }
+            }
         }
         .navigationTitle(project.name)
         .onAppear {
@@ -314,14 +338,34 @@ struct EditorView: View {
         .onDisappear {
             viewModel?.saveThumbnail()
             viewModel?.session.save()
-            if let viewModel { AgentBridge.shared.unregister(viewModel) }
+            if let viewModel {
+                recordVersion(viewModel)
+                AgentBridge.shared.unregister(viewModel)
+            }
         }
         .onChange(of: scenePhase) { _, phase in
             if phase == .background || phase == .inactive {
                 viewModel?.saveThumbnail()
                 viewModel?.session.save()
+                if phase == .background, let viewModel { recordVersion(viewModel) }
             }
         }
+    }
+
+    /// Keep the design as a version (spec §13.3) if it changed since the
+    /// last one (`force`: whatever the change count). The store skips a
+    /// snapshot identical to the latest version.
+    private func recordVersion(_ viewModel: EditorViewModel, force: Bool = false) {
+        let changes = viewModel.session.changeCount
+        guard force || changes != versionedChangeCount else { return }
+        let key = project.versionsKey ?? UUID()
+        if project.versionsKey == nil { project.versionsKey = key }
+        // The archive is read from the saved rows, thumbnail and all.
+        viewModel.saveThumbnail()
+        viewModel.session.save()
+        ProjectVersionStore.shared.record(ProjectArchive.archive(from: project), key: key)
+        versionedChangeCount = changes
+        lastVersionAt = Date()
     }
 
     /// Sketch-state chip inside the sketch pill (plan §C4). Under-defined
