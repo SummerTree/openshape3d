@@ -31,6 +31,8 @@ final class PipelineStore {
     /// read from a single-sample or a multisample depth texture.
     let depthOfField: MTLRenderPipelineState
     let depthOfFieldMS: MTLRenderPipelineState
+    /// Decals (spec §14): a body drawn again, keeping the decal's box.
+    let decal: MTLRenderPipelineState
 
     // Depth-stencil states
     let depthReadWrite: MTLDepthStencilState
@@ -106,7 +108,8 @@ final class PipelineStore {
             ),
             let depthOfFieldMS = makePipeline(
                 vertex: "vertex_fullscreen", fragment: "fragment_depthOfFieldMS", blended: false
-            )
+            ),
+            let decal = makePipeline(vertex: "vertex_lit", fragment: "fragment_decal", blended: true)
         else { return nil }
 
         self.thickLine = thickLine
@@ -123,6 +126,7 @@ final class PipelineStore {
         self.blobShadow = blobShadow
         self.depthOfField = depthOfField
         self.depthOfFieldMS = depthOfFieldMS
+        self.decal = decal
 
         func makeDepthState(compare: MTLCompareFunction, write: Bool) -> MTLDepthStencilState? {
             let descriptor = MTLDepthStencilDescriptor()

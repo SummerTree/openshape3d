@@ -6,7 +6,8 @@
 //  library by category with search, the materials the design already uses,
 //  and the selected bodies' material to edit or reset — and Environment —
 //  lighting presets, the sun's rotation, elevation and intensity, the
-//  background and the ground shadow — plus Capture for a clean picture.
+//  background and the ground shadow — Decals — images put on the bodies —
+//  plus Capture for a clean picture.
 //
 
 import SwiftUI
@@ -15,6 +16,8 @@ struct VisualizationPanelView: View {
     @Bindable var viewModel: EditorViewModel
     /// Opens the Screenshot sheet (owned by EditorView).
     let onCapture: () -> Void
+    /// Add Decal: the Photos picker (true) or the file importer (EditorView's).
+    var onAddDecal: (Bool) -> Void = { _ in }
 
     @State private var query = ""
     @State private var category: MaterialPreset.Category?
@@ -43,6 +46,7 @@ struct VisualizationPanelView: View {
                 VStack(alignment: .leading, spacing: 10) {
                     switch viewModel.visualizationTab {
                     case .materials: materials
+                    case .decals: decalsTab
                     case .environment: environment
                     }
                 }
@@ -143,6 +147,118 @@ struct VisualizationPanelView: View {
                 .accessibilityIdentifier("\(idPrefix)_\(item.name)")
                 .accessibilityLabel(item.name)
             }
+        }
+    }
+
+    // MARK: - Decals
+
+    private var decalsTab: some View {
+        Group {
+            if let hint = viewModel.decalHint {
+                HStack {
+                    Text(hint).font(.caption).foregroundStyle(Color.barLabel)
+                        .accessibilityIdentifier("DecalHint")
+                    Spacer()
+                    Button("Cancel") { viewModel.cancelDecalPlacement() }
+                        .font(.caption)
+                        .accessibilityIdentifier("DecalCancel")
+                }
+            } else {
+                Menu {
+                    Button("From Photos…") { addDecal(fromPhotos: true) }
+                    Button("From Files…") { addDecal(fromPhotos: false) }
+                } label: {
+                    Label("Add Decal", systemImage: "photo.badge.plus").font(.callout)
+                }
+                .accessibilityIdentifier("DecalAdd")
+            }
+            if viewModel.decals.isEmpty {
+                Text("Put a logo, label or picture on a part: add an image, then tap where it goes.")
+                    .font(.caption)
+                    .foregroundStyle(Color.barLabel)
+            }
+            ForEach(viewModel.decals) { decal in
+                decalRow(decal)
+            }
+        }
+    }
+
+    private func addDecal(fromPhotos: Bool) {
+        #if DEBUG
+        // The UI suite cannot drive the system pickers: a test image instead.
+        if ProcessInfo.processInfo.environment["OS3D_DEBUG_DECAL"] != nil {
+            viewModel.beginDecal(name: "Test Decal", image: EditorViewModel.debugSeedImagePNG, aspect: 0.75)
+            return
+        }
+        #endif
+        onAddDecal(fromPhotos)
+    }
+
+    private func decalRow(_ decal: Decal) -> some View {
+        let selected = viewModel.selectedDecalID == decal.id
+        return VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 8) {
+                if let image = UIImage(data: decal.image) {
+                    Image(uiImage: image).resizable().scaledToFit().frame(width: 32, height: 32)
+                        .background(Color.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: 4))
+                }
+                Text(decal.name).font(.caption.weight(.semibold)).lineLimit(1)
+                Spacer()
+                Button {
+                    viewModel.movingDecalID = viewModel.movingDecalID == decal.id ? nil : decal.id
+                    viewModel.pendingDecal = nil
+                } label: {
+                    Image(systemName: "hand.point.up.left")
+                }
+                .accessibilityLabel("Move on the Surface")
+                .accessibilityIdentifier("DecalMove")
+                Button(role: .destructive) {
+                    viewModel.removeDecal(decal.id)
+                } label: {
+                    Image(systemName: "trash")
+                }
+                .accessibilityLabel("Remove Decal")
+                .accessibilityIdentifier("DecalRemove")
+            }
+            .buttonStyle(.borderless)
+            .contentShape(Rectangle())
+            .onTapGesture { viewModel.selectedDecalID = selected ? nil : decal.id }
+            if selected {
+                decalSlider("Size", value: log10(decal.width), in: -1...4,
+                            format: AppSettings.shared.unit.compactLengthString(fromMM: decal.width),
+                            id: "DecalSize") { v, live in
+                    viewModel.updateDecal(decal.id, live: live) { $0.width = DecalKit.tidyWidth(pow(10, v)) }
+                }
+                decalSlider("Rotation", value: decal.rotation, in: -180...180,
+                            format: "\(Int(decal.rotation.rounded()))°", id: "DecalRotation") { v, live in
+                    viewModel.updateDecal(decal.id, live: live) { $0.rotation = v }
+                }
+                decalSlider("Opacity", value: decal.opacity, in: 0...1,
+                            format: "\(Int((decal.opacity * 100).rounded()))%", id: "DecalOpacity") { v, live in
+                    viewModel.updateDecal(decal.id, live: live) { $0.opacity = v }
+                }
+            }
+        }
+        .padding(8)
+        .background(selected ? Color.accentColor.opacity(0.12) : Color.primary.opacity(0.04),
+                    in: RoundedRectangle(cornerRadius: 10))
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("Decal_\(decal.name)")
+    }
+
+    /// A slider that previews while dragging and saves (one undo step) on release.
+    private func decalSlider(_ title: String, value: Double, in range: ClosedRange<Double>, format: String,
+                             id: String, set: @escaping (Double, Bool) -> Void) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            HStack {
+                Text(title).font(.caption)
+                Spacer()
+                Text(format).font(.caption.monospacedDigit()).foregroundStyle(Color.barLabel)
+            }
+            Slider(value: Binding(get: { value }, set: { set($0, true) }), in: range) { editing in
+                if !editing { viewModel.commitDecals() }
+            }
+            .accessibilityIdentifier(id)
         }
     }
 

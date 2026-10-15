@@ -42,6 +42,8 @@ nonisolated struct DesignDocument: Sendable {
     var drawings: [SavedDrawing] = []
     /// The Visualization workspace's environment (spec §14).
     var visualization = VisualizationEnvironment()
+    /// Images put on bodies' surfaces (spec §14), each naming its body.
+    var decals: [Decal] = []
 
     /// Monotonic revision source for mesh changes (GPU cache invalidation).
     private var revisionCounter: UInt64 = 0

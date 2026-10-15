@@ -59,6 +59,13 @@ nonisolated enum ProjectMergeKit {
         for body in guest.bodies {
             merged.bodies.append(map.remap(body, translation: translation))
         }
+        // Decals go with their bodies (body-local, so the move needs nothing).
+        for decal in guest.decals {
+            var copy = decal
+            copy.id = UUID()
+            copy.bodyID = map.newBody(decal.bodyID)
+            merged.decals.append(copy)
+        }
 
         // History last: its refs point at everything remapped above.
         var featureIDs = [FeatureID]()

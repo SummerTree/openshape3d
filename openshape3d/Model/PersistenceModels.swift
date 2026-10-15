@@ -94,6 +94,10 @@ final class Project {
     /// Defaulted, so stores migrate lightly.
     var versionsKey: UUID? = nil
 
+    /// Decals (spec §14) as one JSON blob (`[Decal]`, images inside);
+    /// `nil` = none. Defaulted, so stores migrate lightly.
+    @Attribute(.externalStorage) var decalsData: Data? = nil
+
     init(name: String) {
         self.name = name
         self.createdAt = Date()

@@ -18,6 +18,7 @@ typedef enum {
     BufferIndexFrameUniforms = 2,
     BufferIndexBodyUniforms = 3,
     BufferIndexTexcoords = 4,
+    BufferIndexDecal = 5,
 } BufferIndex;
 
 typedef enum {
@@ -61,6 +62,16 @@ typedef struct {
     float lineHalfWidthPx;             // thick-line pipeline: half stroke width
     float emission;                    // Glow (spec §14): 0 lit, 1 self-lit and brightened
 } BodyUniforms;
+
+// A decal (spec §14): its box in world space (DecalDrawable).
+typedef struct {
+    vector_float4 center;              // xyz
+    vector_float4 axisU;               // xyz unit, w half width
+    vector_float4 axisV;               // xyz unit, w half height
+    vector_float4 normal;              // xyz unit (out of the surface), w depth
+    float opacity;
+    float selected;                    // 1: tinted with the accent
+} DecalUniforms;
 
 // Depth of field (spec §14): the scene's colour and depth, blurred by each
 // pixel's distance from the focus (DepthOfFieldKit).

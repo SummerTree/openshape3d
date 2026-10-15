@@ -92,6 +92,8 @@ final class DocumentSession {
         var drawings = false
         /// The visualization blob failed to decode — leave the column alone.
         var visualization = false
+        /// The decals blob failed to decode — leave the column alone.
+        var decals = false
         /// Whole rows that could not be decoded (absent from the document).
         var rowCount: Int {
             bodies.count + sketches.count + planes.count + axes.count
@@ -809,6 +811,13 @@ final class DocumentSession {
                 unreadableRows.drawings = true
             }
         }
+        if let data = project.decalsData {
+            if let decals = try? JSONDecoder().decode([Decal].self, from: data) {
+                loaded.decals = decals
+            } else {
+                unreadableRows.decals = true
+            }
+        }
         if let data = project.visualizationData {
             if let environment = try? JSONDecoder().decode(VisualizationEnvironment.self, from: data) {
                 loaded.visualization = environment
@@ -1258,6 +1267,11 @@ final class DocumentSession {
             let drawings = document.drawings
             let data = drawings.isEmpty ? nil : try? JSONEncoder().encode(drawings)
             if project.drawingsData != data { project.drawingsData = data }
+        }
+        if !unreadableRows.decals {
+            let decals = document.decals
+            let data = decals.isEmpty ? nil : try? JSONEncoder().encode(decals)
+            if project.decalsData != data { project.decalsData = data }
         }
         if !unreadableRows.visualization {
             let environment = document.visualization

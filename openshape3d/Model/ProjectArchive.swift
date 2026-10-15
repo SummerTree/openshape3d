@@ -39,6 +39,8 @@ nonisolated struct ProjectArchive: Codable, Sendable {
     var drawings: Data?
     /// The Visualization environment (`VisualizationEnvironment` JSON); absent in older archives.
     var visualization: Data?
+    /// Decals (`[Decal]` JSON, images inside); absent in older archives.
+    var decals: Data?
 
     struct BodyRecord: Codable, Sendable {
         var id: UUID
@@ -173,6 +175,9 @@ nonisolated extension ProjectArchive {
         out.itemFolders = itemFolders.map(rewritten)
         // Drawings name the bodies they draw (and key moved views by view id).
         out.drawings = drawings.map(rewritten)
+        // Decals name their bodies (images are base64, which has no hyphens
+        // for the UUID pattern to catch).
+        out.decals = decals.map(rewritten)
         out.bodies = bodies.map { record in
             var r = record
             r.id = mapped(record.id)
@@ -222,6 +227,7 @@ extension ProjectArchive {
         archive.pinnedMeasurements = project.pinnedMeasurementsData
         archive.drawings = project.drawingsData
         archive.visualization = project.visualizationData
+        archive.decals = project.decalsData
         archive.bodies = project.bodies.map {
             BodyRecord(
                 id: $0.bodyID, name: $0.name, transform: $0.transformData,
@@ -275,6 +281,7 @@ extension ProjectArchive {
         project.pinnedMeasurementsData = pinnedMeasurements
         project.drawingsData = drawings
         project.visualizationData = visualization
+        project.decalsData = decals
         context.insert(project)
 
         for record in bodies {

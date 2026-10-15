@@ -107,10 +107,15 @@ nonisolated final class ImageQuadTextureCache {
     private var loader: MTKTextureLoader?
 
     func sync(quads: [ImageQuadDrawable], device: MTLDevice) {
+        sync(images: quads.map { ($0.id, $0.textureRevision, $0.textureData) }, device: device)
+    }
+
+    /// Any set of images by id (decals use it too).
+    func sync(images: [(id: UUID, revision: UInt64, data: Data)], device: MTLDevice) {
         var liveIDs = Set<UUID>()
-        for quad in quads {
+        for quad in images {
             liveIDs.insert(quad.id)
-            if let existing = cache[quad.id], existing.revision == quad.textureRevision {
+            if let existing = cache[quad.id], existing.revision == quad.revision {
                 continue
             }
             let loader = self.loader ?? MTKTextureLoader(device: device)
@@ -119,7 +124,7 @@ nonisolated final class ImageQuadTextureCache {
             // safe against undecodable bytes. Failed decodes are cached as
             // nil so a bad image doesn't retry every frame.
             var texture: MTLTexture?
-            if let source = CGImageSourceCreateWithData(quad.textureData as CFData, nil),
+            if let source = CGImageSourceCreateWithData(quad.data as CFData, nil),
                let image = CGImageSourceCreateImageAtIndex(source, 0, nil) {
                 // The viewport renders into a non-sRGB target, so load
                 // without sRGB conversion to keep image colors consistent
@@ -130,7 +135,7 @@ nonisolated final class ImageQuadTextureCache {
                     .textureStorageMode: MTLStorageMode.shared.rawValue,
                 ])
             }
-            cache[quad.id] = Entry(revision: quad.textureRevision, texture: texture)
+            cache[quad.id] = Entry(revision: quad.revision, texture: texture)
         }
         cache = cache.filter { liveIDs.contains($0.key) }
     }
