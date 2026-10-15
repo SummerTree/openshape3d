@@ -153,6 +153,52 @@ final class DrawingTests: XCTestCase {
         XCTAssertNil(plain.viewFrames[.isometric])
     }
 
+    func testTitleBlockLayouts() throws {
+        var options = DrawingOptions(title: "Bracket")
+        options.titleBlock = .detailed
+        options[.company] = "Laan Labs"
+        options[.partNumber] = "BR-1042"
+        options[.revision] = "C"
+        options[.material] = "6061-T6 Aluminium, anodised black, all edges broken 0.2 mm max"
+        options[.drawnBy] = "JL"
+        let detailed = DrawingSheet.layout(bodies: [box], options: options)
+        for word in ["COMPANY", "Laan Labs", "PART NO.", "BR-1042", "REV", "C", "DRAWN BY", "JL", "CHECKED BY",
+                     "MATERIAL", "SCALE", "DATE", "Bracket"] {
+            XCTAssertTrue(detailed.texts.contains { $0.string == word }, word)
+        }
+        // A long value shrinks, then is cut short, to stay in its cell.
+        let material = try XCTUnwrap(detailed.texts.first { $0.string.hasPrefix("6061") })
+        XCTAssertTrue(material.string.hasSuffix("..."))
+        XCTAssertLessThan(material.height, 2.5)
+        XCTAssertLessThanOrEqual(DrawingAnnotationKit.textWidth(material.string, height: material.height), 46 + 1e-9)
+        // The block is 180 × 36 in the corner; the views keep above it.
+        let right = detailed.size.x - DrawingSheet.margin
+        XCTAssertTrue(detailed.lines.contains { $0.style == .border && $0.a.x == right - 180 && $0.b.x == right - 180 })
+        for frame in detailed.viewFrames.values { XCTAssertGreaterThan(frame.min.y, DrawingSheet.margin + 36) }
+
+        // An empty field writes nothing; setting one empty clears it.
+        XCTAssertFalse(detailed.texts.contains { $0.string.isEmpty })
+        options[.drawnBy] = ""
+        XCTAssertNil(options.titleFields["drawnBy"])
+
+        // None: the border alone, and the views may use the space.
+        options.titleBlock = .none
+        let bare = DrawingSheet.layout(bodies: [box], options: options)
+        XCTAssertFalse(bare.texts.contains { $0.string == "SCALE" || $0.string == "Bracket" || $0.string == "openshape3d" })
+        XCTAssertEqual(bare.lines.filter { $0.style == .border }.count, 4)
+        let simple = DrawingSheet.layout(bodies: [box], options: DrawingOptions())
+        XCTAssertLessThan(bare.viewFrames.values.map(\.min.y).min()!, simple.viewFrames.values.map(\.min.y).min()!)
+        XCTAssertFalse(simple.texts.contains { $0.string == "COMPANY" }, "Simple is the block it always was")
+
+        // Saved with the drawing; older drawings open with the simple block.
+        options.titleBlock = .detailed
+        let back = try JSONDecoder().decode(DrawingOptions.self, from: JSONEncoder().encode(options))
+        XCTAssertEqual(back, options)
+        let old = try JSONDecoder().decode(DrawingOptions.self, from: Data(#"{"title":"Old"}"#.utf8))
+        XCTAssertEqual(old.titleBlock, .simple)
+        XCTAssertTrue(old.titleFields.isEmpty)
+    }
+
     func testEmptyDesignIsAnEmptySheet() {
         let layout = DrawingSheet.layout(bodies: [], options: DrawingOptions())
         XCTAssertTrue(layout.isEmpty)

@@ -2226,11 +2226,18 @@ chain circle through them, listed as "Bolt Circle", selected at its top,
 not draggable; three points in a line start again. Dashed lines drawn as
 connected runs (`DrawingExport.runs`) — SVG / PDF subpaths, DXF
 POLYLINEs with continuous linetype (flag 128) — so a dash pattern flows
-round a curve instead of restarting on each short side. Missing: free
-placement of new views from any angle (custom projection angles, extra
-projected views), cutting lines through picked points / stepped sections,
-centrelines spanning views,
-title-block layouts, multiple sheets, DWG.
+round a curve instead of restarting on each short side.
+**Title blocks (2026-10-15):** a Title Block layout per drawing — Simple
+(title over scale, sheet, projection, date; 120 × 28 mm), Detailed (adds
+company, part number, revision, material, drawn by, checked by — typed
+in the sheet's form; 180 × 36 mm) or None (border only, the views take
+the space). Values too long for their cell shrink to 60 %, then end in
+"..."; fields are kept while another layout is shown. The views' area
+now also keeps 3 mm under the border for the top views' names. Missing:
+free placement of new views from any angle (custom projection angles,
+extra projected views), cutting lines through picked points / stepped
+sections, centrelines spanning views, custom title-block templates
+(logos, own fields), multiple sheets in one drawing, DWG.
 **Feasibility:** [mesh-kernel OK] for a first version (orthographic
 projection + silhouette/hidden-line from meshes; associativity with the model
 [needs history engine]; production-grade HLR quality benefits from a B-rep

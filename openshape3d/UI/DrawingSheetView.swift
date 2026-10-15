@@ -306,6 +306,18 @@ struct DrawingSheetView: View {
                 }
                 .accessibilityIdentifier("DrawingScalePicker")
             }
+            Section("Title Block") {
+                Picker("Layout", selection: $viewModel.drawingOptions.titleBlock) {
+                    ForEach(DrawingTitleBlock.allCases, id: \.self) { Text($0.title).tag($0) }
+                }
+                .accessibilityIdentifier("DrawingTitleBlockPicker")
+                if viewModel.drawingOptions.titleBlock == .detailed {
+                    ForEach(DrawingTitleBlock.Field.allCases, id: \.self) { field in
+                        TextField(field.title, text: $viewModel.drawingOptions[field])
+                            .accessibilityIdentifier("DrawingTitleField_\(field.rawValue)")
+                    }
+                }
+            }
             Section("Views") {
                 Toggle("Isometric View", isOn: $viewModel.drawingOptions.includeIsometric)
                     .accessibilityIdentifier("DrawingIsometricToggle")

@@ -46,6 +46,61 @@ nonisolated enum DrawingStandard: String, CaseIterable, Codable, Sendable {
     var title: String { self == .ansi ? "ANSI (third angle)" : "ISO (first angle)" }
 }
 
+/// The title block in the sheet's bottom-right corner.
+nonisolated enum DrawingTitleBlock: String, CaseIterable, Codable, Sendable {
+    /// The title over scale, sheet, projection and date.
+    case simple
+    /// Adds company, part number, revision, material, drawn and checked by.
+    case detailed
+    /// The border alone.
+    case none
+
+    var title: String {
+        switch self {
+        case .simple: "Simple"
+        case .detailed: "Detailed"
+        case .none: "None"
+        }
+    }
+
+    /// Width × height, mm.
+    var size: SIMD2<Double> {
+        switch self {
+        case .simple: SIMD2(120, 28)
+        case .detailed: SIMD2(180, 36)
+        case .none: .zero
+        }
+    }
+
+    /// The text fields a detailed block carries, typed in by hand.
+    enum Field: String, CaseIterable, Codable, Sendable {
+        case company, partNumber, revision, material, drawnBy, checkedBy
+
+        var title: String {
+            switch self {
+            case .company: "Company"
+            case .partNumber: "Part Number"
+            case .revision: "Revision"
+            case .material: "Material"
+            case .drawnBy: "Drawn By"
+            case .checkedBy: "Checked By"
+            }
+        }
+
+        /// As the block heads its cell.
+        var label: String {
+            switch self {
+            case .company: "COMPANY"
+            case .partNumber: "PART NO."
+            case .revision: "REV"
+            case .material: "MATERIAL"
+            case .drawnBy: "DRAWN BY"
+            case .checkedBy: "CHECKED BY"
+            }
+        }
+    }
+}
+
 nonisolated struct DrawingOptions: Equatable, Codable, Sendable {
     var title = "Drawing"
     var sheet: DrawingSheetSize = .a4
@@ -58,11 +113,21 @@ nonisolated struct DrawingOptions: Equatable, Codable, Sendable {
     var scale: Double?
     /// A cross of chain lines through the centre of every circle seen end on.
     var showCenterMarks = true
+    var titleBlock: DrawingTitleBlock = .simple
+    /// The detailed title block's fields, by `DrawingTitleBlock.Field` raw
+    /// value (a field this build lacks is kept, not dropped).
+    var titleFields: [String: String] = [:]
 
     init(title: String = "Drawing") { self.title = title }
 
+    subscript(field: DrawingTitleBlock.Field) -> String {
+        get { titleFields[field.rawValue] ?? "" }
+        set { titleFields[field.rawValue] = newValue.isEmpty ? nil : newValue }
+    }
+
     private enum CodingKeys: String, CodingKey {
-        case title, sheet, standard, includeIsometric, showHiddenLines, showDimensions, scale, showCenterMarks
+        case title, sheet, standard, includeIsometric, showHiddenLines, showDimensions, scale, showCenterMarks,
+             titleBlock, titleFields
     }
 
     // Every field optional on the way in: drawings saved before a setting
@@ -78,6 +143,8 @@ nonisolated struct DrawingOptions: Equatable, Codable, Sendable {
         showDimensions = try c.decodeIfPresent(Bool.self, forKey: .showDimensions) ?? d.showDimensions
         scale = try c.decodeIfPresent(Double.self, forKey: .scale)
         showCenterMarks = try c.decodeIfPresent(Bool.self, forKey: .showCenterMarks) ?? d.showCenterMarks
+        titleBlock = (try? c.decodeIfPresent(DrawingTitleBlock.self, forKey: .titleBlock)) ?? d.titleBlock
+        titleFields = (try? c.decodeIfPresent([String: String].self, forKey: .titleFields)) ?? [:]
     }
 }
 
@@ -187,7 +254,6 @@ nonisolated enum DrawingSheet {
     }
 
     static let margin = 10.0
-    static let titleBlockSize = SIMD2<Double>(120, 28)
     static let viewGap = 18.0
 
     /// Lay out a sheet for `bodies`. `formatLength` writes a dimension value
@@ -299,11 +365,12 @@ nonisolated enum DrawingSheet {
         }
 
         // Drawing area: inside the border, above the title block's height.
-        let areaMin = SIMD2(margin + 6, margin + titleBlockSize.y + 6)
+        let areaMin = SIMD2(margin + 6, margin + options.titleBlock.size.y + 6)
         // A vertical cutting line lifts its view's name (see below): keep
         // room for it under the border.
         let liftRoom = cuts.contains { $0.section.cut == .vertical } ? 5.0 : 0
-        let areaMax = paper - SIMD2(margin + 6, margin + 6 + liftRoom)
+        // The top views' names sit 3 mm over their frames: room for them too.
+        let areaMax = paper - SIMD2(margin + 6, margin + 6 + 3 + liftRoom)
         let area = areaMax - areaMin
         let dimRoom = options.showDimensions ? 14.0 : 0
         // A 2×2 grid: Front's column also holds Top, the side view's column
@@ -821,6 +888,18 @@ nonisolated enum DrawingSheet {
     }
 
     /// Border and title block.
+    /// `string` at `position`, shrunk (to no less than 60 %) to fit `width`,
+    /// then cut short with "..." if it still does not.
+    static func fitted(_ string: String, at position: SIMD2<Double>, height: Double, width: Double) -> DrawingText {
+        var h = height, s = string
+        let natural = DrawingAnnotationKit.textWidth(s, height: h)
+        if natural > width { h = Swift.max(height * 0.6, h * width / natural) }
+        while s.count > 1, DrawingAnnotationKit.textWidth(s, height: h) > width {
+            s = String(s.dropLast(s.hasSuffix("...") ? 4 : 1)).trimmingCharacters(in: .whitespaces) + "..."
+        }
+        return DrawingText(position: position, height: h, string: s)
+    }
+
     private static func appendFrame(into out: inout DrawingLayout, options: DrawingOptions,
                                     scale: String, date: String) {
         let size = out.size
@@ -832,23 +911,59 @@ nonisolated enum DrawingSheet {
             out.lines.append(DrawingLine(a: SIMD2(a.x, b.y), b: a, style: style))
         }
         rect(lo, hi, .border)
-        let tbLo = SIMD2(hi.x - titleBlockSize.x, lo.y), tbHi = SIMD2(hi.x, lo.y + titleBlockSize.y)
+        let block = options.titleBlock
+        guard block != .none else { return }
+        let tbLo = SIMD2(hi.x - block.size.x, lo.y), tbHi = SIMD2(hi.x, lo.y + block.size.y)
         rect(tbLo, tbHi, .border)
-        // Rows: title (14 mm) over a row of four fields (14 mm).
-        let split = tbLo.y + 14
-        out.lines.append(DrawingLine(a: SIMD2(tbLo.x, split), b: SIMD2(tbHi.x, split), style: .thin))
-        let fieldWidth = titleBlockSize.x / 4
-        for i in 1..<4 {
-            let x = tbLo.x + fieldWidth * Double(i)
-            out.lines.append(DrawingLine(a: SIMD2(x, tbLo.y), b: SIMD2(x, split), style: .thin))
+        let projection = options.standard == .ansi ? "Third angle" : "First angle"
+        func rule(_ a: SIMD2<Double>, _ b: SIMD2<Double>) { out.lines.append(DrawingLine(a: a, b: b, style: .thin)) }
+        /// A row of cells from `y`, `height` tall: each a small label over its
+        /// value (smaller in an 11 mm row, so the two keep apart).
+        func row(_ y: Double, height: Double, _ cells: [(width: Double, label: String, value: String)]) {
+            let roomy = height >= 14
+            var x = tbLo.x
+            for (i, cell) in cells.enumerated() {
+                if i > 0 { rule(SIMD2(x, y), SIMD2(x, y + height)) }
+                out.texts.append(DrawingText(position: SIMD2(x + 2, y + height - (roomy ? 4.5 : 3)), height: roomy ? 1.8 : 1.6,
+                                             string: cell.label))
+                if !cell.value.isEmpty {
+                    out.texts.append(fitted(cell.value, at: SIMD2(x + 2, y + (roomy ? 3.5 : 1.8)),
+                                            height: roomy ? 3 : 2.5, width: cell.width - 4))
+                }
+                x += cell.width
+            }
         }
-        out.texts.append(DrawingText(position: SIMD2(tbLo.x + 3, split + 5), height: 5, string: options.title))
-        let fields = [("SCALE", scale), ("SHEET", options.sheet.title),
-                      ("PROJECTION", options.standard == .ansi ? "Third angle" : "First angle"), ("DATE", date)]
-        for (i, field) in fields.enumerated() {
-            let x = tbLo.x + fieldWidth * Double(i) + 2
-            out.texts.append(DrawingText(position: SIMD2(x, tbLo.y + 9.5), height: 1.8, string: field.0))
-            out.texts.append(DrawingText(position: SIMD2(x, tbLo.y + 3.5), height: 3, string: field.1))
+        switch block {
+        case .simple:
+            // Rows: title (14 mm) over a row of four fields (14 mm).
+            let split = tbLo.y + 14
+            rule(SIMD2(tbLo.x, split), SIMD2(tbHi.x, split))
+            out.texts.append(fitted(options.title, at: SIMD2(tbLo.x + 3, split + 5), height: 5, width: block.size.x - 6))
+            let w = block.size.x / 4
+            row(tbLo.y, height: 14, [(w, "SCALE", scale), (w, "SHEET", options.sheet.title),
+                                     (w, "PROJECTION", projection), (w, "DATE", date)])
+        case .detailed:
+            // Company and title (14 mm) over who and what (11 mm) over the
+            // sheet's own fields (11 mm).
+            let mid = tbLo.y + 11, upper = tbLo.y + 22
+            rule(SIMD2(tbLo.x, mid), SIMD2(tbHi.x, mid))
+            rule(SIMD2(tbLo.x, upper), SIMD2(tbHi.x, upper))
+            rule(SIMD2(tbLo.x + 60, upper), SIMD2(tbLo.x + 60, tbHi.y))
+            out.texts.append(DrawingText(position: SIMD2(tbLo.x + 2, tbHi.y - 4.5), height: 1.8,
+                                         string: DrawingTitleBlock.Field.company.label))
+            if !options[.company].isEmpty {
+                out.texts.append(fitted(options[.company], at: SIMD2(tbLo.x + 2, upper + 3), height: 3.5, width: 56))
+            }
+            out.texts.append(fitted(options.title, at: SIMD2(tbLo.x + 63, upper + 4.5), height: 5, width: 114))
+            row(mid, height: 11, [(40, DrawingTitleBlock.Field.drawnBy.label, options[.drawnBy]),
+                                  (40, DrawingTitleBlock.Field.checkedBy.label, options[.checkedBy]),
+                                  (50, DrawingTitleBlock.Field.material.label, options[.material]),
+                                  (50, DrawingTitleBlock.Field.partNumber.label, options[.partNumber])])
+            row(tbLo.y, height: 11, [(32, "SCALE", scale), (32, "SHEET", options.sheet.title),
+                                     (44, "PROJECTION", projection), (44, "DATE", date),
+                                     (28, DrawingTitleBlock.Field.revision.label, options[.revision])])
+        case .none:
+            break
         }
         out.texts.append(DrawingText(position: SIMD2(tbHi.x - 2, tbHi.y + 2), height: 1.8,
                                      string: "openshape3d", anchor: .end))

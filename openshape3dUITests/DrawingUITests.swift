@@ -34,6 +34,22 @@ final class DrawingUITests: XCTestCase {
         let shot = XCTAttachment(screenshot: app.screenshot())
         shot.name = "drawing-sheet"; shot.lifetime = .keepAlways; add(shot)
 
+        // The detailed title block brings its fields.
+        XCTAssertFalse(app.textFields["DrawingTitleField_company"].exists)
+        let block = app.buttons["DrawingTitleBlockPicker"].firstMatch
+        XCTAssertTrue(block.waitForExistence(timeout: 3))
+        block.tap()
+        XCTAssertTrue(app.buttons["Detailed"].waitForExistence(timeout: 3))
+        app.buttons["Detailed"].tap()
+        let company = app.textFields["DrawingTitleField_company"]
+        XCTAssertTrue(company.waitForExistence(timeout: 3), "the company field")
+        XCTAssertTrue(app.textFields["DrawingTitleField_partNumber"].exists)
+        company.tap()
+        company.typeText("Laan Labs\n")
+        XCTAssertTrue(preview.label.hasPrefix("Drawing at "))
+        let detailed = XCTAttachment(screenshot: app.screenshot())
+        detailed.name = "drawing-title-block"; detailed.lifetime = .keepAlways; add(detailed)
+
         // Turning the isometric off keeps a drawn sheet.
         let iso = app.switches["DrawingIsometricToggle"]
         XCTAssertTrue(iso.waitForExistence(timeout: 3))
