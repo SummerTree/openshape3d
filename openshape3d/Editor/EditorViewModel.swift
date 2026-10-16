@@ -841,6 +841,27 @@ final class EditorViewModel {
         }
     }
 
+    /// FreeCAD document (.FCStd): the analytic bodies as Part features, with
+    /// their colours; mesh-only bodies skipped by name, as for STEP.
+    func exportFreeCAD(documentName: String) -> Data? {
+        guard let bodies = exportableBodies() else { return nil }
+        switch FreeCADKit.export(bodies: bodies, documentLabel: documentName) {
+        case let .success(data, skipped):
+            if !skipped.isEmpty { showNotice(skippedNotice(skipped, format: "FreeCAD")) }
+            return data
+        case let .nothingAnalytic(skipped):
+            errorMessage = skipped.count == 1
+                ? "“\(skipped[0])” has no analytic B-rep, so there is nothing to write "
+                  + "to a FreeCAD file. Bodies imported as meshes can be exported as STL, OBJ, GLB or 3MF."
+                : "None of these \(skipped.count) bodies has an analytic B-rep, so there is "
+                  + "nothing to write to a FreeCAD file. Mesh bodies can be exported as STL, OBJ, GLB or 3MF."
+            return nil
+        case .failed:
+            reportFailure("Couldn't write the FreeCAD file — please try again.")
+            return nil
+        }
+    }
+
     /// "2 mesh-only bodies were skipped (Imported, Imported 2)" — the names
     /// matter, because a partial export otherwise looks like a complete one.
     private func skippedNotice(_ skipped: [String], format: String = "STEP") -> String {
@@ -995,10 +1016,72 @@ final class EditorViewModel {
             commands: bodies.map { AddBodyCommand(body: $0, title: "Import \($0.name)") }))
         selection = Set(bodies.map(\.id))
         mode = .idle
-        cameraControl?.fitScene()
+        fitImported(bodies)
         if bodies.count < solids.count {
             showNotice("Imported \(bodies.count) of \(solids.count) solids — "
                        + "the rest could not be meshed.")
+        }
+    }
+
+    /// Frame what an import added, from the bodies themselves: the scene
+    /// the renderer last drew does not hold them yet (on the web it is
+    /// rebuilt after this call returns), so `fitScene` would frame the
+    /// design as it was.
+    private func fitImported(_ bodies: [Body]) {
+        guard let bounds = SlicerExport.worldBounds(bodies) else {
+            cameraControl?.fitScene()
+            return
+        }
+        cameraControl?.fitTo(bounds: (SIMD3<Float>(bounds.min), SIMD3<Float>(bounds.max)))
+    }
+
+    /// FreeCAD import (.FCStd): each visible object with a shape becomes a
+    /// body — exact, like STEP — named by its label, in its colour, placed by
+    /// its App::Part containers. One undo step.
+    func importFreeCAD(data: Data, fileName: String) {
+        let contents: FreeCADKit.Contents
+        do {
+            contents = try FreeCADKit.parts(from: data)
+        } catch FreeCADKit.ReadError.tooLarge {
+            errorMessage = "Couldn't import “\(fileName)” — it has more than \(FreeCADKit.maxObjects) objects."
+            return
+        } catch {
+            errorMessage = "Couldn't import “\(fileName)” — it isn't a FreeCAD document."
+            return
+        }
+        var document = session.document
+        var bodies: [Body] = []
+        var unreadable = 0
+        for part in contents.parts {
+            guard let handle = OCCTKernel.deserialize(part.brep) else {
+                unreadable += 1
+                continue
+            }
+            let name = document.uniqueBodyName(base: part.label)
+            guard var body = STEPKit.body(from: handle, name: name, revision: document.nextRevision()) else {
+                unreadable += 1
+                continue
+            }
+            body.transform = part.placement
+            if let color = part.color { body.material = BodyMaterialSpec(baseColor: color) }
+            document.bodies.append(body)
+            bodies.append(body)
+        }
+        guard !bodies.isEmpty else {
+            errorMessage = "Couldn't import “\(fileName)” — no visible solids or surfaces found in the FreeCAD document."
+            return
+        }
+        cancelTransientPicks()
+        session.perform(CompositeCommand(
+            title: "Import FreeCAD",
+            commands: bodies.map { AddBodyCommand(body: $0, title: "Import \($0.name)") }))
+        selection = Set(bodies.map(\.id))
+        mode = .idle
+        fitImported(bodies)
+        let left = unreadable + contents.skipped
+        if left > 0 {
+            showNotice("Imported \(bodies.count) of \(bodies.count + left) objects — "
+                       + "the rest had no shape this app can read.")
         }
     }
 

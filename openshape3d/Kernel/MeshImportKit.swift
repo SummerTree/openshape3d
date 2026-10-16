@@ -395,6 +395,9 @@ nonisolated enum ZipReader {
     }
 
     private static func inflate(_ data: Data, expected: Int) throws -> Data {
+        // An empty file deflates to a couple of bytes that inflate to none
+        // (FreeCAD writes such entries) — not a failure.
+        if expected == 0 { return Data() }
         let capacity = max(expected, 1)
         var out = Data(count: capacity)
         let produced = out.withUnsafeMutableBytes { dst -> Int in

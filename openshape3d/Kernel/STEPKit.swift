@@ -99,7 +99,9 @@ nonisolated enum STEPKit {
             id: BodyID(), name: name, transform: .identity, primitive: nil,
             render: RenderMesh(positions: [], normals: [], indices: []),
             revision: revision)
-        guard body.adoptBRep(handle) else { return nil }
+        // A part too big to mesh at render quality in time comes in coarser
+        // rather than not at all.
+        guard body.adoptBRep(handle) || body.adoptBRep(handle, coarse: true) else { return nil }
         return body
     }
 }

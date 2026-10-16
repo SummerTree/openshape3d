@@ -32,6 +32,8 @@ struct ExportDocument: FileDocument {
         ?? UTType(filenameExtension: "step") ?? .data
     /// IGES 5.3: like STEP, no system UTI (dynamic, paired with `.data`).
     static let igesType = UTType(filenameExtension: "igs") ?? .data
+    /// FreeCAD document: no system UTI either (dynamic, paired with `.data`).
+    static let freeCADType = UTType(filenameExtension: FreeCADKit.fileExtension) ?? .data
     static let usdzType = UTType.usdz
     /// The .os3d project archive (Phase F, spec §13).
     static let os3dType = UTType(filenameExtension: "os3d") ?? .data
@@ -229,7 +231,7 @@ struct EditorView: View {
     /// one in the chain (found 2026-08-29 while wiring STEP: "Image from
     /// Files…" presented, the three above it did not).
     private enum ImportRequest: Equatable {
-        case stl, dxf, step, iges, mesh, image, decal
+        case stl, dxf, step, iges, freecad, mesh, image, decal
 
         var contentTypes: [UTType] {
             switch self {
@@ -241,6 +243,7 @@ struct EditorView: View {
             case .dxf: [ExportDocument.dxfType, .data]
             case .step: [ExportDocument.stepType, .data]
             case .iges: [ExportDocument.igesType, .data]
+            case .freecad: [ExportDocument.freeCADType, .data]
             // glTF/GLB, USDZ, OBJ (+MTL/textures) and zips of them. `.data`
             // again: .glb/.gltf/.obj have no system UTI worth trusting.
             case .mesh: [ExportDocument.usdzType, .zip, .data]
@@ -1032,6 +1035,13 @@ struct EditorView: View {
                 showImporter = true
             }
             .accessibilityIdentifier("ImportIGES")
+            // FreeCAD documents: the visible objects' exact shapes (the same
+            // OpenCASCADE BRep as ours), with their names and colours.
+            Button("FreeCAD File…") {
+                importRequest = .freecad
+                showImporter = true
+            }
+            .accessibilityIdentifier("ImportFreeCAD")
             // Textured meshes: glTF/GLB, USDZ, OBJ with its MTL and images, .blend,
             // or a zip holding any of them. Parts become mesh bodies.
             Button("OBJ / glTF / USDZ / Blender…") {
@@ -1195,6 +1205,17 @@ struct EditorView: View {
                 }
             }
             .accessibilityIdentifier("ExportIGES")
+            // FreeCAD: exact like STEP, plus each body's name and colour.
+            Button("FreeCAD (.FCStd)") {
+                if let data = viewModel.exportFreeCAD(documentName: project.name) {
+                    exportDocument = ExportDocument(
+                        data: data,
+                        contentType: ExportDocument.freeCADType,
+                        fileExtension: FreeCADKit.fileExtension
+                    )
+                }
+            }
+            .accessibilityIdentifier("ExportFreeCAD")
             Button("SVG from Sketch") {
                 if let data = viewModel.exportSVG() {
                     exportDocument = ExportDocument(data: data, contentType: .svg, fileExtension: "svg")
@@ -2271,6 +2292,7 @@ struct EditorView: View {
         case .dxf: viewModel.importDXF(data: data, fileName: name)
         case .step: viewModel.importSTEP(data: data, fileName: name)
         case .iges: viewModel.importSTEP(data: data, fileName: name, format: .iges)
+        case .freecad: viewModel.importFreeCAD(data: data, fileName: name)
         case .image: viewModel.beginInsertImage(data: data)
         case .decal: beginDecal(data, name: (name as NSString).deletingPathExtension, viewModel: viewModel)
         }
