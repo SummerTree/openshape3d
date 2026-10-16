@@ -2028,8 +2028,14 @@ folder and versions; the current state is kept as a version first) and
 files under Application Support/ProjectVersions (`ProjectVersionStore`,
 keyed by `Project.versionsKey`), deleted with the design; restored bodies
 keep their analytic solids (the app's own files). Web: an IndexedDB
-`versions` store. Missing: edited-by / client metadata and syncing (no
-accounts). Also fixed with it: the .os3d archive now carries construction
+`versions` store. **Named versions (2026-10-15):** Export ▸ **Save
+Version…** keeps the design as it is now under a name (a design unchanged
+since its latest version names that one instead), with a "Saved as …"
+notice; Versions… shows a named version by its name over "Version 3" and
+offers **Name…** / **Rename…** (blank takes the name off). Names are
+trimmed to 80 characters; named versions are milestones — the 50-version
+limit counts and drops only unnamed ones. Missing: edited-by / client
+metadata and syncing (no accounts). Also fixed with it: the .os3d archive now carries construction
 axes (`ProjectArchive.axes`) — export, Duplicate, Open on the Web and every
 web save used to drop them.
 **Feasibility:** [platform/service] (local snapshots feasible without cloud)

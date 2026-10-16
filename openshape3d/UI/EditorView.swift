@@ -277,6 +277,10 @@ struct EditorView: View {
 
     /// Draft name for the Make Symbol prompt (plan §B16).
     @State private var symbolNameDraft = ""
+    /// Export ▸ Save Version…: the name being typed, and the notice after.
+    @State private var showSaveVersion = false
+    @State private var versionNameDraft = ""
+    @State private var versionSavedNotice: String?
     /// Temp USDZ shown by the AR preview sheet (plan §B14).
     @State private var arPreviewURL: URL?
     /// Project Versions (spec §13.3): the session's change count when the
@@ -357,17 +361,31 @@ struct EditorView: View {
     /// Keep the design as a version (spec §13.3) if it changed since the
     /// last one (`force`: whatever the change count). The store skips a
     /// snapshot identical to the latest version.
-    private func recordVersion(_ viewModel: EditorViewModel, force: Bool = false) {
+    @discardableResult
+    private func recordVersion(_ viewModel: EditorViewModel, force: Bool = false,
+                               name: String? = nil) -> ProjectVersionStore.Version? {
         let changes = viewModel.session.changeCount
-        guard force || changes != versionedChangeCount else { return }
+        guard force || changes != versionedChangeCount else { return nil }
         let key = project.versionsKey ?? UUID()
         if project.versionsKey == nil { project.versionsKey = key }
         // The archive is read from the saved rows, thumbnail and all.
         viewModel.saveThumbnail()
         viewModel.session.save()
-        ProjectVersionStore.shared.record(ProjectArchive.archive(from: project), key: key)
+        let version = ProjectVersionStore.shared.record(ProjectArchive.archive(from: project), key: key, name: name)
         versionedChangeCount = changes
         lastVersionAt = Date()
+        return version
+    }
+
+    /// Save Version…'s "Save": the design as it is, named.
+    private func saveNamedVersion(_ viewModel: EditorViewModel) {
+        let name = ProjectVersionStore.cleaned(versionNameDraft)
+        if let version = recordVersion(viewModel, force: true, name: name) {
+            versionSavedNotice = "Saved as “\(version.name ?? "Version \(version.number)")”"
+        } else {
+            viewModel.errorMessage = "Couldn't save the version."
+        }
+        versionNameDraft = ""
     }
 
     /// Sketch-state chip inside the sketch pill (plan §C4). Under-defined
@@ -1093,6 +1111,15 @@ struct EditorView: View {
                 Label("Drawing…", systemImage: "doc.richtext")
             }
             .accessibilityIdentifier("NewDrawingButton")
+            // Project Versions (spec §13.3): keep the design as it is now,
+            // named — a milestone the 50-version limit never drops.
+            Button {
+                versionNameDraft = ""
+                showSaveVersion = true
+            } label: {
+                Label("Save Version…", systemImage: "clock.arrow.circlepath")
+            }
+            .accessibilityIdentifier("SaveVersionButton")
             Divider()
             Button("STL") {
                 if let data = viewModel.exportSTL() {
@@ -2454,6 +2481,31 @@ struct EditorView: View {
                 }
                 Button("Cancel", role: .cancel) {
                     viewModel.selectThroughCandidates = nil
+                }
+            }
+            .alert("Save Version", isPresented: $showSaveVersion) {
+                TextField("Name", text: $versionNameDraft)
+                    .accessibilityIdentifier("SaveVersionName")
+                Button("Save") { saveNamedVersion(viewModel) }
+                    .accessibilityIdentifier("SaveVersionConfirm")
+                Button("Cancel", role: .cancel) { versionNameDraft = "" }
+            } message: {
+                Text("Keep the design as it is now. Named versions are listed in the gallery under Versions… and are never removed to make room.")
+            }
+            .overlay(alignment: .top) {
+                if let notice = versionSavedNotice {
+                    Text(notice)
+                        .font(.callout.weight(.semibold))
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 8)
+                        .background(.regularMaterial, in: Capsule())
+                        .padding(.top, 70)
+                        .transition(.opacity)
+                        .accessibilityIdentifier("VersionSavedNotice")
+                        .task(id: notice) {
+                            try? await Task.sleep(for: .seconds(2.5))
+                            withAnimation { versionSavedNotice = nil }
+                        }
                 }
             }
             .alert(

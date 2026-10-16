@@ -64,4 +64,56 @@ final class ProjectVersionsUITests: XCTestCase {
         let reopened = XCTAttachment(screenshot: app.screenshot())
         reopened.name = "project-versions-restored"; reopened.lifetime = .keepAlways; add(reopened)
     }
+
+    /// Export ▸ Save Version… keeps the design under a name; the gallery's
+    /// Versions… shows it by that name and can rename it.
+    func testSaveVersionNamesItAndVersionsCanBeRenamed() throws {
+        let app = XCUIApplication()
+        app.launchEnvironment["OS3D_FRESH"] = "1"
+        app.launchEnvironment["OS3D_RESET_STORE"] = "1"
+        app.launchEnvironment["OS3D_DEBUG_SEED"] = "1"
+        app.launch()
+
+        XCTAssertTrue(app.buttons["ExportMenu"].waitForExistence(timeout: 10))
+        sleep(2) // version 1, on opening
+        app.buttons["ExportMenu"].tap()
+        let save = app.buttons["SaveVersionButton"]
+        XCTAssertTrue(save.waitForExistence(timeout: 3))
+        save.tap()
+        // An alert's field and buttons go by the alert, not their identifiers.
+        let alert = app.alerts["Save Version"]
+        XCTAssertTrue(alert.waitForExistence(timeout: 3))
+        let name = alert.textFields.firstMatch
+        XCTAssertTrue(name.waitForExistence(timeout: 3))
+        name.typeText("Before the fillets")
+        alert.buttons["Save"].firstMatch.tap()
+        let notice = app.staticTexts["VersionSavedNotice"]
+        XCTAssertTrue(notice.waitForExistence(timeout: 3))
+        XCTAssertEqual(notice.label, "Saved as “Before the fillets”")
+
+        app.buttons["Designs"].firstMatch.tap()
+        XCTAssertTrue(app.staticTexts["Untitled"].waitForExistence(timeout: 5))
+        app.staticTexts["Untitled"].press(forDuration: 1.0)
+        app.buttons["Versions…"].tap()
+        // The named one: version 1 when nothing changed since it opened,
+        // else a new version 2.
+        let title = app.staticTexts["Before the fillets"]
+        XCTAssertTrue(title.waitForExistence(timeout: 5))
+        let number = title.identifier.replacingOccurrences(of: "ProjectVersionTitle_", with: "")
+        XCTAssertTrue(app.descendants(matching: .any)["ProjectVersion_\(number)"]
+            .staticTexts["Version \(number) · 1 body"].exists)
+
+        app.buttons["ProjectVersionName_\(number)"].tap()
+        let rename = app.alerts["Name Version"]
+        XCTAssertTrue(rename.waitForExistence(timeout: 3))
+        let field = rename.textFields.firstMatch
+        XCTAssertEqual(field.value as? String, "Before the fillets")
+        // The alert's field has the keyboard: clear it and type the new name.
+        field.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: 30) + "Ready to print")
+        rename.buttons["Save"].firstMatch.tap()
+        XCTAssertTrue(app.staticTexts["Ready to print"].waitForExistence(timeout: 3))
+        let shot = XCTAttachment(screenshot: app.screenshot())
+        shot.name = "project-versions-named"; shot.lifetime = .keepAlways; add(shot)
+        app.buttons["ProjectVersionsDone"].tap()
+    }
 }
