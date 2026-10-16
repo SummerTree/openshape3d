@@ -17,9 +17,15 @@ struct ProjectVersionsView: View {
     var onCopy: (Int) -> Void
 
     @Environment(\.dismiss) private var dismiss
+    /// Name…: the version being named and the name typed.
+    @State private var naming: ProjectVersionStore.Version?
+    @State private var nameDraft = ""
+    /// Bumped after a rename so the list reads the index again.
+    @State private var revision = 0
 
     private var versions: [ProjectVersionStore.Version] {
-        project.versionsKey.map(ProjectVersionStore.shared.versions) ?? []
+        _ = revision
+        return project.versionsKey.map(ProjectVersionStore.shared.versions) ?? []
     }
 
     var body: some View {
@@ -34,6 +40,21 @@ struct ProjectVersionsView: View {
                 ForEach(Array(versions.enumerated()), id: \.element.id) { index, version in
                     row(version, isLatest: index == 0)
                 }
+            }
+            .alert("Name Version", isPresented: Binding(get: { naming != nil }, set: { if !$0 { naming = nil } })) {
+                TextField("Name", text: $nameDraft)
+                    .accessibilityIdentifier("ProjectVersionNameField")
+                Button("Save") {
+                    if let key = project.versionsKey, let version = naming {
+                        ProjectVersionStore.shared.rename(key, number: version.number, to: nameDraft)
+                        revision += 1
+                    }
+                    naming = nil
+                }
+                .accessibilityIdentifier("ProjectVersionNameSave")
+                Button("Cancel", role: .cancel) { naming = nil }
+            } message: {
+                Text("A named version is kept until you delete the design. Leave the name empty to take it off.")
             }
             .navigationTitle("Versions of “\(project.name)”")
             .navigationBarTitleDisplayMode(.inline)
@@ -51,7 +72,8 @@ struct ProjectVersionsView: View {
             thumbnail(version)
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 6) {
-                    Text("Version \(version.number)").font(.headline)
+                    Text(version.name ?? "Version \(version.number)").font(.headline)
+                        .accessibilityIdentifier("ProjectVersionTitle_\(version.number)")
                     if isLatest {
                         Text("Latest")
                             .font(.caption2.weight(.semibold))
@@ -63,7 +85,8 @@ struct ProjectVersionsView: View {
                 Text(version.created.formatted(date: .abbreviated, time: .shortened))
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
-                Text([version.note, "\(version.bodies) \(version.bodies == 1 ? "body" : "bodies")"]
+                Text([version.name == nil ? nil : "Version \(version.number)", version.note,
+                      "\(version.bodies) \(version.bodies == 1 ? "body" : "bodies")"]
                     .compactMap { $0 }.joined(separator: " · "))
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -84,6 +107,12 @@ struct ProjectVersionsView: View {
                 }
                 .buttonStyle(.borderless)
                 .accessibilityIdentifier("ProjectVersionCopy_\(version.number)")
+                Button(version.name == nil ? "Name…" : "Rename…") {
+                    nameDraft = version.name ?? ""
+                    naming = version
+                }
+                .buttonStyle(.borderless)
+                .accessibilityIdentifier("ProjectVersionName_\(version.number)")
             }
             .font(.callout)
         }

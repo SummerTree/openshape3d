@@ -22,12 +22,15 @@ struct ProjectVersionStore {
         /// Why it was taken when not simply as you worked:
         /// "Before restoring version 3", "Restored from version 3".
         var note: String?
+        /// The name you gave it ("Before the fillets"): a named version is
+        /// a milestone, never dropped to make room.
+        var name: String?
         var bodies: Int
         var bytes: Int
         var id: Int { number }
     }
 
-    /// Versions kept per design; the oldest go first.
+    /// Versions kept per design besides the named ones; the oldest go first.
     static let limit = 50
     /// While editing, at most one version per this many seconds.
     static let interval: TimeInterval = 600
@@ -68,7 +71,9 @@ struct ProjectVersionStore {
     /// as the latest one, byte for byte (its thumbnail aside). Returns the
     /// version written.
     @discardableResult
-    func record(_ archive: ProjectArchive, key: UUID, note: String? = nil, now: Date = Date()) -> Version? {
+    func record(_ archive: ProjectArchive, key: UUID, note: String? = nil, name: String? = nil,
+                now: Date = Date()) -> Version? {
+        let name = Self.cleaned(name)
         var bare = archive
         let thumbnail = bare.thumbnail
         bare.thumbnail = nil
@@ -76,26 +81,50 @@ struct ProjectVersionStore {
         var list = versions(key)
         if note == nil, let latest = list.first,
            (try? Data(contentsOf: archiveURL(key, latest.number))) == data {
-            return nil
+            // Saving a name for the design as it already is names the latest.
+            guard let name else { return nil }
+            return rename(key, number: latest.number, to: name)
         }
         let fm = FileManager.default
         do {
             try fm.createDirectory(at: folder(key), withIntermediateDirectories: true)
-            let version = Version(number: (list.first?.number ?? 0) + 1, created: now, note: note,
+            let version = Version(number: (list.first?.number ?? 0) + 1, created: now, note: note, name: name,
                                   bodies: archive.bodies.count, bytes: data.count)
             try data.write(to: archiveURL(key, version.number), options: .atomic)
             if let thumbnail { try? thumbnail.write(to: thumbnailURL(key, version.number), options: .atomic) }
             list.insert(version, at: 0)
-            for old in list.dropFirst(Self.limit) {
+            let dropped = Self.overLimit(list)
+            for old in dropped {
                 try? fm.removeItem(at: archiveURL(key, old.number))
                 try? fm.removeItem(at: thumbnailURL(key, old.number))
             }
-            list = Array(list.prefix(Self.limit))
+            list.removeAll { dropped.contains($0) }
             try JSONEncoder().encode(list).write(to: indexURL(key), options: .atomic)
             return version
         } catch {
             return nil
         }
+    }
+
+    /// The unnamed versions past the newest `limit` of them (newest-first list).
+    static func overLimit(_ list: [Version]) -> [Version] {
+        Array(list.filter { $0.name == nil }.dropFirst(limit))
+    }
+
+    /// Name a version, or (nil / blank) take its name off. Returns it renamed.
+    @discardableResult
+    func rename(_ key: UUID, number: Int, to name: String?) -> Version? {
+        var list = versions(key)
+        guard let i = list.firstIndex(where: { $0.number == number }) else { return nil }
+        list[i].name = Self.cleaned(name)
+        guard (try? JSONEncoder().encode(list).write(to: indexURL(key), options: .atomic)) != nil else { return nil }
+        return list[i]
+    }
+
+    /// A name trimmed, at most 80 characters; nil when nothing is left.
+    static func cleaned(_ name: String?) -> String? {
+        guard let name = name?.trimmingCharacters(in: .whitespacesAndNewlines), !name.isEmpty else { return nil }
+        return String(name.prefix(80))
     }
 
     /// Forget every version of a deleted design.

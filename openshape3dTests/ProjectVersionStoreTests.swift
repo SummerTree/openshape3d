@@ -72,6 +72,41 @@ final class ProjectVersionStoreTests: XCTestCase {
         XCTAssertNil(store.archive(key, number: 3), "the oldest are gone from disk too")
     }
 
+    func testVersionsCanBeNamedAndNamedOnesAreNeverDropped() throws {
+        var a = design("A")
+        let first = try XCTUnwrap(store.record(a, key: key, name: "  Before the fillets \n"))
+        XCTAssertEqual(first.name, "Before the fillets", "trimmed")
+        // The same design named again names the latest instead of copying it.
+        a.thumbnail = Data([5])
+        let same = try XCTUnwrap(store.record(a, key: key, name: "Ready to print"))
+        XCTAssertEqual(same.number, 1)
+        XCTAssertEqual(store.versions(key).map(\.name), ["Ready to print"])
+        XCTAssertNil(store.record(a, key: key), "unnamed and unchanged: nothing")
+
+        XCTAssertEqual(store.rename(key, number: 1, to: "Milestone")?.name, "Milestone")
+        XCTAssertNil(store.rename(key, number: 9, to: "x"), "no such version")
+        XCTAssertEqual(ProjectVersionStore.cleaned(String(repeating: "a", count: 200))?.count, 80)
+
+        // Fill past the limit with unnamed versions: the named one stays.
+        for i in 0..<(ProjectVersionStore.limit + 5) { store.record(design("B\(i)"), key: key) }
+        let list = store.versions(key)
+        XCTAssertEqual(list.count, ProjectVersionStore.limit + 1)
+        XCTAssertEqual(list.last?.number, 1)
+        XCTAssertEqual(list.last?.name, "Milestone")
+        XCTAssertNotNil(store.archive(key, number: 1))
+        XCTAssertNil(store.archive(key, number: 2), "the oldest unnamed went")
+
+        // Taking the name off makes it an ordinary version again.
+        XCTAssertNil(store.rename(key, number: 1, to: "  ")?.name)
+        store.record(design("C"), key: key)
+        XCTAssertFalse(store.versions(key).contains { $0.number == 1 })
+
+        // An index written before names existed still reads.
+        let old = #"[{"number":3,"created":0,"bodies":1,"bytes":10}]"#
+        let decoded = try JSONDecoder().decode([ProjectVersionStore.Version].self, from: Data(old.utf8))
+        XCTAssertNil(decoded[0].name)
+    }
+
     func testForgettingADesignRemovesItsVersions() throws {
         store.record(design("A"), key: key)
         let other = UUID()
