@@ -29,6 +29,25 @@ final class Renderer: NSObject, MTKViewDelegate {
     private let quadTextures = ImageQuadTextureCache()
     private let decalTextures = ImageQuadTextureCache()
     private let bodyTextures = BodyTextureCache()
+    /// Face materials' projected pictures (the `.image` pattern).
+    private let patchTextures = FingerprintTextureCache()
+    /// Bound for the lit shader's picture when there is none to show: Metal
+    /// wants every texture the function reads bound.
+    private lazy var whiteTexture: MTLTexture? = {
+        let descriptor = MTLTextureDescriptor.texture2DDescriptor(
+            pixelFormat: .rgba8Unorm, width: 1, height: 1, mipmapped: false)
+        descriptor.usage = .shaderRead
+        guard let texture = context.device.makeTexture(descriptor: descriptor) else { return nil }
+        var white: [UInt8] = [255, 255, 255, 255]
+        texture.replace(region: MTLRegionMake2D(0, 0, 1, 1), mipmapLevel: 0, withBytes: &white, bytesPerRow: 4)
+        return texture
+    }()
+
+    private func syncPatchTextures() {
+        patchTextures.sync(images: scene.facePatches.compactMap { patch in
+            patch.material.textureData.map { (patch.material.textureRevision, $0) }
+        }, device: context.device)
+    }
     private let gizmoRenderer = GizmoRenderer()
     #if DEBUG
     private var didMarkFirstDraw = false
@@ -92,6 +111,7 @@ final class Renderer: NSObject, MTKViewDelegate {
         cache.sync(with: scene, device: context.device)
         quadTextures.sync(quads: scene.imageQuads, device: context.device)
         bodyTextures.sync(bodies: scene.bodies, device: context.device)
+        syncPatchTextures()
 
         var frame = makeFrameUniforms()
         if let target = descriptor.colorAttachments[0].texture,
@@ -598,6 +618,7 @@ final class Renderer: NSObject, MTKViewDelegate {
         cache.sync(with: scene, device: context.device)
         quadTextures.sync(quads: scene.imageQuads, device: context.device)
         bodyTextures.sync(bodies: scene.bodies, device: context.device)
+        syncPatchTextures()
         var frame = makeFrameUniforms(viewportSize: CGSize(width: width, height: height))
         if var blur = depthOfFieldUniforms(frame, width: width, height: height),
            let targets = makeDepthOfFieldTargets(width: width, height: height) {
@@ -668,7 +689,10 @@ final class Renderer: NSObject, MTKViewDelegate {
         // textured twin of the requested lit pipeline; depth-only and other
         // passes keep the pipeline they asked for.
         var chosen = pipeline
-        if let texcoords = resources.texcoordBuffer,
+        // A projected picture (the `.image` pattern) is the lit shader's own
+        // business, texcoords or not.
+        let projectsImage = (drawable.material?.pattern ?? 0) > MaterialPattern.imageThreshold
+        if !projectsImage, let texcoords = resources.texcoordBuffer,
            let texture = bodyTextures.texture(for: drawable.id) {
             if pipeline === context.pipelines.lit {
                 chosen = context.pipelines.litTextured
@@ -680,6 +704,10 @@ final class Renderer: NSObject, MTKViewDelegate {
                                         index: Int(BufferIndexTexcoords.rawValue))
                 encoder.setFragmentTexture(texture, index: 0)
             }
+        }
+        if chosen === pipeline {
+            let picture = projectsImage ? bodyTextures.texture(for: drawable.id) : nil
+            encoder.setFragmentTexture(picture ?? whiteTexture, index: 0)
         }
         encoder.setRenderPipelineState(chosen)
         var body = makeBodyUniforms(drawable)
@@ -867,6 +895,9 @@ final class Renderer: NSObject, MTKViewDelegate {
                 meshRevision: 0, modelMatrix: patch.modelMatrix, baseColor: patch.material.baseColor,
                 selectionState: patch.selectionState, material: patch.material))
             if let alphaOverride { body.baseColor.w = alphaOverride }
+            let picture = patch.material.pattern > MaterialPattern.imageThreshold
+                ? patchTextures.texture(for: patch.material.textureRevision) : nil
+            encoder.setFragmentTexture(picture ?? whiteTexture, index: 0)
             encoder.setVertexBuffer(buffers.positions, offset: 0, index: Int(BufferIndexPositions.rawValue))
             encoder.setVertexBuffer(buffers.normals, offset: 0, index: Int(BufferIndexNormals.rawValue))
             encoder.setVertexBytes(&body, length: MemoryLayout<BodyUniforms>.stride,

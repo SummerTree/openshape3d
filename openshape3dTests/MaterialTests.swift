@@ -143,17 +143,44 @@ final class MaterialTests: XCTestCase {
         var spec = preset("Plastic Gloss")
         spec.baseColorTexture = Data([1, 2, 3])
 
-        let textured = BodyMaterial(spec: spec, meshHasTexcoords: true, revision: 7)
+        let textured = BodyMaterial(spec: spec, meshHasTexcoords: true)
         XCTAssertEqual(textured.baseColor, SIMD4<Float>(spec.baseColor))
         XCTAssertEqual(textured.metallic, Float(spec.metallic))
         XCTAssertEqual(textured.roughness, Float(spec.roughness))
         XCTAssertEqual(textured.textureData, Data([1, 2, 3]))
-        XCTAssertEqual(textured.textureRevision, 7)
+        XCTAssertEqual(textured.textureRevision, ImageFingerprint.of(Data([1, 2, 3])),
+                       "keyed by the picture: a new one reloads, a rebuilt mesh does not")
 
-        let rebuilt = BodyMaterial(spec: spec, meshHasTexcoords: false, revision: 8)
+        let rebuilt = BodyMaterial(spec: spec, meshHasTexcoords: false)
         XCTAssertNil(rebuilt.textureData, "a rebuilt preview mesh cannot sample the image")
         XCTAssertEqual(rebuilt.baseColor, textured.baseColor, "but it keeps the colour")
         XCTAssertEqual(rebuilt.roughness, textured.roughness)
+
+        // A projected picture needs no texcoords.
+        spec.pattern = .image
+        let projected = BodyMaterial(spec: spec, meshHasTexcoords: false)
+        XCTAssertEqual(projected.textureData, Data([1, 2, 3]))
+        XCTAssertEqual(projected.pattern, MaterialPattern.image.shaderValue)
+        XCTAssertGreaterThan(projected.pattern, MaterialPattern.imageThreshold)
+        XCTAssertLessThan(MaterialPattern.marble.shaderValue, MaterialPattern.imageThreshold,
+                          "the procedural patterns keep their numbers")
+    }
+
+    func testImageFingerprintsTellPicturesApart() {
+        let a = Data((0..<100_000).map { UInt8($0 % 251) })
+        var b = a
+        b[50_000] ^= 0xFF
+        b[50_001] ^= 0xFF
+        XCTAssertEqual(ImageFingerprint.of(a), ImageFingerprint.of(a))
+        XCTAssertNotEqual(ImageFingerprint.of(a), ImageFingerprint.of(a + Data([0])), "the length counts")
+        XCTAssertNotEqual(ImageFingerprint.of(Data([1, 2, 3])), ImageFingerprint.of(Data([1, 2, 4])))
+        // An image material round-trips; one from a build without it reads as none.
+        var spec = BodyMaterialSpec(baseColor: SIMD4(1, 1, 1, 1), baseColorTexture: Data([9]), pattern: .image)
+        spec.patternSize = 80
+        let back = try? JSONDecoder().decode(BodyMaterialSpec.self, from: JSONEncoder().encode(spec))
+        XCTAssertEqual(back, spec)
+        XCTAssertEqual(MaterialPattern.image.defaultSize, 50)
+        _ = b
     }
 
     /// Face move/scale/rotate commit through ReplaceBodyCommand with freshly

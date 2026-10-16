@@ -114,6 +114,32 @@ static float patternFbm(float3 p) {
     return patternNoise(p) * 0.5 + patternNoise(p * 2.03 + 1.7) * 0.3 + patternNoise(p * 4.01 + 3.1) * 0.2;
 }
 
+/// The `.image` pattern (7): the user's picture laid on the part from its
+/// three sides, blended by how much the surface faces each (so a curve has
+/// no hard seam); `size` is the picture's width in mm, its height follows
+/// the picture, `rotation` turns it on every side. Each side reads the
+/// right way round from outside the part.
+static float3 imageAlbedo(texture2d<float> image, float3 tint, float size, float rotation, float3 P, float3 N) {
+    constexpr sampler tiled(address::repeat, filter::linear, mip_filter::linear);
+    float aspect = float(image.get_height()) / max(float(image.get_width()), 1.0);
+    float c = cos(rotation), s = sin(rotation);
+    float3 q = P / max(size, 1e-4);
+    float3 w = pow(abs(N), float3(4.0));
+    w /= max(w.x + w.y + w.z, 1e-5);
+    float2 uvs[3] = {
+        float2(-sign(N.x) * q.z, q.y),   // seen from ±X
+        float2(q.x, -sign(N.y) * q.z),   // from above / below
+        float2(sign(N.z) * q.x, q.y),    // from ±Z
+    };
+    float3 color = float3(0.0);
+    for (int i = 0; i < 3; i++) {
+        float2 uv = float2(c * uvs[i].x - s * uvs[i].y, s * uvs[i].x + c * uvs[i].y);
+        uv.y /= aspect;
+        color += image.sample(tiled, float2(uv.x + 0.5, 0.5 - uv.y)).rgb * w[i];
+    }
+    return tint * color;
+}
+
 /// The albedo with `pattern` over it: 1 wood grain, 2 brushed, 3 carbon fibre,
 /// 4 knurl, 5 speckle, 6 marble (MaterialPattern.shaderValue); `size` is one
 /// repeat in mm, `rotation` radians.
@@ -193,7 +219,8 @@ vertex LitOut vertex_lit(
 fragment float4 fragment_lit(
     LitOut in [[stage_in]],
     constant FrameUniforms &frame [[buffer(BufferIndexFrameUniforms)]],
-    constant BodyUniforms &body [[buffer(BufferIndexBodyUniforms)]]
+    constant BodyUniforms &body [[buffer(BufferIndexBodyUniforms)]],
+    texture2d<float> image [[texture(0)]]
 ) {
     if (sectionClipped(in.worldPosition, frame)) {
         discard_fragment();
@@ -202,8 +229,11 @@ fragment float4 fragment_lit(
     float3 V = normalize(frame.cameraPosition.xyz - in.worldPosition);
     float3 L = normalize(-frame.keyLightDirection.xyz);
 
-    float3 albedo = patternAlbedo(body.baseColor.rgb, body.pattern, body.patternSize, body.patternRotation,
-                                  in.localPosition, normalize(in.localNormal));
+    float3 albedo = body.pattern > 6.5
+        ? imageAlbedo(image, body.baseColor.rgb, body.patternSize, body.patternRotation,
+                      in.localPosition, normalize(in.localNormal))
+        : patternAlbedo(body.baseColor.rgb, body.pattern, body.patternSize, body.patternRotation,
+                        in.localPosition, normalize(in.localNormal));
     float alpha = body.baseColor.a;
     if (body.selectionState == SelectionStateSelected) {
         albedo = mix(albedo, frame.accentColor.rgb, 0.45);

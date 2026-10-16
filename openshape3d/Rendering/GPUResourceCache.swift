@@ -193,3 +193,35 @@ final class BodyTextureCache {
 
     var entryCount: Int { cache.count }
 }
+
+/// Pictures by `ImageFingerprint` — a face material's projected image
+/// (spec §14 texture mapping), shared by every patch that shows it; mipmapped,
+/// since a picture tiled small across a part is minified.
+final class FingerprintTextureCache {
+    private var cache: [UInt64: MTLTexture?] = [:]
+    private var loader: MTKTextureLoader?
+
+    func sync(images: [(fingerprint: UInt64, data: Data)], device: MTLDevice) {
+        var live = Set<UInt64>()
+        for image in images {
+            live.insert(image.fingerprint)
+            guard cache[image.fingerprint] == nil else { continue }
+            let loader = self.loader ?? MTKTextureLoader(device: device)
+            self.loader = loader
+            var texture: MTLTexture?
+            if let source = CGImageSourceCreateWithData(image.data as CFData, nil),
+               let cgImage = CGImageSourceCreateImageAtIndex(source, 0, nil) {
+                texture = try? loader.newTexture(cgImage: cgImage, options: [
+                    .SRGB: false,
+                    .textureUsage: MTLTextureUsage.shaderRead.rawValue,
+                    .textureStorageMode: MTLStorageMode.shared.rawValue,
+                    .generateMipmaps: true,
+                ])
+            }
+            cache[image.fingerprint] = .some(texture)
+        }
+        cache = cache.filter { live.contains($0.key) }
+    }
+
+    func texture(for fingerprint: UInt64) -> MTLTexture? { cache[fingerprint] ?? nil }
+}

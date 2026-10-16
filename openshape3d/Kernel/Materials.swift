@@ -17,6 +17,10 @@ import simd
 /// fixed to the part as it moves, and needs no image or texture coordinates.
 nonisolated enum MaterialPattern: String, Codable, CaseIterable, Sendable {
     case none, woodGrain, brushed, carbonFibre, knurl, speckle, marble
+    /// A picture of the user's (`BodyMaterialSpec.baseColorTexture`) laid
+    /// on the part from its three sides — size is the picture's width.
+    /// Last, so the procedural patterns keep their shader numbers.
+    case image
 
     var title: String {
         switch self {
@@ -27,11 +31,15 @@ nonisolated enum MaterialPattern: String, Codable, CaseIterable, Sendable {
         case .knurl: "Knurl"
         case .speckle: "Speckle"
         case .marble: "Marble"
+        case .image: "Image"
         }
     }
 
     /// The shader's number for it.
     var shaderValue: Float { Float(Self.allCases.firstIndex(of: self) ?? 0) }
+
+    /// Shader values above this are the projected picture (`.image` is 7).
+    static let imageThreshold: Float = 6.5
 
     /// One repeat, mm, when first chosen: ring spacing, weave, knurl pitch…
     var defaultSize: Double {
@@ -43,6 +51,7 @@ nonisolated enum MaterialPattern: String, Codable, CaseIterable, Sendable {
         case .knurl: 1.5
         case .speckle: 3
         case .marble: 20
+        case .image: 50
         }
     }
 
@@ -60,10 +69,11 @@ nonisolated struct BodyMaterialSpec: Codable, Equatable, Sendable {
     var metallic: Double = 0
     /// 0 keeps the legacy fixed highlight; > 0 widens/softens it.
     var roughness: Double = 0
-    /// Encoded image bytes (PNG/JPEG) multiplied into `baseColor` where the
+    /// Encoded image bytes (PNG/JPEG) multiplied into `baseColor`: where the
     /// body's mesh carries texture coordinates — how an imported OBJ, glTF or
-    /// USDZ keeps its look. Nil for every modelled body. Optional in the
-    /// JSON, so pre-texture material records decode unchanged.
+    /// USDZ keeps its look — or, with the `.image` pattern, laid on any part
+    /// from its sides. Optional in the JSON, so pre-texture material records
+    /// decode unchanged.
     var baseColorTexture: Data? = nil
     /// Glow (spec §14 emission): 0 lit normally; toward 1 the surface shows
     /// its own colour, brighter, whatever the light. Absent in older records.
@@ -464,5 +474,24 @@ nonisolated struct MaterialPreset: Identifiable, Sendable {
             $0.spec.baseColor == spec.baseColor && $0.spec.metallic == spec.metallic
                 && $0.spec.roughness == spec.roughness && $0.spec.emission == spec.emission
         }
+    }
+}
+
+/// A cheap identity for image bytes, so a texture cache reloads when the
+/// picture changes but not on every redraw: the length and up to 4096
+/// bytes spread through the data, FNV-1a.
+nonisolated enum ImageFingerprint {
+    static func of(_ data: Data) -> UInt64 {
+        var h: UInt64 = 0xcbf2_9ce4_8422_2325
+        func mix(_ byte: UInt8) { h = (h ^ UInt64(byte)) &* 0x0000_0100_0000_01B3 }
+        withUnsafeBytes(of: UInt64(data.count).littleEndian) { $0.forEach(mix) }
+        data.withUnsafeBytes { raw in
+            let bytes = raw.bindMemory(to: UInt8.self)
+            let step = max(1, bytes.count / 4096)
+            var i = 0
+            while i < bytes.count { mix(bytes[i]); i += step }
+            if let last = bytes.last { mix(last) }
+        }
+        return h
     }
 }

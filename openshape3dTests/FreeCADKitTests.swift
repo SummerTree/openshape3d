@@ -279,7 +279,7 @@ final class FreeCADKitTests: XCTestCase {
 
     /// Real documents saved by FreeCAD, when a folder of them is given.
     func testRealFreeCADDocumentsImport() throws {
-        guard let folder = ProcessInfo.processInfo.environment["OS3D_FCSTD_SAMPLES"] else {
+        guard let folder = ProcessInfo.processInfo.environment["OS3D_FCSTD_SAMPLES"], !folder.isEmpty else {
             throw XCTSkip("set OS3D_FCSTD_SAMPLES to a folder of .FCStd files")
         }
         let files = try FileManager.default.contentsOfDirectory(atPath: folder).filter { $0.hasSuffix(".FCStd") }
