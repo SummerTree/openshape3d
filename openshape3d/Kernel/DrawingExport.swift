@@ -69,9 +69,14 @@ nonisolated enum DrawingExport {
         <?xml version="1.0" encoding="UTF-8"?>
         <svg xmlns="http://www.w3.org/2000/svg" width="\(num(w))mm" height="\(num(h))mm" viewBox="0 0 \(num(w)) \(num(h))">
         <rect width="\(num(w))" height="\(num(h))" fill="#ffffff"/>
-        <g fill="none" stroke="#000000" stroke-linecap="round">
 
         """
+        for image in layout.images {
+            out += "<image x=\"\(num(image.origin.x))\" y=\"\(num(h - image.origin.y - image.size.y))\" "
+                + "width=\"\(num(image.size.x))\" height=\"\(num(image.size.y))\" preserveAspectRatio=\"none\" "
+                + "href=\"data:image/jpeg;base64,\(image.logo.jpeg.base64EncodedString())\"/>\n"
+        }
+        out += "<g fill=\"none\" stroke=\"#000000\" stroke-linecap=\"round\">\n"
         for style in DrawingLineStyle.drawOrder {
             let lines = layout.lines.filter { $0.style == style }
             guard !lines.isEmpty else { continue }
@@ -97,14 +102,20 @@ nonisolated enum DrawingExport {
 
     // MARK: - PDF
 
-    /// A one-page PDF 1.4: vector lines and Helvetica text.
+    /// A one-page PDF 1.4: vector lines, Helvetica text and the logo (a
+    /// JPEG, embedded as it is).
     static func pdf(_ layout: DrawingLayout) -> Data { pdf([layout]) }
 
     /// A PDF 1.4 with a page per sheet, each its own paper size.
     static func pdf(_ sheets: [DrawingLayout]) -> Data {
         let k = 72 / 25.4 // mm → points
         func content(_ layout: DrawingLayout) -> String {
-            var content = "q\n1 J 1 j\n"
+            var content = ""
+            for (i, image) in layout.images.enumerated() {
+                content += "q \(num(image.size.x * k)) 0 0 \(num(image.size.y * k)) "
+                    + "\(num(image.origin.x * k)) \(num(image.origin.y * k)) cm /Im\(i + 1) Do Q\n"
+            }
+            content += "q\n1 J 1 j\n"
             for style in DrawingLineStyle.drawOrder {
                 let lines = layout.lines.filter { $0.style == style }
                 guard !lines.isEmpty else { continue }
@@ -129,23 +140,43 @@ nonisolated enum DrawingExport {
             return content
         }
 
-        // 1 catalog, 2 pages, 3 font, then a page and its contents per sheet.
-        var objects = [
-            "<< /Type /Catalog /Pages 2 0 R >>",
-            "<< /Type /Pages /Kids [\(sheets.indices.map { "\(4 + $0 * 2) 0 R" }.joined(separator: " "))] /Count \(sheets.count) >>",
-            "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>",
+        // 1 catalog, 2 pages, 3 font, then per sheet its page, its contents
+        // and its images.
+        var objects: [Data] = [
+            Data("<< /Type /Catalog /Pages 2 0 R >>".utf8),
+            Data(), // the page list, once the pages are numbered
+            Data("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>".utf8),
         ]
-        for (i, layout) in sheets.enumerated() {
-            let page = layout.size * k, stream = content(layout)
-            objects.append("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 \(num(page.x)) \(num(page.y))] "
-                + "/Resources << /Font << /F1 3 0 R >> >> /Contents \(5 + i * 2) 0 R >>")
-            objects.append("<< /Length \(stream.utf8.count) >>\nstream\n\(stream)endstream")
+        var kids: [Int] = []
+        for layout in sheets {
+            let pageNumber = objects.count + 1, page = layout.size * k, stream = content(layout)
+            kids.append(pageNumber)
+            let images = layout.images.enumerated().map { "/Im\($0.offset + 1) \(pageNumber + 2 + $0.offset) 0 R" }
+            let xObjects = images.isEmpty ? "" : " /XObject << \(images.joined(separator: " ")) >>"
+            objects.append(Data(("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 \(num(page.x)) \(num(page.y))] "
+                + "/Resources << /Font << /F1 3 0 R >>\(xObjects) >> /Contents \(pageNumber + 1) 0 R >>").utf8))
+            objects.append(Data("<< /Length \(stream.utf8.count) >>\nstream\n\(stream)endstream".utf8))
+            for image in layout.images {
+                let logo = image.logo
+                let components = JPEGInfo.size(of: logo.jpeg)?.components ?? 3
+                let space = components == 1 ? "/DeviceGray" : components == 4 ? "/DeviceCMYK" : "/DeviceRGB"
+                // Adobe's CMYK JPEGs are stored inverted.
+                let decode = components == 4 ? " /Decode [1 0 1 0 1 0 1 0]" : ""
+                var object = Data(("<< /Type /XObject /Subtype /Image /Width \(logo.pixelWidth) /Height \(logo.pixelHeight) "
+                    + "/ColorSpace \(space) /BitsPerComponent 8\(decode) /Filter /DCTDecode /Length \(logo.jpeg.count) >>\nstream\n").utf8)
+                object += logo.jpeg
+                object += Data("\nendstream".utf8)
+                objects.append(object)
+            }
         }
+        objects[1] = Data("<< /Type /Pages /Kids [\(kids.map { "\($0) 0 R" }.joined(separator: " "))] /Count \(sheets.count) >>".utf8)
         var data = Data("%PDF-1.4\n".utf8)
         var offsets: [Int] = []
         for (i, body) in objects.enumerated() {
             offsets.append(data.count)
-            data += Data("\(i + 1) 0 obj\n\(body)\nendobj\n".utf8)
+            data += Data("\(i + 1) 0 obj\n".utf8)
+            data += body
+            data += Data("\nendobj\n".utf8)
         }
         let xref = data.count
         var trailer = "xref\n0 \(objects.count + 1)\n0000000000 65535 f \n"
@@ -164,7 +195,8 @@ nonisolated enum DrawingExport {
 
     /// DXF R12, in millimetres at sheet scale: layers VISIBLE, HIDDEN (dashed
     /// HIDDEN linetype), CUTTING (CENTER linetype), HATCH, DIMENSIONS, BORDER
-    /// and TEXT.
+    /// and TEXT. A title block's logo is left out: DXF keeps pictures in
+    /// files of their own.
     static func dxf(_ layout: DrawingLayout) -> String {
         var out = ""
         func pair(_ code: Int, _ value: String) { out += "\(code)\n\(value)\n" }

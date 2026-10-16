@@ -380,6 +380,7 @@ final class AppSettings {
         static let defaultSplineType = "os3d.defaultSplineType"
         static let spaceMouse = "os3d.spaceMouse"
         static let shortcuts = "os3d.keyboardShortcuts"
+        static let drawingTitleTemplate = "os3d.drawingTitleTemplate"
     }
 
     /// Settings ▸ Keyboard Shortcuts: the changes from the default keys.
@@ -388,6 +389,14 @@ final class AppSettings {
         didSet {
             defaults.set(try? JSONEncoder().encode(shortcuts), forKey: Key.shortcuts)
             if self === AppSettings.shared { CommandRegistry.customization = shortcuts }
+        }
+    }
+
+    /// Drawing ▸ Title Block ▸ Save as Default: what every new drawing's
+    /// title block starts as (layout, company fields, own fields, logo).
+    var drawingTitleTemplate: DrawingTitleTemplate? {
+        didSet {
+            defaults.set(drawingTitleTemplate.flatMap { try? JSONEncoder().encode($0) }, forKey: Key.drawingTitleTemplate)
         }
     }
 
@@ -598,6 +607,8 @@ final class AppSettings {
             .flatMap { try? JSONDecoder().decode(ShortcutCustomization.self, from: $0) } ?? ShortcutCustomization()
         spaceMouse = defaults.data(forKey: Key.spaceMouse)
             .flatMap { try? JSONDecoder().decode(SpaceMouseSettings.self, from: $0) } ?? SpaceMouseSettings()
+        drawingTitleTemplate = defaults.data(forKey: Key.drawingTitleTemplate)
+            .flatMap { try? JSONDecoder().decode(DrawingTitleTemplate.self, from: $0) }
     }
 
     // Under `SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor`, this class is

@@ -63,7 +63,8 @@ nonisolated enum DrawingTitleBlock: String, CaseIterable, Codable, Sendable {
         }
     }
 
-    /// Width × height, mm.
+    /// Width × height of the layout itself, mm (custom fields add rows:
+    /// `DrawingOptions.titleBlockSize`).
     var size: SIMD2<Double> {
         switch self {
         case .simple: SIMD2(120, 28)
@@ -101,6 +102,118 @@ nonisolated enum DrawingTitleBlock: String, CaseIterable, Codable, Sendable {
     }
 }
 
+/// A field of the user's own in the title block — "Project", "Customer",
+/// "Tolerance" — as a label over its value, in rows above the layout's.
+nonisolated struct DrawingTitleCustomField: Identifiable, Codable, Equatable, Sendable {
+    var id = UUID()
+    var label: String
+    var value: String
+
+    init(label: String, value: String = "") {
+        self.label = label
+        self.value = value
+    }
+}
+
+/// A company logo for the title block: a JPEG laid on white (a sheet is
+/// white paper, so transparency has nothing to show through), which PDF
+/// takes as it is.
+nonisolated struct DrawingTitleLogo: Codable, Equatable, Sendable {
+    var jpeg: Data
+    var pixelWidth: Int
+    var pixelHeight: Int
+
+    /// Images are kept at most this many pixels on a side.
+    static let maxPixels = 800
+
+    /// A logo from JPEG data, or nil when it is not a JPEG this can read.
+    init?(jpeg: Data) {
+        guard let size = JPEGInfo.size(of: jpeg) else { return nil }
+        self.jpeg = jpeg
+        pixelWidth = size.width
+        pixelHeight = size.height
+    }
+
+    /// Height ÷ width.
+    var aspect: Double { Double(pixelHeight) / Double(max(pixelWidth, 1)) }
+
+    /// The largest box of the logo's shape inside `width` × `height`, mm.
+    func fitted(width: Double, height: Double) -> SIMD2<Double> {
+        guard aspect > 0 else { return SIMD2(width, height) }
+        return width * aspect > height ? SIMD2(height / aspect, height) : SIMD2(width, width * aspect)
+    }
+}
+
+/// A JPEG's pixel size and colour components, read from its frame header.
+nonisolated enum JPEGInfo {
+    static func size(of data: Data) -> (width: Int, height: Int, components: Int)? {
+        let b = [UInt8](data)
+        guard b.count > 4, b[0] == 0xFF, b[1] == 0xD8 else { return nil }
+        var i = 2
+        while i + 9 < b.count {
+            guard b[i] == 0xFF else { return nil }
+            let marker = b[i + 1]
+            if marker == 0xFF { i += 1; continue }
+            if marker == 0xD8 || marker == 0x01 || (0xD0...0xD7).contains(marker) { i += 2; continue }
+            let length = Int(b[i + 2]) << 8 | Int(b[i + 3])
+            // Start of frame: baseline, extended, progressive, lossless (not
+            // DHT C4, JPG C8 or DAC CC).
+            if (0xC0...0xCF).contains(marker), ![0xC4, 0xC8, 0xCC].contains(marker) {
+                let height = Int(b[i + 5]) << 8 | Int(b[i + 6])
+                let width = Int(b[i + 7]) << 8 | Int(b[i + 8])
+                let components = Int(b[i + 9])
+                guard width > 0, height > 0, [1, 3, 4].contains(components) else { return nil }
+                return (width, height, components)
+            }
+            guard length >= 2 else { return nil }
+            i += 2 + length
+        }
+        return nil
+    }
+}
+
+/// What a title block carries from drawing to drawing: Settings ▸ Save as
+/// Default Title Block keeps one, and every new drawing starts with it.
+nonisolated struct DrawingTitleTemplate: Codable, Equatable, Sendable {
+    var titleBlock: DrawingTitleBlock = .simple
+    /// The detailed fields that stay the same (company, drawn by, …):
+    /// part number and revision belong to the part, so they are left out.
+    var titleFields: [String: String] = [:]
+    var customFields: [DrawingTitleCustomField] = []
+    var logo: DrawingTitleLogo?
+
+    init(titleBlock: DrawingTitleBlock = .simple) { self.titleBlock = titleBlock }
+
+    init(from options: DrawingOptions) {
+        titleBlock = options.titleBlock
+        titleFields = options.titleFields.filter {
+            ![DrawingTitleBlock.Field.partNumber.rawValue, DrawingTitleBlock.Field.revision.rawValue].contains($0.key)
+        }
+        customFields = options.titleCustomFields
+        logo = options.titleLogo
+    }
+
+    /// `options` wearing this title block (its title, sheet and views kept).
+    func applied(to options: DrawingOptions) -> DrawingOptions {
+        var out = options
+        out.titleBlock = titleBlock
+        for (key, value) in titleFields { out.titleFields[key] = value }
+        out.titleCustomFields = customFields.map { DrawingTitleCustomField(label: $0.label, value: $0.value) }
+        out.titleLogo = logo
+        return out
+    }
+
+    private enum CodingKeys: String, CodingKey { case titleBlock, titleFields, customFields, logo }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        titleBlock = (try? c.decodeIfPresent(DrawingTitleBlock.self, forKey: .titleBlock)) ?? .simple
+        titleFields = (try? c.decodeIfPresent([String: String].self, forKey: .titleFields)) ?? [:]
+        customFields = (try? c.decodeIfPresent([DrawingTitleCustomField].self, forKey: .customFields)) ?? []
+        logo = try? c.decodeIfPresent(DrawingTitleLogo.self, forKey: .logo)
+    }
+}
+
 nonisolated struct DrawingOptions: Equatable, Codable, Sendable {
     var title = "Drawing"
     var sheet: DrawingSheetSize = .a4
@@ -117,8 +230,25 @@ nonisolated struct DrawingOptions: Equatable, Codable, Sendable {
     /// The detailed title block's fields, by `DrawingTitleBlock.Field` raw
     /// value (a field this build lacks is kept, not dropped).
     var titleFields: [String: String] = [:]
+    /// Fields of the user's own, in rows of up to four above the layout.
+    var titleCustomFields: [DrawingTitleCustomField] = []
+    /// A logo by the title (Simple) or the company name (Detailed).
+    var titleLogo: DrawingTitleLogo?
 
     init(title: String = "Drawing") { self.title = title }
+
+    /// Custom fields per row, and the 11 mm rows they take.
+    static let customFieldsPerRow = 4
+    var titleCustomRows: Int {
+        titleBlock == .none ? 0
+            : (titleCustomFields.count + Self.customFieldsPerRow - 1) / Self.customFieldsPerRow
+    }
+
+    /// The title block's width × height with its custom rows, mm.
+    var titleBlockSize: SIMD2<Double> {
+        let base = titleBlock.size
+        return titleBlock == .none ? base : SIMD2(base.x, base.y + Double(titleCustomRows) * 11)
+    }
 
     subscript(field: DrawingTitleBlock.Field) -> String {
         get { titleFields[field.rawValue] ?? "" }
@@ -127,7 +257,7 @@ nonisolated struct DrawingOptions: Equatable, Codable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case title, sheet, standard, includeIsometric, showHiddenLines, showDimensions, scale, showCenterMarks,
-             titleBlock, titleFields
+             titleBlock, titleFields, titleCustomFields, titleLogo
     }
 
     // Every field optional on the way in: drawings saved before a setting
@@ -145,6 +275,8 @@ nonisolated struct DrawingOptions: Equatable, Codable, Sendable {
         showCenterMarks = try c.decodeIfPresent(Bool.self, forKey: .showCenterMarks) ?? d.showCenterMarks
         titleBlock = (try? c.decodeIfPresent(DrawingTitleBlock.self, forKey: .titleBlock)) ?? d.titleBlock
         titleFields = (try? c.decodeIfPresent([String: String].self, forKey: .titleFields)) ?? [:]
+        titleCustomFields = (try? c.decodeIfPresent([DrawingTitleCustomField].self, forKey: .titleCustomFields)) ?? []
+        titleLogo = try? c.decodeIfPresent(DrawingTitleLogo.self, forKey: .titleLogo)
     }
 }
 
@@ -175,10 +307,19 @@ nonisolated struct DrawingText: Equatable, Sendable {
     var rotation: Double = 0
 }
 
+/// A picture on the sheet (the title block's logo): `origin` is its
+/// lower-left corner, sheet mm.
+nonisolated struct DrawingImage: Equatable, Sendable {
+    var origin: SIMD2<Double>
+    var size: SIMD2<Double>
+    var logo: DrawingTitleLogo
+}
+
 nonisolated struct DrawingLayout: Sendable {
     var size: SIMD2<Double>
     var lines: [DrawingLine] = []
     var texts: [DrawingText] = []
+    var images: [DrawingImage] = []
     /// Drawn ÷ real.
     var scale: Double = 1
     /// Where each standard view landed (sheet mm), for tests and labels.
@@ -370,7 +511,7 @@ nonisolated enum DrawingSheet {
         }
 
         // Drawing area: inside the border, above the title block's height.
-        let areaMin = SIMD2(margin + 6, margin + options.titleBlock.size.y + 6)
+        let areaMin = SIMD2(margin + 6, margin + options.titleBlockSize.y + 6)
         // A vertical cutting line lifts its view's name (see below): keep
         // room for it under the border.
         let liftRoom = cuts.contains { $0.section.cut == .vertical } ? 5.0 : 0
@@ -918,8 +1059,10 @@ nonisolated enum DrawingSheet {
         rect(lo, hi, .border)
         let block = options.titleBlock
         guard block != .none else { return }
+        // The layout's own rows from tbLo to tbHi; custom rows above, to top.
         let tbLo = SIMD2(hi.x - block.size.x, lo.y), tbHi = SIMD2(hi.x, lo.y + block.size.y)
-        rect(tbLo, tbHi, .border)
+        let top = lo.y + options.titleBlockSize.y
+        rect(tbLo, SIMD2(tbHi.x, top), .border)
         let projection = options.standard == .ansi ? "Third angle" : "First angle"
         func rule(_ a: SIMD2<Double>, _ b: SIMD2<Double>) { out.lines.append(DrawingLine(a: a, b: b, style: .thin)) }
         /// A row of cells from `y`, `height` tall: each a small label over its
@@ -929,8 +1072,8 @@ nonisolated enum DrawingSheet {
             var x = tbLo.x
             for (i, cell) in cells.enumerated() {
                 if i > 0 { rule(SIMD2(x, y), SIMD2(x, y + height)) }
-                out.texts.append(DrawingText(position: SIMD2(x + 2, y + height - (roomy ? 4.5 : 3)), height: roomy ? 1.8 : 1.6,
-                                             string: cell.label))
+                out.texts.append(fitted(cell.label, at: SIMD2(x + 2, y + height - (roomy ? 4.5 : 3)),
+                                        height: roomy ? 1.8 : 1.6, width: cell.width - 4))
                 if !cell.value.isEmpty {
                     out.texts.append(fitted(cell.value, at: SIMD2(x + 2, y + (roomy ? 3.5 : 1.8)),
                                             height: roomy ? 3 : 2.5, width: cell.width - 4))
@@ -938,12 +1081,22 @@ nonisolated enum DrawingSheet {
                 x += cell.width
             }
         }
+        /// The logo at the left of a 14 mm cell from `x`, `y`: at most
+        /// `maxWidth` wide; how much of the cell it takes.
+        func logo(x: Double, y: Double, maxWidth: Double) -> Double {
+            guard let logo = options.titleLogo else { return 0 }
+            let size = logo.fitted(width: maxWidth, height: 11)
+            out.images.append(DrawingImage(origin: SIMD2(x + 2, y + (14 - size.y) / 2), size: size, logo: logo))
+            return size.x + 2
+        }
         switch block {
         case .simple:
             // Rows: title (14 mm) over a row of four fields (14 mm).
             let split = tbLo.y + 14
             rule(SIMD2(tbLo.x, split), SIMD2(tbHi.x, split))
-            out.texts.append(fitted(options.title, at: SIMD2(tbLo.x + 3, split + 5), height: 5, width: block.size.x - 6))
+            let inset = logo(x: tbLo.x, y: split, maxWidth: 36)
+            out.texts.append(fitted(options.title, at: SIMD2(tbLo.x + 3 + inset, split + 5), height: 5,
+                                    width: block.size.x - 6 - inset))
             let w = block.size.x / 4
             row(tbLo.y, height: 14, [(w, "SCALE", scale), (w, "SHEET", sheet),
                                      (w, "PROJECTION", projection), (w, "DATE", date)])
@@ -954,10 +1107,16 @@ nonisolated enum DrawingSheet {
             rule(SIMD2(tbLo.x, mid), SIMD2(tbHi.x, mid))
             rule(SIMD2(tbLo.x, upper), SIMD2(tbHi.x, upper))
             rule(SIMD2(tbLo.x + 60, upper), SIMD2(tbLo.x + 60, tbHi.y))
-            out.texts.append(DrawingText(position: SIMD2(tbLo.x + 2, tbHi.y - 4.5), height: 1.8,
-                                         string: DrawingTitleBlock.Field.company.label))
+            // With a logo the company cell is the logo and the name beside
+            // it, unlabelled — as a letterhead reads.
+            let inset = logo(x: tbLo.x, y: upper, maxWidth: options[.company].isEmpty ? 56 : 22)
+            if inset == 0 {
+                out.texts.append(DrawingText(position: SIMD2(tbLo.x + 2, tbHi.y - 4.5), height: 1.8,
+                                             string: DrawingTitleBlock.Field.company.label))
+            }
             if !options[.company].isEmpty {
-                out.texts.append(fitted(options[.company], at: SIMD2(tbLo.x + 2, upper + 3), height: 3.5, width: 56))
+                out.texts.append(fitted(options[.company], at: SIMD2(tbLo.x + 2 + inset, upper + (inset == 0 ? 3 : 5.5)),
+                                        height: 3.5, width: 56 - inset))
             }
             out.texts.append(fitted(options.title, at: SIMD2(tbLo.x + 63, upper + 4.5), height: 5, width: 114))
             row(mid, height: 11, [(40, DrawingTitleBlock.Field.drawnBy.label, options[.drawnBy]),
@@ -970,7 +1129,16 @@ nonisolated enum DrawingSheet {
         case .none:
             break
         }
-        out.texts.append(DrawingText(position: SIMD2(tbHi.x - 2, tbHi.y + 2), height: 1.8,
+        // The user's own fields, four to a row, the first row on top.
+        let fields = options.titleCustomFields, perRow = DrawingOptions.customFieldsPerRow
+        for start in stride(from: 0, to: fields.count, by: perRow) {
+            let y = top - Double(start / perRow + 1) * 11
+            rule(SIMD2(tbLo.x, y), SIMD2(tbHi.x, y))
+            let cells = fields[start..<min(start + perRow, fields.count)]
+            let w = block.size.x / Double(cells.count)
+            row(y, height: 11, cells.map { (w, $0.label.uppercased(), $0.value) })
+        }
+        out.texts.append(DrawingText(position: SIMD2(tbHi.x - 2, top + 2), height: 1.8,
                                      string: "openshape3d", anchor: .end))
     }
 }

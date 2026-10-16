@@ -106,6 +106,8 @@ nonisolated struct SavedDrawing: Identifiable, Codable, Equatable, Sendable {
         options.standard = shown.options.standard
         options.titleBlock = shown.options.titleBlock
         options.titleFields = shown.options.titleFields
+        options.titleCustomFields = shown.options.titleCustomFields
+        options.titleLogo = shown.options.titleLogo
         self.pages = pages
     }
 

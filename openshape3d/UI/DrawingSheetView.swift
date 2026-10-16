@@ -9,6 +9,7 @@
 //  dragging them on the preview. The sheet always follows the current model.
 //
 
+import PhotosUI
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -22,6 +23,10 @@ struct DrawingSheetView: View {
     @State private var confirmDelete = false
     /// The drag holds a dimension or note rather than a view.
     @State private var draggingAnnotation = false
+    /// Title Block ▸ Logo: from Photos or from Files.
+    @State private var showLogoPhotos = false
+    @State private var logoPhotoItem: PhotosPickerItem?
+    @State private var showLogoFiles = false
 
     var body: some View {
         NavigationStack {
@@ -232,6 +237,12 @@ struct DrawingSheetView: View {
                         context.fill(Path(CGRect(x: a.x, y: b.y, width: b.x - a.x, height: a.y - b.y)),
                                      with: .color(.accentColor.opacity(0.12)))
                     }
+                    for image in layout.images {
+                        guard let picture = UIImage(data: image.logo.jpeg) else { continue }
+                        let a = paper.point(image.origin), b = paper.point(image.origin + image.size)
+                        context.draw(Image(uiImage: picture),
+                                     in: CGRect(x: a.x, y: b.y, width: b.x - a.x, height: a.y - b.y))
+                    }
                     for style in DrawingLineStyle.drawOrder {
                         var path = Path()
                         for run in DrawingExport.runs(layout.lines.filter { $0.style == style }) {
@@ -359,7 +370,7 @@ struct DrawingSheetView: View {
                     Text("The title, standard and title block are shared by every sheet; size, scale, views and bodies are this sheet's own.")
                 }
             }
-            Section("Title Block") {
+            Section {
                 Picker("Layout", selection: $viewModel.drawingOptions.titleBlock) {
                     ForEach(DrawingTitleBlock.allCases, id: \.self) { Text($0.title).tag($0) }
                 }
@@ -370,6 +381,42 @@ struct DrawingSheetView: View {
                             .accessibilityIdentifier("DrawingTitleField_\(field.rawValue)")
                     }
                 }
+                if viewModel.drawingOptions.titleBlock != .none {
+                    logoRow
+                    ForEach($viewModel.drawingOptions.titleCustomFields) { $field in
+                        HStack {
+                            TextField("Label", text: $field.label)
+                                .font(.subheadline.weight(.semibold))
+                                .frame(maxWidth: 110)
+                                .accessibilityIdentifier("DrawingCustomFieldLabel")
+                            TextField("Value", text: $field.value)
+                                .accessibilityIdentifier("DrawingCustomFieldValue")
+                            Button(role: .destructive) {
+                                viewModel.removeDrawingTitleField(field.id)
+                            } label: {
+                                Image(systemName: "minus.circle.fill")
+                            }
+                            .buttonStyle(.borderless)
+                            .accessibilityLabel("Remove \(field.label)")
+                            .accessibilityIdentifier("DrawingCustomFieldRemove")
+                        }
+                    }
+                    Button("Add Field") { viewModel.addDrawingTitleField() }
+                        .accessibilityIdentifier("DrawingAddTitleField")
+                }
+                Button(viewModel.drawingTitleBlockIsDefault ? "Saved as Default" : "Save as Default") {
+                    viewModel.saveDrawingTitleTemplate()
+                }
+                .disabled(viewModel.drawingTitleBlockIsDefault)
+                .accessibilityIdentifier("DrawingSaveTitleTemplate")
+                if viewModel.hasDrawingTitleTemplate && !viewModel.drawingTitleBlockIsDefault {
+                    Button("Use Default") { viewModel.applyDrawingTitleTemplate() }
+                        .accessibilityIdentifier("DrawingUseTitleTemplate")
+                }
+            } header: {
+                Text("Title Block")
+            } footer: {
+                Text("Save as Default keeps this title block — layout, company, logo and your fields — for the first drawing of every design.")
             }
             Section("Views") {
                 Toggle("Isometric View", isOn: $viewModel.drawingOptions.includeIsometric)
@@ -394,6 +441,71 @@ struct DrawingSheetView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
+        }
+        .photosPicker(isPresented: $showLogoPhotos, selection: $logoPhotoItem, matching: .images)
+        .onChange(of: logoPhotoItem) { _, item in
+            guard let item else { return }
+            logoPhotoItem = nil
+            Task {
+                let data = try? await item.loadTransferable(type: Data.self)
+                setLogo(data)
+            }
+        }
+        .fileImporter(isPresented: $showLogoFiles, allowedContentTypes: [.png, .jpeg, .image]) { result in
+            guard case .success(let url) = result else { return }
+            let scoped = url.startAccessingSecurityScopedResource()
+            defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+            setLogo(try? Data(contentsOf: url))
+        }
+    }
+
+    /// Title Block ▸ Logo: the logo with Replace and Remove, or Add Logo.
+    @ViewBuilder
+    private var logoRow: some View {
+        if let logo = viewModel.drawingOptions.titleLogo {
+            HStack {
+                if let image = UIImage(data: logo.jpeg) {
+                    Image(uiImage: image)
+                        .resizable()
+                        .scaledToFit()
+                        .frame(maxWidth: 120, maxHeight: 36, alignment: .leading)
+                        .accessibilityIdentifier("DrawingLogoPreview")
+                }
+                Spacer()
+                logoMenu("Replace")
+                Button("Remove", role: .destructive) { viewModel.removeDrawingLogo() }
+                    .buttonStyle(.borderless)
+                    .accessibilityIdentifier("DrawingRemoveLogo")
+            }
+        } else {
+            logoMenu("Add Logo…")
+        }
+    }
+
+    private func logoMenu(_ title: String) -> some View {
+        Menu(title) {
+            Button("Photos") { pickLogo(fromPhotos: true) }
+            Button("Files") { pickLogo(fromPhotos: false) }
+        }
+        .accessibilityIdentifier("DrawingAddLogo")
+    }
+
+    private func pickLogo(fromPhotos: Bool) {
+        // The system pickers can't be driven by XCUITest: OS3D_DEBUG_DRAWING_LOGO
+        // stands the debug seed picture in for the pick.
+        #if DEBUG
+        if ProcessInfo.processInfo.environment["OS3D_DEBUG_DRAWING_LOGO"] != nil {
+            setLogo(EditorViewModel.debugSeedImagePNG)
+            return
+        }
+        #endif
+        if fromPhotos { showLogoPhotos = true } else { showLogoFiles = true }
+    }
+
+    private func setLogo(_ data: Data?) {
+        guard let data, let jpeg = DrawingLogoImage.prepare(data), viewModel.setDrawingLogo(jpeg: jpeg) else {
+            viewModel.errorMessage = "Couldn't read the selected image."
+            return
         }
     }
 
