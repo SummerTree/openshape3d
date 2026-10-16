@@ -99,6 +99,10 @@ nonisolated struct DrawingAnnotation: Identifiable, Codable, Equatable, Sendable
     /// Decimal places the value (and its tolerance) is written to, trailing
     /// zeros kept — "40.00 mm"; nil writes it as the canvas does.
     var precision: Int?
+    /// A centreline carried on through the views lined up with its own (a
+    /// vertical one from Front through Top, a horizontal one through the
+    /// side view), one chain line across the gap between them.
+    var span = false
 
     init(kind: Kind, view: String, a: SIMD2<Double>, b: SIMD2<Double>) {
         self.kind = kind
@@ -108,7 +112,7 @@ nonisolated struct DrawingAnnotation: Identifiable, Codable, Equatable, Sendable
     }
 
     private enum CodingKeys: String, CodingKey { case id, kind, view, a, b, c, d, orientation, offset, text, leader,
-                                                    prefix, suffix, tolerance, upper, lower, precision }
+                                                    prefix, suffix, tolerance, upper, lower, precision, span }
 
     // Tolerant of drawings saved by other builds.
     init(from decoder: Decoder) throws {
@@ -131,6 +135,7 @@ nonisolated struct DrawingAnnotation: Identifiable, Codable, Equatable, Sendable
         lower = try c.decodeIfPresent(Double.self, forKey: .lower) ?? -0.1
         precision = (try? c.decodeIfPresent(Int.self, forKey: .precision)).flatMap { $0 }
             .map { Swift.min(Swift.max($0, 0), DrawingAnnotationKit.maxPrecision) }
+        span = try c.decodeIfPresent(Bool.self, forKey: .span) ?? false
     }
 
     /// How the Dimensions & Notes list names it: "40 mm", "Ø8 mm ±0.1",
@@ -459,6 +464,49 @@ nonisolated enum DrawingAnnotationKit {
         let ts = [first.a, first.b, second.a, second.b].map { simd_dot($0 - origin, u) }
         return DrawingAnnotation(kind: .centerline, view: first.view,
                                  a: origin + u * ts.min()!, b: origin + u * ts.max()!)
+    }
+
+    /// The views a centreline on `view` along `u` (sheet) lines up with:
+    /// Front and Top share their columns, Front and the side view their
+    /// rows. Empty unless it runs (within half a degree) up or across.
+    static func alignedViews(of view: String, along u: SIMD2<Double>) -> [String] {
+        let vertical = abs(u.x) < sin(0.5 * .pi / 180), horizontal = abs(u.y) < sin(0.5 * .pi / 180)
+        let front = DrawingSheet.viewKey(.front), top = DrawingSheet.viewKey(.top), side = DrawingSheet.viewKey(.right)
+        switch view {
+        case front: return vertical ? [top] : horizontal ? [side] : []
+        case top: return vertical ? [front] : []
+        case side: return horizontal ? [front] : []
+        default: return []
+        }
+    }
+
+    /// A centreline from `a` to `b` (sheet mm, on `view`) carried on through
+    /// the lined-up views it crosses, to their far edges: its new ends, in
+    /// the same order. Nil when no lined-up view lies across it.
+    static func spanned(_ a: SIMD2<Double>, _ b: SIMD2<Double>, view: String,
+                        frames: [String: (min: SIMD2<Double>, max: SIMD2<Double>)]) -> (SIMD2<Double>, SIMD2<Double>)? {
+        let length = simd_distance(a, b)
+        guard length > 1e-9 else { return nil }
+        let u = (b - a) / length
+        let partners = alignedViews(of: view, along: u)
+        guard !partners.isEmpty else { return nil }
+        let along = abs(u.x) < abs(u.y) ? 1 : 0, across = 1 - along
+        let at = (a[across] + b[across]) / 2
+        var lo = Swift.min(a[along], b[along]), hi = Swift.max(a[along], b[along])
+        var crossed = false
+        for key in partners {
+            guard let frame = frames[key], frame.min[across] - 1e-6 <= at, at <= frame.max[across] + 1e-6 else { continue }
+            lo = Swift.min(lo, frame.min[along])
+            hi = Swift.max(hi, frame.max[along])
+            crossed = true
+        }
+        guard crossed else { return nil }
+        var start = SIMD2<Double>.zero, end = SIMD2<Double>.zero
+        start[across] = at
+        end[across] = at
+        start[along] = u[along] > 0 ? lo : hi
+        end[along] = u[along] > 0 ? hi : lo
+        return (start, end)
     }
 
     /// The centreline through two points of one view.

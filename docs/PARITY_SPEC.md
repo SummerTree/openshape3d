@@ -2331,9 +2331,15 @@ logo out. Save as Default keeps the title block (layout, company / drawn
 revision) in Settings; a design's first drawing starts with it (later
 ones copy the design's last drawing), and Use Default puts it back on the
 drawing shown. The web keeps the default in localStorage.
+**Centrelines through aligned views (2026-10-15):** a centreline that
+runs up (within 0.5°) on Front or Top, or across on Front or the side
+view, offers Through Aligned Views when the lined-up view lies across
+it; on, it is drawn as one chain line from its own end on through that
+view to its far edge (+ the 3 mm overrun) — the hole's axis in Front
+carried down through the hole in Top. Its handle stays on its own view.
 Missing: free placement of new views from any angle (custom projection
 angles, extra projected views), cutting lines through picked points /
-stepped sections, centrelines spanning views, the other title-block
+stepped sections, spanning section / detail views, the other title-block
 layouts (Horizontal, Vertical, Block with Table), DWG.
 **Feasibility:** [mesh-kernel OK] for a first version (orthographic
 projection + silhouette/hidden-line from meshes; associativity with the model
