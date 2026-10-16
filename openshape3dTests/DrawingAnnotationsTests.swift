@@ -732,6 +732,56 @@ final class DrawingAnnotationsTests: XCTestCase {
         XCTAssertEqual(back, through)
     }
 
+    func testThroughAlignedViewsCarriesACentrelineOnThroughTopAndTheSide() throws {
+        var drawing = SavedDrawing()
+        drawing.options.showDimensions = false
+        drawing.options.showCenterMarks = false
+        let plain = DrawingSheet.layout(bodies: [boxWithHole], drawing: drawing)
+        let t = try XCTUnwrap(plain.viewTransforms[front])
+        let f = try XCTUnwrap(plain.placedViews[front])
+        let top = try XCTUnwrap(plain.placedViews[DrawingSheet.viewKey(.top)])
+        let side = try XCTUnwrap(plain.placedViews[DrawingSheet.viewKey(.right)])
+        // Up the middle of the front view (the hole's axis), and across it.
+        let mid = t.view((f.min + f.max) / 2)
+        let up = try XCTUnwrap(DrawingAnnotationKit.centerline(view: front, mid - SIMD2(0, 2), mid + SIMD2(0, 2)))
+        let across = try XCTUnwrap(DrawingAnnotationKit.centerline(view: front, mid - SIMD2(2, 0), mid + SIMD2(2, 0)))
+        let slant = try XCTUnwrap(DrawingAnnotationKit.centerline(view: front, mid, mid + SIMD2(2, 2)))
+        drawing.annotations = [up, across, slant]
+        var l = DrawingSheet.layout(bodies: [boxWithHole], drawing: drawing)
+        XCTAssertEqual(l.spannableCenterlines, [up.id, across.id], "a slanted line lines up with nothing")
+        let before = l.lines.filter { $0.style == .chain }
+
+        for i in 0..<2 { drawing.annotations[i].span = true }
+        l = DrawingSheet.layout(bodies: [boxWithHole], drawing: drawing)
+        let after = l.lines.filter { $0.style == .chain }
+        XCTAssertEqual(after.count, before.count, "still one line each")
+        let over = DrawingAnnotationKit.centerlineOverrun
+        // Up: from the front's own short line on through the whole top view.
+        let vertical = try XCTUnwrap(after.first { abs($0.a.x - $0.b.x) < 1e-9 && abs($0.b.y - $0.a.y) > 20 })
+        let ys = [vertical.a.y, vertical.b.y].sorted()
+        let topBelow = top.max.y < f.min.y
+        XCTAssertEqual(topBelow ? ys[0] : ys[1], topBelow ? top.min.y - over : top.max.y + over, accuracy: 1e-6)
+        XCTAssertEqual(topBelow ? ys[1] : ys[0], t.sheet(topBelow ? up.b : up.a).y + (topBelow ? over : -over), accuracy: 1e-6,
+                       "the front end stays where it was drawn")
+        // Across: on through the side view.
+        let horizontal = try XCTUnwrap(after.first { abs($0.a.y - $0.b.y) < 1e-9 && abs($0.b.x - $0.a.x) > 20 })
+        let xs = [horizontal.a.x, horizontal.b.x].sorted()
+        if side.max.x < f.min.x {
+            XCTAssertEqual(xs[0], side.min.x - over, accuracy: 1e-6)
+        } else {
+            XCTAssertEqual(xs[1], side.max.x + over, accuracy: 1e-6)
+        }
+        // Its handle stays on its own view, for selecting it there.
+        XCTAssertEqual(try XCTUnwrap(l.annotationHandles[up.id]), t.sheet(mid), "\(l.annotationHandles[up.id]!)")
+
+        // Saved, and older drawings read as not spanning.
+        let back = try JSONDecoder().decode(DrawingAnnotation.self, from: JSONEncoder().encode(drawing.annotations[0]))
+        XCTAssertTrue(back.span)
+        let old = try JSONDecoder().decode(DrawingAnnotation.self, from: Data(#"{"kind":"centerline","view":"front","a":[0,0],"b":[0,1]}"#.utf8))
+        XCTAssertFalse(old.span)
+        XCTAssertEqual(DrawingAnnotationKit.alignedViews(of: DrawingSheet.viewKey(.isometric), along: SIMD2(0, 1)), [])
+    }
+
     @MainActor func testACentrelineIsListedByName() {
         XCTAssertEqual(DrawingAnnotation(kind: .centerline, view: front, a: .zero, b: SIMD2(1, 0)).listTitle, "Centreline")
         XCTAssertEqual(DrawingAnnotation(kind: .boltCircle, view: front, a: .zero, b: SIMD2(1, 0)).listTitle, "Bolt Circle")

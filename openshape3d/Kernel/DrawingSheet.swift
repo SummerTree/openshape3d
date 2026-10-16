@@ -342,6 +342,9 @@ nonisolated struct DrawingLayout: Sendable {
     var edges: [String: [DrawingSegment]] = [:]
     /// Each view's long hidden lines, where it shows them — for centrelines.
     var hiddenEdges: [String: [DrawingSegment]] = [:]
+    /// The centrelines that line up with another view (Through Aligned
+    /// Views can carry them on).
+    var spannableCenterlines: Set<UUID> = []
     /// Each annotation's handle (its text), sheet mm — to select or drag it.
     var annotationHandles: [UUID: SIMD2<Double>] = [:]
 
@@ -684,11 +687,16 @@ nonisolated enum DrawingSheet {
                     diameter: annotation.kind == .diameter, offset: annotation.offset,
                     value: DrawingAnnotationKit.valuePieces(annotation, format: formatLength, fixed: formatFixed), into: &out)
             case .centerline:
-                let a = transform.sheet(annotation.a), b = transform.sheet(annotation.b)
+                var a = transform.sheet(annotation.a), b = transform.sheet(annotation.b)
                 guard simd_distance(a, b) > 1e-9 else { continue }
+                let handle = (a + b) / 2
+                if let through = DrawingAnnotationKit.spanned(a, b, view: annotation.view, frames: out.placedViews) {
+                    out.spannableCenterlines.insert(annotation.id)
+                    if annotation.span { (a, b) = through }
+                }
                 let u = simd_normalize(b - a), over = DrawingAnnotationKit.centerlineOverrun
                 out.lines.append(DrawingLine(a: a - u * over, b: b + u * over, style: .chain))
-                out.annotationHandles[annotation.id] = (a + b) / 2
+                out.annotationHandles[annotation.id] = handle
             case .boltCircle:
                 let c = transform.sheet(annotation.a), r = simd_distance(transform.sheet(annotation.b), c)
                 guard r > 1e-9 else { continue }

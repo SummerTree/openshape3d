@@ -37,12 +37,12 @@ struct DrawingSheetView: View {
                     if wide {
                         HStack(spacing: 0) {
                             canvas(layout)
-                            options.frame(width: 340)
+                            options(layout).frame(width: 340)
                         }
                     } else {
                         VStack(spacing: 0) {
                             canvas(layout).frame(height: geo.size.height * 0.5)
-                            options
+                            options(layout)
                         }
                     }
                 }
@@ -337,7 +337,7 @@ struct DrawingSheetView: View {
 
     private var sheetCount: Int { viewModel.activeDrawing?.sheetCount ?? 1 }
 
-    private var options: some View {
+    private func options(_ layout: DrawingLayout) -> some View {
         Form {
             Section {
                 TextField("Title", text: $viewModel.drawingOptions.title)
@@ -432,7 +432,7 @@ struct DrawingSheetView: View {
                         .accessibilityIdentifier("DrawingResetPositions")
                 }
             }
-            annotationsSection
+            annotationsSection(layout)
             bodiesSection
             sectionViews
             detailViews
@@ -510,7 +510,7 @@ struct DrawingSheetView: View {
     }
 
     /// Dimensions and notes placed with the tools above the preview.
-    private var annotationsSection: some View {
+    private func annotationsSection(_ layout: DrawingLayout) -> some View {
         Section {
             if viewModel.drawingAnnotations.isEmpty {
                 Text("None yet — use Dimension or Note above the sheet.")
@@ -548,7 +548,10 @@ struct DrawingSheetView: View {
                         .accessibilityIdentifier("DrawingAnnotationOrientation")
                     }
                     if annotation.isCenterline {
-                        EmptyView()
+                        if layout.spannableCenterlines.contains(annotation.id) {
+                            Toggle("Through Aligned Views", isOn: $annotation.span)
+                                .accessibilityIdentifier("DrawingCenterlineSpan")
+                        }
                     } else if annotation.kind != .note {
                         dimensionText($annotation)
                     } else {
