@@ -38,6 +38,8 @@ final class IO2UITests: XCTestCase {
         // STEP (spec §12.2) — the exact-B-rep export, queried by identifier
         // because its label is the same three letters as its file extension.
         XCTAssertTrue(app.buttons["ExportSTEP"].exists)
+        // FreeCAD (.FCStd): exact like STEP, with names and colours.
+        XCTAssertTrue(app.buttons["ExportFreeCAD"].exists)
         // Graceful USDZ degradation: the USDZ entry and the AR Preview
         // button are both gated on the same support check, so they must
         // appear or hide together — never one without the other.

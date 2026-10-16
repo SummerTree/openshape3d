@@ -1896,6 +1896,27 @@ assembly hierarchy → nested folders. Mesh rules: booleans work only on closed
 mesh bodies; any boolean involving a mesh yields a mesh.
 **IGES (2026-10-12):** Import ▸ IGES File… reads solids (and sews IGES surface
 models into solids where they close), healed and validated like STEP.
+**FreeCAD (2026-10-16):** Import ▸ FreeCAD File… reads an .FCStd
+(`FreeCADKit`): every VISIBLE object with a stored shape becomes a body —
+exact, since FreeCAD's PartShape.brp files are the same OpenCASCADE BRep
+text our kernel reads — named by its label, coloured from ShapeAppearance
+(FreeCAD 1.x, the binary material list) or ShapeColor + Transparency
+(older), placed by the containers around it (App::Part, assemblies);
+App::Links show their target in the link's placement (LinkTransform
+honoured; link arrays and links to other files are left out); a PartDesign
+Body stands for its features; hidden inputs (a Cut's box and cylinder) and
+a hidden container's contents stay out. Shapes go through the hardened
+reader (`shapeFromSerialized`: plausible section counts, deadline, heal and
+validate). Sketches and other shapes with no surface, and binary-BRep
+shapes, are counted in an "Imported 9 of 10 objects" notice. One undo
+step; the camera frames what arrived. Checked against FreeCAD's own
+examples (EngineBlock 10 bodies, AssemblyExample 13 linked parts placed,
+PartDesignExample, draft_test_objects; `FreeCADKitTests` with
+OS3D_FCSTD_SAMPLES, `scripts/freecad-smoke.mjs` with FCSTD_SAMPLES). A
+part too big to mesh at render quality inside the mesher's deadline (the
+EngineBlock's block in the browser) now arrives at a coarser tessellation
+instead of being dropped — STEP and IGES too. Also fixed: zip entries
+that are empty files (FreeCAD writes them) no longer fail the whole zip.
 **Status:** 🟡 partial. **STEP import now ships** (`OCCTKernel.readSTEP`,
 OCCT DataExchange) — each solid in the file becomes a body carrying its
 analytic B-rep, so imported geometry is exact rather than tessellated. Also
@@ -1938,6 +1959,16 @@ the native one. Screenshot tool: grid on/off, transparency, body edges, item cho
 resolution Actual/Double/FullHD/4K/8K, remembers settings, clipboard shortcut.
 **IGES (2026-10-12):** Export ▸ IGES writes the exact B-rep (IGES 5.3, solids
 as MSBO, mm) — same analytic-bodies-only rule as STEP (`STEPKitTests`).
+**FreeCAD (2026-10-16):** Export ▸ FreeCAD (.FCStd) writes a document
+FreeCAD opens: one Part::Feature per analytic body (placement baked into
+its BRep, format version 2 so every FreeCAD since 0.17 reads it), labelled
+with the body's name, its colour as both ShapeAppearance (1.x) and
+ShapeColor (older) — declared as written by 0.21, so FreeCAD 1.1+ reads
+the colour bytes the old way — and hidden bodies hidden. Zip entries in
+the order FreeCAD's reader asks for them (Document.xml, the shapes,
+GuiDocument.xml, the colours). Mesh-only bodies are skipped by name, as
+for STEP. Not yet opened in FreeCAD itself (not installed on the build
+machine): checked against FreeCAD's restore code and by reading back.
 **SVG from Sketch (2026-10-12):** the open (or ground-plane) sketch as an SVG
 drawing in millimetres, Y flipped to read head-on; lines, circles, arcs and
 ellipses exact, splines tessellated (`SVGKitTests`).

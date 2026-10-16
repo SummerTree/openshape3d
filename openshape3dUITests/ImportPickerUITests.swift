@@ -34,7 +34,7 @@ final class ImportPickerUITests: XCTestCase {
         let importMenu = app.buttons["ImportMenu"]
         XCTAssertTrue(importMenu.waitForExistence(timeout: 15))
 
-        for entry in ["ImportSTL", "ImportDXF", "ImportSTEP"] {
+        for entry in ["ImportSTL", "ImportDXF", "ImportSTEP", "ImportFreeCAD"] {
             importMenu.tap()
             let item = app.buttons[entry]
             XCTAssertTrue(item.waitForExistence(timeout: 5), "\(entry) must be in the menu")

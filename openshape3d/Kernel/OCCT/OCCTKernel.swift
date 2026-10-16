@@ -1112,13 +1112,21 @@ nonisolated enum OCCTKernel {
         OCCTBridge.shape(fromSerialized: data).map(BRepHandle.init)
     }
 
-    /// Smooth world-space render mesh for a B-rep solid.
-    static func renderMesh(from handle: BRepHandle)
+    /// Deflections for an imported part too big to mesh at render quality
+    /// inside the mesher's deadline (a large engine block with many holes:
+    /// 72k triangles, ~3 s native and past 5 s in the browser) — coarser,
+    /// so it arrives rather than being dropped.
+    static let coarseAngularDeflection = 0.3
+    static var coarseLinearDeflection: Double { max(renderLinearDeflection * 5, 0.5) }
+
+    /// Smooth world-space render mesh for a B-rep solid (`coarse`: at the
+    /// coarse deflections above).
+    static func renderMesh(from handle: BRepHandle, coarse: Bool = false)
         -> (positions: [SIMD3<Float>], normals: [SIMD3<Float>], indices: [UInt32]) {
         let mesh = OCCTBridge.renderMesh(
             from: handle.shape,
-            angularDeflection: renderAngularDeflection,
-            linearDeflection: renderLinearDeflection)
+            angularDeflection: coarse ? coarseAngularDeflection : renderAngularDeflection,
+            linearDeflection: coarse ? coarseLinearDeflection : renderLinearDeflection)
         let p = mesh.positions.floatArray()
         let nn = mesh.normals.floatArray()
         let indices = mesh.indices.uint32Array()
@@ -1222,8 +1230,8 @@ nonisolated extension Body {
     /// kernel face each triangle belongs to, so picking honours faces the
     /// solid's geometry alone cannot show — coplanar pieces of a split face.
     @discardableResult
-    mutating func adoptBRep(_ handle: BRepHandle, keepingFaceRegions: Bool = false) -> Bool {
-        let m = OCCTKernel.renderMesh(from: handle)
+    mutating func adoptBRep(_ handle: BRepHandle, keepingFaceRegions: Bool = false, coarse: Bool = false) -> Bool {
+        let m = OCCTKernel.renderMesh(from: handle, coarse: coarse)
         guard !m.positions.isEmpty, !m.indices.isEmpty else { return false }
         var mesh = RenderMesh(positions: m.positions, normals: m.normals, indices: m.indices)
         if keepingFaceRegions {
