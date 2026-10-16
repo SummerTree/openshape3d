@@ -1270,8 +1270,7 @@ final class EditorViewModel {
         // default grey for the whole push/pull, blend, shell or face edit.
         func sourceMaterial(_ sourceID: BodyID?, on preview: Body) -> BodyMaterial? {
             guard let sourceID, let spec = session.document.body(with: sourceID)?.material else { return nil }
-            return BodyMaterial(spec: spec, meshHasTexcoords: preview.render.texcoords != nil,
-                                revision: preview.meshRevision)
+            return BodyMaterial(spec: spec, meshHasTexcoords: preview.render.texcoords != nil)
         }
 
         var patches: [FacePatchDrawable] = []
@@ -1305,8 +1304,7 @@ final class EditorViewModel {
                 baseColor: SIMD4(0.72, 0.74, 0.78, 1),
                 selectionState: selectionState,
                 material: body.material.map {
-                    BodyMaterial(spec: $0, meshHasTexcoords: body.render.texcoords != nil,
-                                 revision: body.meshRevision)
+                    BodyMaterial(spec: $0, meshHasTexcoords: body.render.texcoords != nil)
                 }
             )
             if let drawn = faceMaterialDrawnIndices(body) {
@@ -7100,7 +7098,7 @@ final class EditorViewModel {
             return FacePatchDrawable(
                 bodyID: body.id, key: "\(body.id.raw.uuidString):\(body.meshRevision):\(hasher.finalize())",
                 positions: positions, normals: normals, modelMatrix: body.transform.matrixFloat,
-                material: BodyMaterial(spec: group.material, meshHasTexcoords: false, revision: body.meshRevision),
+                material: BodyMaterial(spec: group.material, meshHasTexcoords: false),
                 selectionState: selectionState)
         }
     }

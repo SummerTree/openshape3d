@@ -57,4 +57,45 @@ final class MaterialPatternUITests: XCTestCase {
         XCTAssertTrue(app.descendants(matching: .any)["MaterialPatternPicker"].exists)
         app.buttons["MaterialCancel"].tap()
     }
+
+    /// Texture Mapping ▸ Image: a picture of your own on the block, from its
+    /// sides — Apply waits for the picture.
+    func testAnImageDressesTheBox() throws {
+        let app = XCUIApplication()
+        app.launchEnvironment["OS3D_FRESH"] = "1"
+        app.launchEnvironment["OS3D_RESET_STORE"] = "1"
+        app.launchEnvironment["OS3D_DEBUG_SEED_HOLE"] = "1"
+        app.launchEnvironment["OS3D_DEBUG_MATERIAL_IMAGE"] = "1"
+        app.launch()
+
+        let visualize = app.buttons["VisualizeButton"]
+        XCTAssertTrue(visualize.waitForExistence(timeout: 10))
+        visualize.tap()
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.45, dy: 0.5)).tap()
+        let edit = app.buttons["VisualizeEditMaterial"]
+        XCTAssertTrue(edit.waitForExistence(timeout: 5))
+        edit.tap()
+        XCTAssertTrue(app.buttons["MaterialApply"].waitForExistence(timeout: 5))
+        let picker = app.descendants(matching: .any)["MaterialPatternPicker"]
+        for _ in 0..<6 where !picker.isHittable { app.collectionViews.firstMatch.swipeUp(velocity: .slow) }
+        picker.tap()
+        let imageOption = app.buttons["Image"]
+        XCTAssertTrue(imageOption.waitForExistence(timeout: 3))
+        imageOption.tap()
+        XCTAssertFalse(app.buttons["MaterialApply"].isEnabled, "nothing to lay on yet")
+
+        let choose = app.buttons["Choose Image…"]
+        XCTAssertTrue(choose.waitForExistence(timeout: 3))
+        choose.tap()
+        XCTAssertTrue(app.buttons["Photos"].waitForExistence(timeout: 3))
+        app.buttons["Photos"].tap()
+        XCTAssertTrue(app.images["MaterialImagePreview"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.buttons["MaterialApply"].isEnabled)
+        app.buttons["MaterialApply"].tap()
+
+        app.segmentedControls["VisualizeApplyTo"].buttons["Faces"].tap()
+        XCTAssertTrue(edit.waitForNonExistence(timeout: 3), "deselected")
+        let shot = XCTAttachment(screenshot: app.screenshot())
+        shot.name = "pattern-image"; shot.lifetime = .keepAlways; add(shot)
+    }
 }

@@ -2193,6 +2193,20 @@ Walnut, Maple, Plywood (wood grain), Brushed Aluminum, Knurled Steel,
 Carbon Fibre, Concrete and Granite (speckle), Marble. Saved with the
 material only when set (`BodyMaterialSpec.pattern`, `patternSize`,
 `patternRotation`).
+**Image textures (2026-10-16):** Texture Mapping ▸ **Image** lays a picture
+of your own (Photos or Files on the iPad, the file picker on the web; kept
+at most 1024 px a side, JPEG — PNG with transparency) on any body, from its
+three sides — blended by how much the surface faces each, so curves and
+fillets carry no hard seam — fixed to the part, each side reading the right
+way round from outside. Size is the picture's width on the part (50 mm to
+start; the height follows the picture), Rotation turns it; it repeats
+beyond. The colour tints it (a first picture sets it to white). Works on
+faces too (face materials). Apply waits for a picture. Stored as the
+material's `baseColorTexture` with pattern `image` (shader value 7, after
+the procedural ones, so their numbers are unchanged); textures are keyed by
+the picture's fingerprint (`ImageFingerprint`), so a new picture reloads.
+Also fixed: the Material sheet's Apply used to drop an imported mesh's own
+texture; it is kept now.
 **Decals (2026-10-15):** Visualize ▸ **Decals**: Add Decal (Photos or
 Files on the iPad, the file picker on the web; images kept at most 2048 px a
 side, PNG), then a tap on a body puts it there — centred on the tap, facing

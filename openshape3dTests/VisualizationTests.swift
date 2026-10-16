@@ -214,9 +214,9 @@ final class VisualizationTests: XCTestCase {
         spec.patternRotation = 400
         XCTAssertEqual(spec.clamped.patternSize, MaterialPattern.sizeRange.upperBound)
         XCTAssertEqual(spec.clamped.patternRotation, 40, accuracy: 1e-9)
-        let render = BodyMaterial(spec: spec.clamped, meshHasTexcoords: false, revision: 1)
+        let render = BodyMaterial(spec: spec.clamped, meshHasTexcoords: false)
         XCTAssertEqual(render.pattern, 4, "knurl is the shader's 4")
         XCTAssertEqual(render.patternRotation, Float(40 * Double.pi / 180), accuracy: 1e-6)
-        XCTAssertEqual(MaterialPattern.allCases.map(\.shaderValue), [0, 1, 2, 3, 4, 5, 6])
+        XCTAssertEqual(MaterialPattern.allCases.map(\.shaderValue), [0, 1, 2, 3, 4, 5, 6, 7])
     }
 }

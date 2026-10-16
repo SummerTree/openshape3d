@@ -4,12 +4,14 @@
 //
 //  Body material dialog (plan §B15): preset grid + custom color picker +
 //  metallic/roughness/opacity/glow sliders, and texture mapping — a pattern
-//  (wood grain, brushed, carbon fibre…) with its size and rotation. Apply
-//  commits one SetMaterialCommand over the whole selection
-//  (EditorViewModel.applyMaterial).
+//  (wood grain, brushed, carbon fibre…) or a picture of your own, with its
+//  size and rotation. Apply commits one SetMaterialCommand over the whole
+//  selection (EditorViewModel.applyMaterial).
 //
 
+import PhotosUI
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct MaterialSheet: View {
     @State private var color: Color
@@ -20,6 +22,15 @@ struct MaterialSheet: View {
     @State private var pattern: MaterialPattern
     @State private var patternSize: Double
     @State private var patternRotation: Double
+    /// The `.image` pattern's picture, and an imported mesh's own texture
+    /// (laid on through its texcoords), kept apart: choosing a pattern must
+    /// not turn one into the other.
+    @State private var image: Data?
+    private let meshTexture: Data?
+    @State private var showImagePhotos = false
+    @State private var imagePhotoItem: PhotosPickerItem?
+    @State private var showImageFiles = false
+    @State private var imageError = false
 
     @Environment(\.dismiss) private var dismiss
     let onApply: (BodyMaterialSpec) -> Void
@@ -36,6 +47,8 @@ struct MaterialSheet: View {
         _pattern = State(initialValue: spec.pattern)
         _patternSize = State(initialValue: spec.patternSize)
         _patternRotation = State(initialValue: spec.patternRotation)
+        _image = State(initialValue: spec.pattern == .image ? spec.baseColorTexture : nil)
+        meshTexture = spec.pattern == .image ? nil : spec.baseColorTexture
         self.onApply = onApply
     }
 
@@ -85,6 +98,7 @@ struct MaterialSheet: View {
                         ForEach(MaterialPattern.allCases, id: \.self) { Text($0.title).tag($0) }
                     }
                     .accessibilityIdentifier("MaterialPatternPicker")
+                    if pattern == .image { imageRow }
                     if pattern != .none {
                         HStack {
                             Text("Size")
@@ -121,11 +135,72 @@ struct MaterialSheet: View {
                         onApply(currentSpec)
                         dismiss()
                     }
+                    .disabled(pattern == .image && image == nil)
                     .accessibilityIdentifier("MaterialApply")
                 }
             }
         }
         .presentationDetents([.medium, .large])
+        .photosPicker(isPresented: $showImagePhotos, selection: $imagePhotoItem, matching: .images)
+        .onChange(of: imagePhotoItem) { _, item in
+            guard let item else { return }
+            imagePhotoItem = nil
+            Task { setImage(try? await item.loadTransferable(type: Data.self)) }
+        }
+        .fileImporter(isPresented: $showImageFiles, allowedContentTypes: [.png, .jpeg, .image]) { result in
+            guard case .success(let url) = result else { return }
+            let scoped = url.startAccessingSecurityScopedResource()
+            defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+            setImage(try? Data(contentsOf: url))
+        }
+        .alert("Couldn't read the selected image.", isPresented: $imageError) { Button("OK", role: .cancel) {} }
+    }
+
+    /// Texture Mapping ▸ Image: the picture, and where to get another.
+    @ViewBuilder
+    private var imageRow: some View {
+        HStack {
+            if let image, let picture = UIImage(data: image) {
+                Image(uiImage: picture)
+                    .resizable()
+                    .scaledToFill()
+                    .frame(width: 44, height: 44)
+                    .clipShape(RoundedRectangle(cornerRadius: 6))
+                    .accessibilityIdentifier("MaterialImagePreview")
+            } else {
+                Text("Choose a picture to lay on the part.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+            Menu(image == nil ? "Choose Image…" : "Replace…") {
+                Button("Photos") { pickImage(fromPhotos: true) }
+                Button("Files") { pickImage(fromPhotos: false) }
+            }
+            .accessibilityIdentifier("MaterialChooseImage")
+        }
+    }
+
+    private func pickImage(fromPhotos: Bool) {
+        // The system pickers can't be driven by XCUITest:
+        // OS3D_DEBUG_MATERIAL_IMAGE stands the debug seed picture in.
+        #if DEBUG
+        if ProcessInfo.processInfo.environment["OS3D_DEBUG_MATERIAL_IMAGE"] != nil {
+            setImage(EditorViewModel.debugSeedImagePNG)
+            return
+        }
+        #endif
+        if fromPhotos { showImagePhotos = true } else { showImageFiles = true }
+    }
+
+    private func setImage(_ data: Data?) {
+        guard let data, let prepared = MaterialImage.prepare(data) else {
+            imageError = true
+            return
+        }
+        // A first picture shows as it is: white leaves it untinted.
+        if image == nil { color = .white }
+        image = prepared
     }
 
     private func presetSwatch(_ preset: MaterialPreset) -> some View {
@@ -191,10 +266,36 @@ struct MaterialSheet: View {
             baseColor: SIMD4(Double(r), Double(g), Double(b), max(opacity, 0.05)),
             metallic: metallic,
             roughness: roughness,
+            baseColorTexture: pattern == .image ? image : meshTexture,
             emission: emission,
             pattern: pattern,
             patternSize: patternSize,
             patternRotation: patternRotation
         ).clamped
+    }
+}
+
+/// A picked picture made ready to be a material's image (spec §14 texture
+/// mapping): at most `maxPixels` on a side — a tiled texture needs no more,
+/// and it is stored in every body that wears it — as JPEG, or PNG when it
+/// has transparency.
+enum MaterialImage {
+    static let maxPixels: CGFloat = 1024
+
+    static func prepare(_ data: Data) -> Data? {
+        guard let image = UIImage(data: data), let cg = image.cgImage, image.size.width > 0, image.size.height > 0 else {
+            return nil
+        }
+        let pixels = CGSize(width: image.size.width * image.scale, height: image.size.height * image.scale)
+        let scale = min(1, maxPixels / max(pixels.width, pixels.height))
+        let target = CGSize(width: max(1, (pixels.width * scale).rounded()), height: max(1, (pixels.height * scale).rounded()))
+        let alpha = cg.alphaInfo
+        let opaque = alpha == .none || alpha == .noneSkipFirst || alpha == .noneSkipLast
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        format.opaque = opaque
+        let renderer = UIGraphicsImageRenderer(size: target, format: format)
+        let draw: (UIGraphicsImageRendererContext) -> Void = { _ in image.draw(in: CGRect(origin: .zero, size: target)) }
+        return opaque ? renderer.jpegData(withCompressionQuality: 0.85, actions: draw) : renderer.pngData(actions: draw)
     }
 }

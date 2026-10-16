@@ -18,8 +18,10 @@ struct BodyMaterial: Equatable {
     var roughness: Float = 0
     /// Glow, 0…1.
     var emission: Float = 0
-    /// Encoded image bytes sampled as the albedo when the mesh has texcoords.
-    /// Decoded into an MTLTexture keyed by (body id, textureRevision).
+    /// Encoded image bytes sampled as the albedo: through the mesh's
+    /// texcoords, or projected (the `.image` pattern). Decoded into an
+    /// MTLTexture keyed by (body id, textureRevision) — the image's
+    /// fingerprint, so a new picture reloads and a rebuilt mesh does not.
     var textureData: Data? = nil
     var textureRevision: UInt64 = 0
     /// Texture mapping: `MaterialPattern.shaderValue`, one repeat (mm), turn (radians).
@@ -34,15 +36,17 @@ extension BodyMaterial {
     /// for it (push/pull, blend, shell, delete/replace face), which otherwise
     /// drew the default grey. The texture rides along only when the mesh can
     /// sample it: a rebuilt (boolean'd, blended, previewed) mesh has no
-    /// texcoords, so it keeps the colour and drops the image.
-    init(spec: BodyMaterialSpec, meshHasTexcoords: Bool, revision: UInt64) {
+    /// texcoords, so it keeps the colour and drops the image — unless the
+    /// image is projected (the `.image` pattern), which needs none.
+    init(spec: BodyMaterialSpec, meshHasTexcoords: Bool) {
+        let texture = meshHasTexcoords || spec.pattern == .image ? spec.baseColorTexture : nil
         self.init(
             baseColor: SIMD4<Float>(spec.baseColor),
             metallic: Float(spec.metallic),
             roughness: Float(spec.roughness),
             emission: Float(spec.emission),
-            textureData: meshHasTexcoords ? spec.baseColorTexture : nil,
-            textureRevision: revision,
+            textureData: texture,
+            textureRevision: texture.map(ImageFingerprint.of) ?? 0,
             pattern: spec.pattern.shaderValue,
             patternSize: Float(spec.patternSize),
             patternRotation: Float(spec.patternRotation * .pi / 180)
