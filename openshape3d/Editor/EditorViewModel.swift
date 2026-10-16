@@ -638,7 +638,10 @@ final class EditorViewModel {
     /// visible body when none is selected), saved in the design.
     func newDrawing(designName: String) {
         commitActiveDrawing()
-        var options = activeDrawing?.options ?? session.document.drawings.last?.options ?? DrawingOptions()
+        // The design's other drawings set the style; its first starts from
+        // the saved default title block, if there is one.
+        var options = activeDrawing?.options ?? session.document.drawings.last?.options
+            ?? AppSettings.shared.drawingTitleTemplate.map { $0.applied(to: DrawingOptions()) } ?? DrawingOptions()
         options.title = session.document.uniqueDrawingTitle(base: designName)
         let bodies = session.document.bodies.map(\.id).filter { selection.contains($0) }
         let drawing = SavedDrawing(options: options, bodyIDs: bodies)

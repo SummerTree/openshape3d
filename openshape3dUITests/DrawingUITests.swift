@@ -89,8 +89,9 @@ final class DrawingUITests: XCTestCase {
             app.buttons["NewDrawingButton"].tap()
         }
         func reveal(_ element: XCUIElement) {
-            XCTAssertTrue(element.waitForExistence(timeout: 5))
-            for _ in 0..<8 where !element.isHittable {
+            // The form loads its rows as they scroll in: swipe until it is there.
+            XCTAssertTrue(app.collectionViews.firstMatch.waitForExistence(timeout: 5))
+            for _ in 0..<12 where !(element.exists && element.isHittable) {
                 app.collectionViews.firstMatch.swipeUp(velocity: .slow)
             }
             XCTAssertTrue(element.isHittable)
@@ -139,8 +140,9 @@ final class DrawingUITests: XCTestCase {
             app.buttons["NewDrawingButton"].tap()
         }
         func reveal(_ element: XCUIElement) {
-            XCTAssertTrue(element.waitForExistence(timeout: 5))
-            for _ in 0..<8 where !element.isHittable {
+            // The form loads its rows as they scroll in: swipe until it is there.
+            XCTAssertTrue(app.collectionViews.firstMatch.waitForExistence(timeout: 5))
+            for _ in 0..<12 where !(element.exists && element.isHittable) {
                 app.collectionViews.firstMatch.swipeUp(velocity: .slow)
             }
             XCTAssertTrue(element.isHittable)
@@ -178,6 +180,82 @@ final class DrawingUITests: XCTestCase {
         delete.tap()
         XCTAssertTrue(second.waitForNonExistence(timeout: 3))
         XCTAssertEqual(preview.value as? String, "5 views", "back on sheet 1")
+        app.buttons["DrawingDone"].tap()
+    }
+
+    /// Custom title blocks (spec §15): a logo and a field of your own, saved
+    /// as the default — the next design's first drawing starts with both.
+    func testTitleBlockLogoFieldsAndDefault() throws {
+        let app = XCUIApplication()
+        app.launchEnvironment["OS3D_FRESH"] = "1"
+        app.launchEnvironment["OS3D_RESET_STORE"] = "1"
+        app.launchEnvironment["OS3D_DEBUG_SEED_HOLE"] = "1"
+        app.launchEnvironment["OS3D_DEBUG_DRAWING_LOGO"] = "1"
+        app.launch()
+
+        func openDrawing() {
+            XCTAssertTrue(app.buttons["ExportMenu"].waitForExistence(timeout: 10))
+            app.buttons["ExportMenu"].tap()
+            XCTAssertTrue(app.buttons["NewDrawingButton"].waitForExistence(timeout: 3))
+            app.buttons["NewDrawingButton"].tap()
+        }
+        func reveal(_ element: XCUIElement) {
+            // The form loads its rows as they scroll in: swipe until it is there.
+            XCTAssertTrue(app.collectionViews.firstMatch.waitForExistence(timeout: 5))
+            for _ in 0..<12 where !(element.exists && element.isHittable) {
+                app.collectionViews.firstMatch.swipeUp(velocity: .slow)
+            }
+            XCTAssertTrue(element.isHittable)
+        }
+
+        openDrawing()
+        XCTAssertTrue(app.descendants(matching: .any)["DrawingPreview"].waitForExistence(timeout: 10))
+        let addLogo = app.buttons["DrawingAddLogo"]
+        reveal(addLogo)
+        // A menu opens from its label, not the middle of the row.
+        addLogo.coordinate(withNormalizedOffset: CGVector(dx: 0.15, dy: 0.5)).tap()
+        XCTAssertTrue(app.buttons["Photos"].waitForExistence(timeout: 3))
+        app.buttons["Photos"].tap()
+        XCTAssertTrue(app.images["DrawingLogoPreview"].waitForExistence(timeout: 3))
+
+        app.buttons["DrawingAddTitleField"].tap()
+        let label = app.textFields["DrawingCustomFieldLabel"]
+        XCTAssertTrue(label.waitForExistence(timeout: 3))
+        XCTAssertEqual(label.value as? String, "Field 1")
+        label.tap()
+        label.press(forDuration: 1.0)
+        if app.menuItems["Select All"].waitForExistence(timeout: 2) { app.menuItems["Select All"].tap() }
+        label.typeText("Project")
+        let value = app.textFields["DrawingCustomFieldValue"]
+        value.tap()
+        value.typeText("Apollo\n")
+        XCTAssertEqual(label.value as? String, "Project")
+
+        let save = app.buttons["DrawingSaveTitleTemplate"]
+        reveal(save)
+        save.tap()
+        XCTAssertTrue(app.buttons["Saved as Default"].waitForExistence(timeout: 3))
+        XCTAssertFalse(save.isEnabled)
+        let shot = XCTAttachment(screenshot: app.screenshot())
+        shot.name = "drawing-title-block"; shot.lifetime = .keepAlways; add(shot)
+        app.buttons["DrawingDone"].tap()
+
+        // A new design (the settings kept): its first drawing has both.
+        app.terminate()
+        app.launchEnvironment["OS3D_RESET_STORE"] = nil
+        app.launch()
+        openDrawing()
+        XCTAssertTrue(app.descendants(matching: .any)["DrawingPreview"].waitForExistence(timeout: 10))
+        let logo = app.images["DrawingLogoPreview"]
+        reveal(logo)
+        XCTAssertEqual(app.textFields["DrawingCustomFieldValue"].value as? String, "Apollo")
+        XCTAssertTrue(app.buttons["Saved as Default"].exists)
+        app.buttons["DrawingRemoveLogo"].tap()
+        XCTAssertTrue(logo.waitForNonExistence(timeout: 3))
+        let useDefault = app.buttons["DrawingUseTitleTemplate"]
+        reveal(useDefault)
+        useDefault.tap()
+        XCTAssertTrue(logo.waitForExistence(timeout: 3), "Use Default puts the logo back")
         app.buttons["DrawingDone"].tap()
     }
 

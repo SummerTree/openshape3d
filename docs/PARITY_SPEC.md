@@ -2319,10 +2319,22 @@ SHEET cell reads "A3, 2 of 3" once there are several; view letters stay
 unique across sheets. PDF export writes a page per sheet (each its own
 size); SVG and DXF write the sheet shown. The first sheet stays in the
 drawing's own fields, so older drawings open as one-sheet drawings.
+**Custom title blocks (2026-10-15):** a logo — picked from Photos or
+Files, laid on white and kept as a JPEG of at most 800 px a side — sits
+left of the title (Simple, up to 36 mm wide) or in the company cell
+(Detailed, beside the company name, which then loses its label); own
+fields (label + value, Add Field / remove) add 11 mm rows of up to four
+above the layout. Both are the drawing's, on every sheet. PDF embeds the
+JPEG as it is (DCTDecode image XObject); SVG as a data URL; DXF leaves the
+logo out. Save as Default keeps the title block (layout, company / drawn
+/ checked / material fields, own fields, logo — not part number or
+revision) in Settings; a design's first drawing starts with it (later
+ones copy the design's last drawing), and Use Default puts it back on the
+drawing shown. The web keeps the default in localStorage.
 Missing: free placement of new views from any angle (custom projection
 angles, extra projected views), cutting lines through picked points /
-stepped sections, centrelines spanning views, custom title-block
-templates (logos, own fields), DWG.
+stepped sections, centrelines spanning views, the other title-block
+layouts (Horizontal, Vertical, Block with Table), DWG.
 **Feasibility:** [mesh-kernel OK] for a first version (orthographic
 projection + silhouette/hidden-line from meshes; associativity with the model
 [needs history engine]; production-grade HLR quality benefits from a B-rep
