@@ -149,6 +149,48 @@ final class AgentRouterTests: XCTestCase {
         XCTAssertTrue(AgentRoute.faces(bodyID: "x").needsEditor)
     }
 
+    // MARK: Accuracy
+
+    func testAccuracyRoutesWithDefaultsAndParsesEveryOption() {
+        XCTAssertEqual(route("GET", "/v1/accuracy?reference=A&model=B"),
+                       .accuracy(AccuracyQuery(referenceID: "A", modelID: "B", options: AccuracyOptions())))
+        let full = route("GET", "/v1/accuracy?reference=A&model=B&views=top,left&resolution=128&tolerance=0.25&align=base&samples=500")
+        XCTAssertEqual(full, .accuracy(AccuracyQuery(
+            referenceID: "A", modelID: "B",
+            options: AccuracyOptions(views: [.top, .left], resolution: 128, toleranceMM: 0.25,
+                                     maxSamples: 500, alignment: .base))))
+        XCTAssertTrue(full.needsEditor)
+        XCTAssertFalse(full.isImage)
+    }
+
+    func testAccuracyImageTakesAViewAndAScreenshotStyleBudget() {
+        let r = route("GET", "/v1/accuracy/image?reference=A&model=B&view=top&w=800&format=jpeg&maxBytes=100")
+        XCTAssertEqual(r, .accuracyImage(AccuracyQuery(referenceID: "A", modelID: "B", options: AccuracyOptions()),
+                                         view: .top, width: 800, format: .jpeg, maxBytes: 100))
+        XCTAssertTrue(r.isImage)
+        XCTAssertEqual(route("GET", "/v1/accuracy/image?reference=A&model=B"),
+                       .accuracyImage(AccuracyQuery(referenceID: "A", modelID: "B", options: AccuracyOptions()),
+                                      view: .front, width: AgentRouter.defaultShotSize))
+    }
+
+    func testAccuracyRefusalsAreNamed() {
+        for (target, code) in [("/v1/accuracy?model=B", "missing_reference"),
+                               ("/v1/accuracy?reference=A", "missing_model"),
+                               ("/v1/accuracy?reference=A&model=B&views=sideways", "bad_view"),
+                               ("/v1/accuracy?reference=A&model=B&align=upside", "bad_alignment"),
+                               ("/v1/accuracy/image?reference=A&model=B&view=sideways", "bad_view")] {
+            guard case let .reply(status, error, _) = route("GET", target) else {
+                return XCTFail("\(target) should be refused")
+            }
+            XCTAssertEqual(status, 400, target)
+            XCTAssertEqual(error, code, target)
+        }
+        guard case let .reply(status, _, _) = route("POST", "/v1/accuracy?reference=A&model=B") else {
+            return XCTFail("POST should be refused")
+        }
+        XCTAssertEqual(status, 405)
+    }
+
     func testUnknownPathIs404() {
         guard case let .reply(status, error, _) = route("GET", "/v1/nope") else {
             return XCTFail("expected a reply")

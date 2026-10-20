@@ -237,6 +237,47 @@ reference cut (the BEG 55 report did that by hand on the reference side
 only): `bad_plane` when `normal` is missing or zero; a mesh-only body is
 refused like `/v1/edges`.
 
+### `GET /v1/accuracy?reference=<uuid>&model=<uuid>[&views=front,top,right][&tolerance=1][&align=none|boundsCenter|base][&resolution=512][&samples=20000]`
+
+How closely one body matches another — a part modelled over an imported
+3D scan against the scan itself, a rebuild against the original
+(`Kernel/AccuracyKit.swift`; the same report as Views ▸ Accuracy Report…
+and the `accuracy` MCP op). Either body may be mesh-only; both are
+compared where they sit (`align=none`, the default — build the model on the
+scan's own axis and base), or the model is first translated so the bounding
+boxes' centres coincide (`boundsCenter`) or so the footprints' centres and
+the bottoms do (`base`).
+
+Two measures. Per view (any of the six standard directions, the Drawings'
+Front / Top / Right by default), both silhouettes are rasterised on one
+shared grid (`resolution` pixels across) and compared: `iou` (overlap over
+union, 0…1), the areas (`referenceAreaMM2`, `modelAreaMM2`, `overlapAreaMM2`,
+`missingAreaMM2`, `excessAreaMM2`), how far the outlines sit apart
+(`boundaryMeanMM`, `boundaryRMSMM`, `boundaryP95MM`, `boundaryMaxMM` — every
+outline pixel of each measured to the other's outline), and the outlines
+themselves as closed loops in view millimetres (`referenceOutlines`,
+`modelOutlines`, counter-clockwise outer loops, clockwise holes) for
+drawing. Then the surface deviation both ways (`referenceToModel`,
+`modelToReference`): up to `samples` points of one surface measured to the
+nearest point of the other — `meanMM`, `rmsMM`, `medianMM`, `p95MM`, `maxMM`,
+`withinTolerance` (the share at or under `tolerance`), `meanSignedMM`
+(positive = the samples lie outside the other body; for the reference that
+means the model is undersized) and a 24-bin `histogram`. Plus the bounds of
+each, `extentDeltaMM` (model − reference per axis), the volumes with
+`referenceWatertight` / `modelWatertight` (a scan is usually open), the
+`overallIoU` (mean over the views) and a `summary` paragraph in plain
+English. Refusals: 400 `missing_reference` / `missing_model` / `bad_view` /
+`bad_alignment` / `same_body`, 404 `unknown_body`, 409 `empty_body`.
+
+### `GET /v1/accuracy/image?…&view=front[&w=1024][&format=jpeg&maxBytes=]`
+
+One overlay drawn as a picture: the reference silhouette filled, the
+model's outline over it, the view's numbers in the header and a scale bar
+(`UI/AccuracyReportSheet.swift`'s renderer, the same drawing the sheet
+shows). Takes the same query as `/v1/accuracy` plus `view` (one of the six)
+and the screenshot sizing; only that view is computed and no surface
+sampling runs, so it is quick to call once per view.
+
 ### `POST /v1/exec` — `feature.fillet` / `feature.chamfer` / `feature.shell`
 
 The ops that used to be inexpressible over the wire (they take topological
@@ -463,8 +504,8 @@ tools" in the extension's Settings page, where they can be pre-approved; the
 first-use prompt still appears (checked on 2.110: an annotated `os3d_edges`
 prompted after three annotated reads had run). So the catalog lists ONE tool,
 `os3d`, whose `op` covers everything: the reads (`health`, `guide`, `state`,
-`faces`, `edges`, `sketches`, `check`, `screenshot`, `commands`, with their
-arguments in `args`), the features, `command.run` (`{"id":"view.fit"}` →
+`faces`, `edges`, `sketches`, `check`, `screenshot`, `commands`, `accuracy`,
+`accuracy.image`, with their arguments in `args`), the features, `command.run` (`{"id":"view.fit"}` →
 `POST /v1/command`) and `document.export` (`{"format","up","body","name"}` →
 `GET /v1/export`, saved to Downloads). The old per-endpoint tools
 (`os3d_state`, `os3d_exec`, `os3d_export`, …) still route — recorded sessions

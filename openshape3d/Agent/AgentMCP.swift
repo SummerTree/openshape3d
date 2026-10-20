@@ -144,7 +144,7 @@ nonisolated enum AgentMCP {
     static let readOps: [String: String] = [
         "health": "os3d_health", "state": "os3d_state", "faces": "os3d_faces", "edges": "os3d_edges",
         "sketches": "os3d_sketches", "check": "os3d_check", "screenshot": "os3d_screenshot",
-        "commands": "os3d_list_commands",
+        "commands": "os3d_list_commands", "accuracy": "os3d_accuracy", "accuracy.image": "os3d_accuracy_image",
     ]
 
     /// The REST request a tool call stands for. Everything past this point is
@@ -209,6 +209,26 @@ nonisolated enum AgentMCP {
             if let w = arguments["width"] as? Int { query["w"] = String(min(w, 2048)) }
             if let h = arguments["height"] as? Int { query["h"] = String(min(h, 2048)) }
             return get("/v1/screenshot", query)
+        case "os3d_accuracy", "os3d_accuracy_image":
+            // The comparison's options travel as query items; the image
+            // variant adds the view and, like a screenshot, a JPEG budget.
+            var query: [String: String] = [:]
+            for key in ["reference", "model", "views", "resolution", "tolerance", "align", "samples"] {
+                guard let raw = arguments[key] else { continue }
+                if let list = raw as? [String] { query[key] = list.joined(separator: ",") }
+                else if let text = raw as? String { query[key] = text }
+                else if let number = raw as? NSNumber { query[key] = number.stringValue }
+            }
+            if query["reference"] == nil || query["model"] == nil {
+                return .failure(Problem(message: "\(tool) needs 'reference' and 'model' — two body ids from os3d_state "
+                                               + "(the scan or original, and the body being checked)."))
+            }
+            guard tool == "os3d_accuracy_image" else { return get("/v1/accuracy", query) }
+            query["view"] = (arguments["view"] as? String) ?? "front"
+            query["format"] = "jpeg"
+            query["maxBytes"] = String(screenshotBudgetBytes)
+            if let w = arguments["width"] as? Int { query["w"] = String(min(w, 2048)) }
+            return get("/v1/accuracy/image", query)
         case "os3d_export":
             var query = ["format": arguments["format"] as? String ?? "stl",
                          "up": arguments["up"] as? String ?? "y"]
@@ -227,7 +247,7 @@ nonisolated enum AgentMCP {
     static func result(id: JSONRPCID, tool: ToolCall, response: AgentResponse,
                        saved: URL? = nil, saveProblem: String? = nil) -> AgentResponse {
         let failedHTTP = response.status >= 400
-        if case .screenshot = tool.route, !failedHTTP, response.contentType.hasPrefix("image/") {
+        if tool.route.isImage, !failedHTTP, response.contentType.hasPrefix("image/") {
             return rpcResult(id: id, ["content": [[
                 "type": "image", "mimeType": response.contentType,
                 "data": response.body.base64EncodedString(),

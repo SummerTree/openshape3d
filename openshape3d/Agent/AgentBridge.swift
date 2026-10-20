@@ -149,6 +149,39 @@ final class AgentBridge {
             return section(bodyID: bodyID, origin: origin, normal: normal,
                            xAxisHint: xAxisHint, deflection: deflection, on: viewModel)
 
+        case let .accuracy(query):
+            switch accuracyReport(query, on: viewModel) {
+            case .report(let report):
+                guard let object = jsonObject(report.wire) as? [String: Any] else {
+                    return .failure(500, "Internal Server Error", error: "encoding_failed",
+                                    message: "The accuracy report could not be encoded.")
+                }
+                return .ok(object)
+            case .refused(let reply): return reply
+            }
+
+        case let .accuracyImage(query, view, width, format, maxBytes):
+            // One view, outlines only: a picture needs no surface sampling.
+            var options = query.options
+            options.views = [view]
+            options.includeDeviation = false
+            switch accuracyReport(AccuracyQuery(referenceID: query.referenceID, modelID: query.modelID,
+                                                options: options), on: viewModel) {
+            case .report(let report):
+                guard let overlay = report.overlays.first(where: { $0.view == view }),
+                      let png = AccuracyOverlayRenderer.png(overlay: overlay, report: report, width: width) else {
+                    return .failure(500, "Internal Server Error", error: "render_failed",
+                                    message: "The overlay could not be drawn.")
+                }
+                guard format == .jpeg else { return .png(png) }
+                guard let jpeg = Self.jpeg(fromPNG: png, maxBytes: maxBytes) else {
+                    return .failure(500, "Internal Server Error", error: "render_failed",
+                                    message: "The overlay could not be re-encoded as JPEG.")
+                }
+                return .image(jpeg, contentType: AgentShotFormat.jpeg.contentType)
+            case .refused(let reply): return reply
+            }
+
         case let .spaceMouse(axes, seconds, buttons):
             // Exactly what the device sends: report 1 with all six axes,
             // ticked at 60 Hz, released, then report 3 for the buttons.
@@ -766,6 +799,42 @@ final class AgentBridge {
                  "points": loop.points.map { [$0.x, $0.y] }]
             },
         ])
+    }
+
+    /// `GET /v1/accuracy`: both bodies placed in the world (mesh-only or
+    /// analytic alike — a scan has no B-rep), compared by `AccuracyKit`.
+    private enum AccuracyOutcome {
+        case report(AccuracyReport)
+        case refused(AgentResponse)
+    }
+
+    private func accuracyReport(_ query: AccuracyQuery, on viewModel: EditorViewModel) -> AccuracyOutcome {
+        let document = viewModel.session.document
+        func body(_ id: String) -> (Body?, AgentResponse?) {
+            guard let uuid = UUID(uuidString: id) else { return (nil, execMissing("body", id)) }
+            guard let found = document.bodies.first(where: { $0.id.raw == uuid }) else {
+                return (nil, execMissing("body", id))
+            }
+            guard found.render.indices.count >= 3 else {
+                return (nil, .failure(409, "Conflict", error: "empty_body",
+                                      message: "'\(found.name)' has no triangles to compare."))
+            }
+            return (found, nil)
+        }
+        let (referenceBody, referenceProblem) = body(query.referenceID)
+        guard let reference = referenceBody else { return .refused(referenceProblem!) }
+        let (modelBody, modelProblem) = body(query.modelID)
+        guard let model = modelBody else { return .refused(modelProblem!) }
+        guard reference.id != model.id else {
+            return .refused(.failure(400, "Bad Request", error: "same_body",
+                                     message: "reference and model are the same body; compare two different ones."))
+        }
+        guard let report = AccuracyKit.compare(reference: AccuracyMesh(body: reference),
+                                               model: AccuracyMesh(body: model), options: query.options) else {
+            return .refused(.failure(409, "Conflict", error: "nothing_to_compare",
+                                     message: "One of the bodies has no geometry."))
+        }
+        return .report(report)
     }
 
     private func listEdges(bodyID: String, on viewModel: EditorViewModel) -> AgentResponse {

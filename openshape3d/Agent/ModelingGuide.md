@@ -165,6 +165,29 @@ target; start the sketch `0.5 mm` inside the body so the union overlaps.
 **Several parts** — every new-body feature returns its id. Move one beside
 another with `feature.transform`; export them one file each with `body`.
 
+## Checking a model against a scan or a reference part
+
+`accuracy` with `{"reference": "<id>", "model": "<id>"}` measures how
+closely the model body matches the reference body — a part built over an
+imported 3D scan against the scan, a rebuild against the original. The reply
+carries, per standard view (`front`, `top`, `right` by default), the
+silhouette overlap (`iou`, 0…1), the two areas, the missing and excess
+areas, and how far the outlines sit apart (`boundaryMeanMM`, `boundaryP95MM`,
+`boundaryMaxMM`); then the surface deviation both ways (`referenceToModel`,
+`modelToReference`: `meanMM`, `rmsMM`, `p95MM`, `maxMM`, `withinTolerance`,
+`meanSignedMM` — positive means the model is undersized there), the size
+difference per axis (`extentDeltaMM`), the volumes when both meshes are
+closed, and a `summary` paragraph to repeat to the person. Options:
+`views` (a list, any of the six), `tolerance` (mm, default 1), `align`
+(`none` compares where the bodies sit — build the model on the scan's own
+axis and base; `boundsCenter` or `base` first moves the model onto the
+reference), `resolution` (pixels across the overlay, default 512).
+`accuracy.image` with `"view": "front"` returns the overlay as a picture:
+the reference silhouette filled, the model's outline over it. Aim for an
+overlap above 95 % and a 95th-percentile deviation under the tolerance;
+compare after every change that matters, not only at the end, and report
+the numbers in millimetres and percent.
+
 ## Exporting for 3D printing
 
 MCP: `document.export` with `format: "stl"` (or `"3mf"`), **`up: "z"`**,

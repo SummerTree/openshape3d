@@ -2076,6 +2076,11 @@ struct EditorView: View {
                         }
                         Button("Field of View…") { viewModel.showFieldOfViewSheet = true }
                             .accessibilityIdentifier("FieldOfViewButton")
+                        // One body measured against another (a part built
+                        // over a scan): overlays per view, surface deviation.
+                        Button("Accuracy Report…") { viewModel.showAccuracyReportSheet = true }
+                            .disabled(viewModel.session.document.bodies.count < 2)
+                            .accessibilityIdentifier("AccuracyReportButton")
                         // Spec §7.5: under Views while a SpaceMouse is connected.
                         if SpaceMouseDriver.shared.deviceName != nil {
                             Button("SpaceMouse Settings…") { showSettings = true }
@@ -2464,6 +2469,12 @@ struct EditorView: View {
             )) {
                 FieldOfViewSheet(viewModel: viewModel)
                     .presentationDetents([.height(220)])
+            }
+            .sheet(isPresented: Binding(
+                get: { viewModel.showAccuracyReportSheet },
+                set: { viewModel.showAccuracyReportSheet = $0 }
+            )) {
+                AccuracyReportSheet(viewModel: viewModel)
             }
             .sheet(isPresented: Binding(
                 get: { viewModel.showConstraintSettings },

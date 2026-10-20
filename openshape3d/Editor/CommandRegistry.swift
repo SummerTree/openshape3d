@@ -263,6 +263,7 @@ nonisolated struct CommandRegistry: Sendable {
         AppCommand(id: "view.rotateUp45", title: "Rotate View Up by 45°", category: .view, chord: nil),
         AppCommand(id: "view.rotateDown45", title: "Rotate View Down by 45°", category: .view, chord: nil),
         AppCommand(id: "view.fieldOfView", title: "Field of View", category: .view, chord: nil),
+        AppCommand(id: "view.accuracyReport", title: "Accuracy Report", category: .view, chord: nil),
         AppCommand(id: "view.lockGrid", title: "Lock Grid Size", category: .view, chord: nil),
         AppCommand(id: "view.zebra", title: "Zebra Analysis", category: .view, chord: nil),
         AppCommand(id: "view.visualize", title: "Visualize", category: .view, chord: nil),

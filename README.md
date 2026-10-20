@@ -144,6 +144,12 @@ rebuild the framework from OCCT source instead, see `scripts/build_occt_ios.sh`.
 - **Section View** — pick a world or construction plane; the model clips
   live against it with a drag arrow to move the cut and Flip / Section Off
   badges. **Isolate** hides everything but the selection.
+- **Accuracy Report** — Views ▸ Accuracy Report… measures one body against
+  another (a part modelled over an imported 3D scan against the scan):
+  orthographic silhouette overlays per view with overlap and outline
+  distance, surface deviation both ways with histograms, size and volume;
+  the same report over the agent bridge (`/v1/accuracy`, the `accuracy`
+  MCP op). `docs/SCAN_TO_CAD.md` walks a phone scan to a CAD model over MCP.
 - **Display modes** — Shaded, Shaded (No Edges), Wireframe (hidden lines
   stay hidden via a depth prepass), and X-Ray, plus a Show Hidden Edges
   pass; bodies stay selectable in every mode.

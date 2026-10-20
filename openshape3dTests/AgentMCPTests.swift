@@ -209,6 +209,26 @@ final class AgentMCPTests: XCTestCase {
         XCTAssertEqual(result?["isError"] as? Bool, true)
     }
 
+    func testAccuracyRidesOnTheOneToolWithItsOptions() {
+        let route = call(AgentMCP.plan(for: rpc("tools/call", params: [
+            "name": "os3d", "arguments": ["op": "accuracy", "args": [
+                "reference": "SCAN", "model": "CAD", "views": ["front", "top"], "tolerance": 0.5, "align": "base"]]])))?.route
+        XCTAssertEqual(route, .accuracy(AccuracyQuery(
+            referenceID: "SCAN", modelID: "CAD",
+            options: AccuracyOptions(views: [.front, .top], toleranceMM: 0.5, alignment: .base))))
+        let image = call(AgentMCP.plan(for: rpc("tools/call", params: [
+            "name": "os3d", "arguments": ["op": "accuracy.image", "args": ["reference": "SCAN", "model": "CAD", "view": "top"]]])))?.route
+        XCTAssertEqual(image, .accuracyImage(AccuracyQuery(referenceID: "SCAN", modelID: "CAD", options: AccuracyOptions()),
+                                             view: .top, width: AgentRouter.defaultShotSize, format: .jpeg,
+                                             maxBytes: AgentMCP.screenshotBudgetBytes))
+        XCTAssertEqual(image?.isImage, true)
+        // Missing ids are a tool error naming what is needed.
+        let result = object(reply(AgentMCP.plan(for: rpc("tools/call", params: [
+            "name": "os3d", "arguments": ["op": "accuracy", "args": ["reference": "SCAN"]]]))))["result"] as? [String: Any]
+        XCTAssertEqual(result?["isError"] as? Bool, true)
+        XCTAssertTrue((((result?["content"] as? [[String: Any]])?.first?["text"] as? String) ?? "").contains("model"))
+    }
+
     func testScreenshotsOverMCPAreBudgetedJPEGs() {
         let tool = call(AgentMCP.plan(for: rpc("tools/call", params: ["name": "os3d_screenshot", "arguments": ["width": 4096]])))
         XCTAssertEqual(tool?.route, .screenshot(width: 2048, height: 1024, format: .jpeg, maxBytes: AgentMCP.screenshotBudgetBytes))
