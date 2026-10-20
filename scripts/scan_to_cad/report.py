@@ -166,20 +166,20 @@ def build(run, title, artifact=False, shot_keys=None):
   .headline { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 12px; margin: 24px 0 8px; }
   .tile { background: var(--panel); border-radius: 10px; padding: 14px 16px; min-width: 0; }
   .tile .n { font: 600 28px/1.1 var(--display); font-variant-numeric: tabular-nums; } .tile .l { color: var(--muted); font-size: 13px; margin-top: 4px; }
-  table { border-collapse: collapse; font-size: 14.5px; font-variant-numeric: tabular-nums; max-width: 100%; }
+  table { border-collapse: collapse; font-size: 14.5px; font-variant-numeric: tabular-nums; max-width: 100%%; }
   th, td { text-align: left; padding: 6px 12px 6px 0; border-bottom: 1px solid var(--line); vertical-align: top; }
   th { color: var(--muted); font-weight: 500; white-space: nowrap; }
   .overlays { display: grid; grid-template-columns: repeat(auto-fit, minmax(290px, 1fr)); gap: 20px; }
-  figure { margin: 0; min-width: 0; } figure img { width: 100%; max-width: 100%; border: 1px solid var(--line); border-radius: 8px; background: #fff; display: block; }
+  figure { margin: 0; min-width: 0; } figure img { width: 100%%; max-width: 100%%; border: 1px solid var(--line); border-radius: 8px; background: #fff; display: block; }
   figcaption { font-size: 13.5px; color: var(--muted); margin-top: 8px; line-height: 1.45; }
   .devs { display: grid; grid-template-columns: repeat(auto-fit, minmax(330px, 1fr)); gap: 24px; }
-  .dev { min-width: 0; } .dev svg { max-width: 100%; height: auto; display: block; margin-top: 8px; }
+  .dev { min-width: 0; } .dev svg { max-width: 100%%; height: auto; display: block; margin-top: 8px; }
   .legend { color: var(--muted); font-size: 14px; }
   .legend span { display: inline-block; width: 12px; height: 12px; border-radius: 2px; margin: 0 6px 0 14px; vertical-align: -1px; }
   .legend span:first-child { margin-left: 0; }
   .shots { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 14px; }
   .scroll { overflow-x: auto; }
-  table.transcript { width: 100%; font-size: 12.5px; } table.transcript td { font-family: var(--mono); font-size: 12px; word-break: break-word; }
+  table.transcript { width: 100%%; font-size: 12.5px; } table.transcript td { font-family: var(--mono); font-size: 12px; word-break: break-word; }
   .summary { background: var(--panel); border-radius: 10px; padding: 14px 18px; max-width: none; }
   code { font-family: var(--mono); font-size: 13.5px; }
   .files th { width: 11em; }
