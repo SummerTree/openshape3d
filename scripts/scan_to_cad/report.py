@@ -10,6 +10,7 @@ The numbers are the app's own (`/v1/accuracy`); nothing is recomputed here.
 """
 import argparse
 import base64
+import datetime
 import html
 import json
 import os
@@ -36,10 +37,10 @@ def histogram_svg(stats, tolerance, width=360, height=120):
         h = (height - 28) * count / peak
         within = (i + 1) * bin_mm <= tolerance + 1e-9
         bars.append('<rect x="%.1f" y="%.1f" width="%.1f" height="%.1f" fill="%s"/>' % (
-            i * w + 1, height - 20 - h, max(w - 2, 1), h, "#4caf50" if within else "#ff9800"))
+            i * w + 1, height - 20 - h, max(w - 2, 1), h, "var(--ok)" if within else "var(--warn)"))
     tx = tolerance / (bin_mm * len(bins)) * width
-    marker = '<line x1="%.1f" y1="0" x2="%.1f" y2="%d" stroke="#555" stroke-dasharray="3,3"/>' % (tx, tx, height - 20) if tx <= width else ""
-    axis = '<text x="2" y="%d" font-size="11" fill="#666">0</text><text x="%d" y="%d" font-size="11" fill="#666" text-anchor="end">%.1f mm</text>' % (
+    marker = '<line x1="%.1f" y1="0" x2="%.1f" y2="%d" stroke="var(--muted)" stroke-dasharray="3,3"/>' % (tx, tx, height - 20) if tx <= width else ""
+    axis = '<text x="2" y="%d" font-size="11" fill="var(--muted)">0</text><text x="%d" y="%d" font-size="11" fill="var(--muted)" text-anchor="end">%.1f mm</text>' % (
         height - 6, width - 2, height - 6, bin_mm * len(bins))
     return '<svg viewBox="0 0 %d %d" width="%d" height="%d">%s%s%s</svg>' % (width, height, width, height, "".join(bars), marker, axis)
 
@@ -80,7 +81,7 @@ def markdown_table_to_html(md):
     return "\n".join(out)
 
 
-def build(run, title):
+def build(run, title, artifact=False, shot_keys=None):
     with open(os.path.join(run, "summary.json")) as f:
         summary = json.load(f)
     with open(os.path.join(run, "accuracy.json")) as f:
@@ -121,6 +122,8 @@ def build(run, title):
 
     shots = []
     for key in sorted(summary.get("shots", {})):
+        if shot_keys is not None and key not in shot_keys:
+            continue
         img = data_uri(summary["shots"][key])
         if img:
             shots.append('<figure><img src="%s" alt="%s"><figcaption>%s</figcaption></figure>' % (img, key, key))
@@ -128,35 +131,62 @@ def build(run, title):
     rb, mb = acc["referenceBounds"], acc["modelBounds"]
     exports = summary.get("exports", {})
     bosses = summary.get("bosses", [])
-    page = '''<!doctype html>
+    head = "" if artifact else '''<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>%(title)s — accuracy report</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+'''
+    page = head + '''<title>%(title)s</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Source+Serif+4:wght@600&family=Source+Sans+3:wght@400;500;600&family=JetBrains+Mono:wght@400&display=swap">
 <style>
-  :root { --ink:#1d2330; --muted:#5b6472; --line:#e3e6ec; --ref:#2b74e0; --model:#e8650d; --bg:#fff; }
-  body { font: 15px/1.5 -apple-system, "Helvetica Neue", Helvetica, Arial, sans-serif; color: var(--ink); background: var(--bg); margin: 0; }
-  main { max-width: 1100px; margin: 0 auto; padding: 32px 20px 64px; }
-  h1 { font-size: 30px; margin: 0 0 6px; } h2 { font-size: 21px; margin: 40px 0 12px; border-bottom: 1px solid var(--line); padding-bottom: 6px; }
-  h4 { margin: 0 0 8px; }
-  .lede { color: var(--muted); font-size: 16px; }
-  .headline { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; margin: 22px 0; }
-  .tile { border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; }
-  .tile .n { font-size: 26px; font-weight: 600; } .tile .l { color: var(--muted); font-size: 13px; }
-  table { border-collapse: collapse; font-size: 14px; } th, td { text-align: left; padding: 5px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  /* Layout: one reading column (72ch) with the overlays and deviation panels on wrapping grids;
+     colour tokens below, the two dark blocks only redefine them. */
+  :root {
+    --bg: #fbfaf7; --fg: #1f2429; --muted: #5f6872; --line: #e1ded6; --panel: #f3f1ea;
+    --ref: #2b6fd6; --model: #d9641a; --ok: #3f9a52; --warn: #e0a21c;
+    --display: "Source Serif 4", Georgia, "Times New Roman", serif;
+    --body: "Source Sans 3", "Helvetica Neue", Helvetica, Arial, sans-serif;
+    --mono: "JetBrains Mono", Menlo, Consolas, monospace;
+  }
+  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+    --bg: #15181c; --fg: #e9e6df; --muted: #9aa2ad; --line: #2b3138; --panel: #1d2127;
+    --ref: #6ea2f0; --model: #f08a45; --ok: #6fc482; --warn: #f0c04a; color-scheme: dark } }
+  :root[data-theme="dark"] {
+    --bg: #15181c; --fg: #e9e6df; --muted: #9aa2ad; --line: #2b3138; --panel: #1d2127;
+    --ref: #6ea2f0; --model: #f08a45; --ok: #6fc482; --warn: #f0c04a; color-scheme: dark }
+  body { background: var(--bg); color: var(--fg); font: 16px/1.55 var(--body); margin: 0;
+         padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+  main { max-width: 1040px; margin: 0 auto; padding-block: 36px 72px; }
+  h1 { font: 600 clamp(28px, 4vw, 38px)/1.15 var(--display); margin: 0 0 8px; text-wrap: balance; letter-spacing: -0.01em; }
+  h2 { font: 600 24px/1.2 var(--display); margin: 44px 0 14px; padding-bottom: 8px; border-bottom: 1px solid var(--line); text-wrap: balance; }
+  h4 { margin: 0 0 10px; font: 600 15px/1.3 var(--body); }
+  p { max-width: 72ch; }
+  .lede { color: var(--muted); font-size: 17px; }
+  .eyebrow { font: 500 12px/1 var(--body); letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); margin: 0 0 10px; }
+  .headline { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 12px; margin: 24px 0 8px; }
+  .tile { background: var(--panel); border-radius: 10px; padding: 14px 16px; min-width: 0; }
+  .tile .n { font: 600 28px/1.1 var(--display); font-variant-numeric: tabular-nums; } .tile .l { color: var(--muted); font-size: 13px; margin-top: 4px; }
+  table { border-collapse: collapse; font-size: 14.5px; font-variant-numeric: tabular-nums; max-width: 100%; }
+  th, td { text-align: left; padding: 6px 12px 6px 0; border-bottom: 1px solid var(--line); vertical-align: top; }
   th { color: var(--muted); font-weight: 500; white-space: nowrap; }
-  .overlays { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 18px; }
-  figure { margin: 0; } figure img { width: 100%%; border: 1px solid var(--line); border-radius: 8px; }
-  figcaption { font-size: 13px; color: var(--muted); margin-top: 6px; }
-  .devs { display: grid; grid-template-columns: repeat(auto-fit, minmax(360px, 1fr)); gap: 24px; }
+  .overlays { display: grid; grid-template-columns: repeat(auto-fit, minmax(290px, 1fr)); gap: 20px; }
+  figure { margin: 0; min-width: 0; } figure img { width: 100%; max-width: 100%; border: 1px solid var(--line); border-radius: 8px; background: #fff; display: block; }
+  figcaption { font-size: 13.5px; color: var(--muted); margin-top: 8px; line-height: 1.45; }
+  .devs { display: grid; grid-template-columns: repeat(auto-fit, minmax(330px, 1fr)); gap: 24px; }
+  .dev { min-width: 0; } .dev svg { max-width: 100%; height: auto; display: block; margin-top: 8px; }
+  .legend { color: var(--muted); font-size: 14px; }
   .legend span { display: inline-block; width: 12px; height: 12px; border-radius: 2px; margin: 0 6px 0 14px; vertical-align: -1px; }
-  .shots { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px; }
-  table.transcript { width: 100%%; font-size: 12.5px; } table.transcript td { font-family: Menlo, monospace; word-break: break-word; }
-  .summary { background: #f5f7fb; border-radius: 10px; padding: 14px 18px; }
-  code { font-family: Menlo, monospace; font-size: 13px; }
-  @media (prefers-color-scheme: dark) { :root { --ink:#e8ebf1; --muted:#9aa3b2; --line:#2a303b; --bg:#12151b; } .summary { background:#1a1f28; } figure img { background:#fff; } }
-</style></head>
-<body><main>
-<h1>%(title)s — scan to CAD accuracy report</h1>
+  .legend span:first-child { margin-left: 0; }
+  .shots { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 14px; }
+  .scroll { overflow-x: auto; }
+  table.transcript { width: 100%; font-size: 12.5px; } table.transcript td { font-family: var(--mono); font-size: 12px; word-break: break-word; }
+  .summary { background: var(--panel); border-radius: 10px; padding: 14px 18px; max-width: none; }
+  code { font-family: var(--mono); font-size: 13.5px; }
+  .files th { width: 11em; }
+</style>
+''' + ("" if artifact else "</head><body>") + '''<main>
+<p class="eyebrow">OpenShape 3D · accuracy report · %(date)s</p>
+<h1>%(title)s</h1>
 <p class="lede">A 3D scan turned into a parametric CAD model in OpenShape 3D over its MCP interface, and graded by the app itself:
 orthographic silhouettes of the scan and the model laid over each other, and the distance from every sampled point of one surface to the other.</p>
 
@@ -170,7 +200,7 @@ orthographic silhouettes of the scan and the model laid over each other, and the
 <p class="summary">%(summary)s</p>
 
 <h2>Orthographic overlays</h2>
-<p class="legend"><span style="background:var(--ref)"></span>reference (scan) silhouette, filled <span style="background:var(--model)"></span>model outline</p>
+<p class="legend"><span style="background:var(--ref)"></span>scan silhouette, filled <span style="background:var(--model)"></span>model outline</p>
 <div class="overlays">%(overlays)s</div>
 
 <h2>Surface deviation</h2>
@@ -190,13 +220,14 @@ orthographic silhouettes of the scan and the model laid over each other, and the
 
 <h2>The MCP session</h2>
 <p>Every call the build made to the <code>os3d</code> tool, through <code>scripts/mcp_openshape3d.py</code>, in order.</p>
-%(transcript)s
+<div class="scroll">%(transcript)s</div>
 
 <h2>Files</h2>
-%(files)s
-</main></body></html>
+<div class="files">%(files)s</div>
+</main>''' + ("" if artifact else "</body></html>") + '''
 ''' % {
         "title": html.escape(title),
+        "date": datetime.date.today().isoformat(),
         "iou": acc["overallIoU"] * 100, "views": len(acc["overlays"]),
         "within": acc["referenceToModel"]["withinTolerance"] * 100, "tol": tol,
         "p95": acc["referenceToModel"]["p95MM"],
@@ -242,11 +273,18 @@ def main():
     ap.add_argument("run")
     ap.add_argument("--out", default=None)
     ap.add_argument("--title", default="Fire hydrant")
+    ap.add_argument("--artifact", default=None,
+                    help="also write the page without its document skeleton, with a few pictures, for publishing as a claude.ai artifact")
     args = ap.parse_args()
     out = args.out or os.path.join(args.run, "report.html")
     with open(out, "w") as f:
         f.write(build(args.run, args.title))
     print("wrote", out, os.path.getsize(out), "bytes")
+    if args.artifact:
+        with open(args.artifact, "w") as f:
+            f.write(build(args.run, args.title, artifact=True,
+                          shot_keys={"01-scan-iso", "04-both-iso", "05-cad-front", "06-cad-visualize"}))
+        print("wrote", args.artifact, os.path.getsize(args.artifact), "bytes")
 
 
 if __name__ == "__main__":
