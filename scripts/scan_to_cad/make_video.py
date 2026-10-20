@@ -227,7 +227,7 @@ def main():
     print("== compose")
     segs = json.load(open(os.path.join(frames, "segments.json")))
     fps = segs["fps"]
-    inputs = ["-framerate", str(fps), "-i", os.path.join(frames, "frame_%04d.png")]
+    inputs = ["-framerate", str(fps), "-i", os.path.join(frames, "frame_%04d.jpg")]
     filters = []
     mix = []
     for i, seg in enumerate(segs["segments"]):
