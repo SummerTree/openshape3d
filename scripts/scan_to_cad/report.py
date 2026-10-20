@@ -135,7 +135,7 @@ def build(run, title, artifact=False, shot_keys=None):
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 '''
-    page = head + '''<title>%(title)s</title>
+    page = (head + '''<title>%(title)s</title>
 <meta name="claude:viewport-fit-sides" content="cover">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Source+Serif+4:wght@600&family=Source+Sans+3:wght@400;500;600&family=JetBrains+Mono:wght@400&display=swap">
 <style>
@@ -225,7 +225,7 @@ orthographic silhouettes of the scan and the model laid over each other, and the
 <h2>Files</h2>
 <div class="files">%(files)s</div>
 </main>''' + ("" if artifact else "</body></html>") + '''
-''' % {
+''') % {
         "title": html.escape(title),
         "date": datetime.date.today().isoformat(),
         "iou": acc["overallIoU"] * 100, "views": len(acc["overlays"]),
