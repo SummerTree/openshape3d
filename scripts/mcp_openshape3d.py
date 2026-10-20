@@ -163,7 +163,8 @@ TOOLS = load_tools()
 # skip the prompt — checked on 2.110), so reads and changes share one approval.
 READ_OPS = {"health": "os3d_health", "guide": "os3d_guide", "state": "os3d_state", "faces": "os3d_faces",
             "edges": "os3d_edges", "sketches": "os3d_sketches", "check": "os3d_check",
-            "screenshot": "os3d_screenshot", "commands": "os3d_list_commands"}
+            "screenshot": "os3d_screenshot", "commands": "os3d_list_commands",
+            "accuracy": "os3d_accuracy", "accuracy.image": "os3d_accuracy_image"}
 
 
 def run_tool(name, arguments):
@@ -264,6 +265,37 @@ def run_tool(name, arguments):
                                    timeout=EXEC_TIMEOUT)
         text = body.decode("utf-8")
         return error_result(text) if status >= 400 else text_result(text)
+
+    if name in ("os3d_accuracy", "os3d_accuracy_image"):
+        # One body measured against another (`AccuracyKit`): the options
+        # travel as query items, exactly as the in-app MCP sends them.
+        arguments = arguments or {}
+        if not arguments.get("reference") or not arguments.get("model"):
+            return error_result("{} needs 'reference' and 'model' — two body ids from os3d_state "
+                                "(the scan or original, and the body being checked).".format(name))
+        query = []
+        for key in ("reference", "model", "views", "resolution", "tolerance", "align", "samples"):
+            value = arguments.get(key)
+            if value is None:
+                continue
+            if isinstance(value, (list, tuple)):
+                value = ",".join(str(v) for v in value)
+            query.append("{}={}".format(key, urllib.parse.quote(str(value))))
+        if name == "os3d_accuracy":
+            status, body, _ = call_app("GET", "/v1/accuracy?" + "&".join(query), timeout=EXEC_TIMEOUT)
+            text = body.decode("utf-8")
+            return error_result(text) if status >= 400 else text_result(text)
+        query.append("view=" + urllib.parse.quote(str(arguments.get("view") or "front")))
+        query.append("w={}".format(min(int(arguments.get("width", 1024)), 2048)))
+        query.append("format=jpeg&maxBytes={}".format(SCREENSHOT_BUDGET))
+        status, body, content_type = call_app("GET", "/v1/accuracy/image?" + "&".join(query), timeout=EXEC_TIMEOUT)
+        if status >= 400 or not content_type.startswith("image/"):
+            return error_result(body.decode("utf-8", "replace"))
+        return {"content": [{
+            "type": "image",
+            "data": base64.b64encode(body).decode("ascii"),
+            "mimeType": content_type.split(";")[0].strip(),
+        }]}
 
     if name == "os3d_export":
         return export(arguments or {})

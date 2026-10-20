@@ -2,7 +2,14 @@
 
 > **Current unfinished-work register:** [Sketch parity open status](SKETCH_PARITY_OPEN_STATUS.md). Maintained at every meaningful checkpoint; older mission logs below are historical.
 
-Last updated: 2026-09-19 — a sketch on a picked face reads upright (top/bottom faces take the ground's axes, other faces are upright like the front/side planes; Text on a tag's top face now runs along +X); ten YouTube project tutorials (coffee mug, chess pawn & rook, LEGO-style brick, name keychain, twisted vase, bolt & nut with threads, spur gears, fidget spinner, ice cube tray, print-in-place hinged box) from `scripts/youtube_series/project_tutorial.py`, every model checked valid before recording, narrated with a pronunciation guide (CAD /kæd/, fillet FILL-it; `pronunciation.py`); Claude Desktop asks for permission ONCE, proven in the real Desktop 2.110 (the MCP catalog is one tool, `os3d`, whose `op` covers reads, features, views/undo and export; one card, Always allow, 14 more calls unprompted), MCP screenshots are budgeted JPEGs (the 1024² PNG blew Desktop's 1 MB tool-result cap), `model-openshape3d` skill rewritten (full op table, face/edge reading, boolean-overlap rule) and proven on three headless Claude runs plus the Desktop run; the AI control channel ships in 1.3 (Settings ▸ AI Assistant switch, pairing code, in-app MCP, one-click Claude Desktop extension; proven with the real Claude Desktop and a store-user video); AI modelling made usable end to end (MCP server gained exec / faces / edges / check / export, new `/v1/export`, `model-openshape3d` skill, `docs/AI_MODELING_SETUP.md`, tested with real Claude sessions) and the "flowerpot with Claude or ChatGPT" tutorial; three narrated YouTube tutorials (sketching, shapes, materials) from `scripts/youtube_series/`; loft preview creases fixed (banded ruled mesh); welcome screen, bundled sample designs (Demos folder) and App Store preview videos at 886 × 1920 / 1200 × 1600; camera / material / phone safe-area / constraint-sheet fixes (#37–#40); full UI suite on main has no known failures; all twelve App Store screenshots reshot for the new framing; medium-detent sheet tap probe (no other sheet drops taps); Settings reachable on iPhone; switch-tap probe on iPhone (no taps lost, not even in the control); SOLIDWORKS practice problems rerun on main (170 / 202, unchanged); Shell tool opens holed faces, 13.9 over-hollow finding stale; lateral-edge fillet finding stale; practice-problem round 6 (181 / 215 pass, four bugs confirmed); Settings reachable at any width (the iPad mini in portrait lost it too); edge convexity and collinear edge merging fixed (round 6 bug 3); crossing outlines split into real regions (round 6's bug 1); curved-edge midpoints in /v1/edges stable (practice problems 181 / 215, unchanged); render mesh no longer fails validity (round 6's bug 2), heal-loosened booleans refused; a bridge feature is one undo step (round 6's bug 4); 7.29 at 0.00 % (R1 on every edge but the hole rims); practice problems 182 / 215 on merged main (18.3's tube fillet built 0.001 mm off tangent); shell refusals traced (18.3 fixed by the tube offset, 13.9A an OCCT offset limit); a shell over a fillet no longer refused as C0Geometry (18.23's refusals traced); fillets OCCT built no longer refused per edge (practice problems 183 / 215: 13.3 passes, 18.5A / 18.5B with their full R5 sets, 18.5B at −0.001 %); the fillet drag's size probe looks past a failed tiny size; 18.9A's refused sphere/diamond blend traced to a drawn tangency (recipe unchanged); practice problems rerun on main after the shell and fillet fixes (183 / 215, identical); the boolean's face merge no longer corrupts its operands (18.19 cut in drawing order); kernel ops audited for changing their inputs (the heal does not; the enclosed-hollow cut did, now non-destructive); 18.23's shell refusal pinned to the pipe junction over the S step's concave R3; **outstanding work is listed under "Open work" below**; see the newest mission log, the register above, and
+Last updated: 2026-10-20 — **Accuracy Report** (one body measured against
+another: orthographic silhouette overlays per view, outline and surface
+deviation both ways; `Kernel/AccuracyKit.swift`, Views ▸ Accuracy Report…,
+`/v1/accuracy` + `/v1/accuracy/image`, MCP ops `accuracy` /
+`accuracy.image`) and the scan-to-CAD-over-MCP pipeline
+(`scripts/scan_to_cad/`, `docs/SCAN_TO_CAD.md`: a phone scan analysed,
+rebuilt through the real MCP server, graded by the app, written up as an
+HTML report and a narrated Blender video); earlier: a sketch on a picked face reads upright (top/bottom faces take the ground's axes, other faces are upright like the front/side planes; Text on a tag's top face now runs along +X); ten YouTube project tutorials (coffee mug, chess pawn & rook, LEGO-style brick, name keychain, twisted vase, bolt & nut with threads, spur gears, fidget spinner, ice cube tray, print-in-place hinged box) from `scripts/youtube_series/project_tutorial.py`, every model checked valid before recording, narrated with a pronunciation guide (CAD /kæd/, fillet FILL-it; `pronunciation.py`); Claude Desktop asks for permission ONCE, proven in the real Desktop 2.110 (the MCP catalog is one tool, `os3d`, whose `op` covers reads, features, views/undo and export; one card, Always allow, 14 more calls unprompted), MCP screenshots are budgeted JPEGs (the 1024² PNG blew Desktop's 1 MB tool-result cap), `model-openshape3d` skill rewritten (full op table, face/edge reading, boolean-overlap rule) and proven on three headless Claude runs plus the Desktop run; the AI control channel ships in 1.3 (Settings ▸ AI Assistant switch, pairing code, in-app MCP, one-click Claude Desktop extension; proven with the real Claude Desktop and a store-user video); AI modelling made usable end to end (MCP server gained exec / faces / edges / check / export, new `/v1/export`, `model-openshape3d` skill, `docs/AI_MODELING_SETUP.md`, tested with real Claude sessions) and the "flowerpot with Claude or ChatGPT" tutorial; three narrated YouTube tutorials (sketching, shapes, materials) from `scripts/youtube_series/`; loft preview creases fixed (banded ruled mesh); welcome screen, bundled sample designs (Demos folder) and App Store preview videos at 886 × 1920 / 1200 × 1600; camera / material / phone safe-area / constraint-sheet fixes (#37–#40); full UI suite on main has no known failures; all twelve App Store screenshots reshot for the new framing; medium-detent sheet tap probe (no other sheet drops taps); Settings reachable on iPhone; switch-tap probe on iPhone (no taps lost, not even in the control); SOLIDWORKS practice problems rerun on main (170 / 202, unchanged); Shell tool opens holed faces, 13.9 over-hollow finding stale; lateral-edge fillet finding stale; practice-problem round 6 (181 / 215 pass, four bugs confirmed); Settings reachable at any width (the iPad mini in portrait lost it too); edge convexity and collinear edge merging fixed (round 6 bug 3); crossing outlines split into real regions (round 6's bug 1); curved-edge midpoints in /v1/edges stable (practice problems 181 / 215, unchanged); render mesh no longer fails validity (round 6's bug 2), heal-loosened booleans refused; a bridge feature is one undo step (round 6's bug 4); 7.29 at 0.00 % (R1 on every edge but the hole rims); practice problems 182 / 215 on merged main (18.3's tube fillet built 0.001 mm off tangent); shell refusals traced (18.3 fixed by the tube offset, 13.9A an OCCT offset limit); a shell over a fillet no longer refused as C0Geometry (18.23's refusals traced); fillets OCCT built no longer refused per edge (practice problems 183 / 215: 13.3 passes, 18.5A / 18.5B with their full R5 sets, 18.5B at −0.001 %); the fillet drag's size probe looks past a failed tiny size; 18.9A's refused sphere/diamond blend traced to a drawn tangency (recipe unchanged); practice problems rerun on main after the shell and fillet fixes (183 / 215, identical); the boolean's face merge no longer corrupts its operands (18.19 cut in drawing order); kernel ops audited for changing their inputs (the heal does not; the enclosed-hollow cut did, now non-destructive); 18.23's shell refusal pinned to the pipe junction over the S step's concave R3; **outstanding work is listed under "Open work" below**; see the newest mission log, the register above, and
 [full 42-issue implementation ledger](SKETCH_PARITY_IMPLEMENTATION.md).
 This is the living handoff document: what is DONE, how the newest subsystems
 work, the dev workflow, and the prioritized next missions.
@@ -11,6 +18,60 @@ Companions: `IMPLEMENTATION_PLAN.md` (original phase plan),
 design), `FREECAD_PLAYBOOK.md` (the FreeCAD-derived hardening ledger),
 `TOPO_NAMING_HISTORY_DESIGN.md` (element-naming design, now complete), and
 `AGENT_CONTROL.md` (the `/v1/exec` scripting surface).
+
+## Mission log — 2026-10-20, Accuracy Report and scan-to-CAD over MCP
+
+The request: download laanlabs' fire-hydrant TrueDepth scan from Sketchfab,
+turn it into a CAD model through the MCP, document and film the process in
+Blender, and have the app produce an accuracy report with orthographic
+overlays. Everything shipped; the one open item is the scan itself —
+Sketchfab serves the download only to a signed-in account, so the run was
+proven on a stand-in (`scripts/scan_to_cad/synthetic_hydrant.py`) and the
+real file drops into the same commands (`docs/SCAN_TO_CAD.md`).
+
+- **`Kernel/AccuracyKit.swift`** (pure values): both bodies placed in the
+  world, rasterised per standard view on one grid (pixel-centre test, no
+  fill for edge-on triangles — marking their pixels spilled onto the empty
+  border and outlines could not close), IoU and areas, outline-to-outline
+  distance via an exact Euclidean distance transform, marching-squares
+  outlines walked in linear time by grid-edge keys (endpoint-distance
+  chaining was quadratic: 19 s per report on 107k triangles, now ~4 s in
+  Debug) and oriented by nesting; surface deviation both ways over a
+  compressed-row uniform grid sized to the mesh density; watertightness
+  after welding; `wire` (Codable) and a `summary` paragraph.
+  `AccuracyKitTests` (11): identical boxes, a 22 mm cube over a 20 mm cube
+  (IoU 400/484, 1 mm outlines, √3 mm max), base / centre alignment, a
+  frame with a hole (two loops, opposite signs), welding, the distance
+  transform, closest points, the raster, the wire form.
+- **Bridge / MCP**: `GET /v1/accuracy` and `/v1/accuracy/image`
+  (`AccuracyQuery` parses query items and MCP args alike), the one `os3d`
+  tool gained read ops `accuracy` and `accuracy.image` (both dialects, the
+  Python server too; `MCPTools.json`, the skill and the derived guide /
+  tools.json / .mcpb re-synced), `AgentRoute.isImage`. `AgentRouterTests`
+  (+3), `AgentMCPTests` (+1), `test_mcp_openshape3d.py` (+1).
+- **UI**: Views ▸ **Accuracy Report…** / command `view.accuracyReport`
+  (`UI/AccuracyReportSheet.swift`): pick reference and model, alignment,
+  tolerance, three or six views; computes off the main thread; overlays
+  drawn with `Canvas` from the outlines (the same renderer draws the
+  bridge's PNG), deviation histograms, size/volume table, the summary;
+  Share → report image (`ImageRenderer`), Copy Summary / JSON.
+- **Pipeline** (`scripts/scan_to_cad/`): `analyze_scan.py` (PCA axis
+  refined through RANSAC slice-circle centres — bounding-box centres sat
+  12 mm toward the pumper nozzle; per-sector 30th-percentile body radius;
+  watershed boss detection with saddle merging, ring and sliver filters),
+  `mcp_client.py` (JSON-RPC over the server's stdio, logged, transcript),
+  `build_hydrant.py` (import → revolve on the fitted axis → bosses as
+  union extrudes → check → pictures → `accuracy` → exports; Pappus check
+  on the revolve), `report.py` (HTML), `make_video.py` + `blender_video.py`
+  (narration, trimesh heatmap, Blender 5.2 EEVEE; `Action.fcurves` is gone
+  in 5.x — layered actions).
+- **Stand-in result**: 87 MCP calls, 43 s in the app; three nozzles found
+  at −143°/−52°/128° (truth −143°/−53°/127°); valid B-rep, revolve volume
+  equal to Pappus to 0.00 %; IoU front 97.4 % / top 98.3 % / right 97.5 %;
+  scan→model mean 1.04 mm, 95 % within 3.26 mm, 87.9 % within 2 mm (the
+  stand-in's own 0.7 mm noise plus a 4 mm voxel remesh).
+- **Not yet in the web app**: the kernel compiles there unchanged, but the
+  sheet is not ported (openshape-cloud `docs/IOS_PARITY.md` lists it).
 
 ## Open work — 2026-09-17
 

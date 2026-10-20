@@ -6776,6 +6776,9 @@ final class EditorViewModel {
     /// Perspective field of view (View ▸ Field of View…); 0 is orthographic.
     private(set) var fieldOfViewDegrees: Double = 40
     var showFieldOfViewSheet = false
+    /// Views ▸ Accuracy Report… (`AccuracyReportSheet`): one body measured
+    /// against another, overlays and surface deviation.
+    var showAccuracyReportSheet = false
 
     func setFieldOfView(_ degrees: Double) {
         let clamped = min(max(degrees, 0), 100)

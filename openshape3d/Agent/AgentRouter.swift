@@ -135,6 +135,14 @@ nonisolated enum AgentRoute: Sendable, Equatable {
     /// device counts tx, ty, tz, rx, ry, rz) for `seconds`, then press
     /// `buttons` — the whole report-to-camera path, without the device.
     case spaceMouse(axes: [Double], seconds: Double, buttons: Int)
+    /// How closely one body matches another (a modelled part against the
+    /// scan it was built from): silhouette overlays per standard view and
+    /// surface deviation both ways (`AccuracyKit`), as JSON.
+    case accuracy(AccuracyQuery)
+    /// One of the report's overlays drawn as a picture — the reference
+    /// silhouette under the model's outline, with the view's numbers.
+    case accuracyImage(AccuracyQuery, view: DrawingViewDirection, width: Int,
+                       format: AgentShotFormat = .png, maxBytes: Int? = nil)
     /// Already-decided replies.
     case reply(status: Int, error: String, message: String)
 
@@ -142,10 +150,86 @@ nonisolated enum AgentRoute: Sendable, Equatable {
     var needsEditor: Bool {
         switch self {
         case .state, .runCommand, .exec, .screenshot, .check, .capture,
-             .edges, .faces, .sketches, .project, .section, .archive, .export, .spaceMouse:
+             .edges, .faces, .sketches, .project, .section, .archive, .export, .spaceMouse,
+             .accuracy, .accuracyImage:
             return true
         case .health, .commands, .reply: return false
         }
+    }
+
+    /// Routes whose success reply is an image, not JSON.
+    var isImage: Bool {
+        switch self {
+        case .screenshot, .accuracyImage: return true
+        default: return false
+        }
+    }
+}
+
+/// `GET /v1/accuracy?reference=&model=…`: which two bodies, and how to compare.
+nonisolated struct AccuracyQuery: Sendable, Equatable {
+    var referenceID: String
+    var modelID: String
+    var options: AccuracyOptions
+
+    /// Every option the two endpoints share, from a query string or the MCP
+    /// op's `args` (`views` as a comma list or an array, `tolerance` mm,
+    /// `align` none / boundsCenter / base, `resolution` px, `samples`).
+    nonisolated enum Parsed: Sendable {
+        case query(AccuracyQuery)
+        case refused(AgentRoute)
+    }
+
+    static func parse(reference: String?, model: String?, views: Any?, resolution: Any?,
+                      tolerance: Any?, align: Any?, samples: Any?) -> Parsed {
+        guard let reference, !reference.isEmpty else {
+            return .refused(.reply(status: 400, error: "missing_reference",
+                                   message: "The comparison needs 'reference' — the id of the body to measure "
+                                          + "against (the scan or the original), from /v1/state."))
+        }
+        guard let model, !model.isEmpty else {
+            return .refused(.reply(status: 400, error: "missing_model",
+                                   message: "The comparison needs 'model' — the id of the body being checked, from /v1/state."))
+        }
+        var directions: [DrawingViewDirection] = []
+        let names: [String]
+        if let list = views as? [String] { names = list }
+        else if let text = views as? String { names = text.split(separator: ",").map { String($0) } }
+        else { names = [] }
+        for name in names {
+            let key = name.trimmingCharacters(in: .whitespaces).lowercased()
+            guard !key.isEmpty else { continue }
+            guard let direction = DrawingViewDirection(rawValue: key) else {
+                return .refused(.reply(status: 400, error: "bad_view",
+                                       message: "Unknown view '\(name)'. Views are "
+                                              + DrawingViewDirection.allCases.map(\.rawValue).joined(separator: ", ") + "."))
+            }
+            directions.append(direction)
+        }
+        var alignment = AccuracyAlignment.none
+        if let raw = align as? String, !raw.isEmpty {
+            switch raw.trimmingCharacters(in: .whitespaces).lowercased() {
+            case "none", "asplaced", "placed": alignment = .none
+            case "boundscenter", "bounds", "center", "centre": alignment = .boundsCenter
+            case "base", "ground", "bottom": alignment = .base
+            default:
+                return .refused(.reply(status: 400, error: "bad_alignment",
+                                       message: "align is none (compare where the bodies sit), boundsCenter, or base."))
+            }
+        }
+        func number(_ raw: Any?) -> Double? {
+            if let d = raw as? Double { return d }
+            if let i = raw as? Int { return Double(i) }
+            if let s = raw as? String { return Double(s.trimmingCharacters(in: .whitespaces)) }
+            return nil
+        }
+        let options = AccuracyOptions(
+            views: directions,
+            resolution: Int(number(resolution) ?? 512),
+            toleranceMM: number(tolerance) ?? 1,
+            maxSamples: Int(number(samples) ?? 20_000),
+            alignment: alignment)
+        return .query(AccuracyQuery(referenceID: reference, modelID: model, options: options))
     }
 }
 
@@ -248,6 +332,31 @@ nonisolated enum AgentRouter {
             let deflection = request.query["deflection"].flatMap(Double.init) ?? 0.05
             return .section(bodyID: body, origin: origin, normal: normal,
                             xAxisHint: hint, deflection: deflection)
+
+        case "/v1/accuracy", "/v1/accuracy/image":
+            if let bad = get(request) { return bad }
+            let q = request.query
+            let parsed = AccuracyQuery.parse(reference: q["reference"], model: q["model"], views: q["views"],
+                                             resolution: q["resolution"], tolerance: q["tolerance"],
+                                             align: q["align"], samples: q["samples"])
+            let query: AccuracyQuery
+            switch parsed {
+            case .query(let value): query = value
+            case .refused(let reply): return reply
+            }
+            guard request.path == "/v1/accuracy/image" else { return .accuracy(query) }
+            let viewName = (q["view"] ?? "front").lowercased()
+            guard let view = DrawingViewDirection(rawValue: viewName) else {
+                return .reply(status: 400, error: "bad_view",
+                              message: "/v1/accuracy/image takes ?view= one of "
+                                     + DrawingViewDirection.allCases.map(\.rawValue).joined(separator: ", ") + ".")
+            }
+            let raw = (q["format"] ?? "png").lowercased()
+            let format: AgentShotFormat = (raw == "jpeg" || raw == "jpg") ? .jpeg : .png
+            let budget = request.intQuery("maxBytes", default: 0, min: 0, max: Int.max)
+            return .accuracyImage(query, view: view,
+                                  width: request.intQuery("w", default: defaultShotSize, min: minShotSize, max: maxShotSize),
+                                  format: format, maxBytes: budget > 0 ? budget : nil)
 
         case "/v1/capture":
             guard developerRoutes else { return developerOnly(request.path) }

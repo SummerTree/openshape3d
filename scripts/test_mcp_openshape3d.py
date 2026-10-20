@@ -101,6 +101,10 @@ class Stub(BaseHTTPRequestHandler):
             return self.send(200, b"\0" * 80 + struct.pack("<I", 2) + b"\0" * 100, "model/stl")
         if self.path.startswith("/v1/faces"):
             return self.send(200, {"ok": True, "faces": [{"index": 1, "kind": "planar"}]})
+        if self.path.startswith("/v1/accuracy/image"):
+            return self.send(200, b"\x89PNG\r\n\x1a\n" + b"\0" * 32, "image/jpeg")
+        if self.path.startswith("/v1/accuracy") and "model=" not in self.path:
+            return self.send(400, {"ok": False, "error": "missing_model", "message": "needs model"})
         if self.path.startswith("/v1/edges?body=missing"):
             return self.send(404, {"ok": False, "error": "unknown_body", "message": "no such body"})
         return self.send(200, {"ok": True, "path": self.path})
@@ -196,6 +200,21 @@ class OfflineTests(unittest.TestCase):
         result, text = self.c.tool("os3d_exec", {"args": {}})
         self.assertTrue(result["isError"])
         self.assertIn("op", text)
+
+    def test_accuracy_rides_on_the_one_tool_with_its_options(self):
+        result, body = self.c.tool("os3d", {"op": "accuracy", "args": {
+            "reference": "SCAN", "model": "CAD", "views": ["front", "top"], "tolerance": 0.5, "align": "base"}})
+        self.assertFalse(result.get("isError"), body)
+        self.assertEqual(body["path"], "/v1/accuracy?reference=SCAN&model=CAD&views=front%2Ctop&tolerance=0.5&align=base")
+        result, text = self.c.tool("os3d", {"op": "accuracy", "args": {"reference": "SCAN"}})
+        self.assertTrue(result["isError"])
+        self.assertIn("model", text)
+        image = self.c.rpc("tools/call", {"name": "os3d", "arguments": {
+            "op": "accuracy.image", "args": {"reference": "SCAN", "model": "CAD", "view": "top"}}})["result"]
+        self.assertEqual(image["content"][0]["type"], "image")
+        self.assertEqual(image["content"][0]["mimeType"], "image/jpeg")
+        self.assertIn(("GET", "/v1/accuracy/image?reference=SCAN&model=CAD&view=top&w=1024&format=jpeg&maxBytes=700000"),
+                      Stub.seen)
 
     def test_bridge_refusal_reaches_the_model_intact(self):
         result, body = self.c.tool("os3d_exec", {"op": "feature.bogus"})
