@@ -164,6 +164,10 @@ nonisolated enum AgentExecOp: Sendable, Equatable {
     /// Open Views ▸ Accuracy Report… on two bodies and run the comparison
     /// (`show: true`), or close it. A display state, no undo step.
     case accuracyReport(reference: BodyID, model: BodyID, tolerance: Double, show: Bool)
+    /// The report's colours on the part: the reference coloured by its
+    /// distance to the model in the viewport (`show: true`), or off. A
+    /// display state, no undo step; the reply carries the per-vertex stats.
+    case deviationPreview(reference: BodyID, model: BodyID, tolerance: Double, maxMM: Double?, panel: Bool, show: Bool)
 }
 
 /// `view.visualize`'s environment fields; nil leaves a field as it is.
@@ -213,6 +217,7 @@ nonisolated enum AgentExec {
         "feature.moveFace", "feature.scaleFace", "feature.rotateFace",
         "feature.deleteFace", "feature.replaceFace", "feature.draftFace", "feature.imprint",
         "body.setMaterial", "item.setHidden", "item.select", "view.section", "view.visualize",
+        "view.accuracyReport", "view.deviationPreview",
     ]
 
     static let booleanKinds = ["union", "subtract", "intersect"]
@@ -258,6 +263,7 @@ nonisolated enum AgentExec {
         case "view.section":       return parseSection(args)
         case "view.visualize":     return parseVisualize(args)
         case "view.accuracyReport": return parseAccuracyReport(args)
+        case "view.deviationPreview": return parseDeviationPreview(args)
         default:
             return .failure(.init(code: "unknown_op",
                                   message: "No exec op '\(op)'. Known ops: \(opNames.joined(separator: ", "))."))
@@ -1022,6 +1028,26 @@ nonisolated enum AgentExec {
                 return .failure(.init(code: "bad_tolerance", message: "args.tolerance is millimetres, 0 or more."))
             }
             return .success(.accuracyReport(reference: reference, model: model, tolerance: tolerance, show: true))
+        } catch let e as AgentExecError { return .failure(e) } catch { return .failure(unexpected) }
+    }
+
+    private static func parseDeviationPreview(_ a: [String: Any]) -> Result<AgentExecOp, AgentExecError> {
+        if a["off"] as? Bool == true {
+            return .success(.deviationPreview(reference: BodyID(), model: BodyID(), tolerance: 0, maxMM: nil, panel: true, show: false))
+        }
+        do {
+            let reference = BodyID(raw: try uuid(a, "reference"))
+            let model = BodyID(raw: try uuid(a, "model"))
+            let tolerance = try optionalDouble(a, "tolerance") ?? 1
+            guard tolerance >= 0 else {
+                return .failure(.init(code: "bad_tolerance", message: "args.tolerance is millimetres, 0 or more."))
+            }
+            let maxMM = try optionalDouble(a, "maxMM")
+            if let maxMM, maxMM <= tolerance {
+                return .failure(.init(code: "bad_maxMM", message: "args.maxMM (full colour) must be larger than the tolerance."))
+            }
+            return .success(.deviationPreview(reference: reference, model: model, tolerance: tolerance, maxMM: maxMM,
+                                              panel: a["panel"] as? Bool ?? true, show: true))
         } catch let e as AgentExecError { return .failure(e) } catch { return .failure(unexpected) }
     }
 

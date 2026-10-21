@@ -597,6 +597,38 @@ final class AgentBridge {
             viewModel.showAccuracyReportSheet = true
             return execOK(viewModel, ["accuracyReport": true, "undoSteps": 0])
 
+        case let .deviationPreview(reference, model, tolerance, maxMM, panel, show):
+            // The colours on the part, for the person and for the next
+            // screenshot: measured here and now (a few seconds on a dense
+            // scan, spread over the cores), so the reply carries the numbers.
+            guard show else {
+                viewModel.endDeviationPreview()
+                return execOK(viewModel, ["deviationPreview": false, "undoSteps": 0])
+            }
+            if let missing = missingBody([reference, model], session) { return missing }
+            guard reference != model else {
+                return .failure(400, "Bad Request", error: "same_body",
+                                message: "reference and model are the same body; compare two different ones.")
+            }
+            let document = session.document
+            guard let ref = document.body(with: reference), let mdl = document.body(with: model) else {
+                return execMissing("body", reference.raw.uuidString)
+            }
+            let limit = maxMM ?? max(tolerance * 5, 1)
+            guard let preview = DeviationPreview.make(reference: ref, model: mdl, toleranceMM: tolerance, maxMM: limit) else {
+                return .failure(409, "Conflict", error: "nothing_to_compare", message: "One of the bodies has no geometry.")
+            }
+            viewModel.deviationPreviewComputing = false
+            viewModel.deviationPreview = preview
+            viewModel.deviationPanelHidden = !panel
+            var reply: [String: Any] = preview.stats.wire
+            reply["deviationPreview"] = true
+            reply["toleranceMM"] = tolerance
+            reply["maxMM"] = limit
+            reply["panel"] = panel
+            reply["undoSteps"] = 0
+            return execOK(viewModel, reply)
+
         case let .visualize(on, args):
             guard on else {
                 viewModel.exitVisualize()
@@ -1406,6 +1438,20 @@ final class AgentBridge {
             "commandSearchActive": viewModel.commandSearchActive,
         ]
         if let title = viewModel.session.undoStack.undoTitle { state["undoTitle"] = title }
+        // The deviation preview while it is on or measuring — whether an
+        // assistant turned it on or a person did, the numbers are here.
+        if viewModel.deviationPreview != nil || viewModel.deviationPreviewComputing {
+            var preview: [String: Any] = ["active": viewModel.deviationPreview != nil,
+                                          "computing": viewModel.deviationPreviewComputing]
+            if let dp = viewModel.deviationPreview {
+                preview["reference"] = dp.reference.raw.uuidString
+                preview["model"] = dp.model.raw.uuidString
+                preview["toleranceMM"] = dp.toleranceMM
+                preview["maxMM"] = dp.maxMM
+                for (key, value) in dp.stats.wire { preview[key] = value }
+            }
+            state["deviationPreview"] = preview
+        }
         // Items Manager folders (spec §11): the tree as the panel shows it.
         state["itemFolders"] = document.itemFolders.map { folder -> [String: Any] in
             [

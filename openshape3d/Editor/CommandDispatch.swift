@@ -70,7 +70,7 @@ extension CommandRegistry {
         "view.top", "view.bottom", "view.isometric", "view.fit",
         "view.nearestOrtho", "view.rotateLeft15", "view.rotateRight15", "view.rotateUp15",
         "view.rotateDown15", "view.rotateLeft45", "view.rotateRight45", "view.rotateUp45",
-        "view.rotateDown45", "view.fieldOfView", "view.accuracyReport", "view.lockGrid",
+        "view.rotateDown45", "view.fieldOfView", "view.accuracyReport", "view.deviationPreview", "view.lockGrid",
         "items.showHidden", "items.invert", "items.reveal", "view.zebra", "view.curvature",
         "file.newDrawing", "view.visualize", "view.section", "view.editSection", "view.section2D", "view.sectionOnly", "view.sectionFlip",
     ]
@@ -267,6 +267,11 @@ extension EditorViewModel {
         case "view.accuracyReport":
             guard session.document.bodies.count >= 2 else { return false }
             showAccuracyReportSheet = true; return true
+        case "view.deviationPreview":
+            if deviationPreview != nil || deviationPreviewComputing { endDeviationPreview(); return true }
+            guard let pair = deviationPreviewDefaults() else { return false }
+            Task { await showDeviationPreview(reference: pair.reference, model: pair.model, toleranceMM: 1) }
+            return true
         case "view.lockGrid":      toggleLockGridSize();        return true
         case "view.zebra":
             surfaceAnalysis = surfaceAnalysis == .zebra ? .none : .zebra; return true

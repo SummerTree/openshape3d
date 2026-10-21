@@ -1396,6 +1396,16 @@ struct EditorView: View {
             }
             .onChange(of: viewModel.itemsRevealRequest) { _, _ in showItemsPanel = true }
             .overlay(alignment: .topTrailing) {
+                // The deviation preview's key, where the Items panel sits
+                // (the viewport's top edge survives a 16:9 crop of a recording).
+                if viewModel.deviationPreview != nil || viewModel.deviationPreviewComputing,
+                   !viewModel.deviationPanelHidden, !viewModel.visualizeActive {
+                    DeviationLegendView(viewModel: viewModel)
+                        .padding(.trailing, 14)
+                        .padding(.top, 8)
+                }
+            }
+            .overlay(alignment: .topTrailing) {
                 // Visualization panel (spec §14) in place of the Items panel.
                 if viewModel.visualizeActive {
                     if !viewModel.visualizePanelHidden {
@@ -2083,6 +2093,15 @@ struct EditorView: View {
                         Button("Accuracy Report…") { viewModel.showAccuracyReportSheet = true }
                             .disabled(viewModel.session.document.bodies.count < 2)
                             .accessibilityIdentifier("AccuracyReportButton")
+                        // The report's colours on the part itself (see
+                        // `DeviationPreview`): one tap on the sheet's default
+                        // pair, or off again.
+                        Button(viewModel.deviationPreview != nil || viewModel.deviationPreviewComputing
+                               ? "Hide Deviation Preview" : "Deviation Preview") {
+                            _ = viewModel.runCommand("view.deviationPreview")
+                        }
+                            .disabled(viewModel.session.document.bodies.count < 2)
+                            .accessibilityIdentifier("DeviationPreviewButton")
                         // Spec §7.5: under Views while a SpaceMouse is connected.
                         if SpaceMouseDriver.shared.deviceName != nil {
                             Button("SpaceMouse Settings…") { showSettings = true }

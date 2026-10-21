@@ -101,7 +101,7 @@ def modelling_calls(calls):
     """The calls that made the model: sketches, features, checks and the
     report — not the camera moves, colours and hides that stage the film."""
     staging = {"health", "state", "screenshot", "item.setHidden", "item.select", "body.setMaterial", "view.visualize",
-               "view.accuracyReport", "command.run"}
+               "view.accuracyReport", "view.deviationPreview", "command.run"}
     return sum(1 for c in calls if (c.get("arguments") or {}).get("op") not in staging)
 
 
@@ -280,10 +280,30 @@ def take(args):
                 beats[-1]["computeEnd"] = rec.now()
                 hold(2.4)
                 touch("raw_drag:0.5,0.80;0.5,0.34;0.1")
-                hold(1.8)
-                touch("raw_drag:0.5,0.80;0.5,0.34;0.1")
                 hold(2.0)
-                touch("raw_tap:Done")
+                touch("raw_drag:0.5,0.34;0.5,0.80;0.1")
+                hold(1.0)
+                # The report on the part: the sheet's "Show Deviation in
+                # Viewport" row closes the sheet and colours the scan — blue
+                # where the model is missing material, orange where it has
+                # too much; the legend's Done ends it. The cut starts when
+                # the legend reports the colours are in (`ready`).
+                beat("deviation", "Deviation preview · blue = missing · orange = excess")
+                touch("raw_tap:AccuracyShowDeviationButton")
+                # The colours are in when the app's state says so (an
+                # XCUITest poll for the legend's button never matched it,
+                # and each poll's snapshot slowed the measurement).
+                until = time.time() + 150
+                while time.time() < until:
+                    dp = mcp.os3d("state").get("deviationPreview") or {}
+                    if dp.get("active") and not dp.get("computing"):
+                        break
+                    time.sleep(1.0)
+                hold(0.8)
+                beats[-1]["ready"] = rec.now()
+                turn(7.5)
+                if touch("raw_tap:DeviationDone") != "done":
+                    mcp.os3d("view.deviationPreview", {"off": True})
                 hold(0.6)
             else:
                 beat("accuracy", "")
@@ -294,6 +314,13 @@ def take(args):
                 beats[-1]["computeSeconds"] = round(mcp.calls[-2]["seconds"], 1)
                 hold(mcp.calls[-2]["seconds"] + 12.0)
                 mcp.os3d("view.accuracyReport", {"off": True})
+                hold(0.5)
+                beat("deviation", "Deviation preview · blue = missing · orange = excess")
+                mcp.os3d("view.deviationPreview", {"reference": scan_id, "model": cad_id, "tolerance": args.tolerance})
+                hold(0.6)
+                beats[-1]["ready"] = rec.now()
+                turn(7.5)
+                mcp.os3d("view.deviationPreview", {"off": True})
                 hold(0.5)
 
             # The hook for the opening: the scan, photo texture and all,
@@ -355,6 +382,8 @@ def script_for(timeline, title_say, scan_name):
         "accuracy": "Then the app grades its own work: Views, Accuracy Report. The scan is the reference, the solid is the model — "
                     "compare, and it lays the silhouettes over each other and measures every point. {:.0f} percent overlap.".format(
             a["overallIoU"] * 100),
+        "deviation": "And it shows you where, on the scan itself: blue where the model is missing material, orange where it "
+                     "has too much, grey within tolerance.",
         "report": "Every run also writes a report: the three orthographic silhouettes — the scan filled in blue under the "
                   "model's outline — and the distance from every sampled point, both ways.",
         "numbers": "A phone scan to a parametric model in {} calls, within {:.0f} millimetres on average.".format(
