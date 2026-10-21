@@ -2475,6 +2475,7 @@ struct EditorView: View {
                 set: { viewModel.showAccuracyReportSheet = $0 }
             )) {
                 AccuracyReportSheet(viewModel: viewModel)
+                    .modifier(PageSheetSizing())
             }
             .sheet(isPresented: Binding(
                 get: { viewModel.showConstraintSettings },

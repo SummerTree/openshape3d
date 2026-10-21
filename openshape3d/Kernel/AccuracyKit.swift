@@ -780,6 +780,15 @@ nonisolated struct SurfaceGrid: Sendable {
     }
 }
 
+/// A comparison the agent bridge asks Views ▸ Accuracy Report… to run as it
+/// opens (`view.accuracyReport` over exec): the sheet picks these bodies and
+/// compares at once, so a person watching sees the report appear.
+nonisolated struct AccuracyReportRequest: Sendable, Equatable {
+    var reference: BodyID
+    var model: BodyID
+    var toleranceMM: Double
+}
+
 // MARK: - On the wire
 
 /// The report as JSON carries it (`/v1/accuracy`, the `accuracy` MCP op,

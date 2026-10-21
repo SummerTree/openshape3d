@@ -1,0 +1,690 @@
+#!/usr/bin/env python3
+"""A demo film of the scan-to-CAD run, shot in the app itself.
+
+    python3 demo_video.py take    --scan analysis/scan_cropped.glb --analysis analysis/ --out demo/ --port 8947
+    python3 demo_video.py compose --out demo/ [--tts gemini|edge] [--music lyria|generated|path.m4a]
+
+`take` records the iPad simulator (`simctl io recordVideo`) while the model
+is built over MCP — the scan appearing, the revolve, each nozzle, a slow
+turn in Visualize, then Views ▸ Accuracy Report… opening and computing on
+screen — and writes `take.mov` plus `timeline.json` (when each beat
+happened). The build itself is `build_hydrant.py`'s recipe, paced for the
+camera; exports and the JSON report are not filmed.
+
+`compose` cuts the take to its beats, lays a caption pill over each, puts a
+title and a numbers card around it, narrates it (Gemini TTS through Vertex
+AI when the gcloud login is valid, otherwise the edge-tts neural voice) and
+adds a music bed (Lyria through Vertex AI, or a generated one), then writes
+`<name>.mp4` and a contact sheet.
+"""
+import argparse
+import asyncio
+import base64
+import hashlib
+import json
+import math
+import os
+import signal
+import subprocess
+import sys
+import time
+import urllib.request
+
+import numpy as np
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, HERE)
+from mcp_client import MCPClient  # noqa: E402
+
+BUNDLE = "com.laan.labs.openshape3d"
+W, H, FPS = 1920, 1080, 30
+
+
+# ----------------------------------------------------------------------------- take
+
+def simctl(*args, check=True, capture=True):
+    return subprocess.run(["xcrun", "simctl", *args], check=check, capture_output=capture, text=True)
+
+
+def udid_for(name):
+    out = simctl("list", "devices", "available").stdout
+    for line in out.splitlines():
+        if name + " (" in line:
+            import re
+            m = re.search(r"[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}", line)
+            if m:
+                return m.group(0)
+    sys.exit("no simulator named " + name)
+
+
+class Recorder:
+    def __init__(self, udid, path):
+        if os.path.exists(path):
+            os.remove(path)
+        self.proc = subprocess.Popen(["xcrun", "simctl", "io", udid, "recordVideo", "--codec=h264", "--force", path],
+                                     stderr=subprocess.PIPE, text=True)
+        while True:
+            line = self.proc.stderr.readline()
+            if "Recording started" in line:
+                self.t0 = time.time()
+                return
+            if self.proc.poll() is not None:
+                sys.exit("recordVideo did not start")
+
+    def now(self):
+        return time.time() - self.t0
+
+    def stop(self):
+        self.proc.send_signal(signal.SIGINT)
+        self.proc.wait(timeout=180)
+
+
+def take(args):
+    with open(os.path.join(args.analysis, "profile.json")) as f:
+        analysis = json.load(f)
+    from build_hydrant import unit, world, lines_for
+    axis_origin = np.array(analysis["axisOrigin"])
+    axis = unit(analysis["axisDirection"])
+    u = unit(analysis["azimuthZero"])
+    v = unit(analysis["azimuthNinety"])
+    profile = analysis["profile"]
+    height = analysis["heightMM"]
+    body_r = analysis["bodyRadiusMM"]
+    bosses = [b for b in analysis["bosses"] if b["reachMM"] - b["bodyRadiusMM"] > 15 and b.get("profile")]
+    nozzles = set(id(b) for b in sorted(bosses, key=lambda b: -(b["reachMM"] - b["bodyRadiusMM"]))[:3])
+
+    os.makedirs(args.out, exist_ok=True)
+    udid = udid_for(args.simulator)
+    beats = []
+
+    with MCPClient(port=args.port, log_dir=args.out) as mcp:
+        mcp.initialize()
+        health = mcp.os3d("health")
+        if not health.get("hasDocument"):
+            sys.exit("open an empty design first (launch with OS3D_FRESH=1)")
+        if mcp.os3d("state")["bodies"]:
+            sys.exit("the design is not empty; relaunch with OS3D_FRESH=1")
+        mcp.os3d("command.run", {"id": "view.isometric"})
+        rec = Recorder(udid, os.path.join(args.out, "take.mov"))
+        time.sleep(1.0)
+
+        def beat(bid, caption):
+            beats.append({"id": bid, "caption": caption, "start": rec.now()})
+            print("== %5.1fs %s" % (rec.now(), caption), flush=True)
+
+        def hold(seconds):
+            time.sleep(seconds)
+
+        try:
+            beat("import", "Import the iPhone scan")
+            reply = mcp.os3d("document.import", {"path": os.path.abspath(args.scan), "fileName": os.path.basename(args.scan)})
+            scan_id = reply["bodyIDs"][0]
+            mcp.os3d("command.run", {"id": "view.fit"})
+            hold(1.2)
+            mcp.os3d("command.run", {"id": "view.isometric"})
+            hold(2.0)
+            mcp.os3d("body.setMaterial", {"bodyIDs": [scan_id], "color": [0.55, 0.62, 0.72, 0.42], "roughness": 0.9})
+            hold(0.8)
+
+            beat("revolve", "One sketch on the scan's own axis, one revolve")
+            plane = {"origin": world(axis_origin, axis, u, v, 0, 0), "xAxis": [float(x) for x in u],
+                     "yAxis": [float(x) for x in axis], "name": "Hydrant profile"}
+            sketch = mcp.os3d("sketch.create", plane)["sketchID"]
+            loop = [[0.0, 0.0]] + [[max(r, 0.0), h] for r, h in profile] + [[0.0, height]]
+            cleaned = [loop[0]]
+            for p in loop[1:]:
+                if abs(p[0] - cleaned[-1][0]) > 1e-6 or abs(p[1] - cleaned[-1][1]) > 1e-6:
+                    cleaned.append(p)
+            mcp.os3d("sketch.addEntities", {"sketchID": sketch, "entities": lines_for(cleaned)})
+            hold(1.2)
+            reply = mcp.os3d("feature.revolve", {"sketchID": sketch, "seedPoint": [body_r * 0.5, height * 0.5],
+                                                 "axisPoint": [0, 0], "axisDirection": [0, 1], "angleDegrees": 360})
+            cad_id = reply["producedBodyIDs"][0]
+            mcp.os3d("body.setMaterial", {"bodyIDs": [cad_id], "color": [0.86, 0.17, 0.12], "roughness": 0.45})
+            mcp.os3d("item.setHidden", {"allSketches": True})
+            hold(2.2)
+
+            nozzle_no = 0
+            for n, boss in enumerate(bosses, 1):
+                if id(boss) in nozzles:
+                    nozzle_no += 1
+                    beat("boss%d" % n, "Nozzle %d · its own profile, revolved and unioned in" % nozzle_no)
+                else:
+                    beat("boss%d" % n, "A lug on the bonnet · the same way")
+                az = boss["azimuthDeg"]
+                d = unit(math.cos(math.radians(az)) * u + math.sin(math.radians(az)) * v)
+                t = unit(np.cross(axis, d))
+                inner = boss.get("innerStartMM", boss["bodyRadiusMM"] - 12.0)
+                prof = [[max(r, 1.0), s] for r, s in boss["profile"]]
+                bl = [[0.0, 0.0], [prof[0][0], 0.0]] + prof + [[0.0, prof[-1][1]]]
+                bc = [bl[0]]
+                for p in bl[1:]:
+                    if abs(p[0] - bc[-1][0]) > 1e-6 or abs(p[1] - bc[-1][1]) > 1e-6:
+                        bc.append(p)
+                origin = world(axis_origin, axis, u, v, inner, boss["centerHeightMM"], az)
+                sk = mcp.os3d("sketch.create", {"origin": origin, "xAxis": [float(x) for x in t],
+                                                "yAxis": [float(x) for x in d], "name": "Boss %d" % n})["sketchID"]
+                mcp.os3d("sketch.addEntities", {"sketchID": sk, "entities": lines_for(bc)})
+                hold(0.6)
+                mcp.os3d("feature.revolve", {"sketchID": sk, "seedPoint": [max(prof[0][0] * 0.4, 2.0), prof[-1][1] * 0.3],
+                                             "axisPoint": [0, 0], "axisDirection": [0, 1], "angleDegrees": 360,
+                                             "boolean": "union", "booleanTargets": [cad_id]})
+                mcp.os3d("item.setHidden", {"allSketches": True})
+                hold(0.5)
+                mcp.os3d("command.run", {"id": "view.rotateLeft15"})
+                hold(0.9)
+
+            beat("check", "A valid solid, every step in the history")
+            check = mcp.os3d("check", {"body": cad_id})
+            valid = check["bodies"][0]["health"]["valid"]
+            mcp.os3d("item.setHidden", {"ids": [scan_id]})
+            mcp.os3d("view.visualize", {"preset": "Studio", "background": "color", "backgroundColor": [1, 1, 1],
+                                        "groundShadow": True})
+            hold(1.0)
+            for _ in range(12):
+                mcp.os3d("command.run", {"id": "view.rotateLeft15"})
+                hold(0.45)
+            mcp.os3d("view.visualize", {"off": True})
+            mcp.os3d("item.setHidden", {"ids": [scan_id], "hidden": False})
+            mcp.os3d("command.run", {"id": "view.isometric"})
+            hold(1.0)
+            # The numbers for the cards, before the beat so the wait is not filmed.
+            report = mcp.os3d("accuracy", {"reference": scan_id, "model": cad_id, "tolerance": args.tolerance})
+
+            beat("accuracy", "The app grades it · Views ▸ Accuracy Report")
+            mcp.os3d("view.accuracyReport", {"reference": scan_id, "model": cad_id, "tolerance": args.tolerance})
+            # The sheet computes for about as long as the `accuracy` call took
+            # (the same kernel), then shows its overlays; film both, and let
+            # the cut skip the wait.
+            beats[-1]["computeSeconds"] = round(mcp.calls[-2]["seconds"], 1)
+            hold(mcp.calls[-2]["seconds"] + 12.0)
+            mcp.os3d("view.accuracyReport", {"off": True})
+            hold(0.5)
+
+            beat("end", "")
+            end = rec.now()
+        finally:
+            rec.stop()
+
+    timeline = {"beats": beats, "end": end, "valid": bool(valid),
+                "accuracy": {"overallIoU": report["overallIoU"],
+                             "views": {o["view"]: o["iou"] for o in report["overlays"]},
+                             "referenceToModel": report["referenceToModel"], "modelToReference": report["modelToReference"],
+                             "summary": report["summary"], "calls": len(mcp.calls)}}
+    with open(os.path.join(args.out, "timeline.json"), "w") as f:
+        json.dump(timeline, f, indent=1)
+    print("take %.1f s, %d MCP calls -> %s" % (end, len(mcp.calls), os.path.join(args.out, "take.mov")))
+
+
+# ----------------------------------------------------------------------------- narration
+
+def script_for(timeline, title_say, scan_name):
+    a = timeline["accuracy"]
+    r2m = a["referenceToModel"]
+    views = a["views"]
+    return {
+        "title": title_say,
+        "import": "The scan comes straight into OpenShape 3D as a mesh, texture and all.",
+        "revolve": "One sketch on the scan's own axis, one revolve — the barrel, the flanges, the bonnet.",
+        "boss1": "Each nozzle is read off the scan as a profile of its own, revolved, and unioned into the body.",
+        "boss2": "",
+        "boss3": "",
+        "boss4": "",
+        "check": "It's a valid solid, every step in the history, ready to export as STEP or STL.",
+        "accuracy": "Then the app grades its own work: silhouettes laid over the scan view by view, and every scan point measured to the model. {:.0f} percent overlap, the model within {:.0f} millimetres on average.".format(
+            a["overallIoU"] * 100, a["modelToReference"]["meanMM"]),
+        "numbers": "From a phone scan to a parametric model in {} calls.".format(a["calls"]),
+        "outro": "OpenShape 3D is open source.",
+    }
+
+
+def gcloud_token():
+    try:
+        out = subprocess.run(["gcloud", "auth", "print-access-token"], capture_output=True, text=True, timeout=30)
+        token = out.stdout.strip()
+        return token if out.returncode == 0 and token else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def gemini_tts(text, path, voice, project, region):
+    """Gemini 2.5 TTS through Vertex AI; raw 24 kHz PCM → the given path (m4a)."""
+    token = gcloud_token()
+    if not token:
+        raise RuntimeError("no gcloud access token (run `gcloud auth login`)")
+    url = ("https://{r}-aiplatform.googleapis.com/v1/projects/{p}/locations/{r}/publishers/google/models/"
+           "gemini-2.5-flash-preview-tts:generateContent").format(r=region, p=project)
+    body = {"contents": [{"role": "user", "parts": [{"text": text}]}],
+            "generationConfig": {"responseModalities": ["AUDIO"],
+                                 "speechConfig": {"voiceConfig": {"prebuiltVoiceConfig": {"voiceName": voice}}}}}
+    req = urllib.request.Request(url, data=json.dumps(body).encode(), method="POST",
+                                 headers={"Authorization": "Bearer " + token, "Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=120) as r:
+        reply = json.load(r)
+    part = reply["candidates"][0]["content"]["parts"][0]["inlineData"]
+    mime = part.get("mimeType", "audio/L16;codec=pcm;rate=24000")
+    rate = 24000
+    for piece in mime.split(";"):
+        if piece.strip().startswith("rate="):
+            rate = int(piece.strip()[5:])
+    pcm = base64.b64decode(part["data"])
+    raw = path + ".pcm"
+    with open(raw, "wb") as f:
+        f.write(pcm)
+    subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-f", "s16le", "-ar", str(rate), "-ac", "1", "-i", raw,
+                    "-c:a", "aac", "-b:a", "128k", path], check=True)
+    os.remove(raw)
+
+
+def edge_tts(text, path, voice="en-US-AndrewMultilingualNeural", rate="-2%"):
+    import edge_tts as et
+    mp3 = path + ".mp3"
+    asyncio.run(et.Communicate(text, voice, rate=rate).save(mp3))
+    subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", mp3, "-c:a", "aac", "-b:a", "128k", path], check=True)
+    os.remove(mp3)
+
+
+def narrate(lines, cache_dir, backend, gemini_voice, project, region):
+    os.makedirs(cache_dir, exist_ok=True)
+    clips = {}
+    used = backend
+    for key, text in lines.items():
+        if not text:
+            continue
+        stamp = hashlib.sha1((used + gemini_voice + text).encode()).hexdigest()[:10]
+        out = os.path.join(cache_dir, "%s-%s.m4a" % (key, stamp))
+        trimmed = out[:-4] + "-trim.m4a"
+        if not os.path.exists(trimmed):
+            if not os.path.exists(out):
+                if used == "gemini":
+                    try:
+                        gemini_tts(text, out, gemini_voice, project, region)
+                    except Exception as error:  # noqa: BLE001
+                        print("Gemini TTS unavailable (%s); using the edge-tts voice" % str(error)[:120])
+                        used = "edge"
+                        stamp = hashlib.sha1((used + gemini_voice + text).encode()).hexdigest()[:10]
+                        out = os.path.join(cache_dir, "%s-%s.m4a" % (key, stamp))
+                        trimmed = out[:-4] + "-trim.m4a"
+                        if not os.path.exists(out):
+                            edge_tts(text, out)
+                else:
+                    edge_tts(text, out)
+            subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", out, "-af",
+                            "silenceremove=start_periods=1:start_threshold=-45dB:start_silence=0.08,"
+                            "areverse,silenceremove=start_periods=1:start_threshold=-45dB:start_silence=0.12,areverse,"
+                            "loudnorm=I=-16:TP=-1.5", "-ar", "48000", "-c:a", "aac", "-b:a", "128k", trimmed], check=True)
+        seconds = float(subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", trimmed],
+                                       capture_output=True, text=True).stdout.strip())
+        clips[key] = {"path": trimmed, "seconds": seconds}
+    return clips, used
+
+
+# ----------------------------------------------------------------------------- music
+
+def lyria_music(path, project, region, prompt):
+    token = gcloud_token()
+    if not token:
+        raise RuntimeError("no gcloud access token")
+    url = ("https://{r}-aiplatform.googleapis.com/v1/projects/{p}/locations/{r}/publishers/google/models/"
+           "lyria-002:predict").format(r=region, p=project)
+    body = {"instances": [{"prompt": prompt, "negative_prompt": "vocals, lyrics, distortion"}], "parameters": {"sample_count": 1}}
+    req = urllib.request.Request(url, data=json.dumps(body).encode(), method="POST",
+                                 headers={"Authorization": "Bearer " + token, "Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=180) as r:
+        reply = json.load(r)
+    pred = reply["predictions"][0]
+    data = base64.b64decode(pred.get("bytesBase64Encoded") or pred.get("audioContent"))
+    wav = path + ".wav"
+    with open(wav, "wb") as f:
+        f.write(data)
+    subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", wav, "-c:a", "aac", "-b:a", "160k", path], check=True)
+    os.remove(wav)
+
+
+def generated_music(path, seconds, bpm=104, seed=3):
+    """A light, upbeat bed: a four-chord loop (I–V–vi–IV) on a soft synth
+    pad with a plucked arpeggio and a gentle kick — enough to carry a demo
+    when no licensed track is at hand."""
+    sr = 44100
+    rng = np.random.default_rng(seed)
+    beat = 60.0 / bpm
+    n = int(seconds * sr)
+    tt = np.arange(n) / sr
+    out = np.zeros(n)
+    root = 220.0  # A3
+    chords = [[0, 4, 7], [7, 11, 14], [9, 12, 16], [5, 9, 12]]   # A, E, F#m, D
+    bar = 4 * beat
+
+    def note(freq, start, length, amp, kind):
+        i0 = int(start * sr)
+        i1 = min(int((start + length) * sr), n)
+        if i1 <= i0:
+            return
+        t = np.arange(i1 - i0) / sr
+        env = np.minimum(1, t / 0.02) * np.exp(-t / (length * (0.9 if kind == "pad" else 0.3)))
+        if kind == "pad":
+            wave = 0.5 * np.sin(2 * np.pi * freq * t) + 0.25 * np.sin(2 * np.pi * freq * 2 * t) * np.exp(-t * 2)
+        else:
+            wave = np.sign(np.sin(2 * np.pi * freq * t)) * 0.3 + 0.7 * np.sin(2 * np.pi * freq * t)
+            wave *= np.exp(-t * 6)
+        out[i0:i1] += amp * env * wave
+
+    k = 0
+    total_bars = int(seconds / bar) + 1
+    for b in range(total_bars):
+        chord = chords[b % 4]
+        start = b * bar
+        for semi in chord:
+            note(root * 2 ** (semi / 12) / 2, start, bar, 0.09, "pad")
+            note(root * 2 ** (semi / 12), start, bar, 0.05, "pad")
+        # Arpeggio: eighth notes over the chord, with a little variation.
+        for e in range(8):
+            semi = chord[(e + (b % 2)) % 3] + (12 if e % 3 == 2 else 0)
+            if rng.random() < 0.85:
+                note(root * 2 ** (semi / 12) * 2, start + e * beat / 2, beat * 0.45, 0.07, "pluck")
+        # Kick on 1 and 3, soft.
+        for q in (0, 2):
+            i0 = int((start + q * beat) * sr)
+            t = np.arange(min(int(0.18 * sr), n - i0)) / sr
+            if len(t):
+                out[i0:i0 + len(t)] += 0.25 * np.sin(2 * np.pi * (55 + 60 * np.exp(-t * 30)) * t) * np.exp(-t * 18)
+        k += 1
+    # Fade in / out, soft limit.
+    fade = int(1.5 * sr)
+    out[:fade] *= np.linspace(0, 1, fade)
+    out[-fade:] *= np.linspace(1, 0, fade)
+    out = np.tanh(out * 1.6) * 0.8
+    wav = path + ".wav"
+    import wave
+    with wave.open(wav, "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(sr)
+        w.writeframes((out * 32767).astype(np.int16).tobytes())
+    subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", wav, "-c:a", "aac", "-b:a", "160k", path], check=True)
+    os.remove(wav)
+
+
+# ----------------------------------------------------------------------------- compose
+
+def card(path, title, lines, foot="", accent=(230, 72, 48)):
+    from PIL import Image, ImageDraw, ImageFont
+
+    def font(size, bold=False):
+        return ImageFont.truetype("/System/Library/Fonts/HelveticaNeue.ttc", size, index=1 if bold else 0)
+
+    im = Image.new("RGB", (W, H), (248, 247, 244))
+    d = ImageDraw.Draw(im)
+    d.rectangle([0, 0, 18, H], fill=accent)
+    y = 150
+    for i, word in enumerate(title):
+        d.text((110, y), word, font=font(84, True), fill=(28, 32, 40))
+        y += 104
+    y += 30
+    for label, value in lines:
+        if label:
+            d.text((110, y), label.upper(), font=font(24), fill=(120, 128, 140))
+            y += 34
+        d.text((110, y), value, font=font(46, True), fill=(28, 32, 40))
+        y += 86
+    if foot:
+        d.text((110, H - 110), foot, font=font(28), fill=(120, 128, 140))
+    im.save(path)
+
+
+def caption(path, text, sub=""):
+    from PIL import Image, ImageDraw, ImageFont
+    font = ImageFont.truetype("/System/Library/Fonts/HelveticaNeue.ttc", 44, index=1)
+    small = ImageFont.truetype("/System/Library/Fonts/HelveticaNeue.ttc", 28, index=0)
+    pad = 28
+    probe = ImageDraw.Draw(Image.new("RGB", (10, 10)))
+    tw = probe.textlength(text, font=font)
+    sw = probe.textlength(sub, font=small) if sub else 0
+    w = int(max(tw, sw) + 2 * pad)
+    h = 44 + 2 * pad + (40 if sub else 0)
+    im = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+    d = ImageDraw.Draw(im)
+    d.rounded_rectangle([0, 0, w - 1, h - 1], radius=22, fill=(20, 24, 32, 215))
+    d.text((pad, pad - 6), text, font=font, fill=(255, 255, 255, 255))
+    if sub:
+        d.text((pad, pad + 48), sub, font=small, fill=(190, 198, 210, 255))
+    im.save(path)
+
+
+def compose(args):
+    with open(os.path.join(args.out, "timeline.json")) as f:
+        tl = json.load(f)
+    beats = tl["beats"]
+    acc = tl["accuracy"]
+    work = os.path.join(args.out, "work")
+    os.makedirs(work, exist_ok=True)
+    # The simulator records a frame only when the screen changes, so a still
+    # moment has no frames at all and a cut through it comes out empty.
+    # Resample to a constant 30 fps once, then cut from that.
+    take = os.path.join(work, "take-cfr.mp4")
+    if not os.path.exists(take):
+        subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", os.path.join(args.out, "take.mov"),
+                        "-vf", "fps=%d" % FPS, "-fps_mode", "cfr", "-an", "-c:v", "libx264", "-preset", "veryfast",
+                        "-crf", "16", "-pix_fmt", "yuv420p", take], check=True)
+
+    # 1. Narration first: it sets how long each beat may hold.
+    lines = script_for(tl, args.title_say, "")
+    clips, backend = narrate(lines, os.path.join(args.out, "tts"), args.tts, args.gemini_voice, args.project, args.region)
+    print("narration:", backend)
+
+    # 2. Cut list: every beat of the take, trimmed to its narration (plus a
+    #    beat of air), with a title card before and cards after.
+    segs = []
+    for i, b in enumerate(beats[:-1]):
+        start, end = b["start"], beats[i + 1]["start"]
+        say = clips.get(b["id"])
+        want = (say["seconds"] + 0.8) if say else (end - start)
+        # Keep the whole beat if it is short; otherwise show its first part
+        # and its last part, so the result is always seen.
+        length = end - start
+        if b["id"] == "accuracy":
+            # The sheet opens (2.5 s), then the result — the computing wait
+            # in between is cut out.
+            wait = b.get("computeSeconds", 16.0) + 3.0
+            pieces = [(start, start + 2.5), (min(start + wait, end - 1), end)] if end - start > wait + 2 else [(start, end)]
+        elif length <= want + 0.5:
+            pieces = [(start, min(end, start + want))]
+        else:
+            pieces = [(start, start + want * 0.55), (end - want * 0.45, end)]
+        segs.append({"id": b["id"], "caption": b["caption"], "pieces": pieces, "say": say})
+
+    # Source clips at 1920×1080: the take is the iPad's screen; crop to 16:9
+    # from the top (the toolbar) down, then scale.
+    probe = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=width,height",
+                            "-of", "csv=p=0", take], capture_output=True, text=True).stdout.strip().split(",")
+    sw, sh = int(probe[0]), int(probe[1])
+    # `simctl io recordVideo` writes the native (portrait) framebuffer with
+    # a landscape device's picture turned inside it, status bar down the
+    # right edge; a quarter turn counter-clockwise stands it up.
+    pre = ""
+    if sw < sh and args.landscape:
+        pre = "transpose=2,"
+        sw, sh = sh, sw
+    if sw >= sh:
+        crop_h = int(sw * 9 / 16)
+        # 16:9 from near the top, so the app's toolbar stays in frame.
+        crop = pre + "crop=%d:%d:0:%d" % (sw, min(crop_h, sh), min(60, max(0, sh - crop_h)))
+    else:
+        # A portrait screen: show it whole on a blurred copy of itself.
+        crop = None
+
+    clip_paths = []
+    for seg in segs:
+        for j, (a, b) in enumerate(seg["pieces"]):
+            path = os.path.join(work, "%s-%d.mp4" % (seg["id"], j))
+            vf = (crop + ",scale=%d:%d" % (W, H)) if crop else \
+                "split[bg][fg];[bg]scale=%d:%d,boxblur=30:5,eq=brightness=-0.15[bgs];[fg]scale=-2:%d[fgs];[bgs][fgs]overlay=(W-w)/2:0" % (W, H, H)
+            # `-ss` before the input seeks; the length is an output `-t` (an
+            # input `-to` is not honoured by this ffmpeg and the clips ran long).
+            subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-ss", "%.3f" % a, "-i", take, "-t", "%.3f" % (b - a),
+                            "-an", "-vf", vf, "-r", str(FPS), "-c:v", "libx264", "-preset", "veryfast", "-crf", "18",
+                            "-pix_fmt", "yuv420p", path], check=True)
+            probe_len = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", path],
+                                       capture_output=True, text=True).stdout.strip()
+            try:
+                real = float(probe_len)
+            except ValueError:
+                sys.exit("an empty clip for beat %s (%.1f–%.1f s): the take is shorter than its timeline?" % (seg["id"], a, b))
+            clip_paths.append((seg, path, real))
+
+    # 3. Cards.
+    r2m, m2r = acc["referenceToModel"], acc["modelToReference"]
+    per_view = "   ".join("%s %.0f%%" % (k, v * 100) for k, v in acc["views"].items())
+    card(os.path.join(work, "title.png"), args.title.split("|"), [("", args.subtitle)], "OpenShape 3D  ·  Model Context Protocol")
+    card(os.path.join(work, "numbers.png"), ["By the numbers"], [
+        ("Silhouette overlap, mean of three views", "%.1f%%   (%s)" % (acc["overallIoU"] * 100, per_view)),
+        ("Model surface to scan", "mean %.1f mm · 95%% within %.1f mm" % (m2r["meanMM"], m2r["p95MM"])),
+        ("Scan surface to model", "mean %.1f mm · 95%% within %.1f mm" % (r2m["meanMM"], r2m["p95MM"])),
+        ("Built by an assistant over MCP", "%d calls, one parametric model" % acc["calls"]),
+    ], "Scan: CC-BY laanlabs on Sketchfab")
+    card(os.path.join(work, "outro.png"), ["OpenShape 3D", "is open source"], [
+        ("", "app.openshape3d.com"), ("", "github.com/laanlabs/openshape3d")], "Built with Claude over MCP")
+
+    def still(name, seconds):
+        path = os.path.join(work, name + ".mp4")
+        subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-loop", "1", "-i", os.path.join(work, name + ".png"),
+                        "-t", "%.2f" % seconds, "-r", str(FPS), "-c:v", "libx264", "-preset", "veryfast", "-crf", "18",
+                        "-pix_fmt", "yuv420p", path], check=True)
+        return path
+
+    def hold_for(key, floor):
+        return max(floor, clips[key]["seconds"] + 0.9) if key in clips else floor
+
+    sequence = [("title", still("title", hold_for("title", 4.0)), hold_for("title", 4.0))]
+    for seg, path, length in clip_paths:
+        sequence.append((seg["id"], path, length))
+    sequence.append(("numbers", still("numbers", hold_for("numbers", 5.0)), hold_for("numbers", 5.0)))
+    sequence.append(("outro", still("outro", hold_for("outro", 3.5)), hold_for("outro", 3.5)))
+
+    # 4. Concatenate the picture, then captions, narration and music in one pass.
+    concat = os.path.join(work, "concat.txt")
+    with open(concat, "w") as f:
+        for _, path, _ in sequence:
+            f.write("file '%s'\n" % path)
+    silent = os.path.join(work, "picture.mp4")
+    subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-f", "concat", "-safe", "0", "-i", concat, "-c", "copy", silent], check=True)
+
+    # Where each segment starts in the film.
+    t = 0.0
+    starts = {}
+    for sid, _, length in sequence:
+        starts.setdefault(sid, t)
+        t += length
+    total = t
+
+    # Captions: one pill per beat, shown over its clips.
+    caption_inputs, overlays = [], []
+    seen = set()
+    for seg, path, length in clip_paths:
+        if seg["id"] in seen or not seg["caption"]:
+            continue
+        seen.add(seg["id"])
+        png = os.path.join(work, "cap-%s.png" % seg["id"])
+        caption(png, seg["caption"])
+        caption_inputs.append(png)
+        # Visible from the first clip of the beat to the end of its last clip.
+        first = starts[seg["id"]]
+        last = first + sum(l2 for sg2, _, l2 in clip_paths if sg2["id"] == seg["id"])
+        overlays.append((seg["id"], first, last))
+
+    print("captions:", [(sid, round(a, 1), round(b, 1)) for sid, a, b in overlays])
+    inputs = ["-i", silent]
+    filters = []
+    vin = "[0:v]"
+    for i, png in enumerate(caption_inputs):
+        inputs += ["-loop", "1", "-framerate", str(FPS), "-i", png]
+        sid, a, b = overlays[i]
+        # Top-left over the viewport; bottom-left while the report sheet is
+        # up, so the pill never sits on the sheet's title.
+        y = "H-h-48" if sid == "accuracy" else "40"
+        filters.append("%s[%d:v]overlay=56:%s:enable='between(t,%.2f,%.2f)'[v%d]" % (vin, i + 1, y, a + 0.15, b - 0.15, i))
+        vin = "[v%d]" % i
+    video_out = vin
+
+    # Narration at each segment's start.
+    n_caps = len(caption_inputs)
+    aud_idx = n_caps + 1
+    mix = []
+    for sid, clip in clips.items():
+        if sid not in starts:
+            continue
+        inputs += ["-i", clip["path"]]
+        delay = int((starts[sid] + 0.25) * 1000)
+        filters.append("[%d:a]adelay=%d|%d[n%d]" % (aud_idx, delay, delay, aud_idx))
+        mix.append("[n%d]" % aud_idx)
+        aud_idx += 1
+
+    # Music: a bed under everything, ducked by a third.
+    music = None
+    if args.music == "lyria":
+        try:
+            music = os.path.join(work, "music.m4a")
+            if not os.path.exists(music):
+                lyria_music(music, args.project, args.region, args.music_prompt)
+        except Exception as error:  # noqa: BLE001
+            print("Lyria unavailable (%s); generating a bed" % str(error)[:120])
+            music = None
+    if args.music == "generated" or (args.music == "lyria" and music is None):
+        music = os.path.join(work, "music-generated.m4a")
+        if not os.path.exists(music):
+            generated_music(music, total + 2)
+    elif args.music not in ("lyria", "generated", "none"):
+        music = args.music
+    if music and args.music != "none":
+        inputs += ["-stream_loop", "-1", "-i", music]
+        filters.append("[%d:a]volume=%.2f,atrim=0:%.2f,afade=t=out:st=%.2f:d=2.5[mus]" % (aud_idx, args.music_gain, total, total - 2.5))
+        mix.append("[mus]")
+    filters.append("".join(mix) + "amix=inputs=%d:normalize=0,alimiter=limit=0.95[aout]" % len(mix))
+
+    out = os.path.join(args.out, args.name + ".mp4")
+    subprocess.run(["ffmpeg", "-y", "-loglevel", "error", *inputs, "-filter_complex", ";".join(filters),
+                    "-map", video_out, "-map", "[aout]", "-c:v", "libx264", "-preset", "medium", "-crf", "19",
+                    "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "192k", "-t", "%.2f" % total,
+                    "-movflags", "+faststart", out], check=True)
+    sheet = os.path.join(args.out, "contact.png")
+    rows = max(1, -(-int(total / 2 + 1) // 6))
+    subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", out, "-vf", "fps=1/2,scale=320:-1,tile=6x%d" % rows,
+                    "-frames:v", "1", sheet], check=True)
+    print("wrote %s (%.1f s); narration %s; music %s; contact sheet %s" % (
+        out, total, backend, "none" if not music else os.path.basename(music), sheet))
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    sub = ap.add_subparsers(dest="cmd", required=True)
+    t = sub.add_parser("take")
+    t.add_argument("--scan", required=True)
+    t.add_argument("--analysis", required=True)
+    t.add_argument("--out", default="demo")
+    t.add_argument("--port", type=int, default=8787)
+    t.add_argument("--simulator", default="os3d-hydrant")
+    t.add_argument("--tolerance", type=float, default=3.0)
+    c = sub.add_parser("compose")
+    c.add_argument("--out", default="demo")
+    c.add_argument("--name", default="hydrant-demo")
+    c.add_argument("--title", default="From an iPhone scan|to a CAD model")
+    c.add_argument("--subtitle", default="A fire hydrant, built in OpenShape 3D by an assistant over MCP")
+    c.add_argument("--title-say", default="A fire hydrant, scanned with an iPhone — turned into a CAD model inside OpenShape 3D by an assistant, over MCP.")
+    c.add_argument("--tts", choices=["gemini", "edge"], default="gemini")
+    c.add_argument("--gemini-voice", default="Charon")
+    c.add_argument("--project", default="openshape3d")
+    c.add_argument("--region", default="us-central1")
+    c.add_argument("--music", default="lyria", help="lyria | generated | none | a file")
+    c.add_argument("--music-prompt", default="upbeat, clean, modern electronic product-demo music, light and optimistic, no vocals, 100 bpm")
+    c.add_argument("--music-gain", type=float, default=0.22)
+    c.add_argument("--landscape", action=argparse.BooleanOptionalAction, default=True,
+                   help="the take was filmed on a landscape device (the recording needs a quarter turn)")
+    args = ap.parse_args()
+    if args.cmd == "take":
+        take(args)
+    else:
+        compose(args)
+
+
+if __name__ == "__main__":
+    main()

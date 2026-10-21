@@ -161,6 +161,18 @@ nonisolated enum AccuracyOverlayRenderer {
 
 // MARK: - The sheet
 
+/// A taller sheet where the system offers one (iOS 18's page sizing): the
+/// report's first overlay then fits above the fold.
+struct PageSheetSizing: ViewModifier {
+    func body(content: Content) -> some View {
+        if #available(iOS 18.0, *) {
+            content.presentationSizing(.page)
+        } else {
+            content
+        }
+    }
+}
+
 struct AccuracyReportSheet: View {
     @Bindable var viewModel: EditorViewModel
     @Environment(\.dismiss) private var dismiss
@@ -252,7 +264,22 @@ struct AccuracyReportSheet: View {
                 ActivityShareSheet(items: [share.url])
             }
         }
-        .onAppear(perform: pickDefaults)
+        .onAppear {
+            pickDefaults()
+            runRequest()
+        }
+        .onChange(of: viewModel.accuracyReportRequest) { _, _ in runRequest() }
+    }
+
+    /// A comparison the agent bridge asked for (`view.accuracyReport`): pick
+    /// its bodies and compare at once.
+    private func runRequest() {
+        guard let request = viewModel.accuracyReportRequest else { return }
+        viewModel.accuracyReportRequest = nil
+        referenceID = request.reference
+        modelID = request.model
+        toleranceMM = request.toleranceMM
+        compare()
     }
 
     private func bodyPicker(_ title: String, selection: Binding<BodyID?>, identifier: String) -> some View {
@@ -307,13 +334,8 @@ struct AccuracyReportSheet: View {
 
     @ViewBuilder
     private func results(_ report: AccuracyReport) -> some View {
-        Section {
-            Text(report.summary)
-                .font(.callout)
-                .accessibilityIdentifier("AccuracySummary")
-        } header: {
-            Text(String(format: "Overlap %.1f%%", report.overallIoU * 100))
-        }
+        // The pictures first: an overlay says more at a glance than the
+        // paragraph, and on a sheet the first section is the one seen.
         ForEach(report.overlays, id: \.view) { overlay in
             Section {
                 AccuracyOverlayView(overlay: overlay, report: report)
@@ -328,8 +350,15 @@ struct AccuracyReportSheet: View {
                 LabeledContent("Missing / excess",
                                value: String(format: "%.0f / %.0f mm²", overlay.missingAreaMM2, overlay.excessAreaMM2))
             } header: {
-                Text("\(overlay.view.title) view")
+                overlay.view == report.overlays.first?.view
+                    ? Text(String(format: "Overlap %.1f%% · %@ view", report.overallIoU * 100, overlay.view.title))
+                    : Text("\(overlay.view.title) view")
             }
+        }
+        Section("In words") {
+            Text(report.summary)
+                .font(.callout)
+                .accessibilityIdentifier("AccuracySummary")
         }
         deviationSection("Reference → model", report.referenceToModel, tolerance: report.options.toleranceMM)
         deviationSection("Model → reference", report.modelToReference, tolerance: report.options.toleranceMM)
