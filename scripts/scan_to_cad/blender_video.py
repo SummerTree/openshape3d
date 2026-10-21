@@ -227,7 +227,11 @@ scene.render.engine = "BLENDER_EEVEE"
 scene.eevee.taa_render_samples = SAMPLES
 scene.render.resolution_x, scene.render.resolution_y = WIDTH, HEIGHT
 scene.render.fps = FPS
-scene.render.image_settings.file_format = "PNG"
+# JPEG frames: a 100 s film is ~3,000 frames, and as PNGs that was several
+# gigabytes of scratch before ffmpeg ever ran (this Blender build has no
+# video output format at all).
+scene.render.image_settings.file_format = "JPEG"
+scene.render.image_settings.quality = 92
 scene.render.filepath = os.path.join(FRAMES_DIR, "frame_")
 scene.render.film_transparent = False
 scene.view_settings.view_transform = "Standard"
@@ -526,6 +530,7 @@ if only:
     scene.frame_start, scene.frame_end = seg["start"], seg["start"] + seg["frames"] - 1
 if opts.get("preview"):
     # One frame per segment, for a quick look.
+    scene.render.image_settings.file_format = "PNG"
     for seg in segments:
         scene.frame_set(seg["start"] + seg["frames"] // 2)
         scene.render.filepath = os.path.join(FRAMES_DIR, "preview_%s.png" % seg["id"])

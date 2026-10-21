@@ -172,7 +172,10 @@ voice offline), colours the scan by its distance to the model (trimesh →
 1080, 30 fps): title, the scan turning, the analysis charts, the MCP calls
 appearing one by one, the model taking shape over the ghosted scan, scan
 and model in place, the heatmap, the app's overlays, the numbers, outro;
-ffmpeg assembles frames and narration and writes a contact sheet to review.
+Blender writes JPEG frames (PNGs of a 100 s film ran to several gigabytes
+of scratch and filled the disk once; this Blender build has no video
+output), ffmpeg encodes them under the narration and writes a contact sheet
+to review.
 
 ## Gotchas
 
