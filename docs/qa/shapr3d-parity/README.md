@@ -16,13 +16,13 @@ In the 44-page Word edition, the common execution pattern starts on page 4, nume
 
 ## Files
 
-- `fixtures/`: 20 STEP geometry references, six binary STL companions, two DXF inputs, four deliberately invalid/open inputs, and a raw OCCT validation log.
+- `fixtures/`: 23 STEP geometry references (M17–M19, the surface-model cases, added 2026-10-21, M17 also as IGES trimmed surfaces), six binary STL companions, two DXF inputs, four deliberately invalid/open inputs, and a raw OCCT validation log.
 - `fixture_manifest.json`: file sizes, SHA-256 hashes, units, expected geometry, and negative-input outcomes.
 - `model_catalog.png`: six original fixture previews. These are geometry illustrations, not Shapr3D screenshots.
 - `RESULTS_TEMPLATE.md` / `results_template.json`: manual and machine-readable run records.
 - `VALIDATION.md`: what was verified when preparing the pack, and what still requires app execution.
 - `tools/`: the fixture generators, the OCCT oracle (`occt_inspect`) and the MCP-driven live runner (`import_qa.py`); `tools/README.md` has the build recipe and the fixing loop. `openshape3dTests/ImportQATests.swift` runs the same manifest offline.
-- `runs/`: one directory per live run (`REPORT.md`, `results.json`, the app's STEP exports, the oracle's JSON, every MCP call). `qa5` and `qa5-ext` (2026-10-21) are the current baseline: the pack and the FreeCAD IDF/NIST corpus.
+- `runs/`: one directory per live run (`REPORT.md`, `results.json`, the app's STEP exports, the oracle's JSON, every MCP call). `qa6`, `qa6-ext` and `qa6-iges` (2026-10-21, on main at dbbd750e) are the current baseline: the pack, the FreeCAD IDF/NIST STEP corpus, and the IDF IGES twins.
 
 The official tutorial and NIST download landing pages are in the plan. Their third-party model binaries and Shapr3D native files are not redistributed in this pack. Obtain the chosen assets from the source, record access/usage terms, and freeze the exact filename and checksum.
 

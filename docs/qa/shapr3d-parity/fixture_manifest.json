@@ -850,6 +850,41 @@
     "openShells": 1,
     "dropped": 0
    }
+  },
+  {
+   "file": "M17_shell_only_box.igs",
+   "valid_reference": true,
+   "units": "mm",
+   "origin": "Synthetic (generate_sewing_fixtures.cpp, 2026-10-21): the M17 box written as IGES trimmed surfaces (entity 144) \u2014 six loose faces, no shell, no solid, the usual IGES.",
+   "expected_aggregate_volume_mm3": 12000.0,
+   "solid_count": 1,
+   "sheet_bodies": 0,
+   "bounds_min_mm": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "bounds_max_mm": [
+    40.0,
+    30.0,
+    10.0
+   ],
+   "expect_notice": true,
+   "occt_roundtrip": {
+    "valid": true,
+    "measured_volume_mm3": 12000.0,
+    "planar_faces": 6,
+    "cylindrical_faces": 0,
+    "other_faces": 0
+   },
+   "sewing": {
+    "sewnSolids": 1,
+    "openShells": 0,
+    "dropped": 0
+   },
+   "expected": "The six surfaces are sewn into one solid through the same collector as STEP; the import says it stitched faces the file had not declared.",
+   "bytes": 12393,
+   "sha256": "843f076ce647ff82a66e97f380cb6cd56e6d8aa826baac523c9fcedf307445e4"
   }
  ]
 }

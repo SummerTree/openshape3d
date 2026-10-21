@@ -558,7 +558,7 @@ class Runner:
                 os.path.join(root, n) for root, _, names in os.walk(extra) for n in names)
             for path in paths:
                 n = os.path.basename(path)
-                if n.lower().endswith((".step", ".stp")) and (not only or any(n.startswith(o) for o in only)):
+                if n.lower().endswith((".step", ".stp", ".igs", ".iges")) and (not only or any(n.startswith(o) for o in only)):
                     selected.append(("EXT_" + os.path.splitext(n)[0], path, {"external": True}))
         print("run %s: %d cases on %s (pid %s, %s)" % (self.run_id, len(selected), h.get("platform"), pid, self.commit))
         for case_id, path, spec in selected:

@@ -40,9 +40,9 @@ final class ImportQATests: XCTestCase {
         var checked = 0
         for entry in try manifest() {
             let name = try XCTUnwrap(entry["file"] as? String)
-            guard name.hasSuffix(".step") else { continue }
+            guard name.hasSuffix(".step") || name.hasSuffix(".igs") else { continue }
             checked += 1
-            let read = STEPKit.read(from: try fixture(name))
+            let read = STEPKit.read(from: try fixture(name), format: name.hasSuffix(".igs") ? .iges : .step)
             if (entry["valid_reference"] as? Bool) == false {
                 XCTAssertTrue(read.solids.isEmpty, "\(name): a negative fixture must import nothing")
                 continue
@@ -97,6 +97,18 @@ final class ImportQATests: XCTestCase {
         XCTAssertEqual(read.summary.openShells, 0)
         XCTAssertEqual(read.solids.count, 1)
         XCTAssertEqual(OCCTKernel.volume(read.solids[0]), 12000, accuracy: 1e-6, "a stitched shell must be oriented outward")
+        XCTAssertTrue(read.summary.notice.contains("Stitched 6 loose faces into 1 solid"), read.summary.notice)
+    }
+
+    func testShellOnlyIGESIsStitchedIntoTheSameSolid() throws {
+        // The usual IGES: every face a trimmed surface, no shell, no solid.
+        // It goes through the same collector as STEP and comes out the same.
+        let read = STEPKit.read(from: try fixture("M17_shell_only_box.igs"), format: .iges)
+        XCTAssertEqual(read.summary.freeFaces, 6)
+        XCTAssertEqual(read.summary.sewnSolids, 1)
+        XCTAssertEqual(read.summary.openShells, 0)
+        XCTAssertEqual(read.solids.count, 1)
+        XCTAssertEqual(OCCTKernel.volume(read.solids[0]), 12000, accuracy: 1e-6)
         XCTAssertTrue(read.summary.notice.contains("Stitched 6 loose faces into 1 solid"), read.summary.notice)
     }
 

@@ -2,7 +2,7 @@
 
 > **Current unfinished-work register:** [Sketch parity open status](SKETCH_PARITY_OPEN_STATUS.md). Maintained at every meaningful checkpoint; older mission logs below are historical.
 
-Last updated: 2026-10-21 (CAD import over MCP: STEP and IGES sew loose faces into solids and sheet bodies, exact bounds, DXF units and ellipses, an open-mesh notice, and agents import STEP / IGES / DXF / FCStd; an OCCT oracle, a live MCP runner and offline XCTests behind it; test pack 35 / 35, FreeCAD IDF + NIST corpus 32 / 32 — newest mission log. Also today: Deviation Preview — the Accuracy Report's colours on the part; the scan's profile straightened; `item.select`) — **Accuracy Report** (one body measured against
+Last updated: 2026-10-21 (CAD import over MCP: STEP and IGES sew loose faces into solids and sheet bodies, exact bounds, DXF units and ellipses, an open-mesh notice, and agents import STEP / IGES / DXF / FCStd; an OCCT oracle, a live MCP runner and offline XCTests behind it; test pack 36 / 36, FreeCAD IDF + NIST corpus 32 / 32, IGES twins 4 / 4 — newest mission log. Also today: Deviation Preview — the Accuracy Report's colours on the part; the scan's profile straightened; `item.select`) — **Accuracy Report** (one body measured against
 another: orthographic silhouette overlays per view, outline and surface
 deviation both ways; `Kernel/AccuracyKit.swift`, Views ▸ Accuracy Report…,
 `/v1/accuracy` + `/v1/accuracy/image`, MCP ops `accuracy` /
@@ -62,8 +62,9 @@ deviation, and build a fixing pipeline. Everything is in
 - `openshape3dTests/ImportQATests.swift`: the offline half, manifest-driven
   (ten tests, half a second).
 - `tools/generate_sewing_fixtures.cpp` and fixtures M17–M19 (a box written
-  as a shell with no solid; a solid beside a loose closed shell; an open
-  five-face sheet), manifest revision 1.1 with their sewing ledgers.
+  as a shell with no solid, also as IGES trimmed surfaces; a solid beside a
+  loose closed shell; an open five-face sheet), manifest revision 1.1 with
+  their sewing ledgers.
 - `document.import` replies carry `format`, `bodyIDs`, `names`, `analytic`,
   `textured`, `triangles`, `sketches` (DXF), `notice`, and for STEP a `step`
   ledger `{solids, sewnSolids, openShells, freeFaces, dropped}`
@@ -103,12 +104,21 @@ fixture.
    solid. SOT404's package turned out to be declared a solid but built of 17
    faces with 12 free edges (7 remain even at 0.5 mm sewing): it is a sheet,
    and is now reported as one — not the lost closed body first assumed.
+6. **IGES had a reader of its own** that kept only the shells that closed
+   and ignored loose faces beside declared solids. It now goes through the
+   same collector as STEP (`OS3DCollectImportable`), ledger and sheet
+   bodies included, and `document.import` routes `.igs`/`.iges` (and
+   `.fcstd`). FreeCAD's IGES twins of the footprints read to exactly the
+   STEP figures: RLF_12545 3 solids, 718.977 mm³ either way; SOT404 4 pins
+   plus the package sheet; SOT23 3.553 mm³; SOD_323 1.069 mm³ plus its
+   lead sheet less one face.
 
-**Numbers (runs `qa5` and `qa5-ext`).** The pack: 35 of 35 (20 STEP
-including M17–M19, 6 STL, 2 DXF, 4 negatives). The corpus: 32 of 32 —
+**Numbers (runs `qa6`, `qa6-ext` and `qa6-iges`, on main at dbbd750e).** The pack: 36 of 36 (23 STEP
+including M17–M19, the IGES twin of M17, 6 STL, 2 DXF, 4 negatives). The corpus: 32 of 32 —
 FreeCAD's 28 IDF footprint STEPs, `Schenkel.stp` (121 134.10 mm³; the app
 reads 121 134.12, 1.4e-7 relative), NIST `as1-ac-214` (18 solids, exact)
-and its small variant, and `geometry_out` (refused, as it should be).
+and its small variant, and `geometry_out` (refused, as it should be); the four IGES twins in
+`qa6-iges`.
 Volume, bounds and centroid errors are 0 on every analytic case; round-trip
 symmetric difference 0; sampled surface distance 0. Imports take ≤ 0.07 s
 for any fixture and 7.8 s for the whole corpus (Schenkel 1.68 s); the

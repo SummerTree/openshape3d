@@ -8,12 +8,13 @@ holds the gates; this file is how to run them and how to work a failure.
 | File | What it is |
 |---|---|
 | `generate_fixtures.cpp` | Builds the M01–M15 STEP/STL fixtures from public OCCT APIs: original geometry, no app code. |
-| `generate_sewing_fixtures.cpp` | Builds M17–M19: a box written as a shell with no solid, a solid beside a loose closed shell, and an open five-face sheet. These are the surface-model cases the FreeCAD IDF footprint corpus exposed on 2026-10-21 (SOT23, SOT404, SOD_323), reduced to synthetic parts the pack owns. |
-| `inspect_step.cpp` → `build/qa/occt_inspect` | The oracle. Reads a STEP, STL or BREP file with OCCT alone and prints volume, centroid, bounds, face classes and validity; with `--ref` it also prints the deviation against a reference file. |
+| `generate_sewing_fixtures.cpp` | Builds M17–M19: a box written as a shell with no solid (also as IGES trimmed surfaces, `M17_shell_only_box.igs`), a solid beside a loose closed shell, and an open five-face sheet. These are the surface-model cases the FreeCAD IDF footprint corpus exposed on 2026-10-21 (SOT23, SOT404, SOD_323), reduced to synthetic parts the pack owns. |
+| `inspect_step.cpp` → `build/qa/occt_inspect` | The oracle. Reads a STEP, IGES, STL or BREP file with OCCT alone and prints volume, centroid, bounds, face classes and validity; with `--ref` it also prints the deviation against a reference file. |
 | `import_qa.py` | The live half. Drives the running app over MCP (`scripts/mcp_openshape3d.py`), imports every fixture and every `--extra` file, measures through `/v1/state`, `/v1/check` and `/v1/faces`, round-trips through `/v1/export`, runs the oracle on the export, applies the gates, undoes, and writes a report. |
 
 The offline half is `openshape3dTests/ImportQATests.swift`: the same
-manifest through the importers themselves, no simulator agent needed.
+manifest through the importers themselves (STEP, IGES, STL, DXF), no
+simulator agent needed.
 
     xcodebuild test -scheme openshape3d -destination "platform=iOS Simulator,id=<udid>" \
       -only-testing:openshape3dTests/ImportQATests -parallel-testing-enabled NO
@@ -34,7 +35,7 @@ flush before it; the oracle writes with `std::endl` for that reason.
 
 ## The oracle
 
-    build/qa/occt_inspect <file> [--ref <reference>] [--deflection 0.02] [--samples 1500] [--no-boolean]
+    build/qa/occt_inspect <file.step|.igs|.stl|.brep> [--ref <reference>] [--deflection 0.02] [--samples 1500] [--no-boolean]
 
 JSON on stdout. `sewing` says what an importer can make of the file:
 `rawSolids` declared, `freeFaces` outside any solid, `sewnSolids` closed by
@@ -60,13 +61,13 @@ this Mac, hence 8899.
       --extra /path/to/a/folder/of/models --extra one_more.stp
 
 Flags: `--only M01,M02,NEGATIVE` (case id prefixes), `--extra` (a file or a
-folder, repeatable; the oracle's own reading of each file is the
-reference), `--no-fixtures`, `--skip-mesh`. Output lands in
+folder of `.step`/`.stp`/`.igs`/`.iges`, repeatable; the oracle's own
+reading of each file is the reference), `--no-fixtures`, `--skip-mesh`. Output lands in
 `../runs/<run-id>/`: `REPORT.md`, `results.json`, `exports/` (the app's
 STEP of each import), `inspect/` (the oracle's JSON per case) and
 `mcp_calls.jsonl` (every MCP call and reply).
 
-What a case checks, in order: the import reply (`bodyIDs`, `notice`, the
+What a case checks, in order (STEP and IGES alike): the import reply (`bodyIDs`, `notice`, the
 `step` ledger); solid and sheet counts from `/v1/check` (`counts.solids`);
 volume over solid bodies only; exact bounds; BRepCheck validity; BOP
 self-intersections (advisory); face classes against the manifest

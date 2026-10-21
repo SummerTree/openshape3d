@@ -41,6 +41,11 @@
 #include <Poly_Triangulation.hxx>
 #include <RWStl.hxx>
 #include <STEPControl_Reader.hxx>
+#include <Message.hxx>
+#include <Message_Messenger.hxx>
+#include <Message_PrinterOStream.hxx>
+#include <IGESControl_Controller.hxx>
+#include <IGESControl_Reader.hxx>
 #include <ShapeAnalysis_ShapeTolerance.hxx>
 #include <Standard_Version.hxx>
 #include <TopExp_Explorer.hxx>
@@ -81,6 +86,14 @@ static S readAny(const std::string& path, std::string& error, int& roots) {
     if (reader.ReadFile(path.c_str()) != IFSelect_RetDone) { error = "STEP read failed"; return S(); }
     roots = reader.TransferRoots();
     if (reader.NbShapes() == 0) { error = "STEP carries no shapes"; return S(); }
+    return reader.OneShape();
+  }
+  if (endsWith(p, ".igs") || endsWith(p, ".iges")) {
+    IGESControl_Controller::Init();
+    IGESControl_Reader reader;
+    if (reader.ReadFile(path.c_str()) != IFSelect_RetDone) { error = "IGES read failed"; return S(); }
+    roots = reader.TransferRoots();
+    if (reader.NbShapes() == 0) { error = "IGES carries no shapes"; return S(); }
     return reader.OneShape();
   }
   if (endsWith(p, ".stl")) {
@@ -369,6 +382,9 @@ static double sampledDistance(const S& from, const S& to, double deflection, int
 }
 
 int main(int argc, char** argv) {
+  // OCCT's readers chat on stdout ("Total number of loaded entities 49.",
+  // in colour); stdout is the JSON, so drop the default printer.
+  Message::DefaultMessenger()->RemovePrinters(STANDARD_TYPE(Message_PrinterOStream));
   if (argc < 2) { std::fprintf(stderr, "usage: occt_inspect <file> [--ref <reference>] [--deflection 0.02] [--samples 1500] [--no-boolean]\n"); std::_Exit(2); }
   std::string path = argv[1], ref; double deflection = 0.02; int samples = 1500; bool doBoolean = true;
   for (int i = 2; i < argc; ++i) {
