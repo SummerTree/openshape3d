@@ -401,48 +401,91 @@ def gcloud_token():
         return None
 
 
-def vertex_post(url, body, token, timeout=180):
-    """POST JSON to Vertex AI through curl: this Mac's Python cannot verify
-    Google's certificate chain (urllib: CERTIFICATE_VERIFY_FAILED), curl can."""
+def google_post(url, body, headers, timeout=180):
+    """POST JSON to a Google API through curl: this Mac's Python cannot verify
+    Google's certificate chain (urllib: CERTIFICATE_VERIFY_FAILED), curl can.
+    The headers (a bearer token or an API key) travel in a file, not on the
+    command line, so they never show in a process list."""
     import tempfile
     with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as f:
         json.dump(body, f)
         payload = f.name
+    with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False) as f:
+        f.write("\n".join(headers + ["Content-Type: application/json"]) + "\n")
+        header_file = f.name
     try:
-        out = subprocess.run(["curl", "-s", "-m", str(timeout), "-X", "POST", "-H", "Authorization: Bearer " + token,
-                              "-H", "Content-Type: application/json", "--data-binary", "@" + payload, url],
-                             capture_output=True, text=True, check=True)
+        out = subprocess.run(["curl", "-s", "-m", str(timeout), "-X", "POST", "-H", "@" + header_file,
+                              "--data-binary", "@" + payload, url], capture_output=True, text=True, check=True)
     finally:
         os.remove(payload)
+        os.remove(header_file)
     reply = json.loads(out.stdout)
     if "error" in reply:
         raise RuntimeError(reply["error"].get("message", str(reply["error"]))[:200])
     return reply
 
 
-def gemini_tts(text, path, voice, project, region):
-    """Gemini 2.5 TTS through Vertex AI; raw 24 kHz PCM → the given path (m4a)."""
-    token = gcloud_token()
-    if not token:
-        raise RuntimeError("no gcloud access token (run `gcloud auth login`)")
-    url = ("https://{r}-aiplatform.googleapis.com/v1/projects/{p}/locations/{r}/publishers/google/models/"
-           "gemini-2.5-flash-preview-tts:generateContent").format(r=region, p=project)
+def vertex_post(url, body, token, timeout=180):
+    return google_post(url, body, ["Authorization: Bearer " + token], timeout)
+
+
+GEMINI_KEY_FILE = os.path.expanduser("~/.config/openshape3d/gemini-api.key")
+
+
+def gemini_api_key():
+    """The Gemini Developer API key: `GEMINI_API_KEY`, else the key file
+    (mode 600, outside every repo). None means Vertex AI with gcloud."""
+    key = os.environ.get("GEMINI_API_KEY", "").strip()
+    if key:
+        return key
+    try:
+        with open(GEMINI_KEY_FILE) as f:
+            return f.read().strip() or None
+    except OSError:
+        return None
+
+
+def gemini_tts(text, path, voice, project, region, model="gemini-3.8-flash-tts"):
+    """Gemini TTS; raw 24 kHz PCM → the given path (m4a). With a Developer
+    API key (AI Studio) the model comes from generativelanguage — its
+    catalog (2026-10-21) has gemini-3.8-flash-tts, gemini-3.8-flash-lite-tts,
+    gemini-3.1-flash-tts-preview, gemini-2.5-pro-preview-tts; otherwise
+    Vertex AI with the gcloud login, whose catalog stops at
+    gemini-3.1-flash-tts-preview (us-central1) and gemini-2.5-pro-tts."""
     body = {"contents": [{"role": "user", "parts": [{"text": text}]}],
             "generationConfig": {"responseModalities": ["AUDIO"],
                                  "speechConfig": {"voiceConfig": {"prebuiltVoiceConfig": {"voiceName": voice}}}}}
-    reply = vertex_post(url, body, token, timeout=120)
+    key = gemini_api_key()
+    if key:
+        url = "https://generativelanguage.googleapis.com/v1beta/models/{m}:generateContent".format(m=model)
+        reply = google_post(url, body, ["x-goog-api-key: " + key], timeout=120)
+    else:
+        token = gcloud_token()
+        if not token:
+            raise RuntimeError("no Gemini API key and no gcloud access token (run `gcloud auth login`)")
+        url = ("https://{r}-aiplatform.googleapis.com/v1/projects/{p}/locations/{r}/publishers/google/models/"
+               "{m}:generateContent").format(r=region, p=project, m=model)
+        reply = vertex_post(url, body, token, timeout=120)
     part = reply["candidates"][0]["content"]["parts"][0]["inlineData"]
     mime = part.get("mimeType", "audio/L16;codec=pcm;rate=24000")
-    rate = 24000
-    for piece in mime.split(";"):
-        if piece.strip().startswith("rate="):
-            rate = int(piece.strip()[5:])
-    pcm = base64.b64decode(part["data"])
-    raw = path + ".pcm"
-    with open(raw, "wb") as f:
-        f.write(pcm)
-    subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-f", "s16le", "-ar", str(rate), "-ac", "1", "-i", raw,
-                    "-c:a", "aac", "-b:a", "128k", path], check=True)
+    data = base64.b64decode(part["data"])
+    if mime.lower().startswith("audio/wav"):
+        # The 3.8 models answer with a WAV container; ffmpeg reads it as is.
+        raw = path + ".wav"
+        with open(raw, "wb") as f:
+            f.write(data)
+        subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", raw, "-c:a", "aac", "-b:a", "128k", path], check=True)
+    else:
+        # Raw 16-bit PCM at the rate the mime type names (the 2.5 and 3.1 models).
+        rate = 24000
+        for piece in mime.split(";"):
+            if piece.strip().startswith("rate="):
+                rate = int(piece.strip()[5:])
+        raw = path + ".pcm"
+        with open(raw, "wb") as f:
+            f.write(data)
+        subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-f", "s16le", "-ar", str(rate), "-ac", "1", "-i", raw,
+                        "-c:a", "aac", "-b:a", "128k", path], check=True)
     os.remove(raw)
 
 
@@ -454,22 +497,47 @@ def edge_tts(text, path, voice="en-US-AndrewMultilingualNeural", rate="-2%"):
     os.remove(mp3)
 
 
-def narrate(lines, cache_dir, backend, gemini_voice, project, region):
+def narrate(lines, cache_dir, backend, gemini_voice, project, region, gemini_model="gemini-3.8-flash-tts"):
     os.makedirs(cache_dir, exist_ok=True)
     clips = {}
     used = backend
     for key, text in lines.items():
         if not text:
             continue
-        stamp = hashlib.sha1((used + gemini_voice + text).encode()).hexdigest()[:10]
+        stamp = hashlib.sha1((used + gemini_model + gemini_voice + text).encode()).hexdigest()[:10]
         out = os.path.join(cache_dir, "%s-%s.m4a" % (key, stamp))
         trimmed = out[:-4] + "-trim.m4a"
         if not os.path.exists(trimmed):
             if not os.path.exists(out):
                 if used == "gemini":
-                    try:
-                        gemini_tts(text, out, gemini_voice, project, region)
-                    except Exception as error:  # noqa: BLE001
+                    # A rate limit is not an outage: wait and try again (the
+                    # Developer API's free tier allows a few requests a
+                    # minute, and a film has a dozen lines). Only when the
+                    # model itself is out of reach does the fallback voice
+                    # take over — and then for every line, so the film never
+                    # mixes two voices.
+                    attempts, error = 0, None
+                    while attempts < 6:
+                        try:
+                            gemini_tts(text, out, gemini_voice, project, region, gemini_model)
+                            error = None
+                            # Pace the next line: a burst of a dozen requests
+                            # trips the Developer API's per-minute limit.
+                            time.sleep(8)
+                            break
+                        except Exception as problem:  # noqa: BLE001
+                            error = problem
+                            message = str(problem)
+                            if "quota" not in message.lower() and "429" not in message and "rate" not in message.lower():
+                                break
+                            attempts += 1
+                            wait = 20 * attempts
+                            print("Gemini TTS rate-limited on %s (%s); waiting %d s" % (key, message[:80], wait))
+                            time.sleep(wait)
+                    if error is not None:
+                        if clips:
+                            raise RuntimeError("Gemini TTS failed on %s after earlier lines succeeded (%s); "
+                                               "try again later rather than mix voices" % (key, str(error)[:160]))
                         print("Gemini TTS unavailable (%s); using the edge-tts voice" % str(error)[:120])
                         used = "edge"
                         stamp = hashlib.sha1((used + gemini_voice + text).encode()).hexdigest()[:10]
@@ -755,8 +823,9 @@ def compose(args):
 
     # 1. Narration first: it sets how long each beat may hold.
     lines = script_for(tl, args.title_say, "")
-    clips, backend = narrate(lines, os.path.join(args.out, "tts"), args.tts, args.gemini_voice, args.project, args.region)
-    print("narration:", backend)
+    clips, backend = narrate(lines, os.path.join(args.out, "tts"), args.tts, args.gemini_voice, args.project, args.region,
+                             args.gemini_model)
+    print("narration:", backend, args.gemini_model if backend == "gemini" else "")
 
     # 2. Cut list: every beat of the take, trimmed to its narration (plus a
     #    beat of air), with a title card before and cards after.
@@ -1064,6 +1133,10 @@ def main():
     c.add_argument("--title-say", default="A fire hydrant, scanned with an iPhone — turned into a CAD model inside OpenShape 3D by an assistant, over MCP.")
     c.add_argument("--tts", choices=["gemini", "edge"], default="gemini")
     c.add_argument("--gemini-voice", default="Charon")
+    c.add_argument("--gemini-model", default="gemini-3.8-flash-tts",
+                   help="a Gemini TTS model; with a Developer API key (GEMINI_API_KEY or ~/.config/openshape3d/gemini-api.key): "
+                        "gemini-3.8-flash-tts, gemini-3.8-flash-lite-tts, gemini-3.1-flash-tts-preview; on Vertex AI: "
+                        "gemini-3.1-flash-tts-preview, gemini-2.5-pro-tts, gemini-2.5-flash-tts")
     c.add_argument("--project", default="openshape3d")
     c.add_argument("--region", default="us-central1")
     c.add_argument("--music", default="lyria", help="lyria | generated | none | a file")
