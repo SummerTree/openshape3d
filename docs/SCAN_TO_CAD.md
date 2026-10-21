@@ -184,20 +184,32 @@ MCP tests pin the behaviour with boxes of known overlap.
 
 `demo_video.py take` records the iPad simulator (`simctl io recordVideo`)
 while the recipe runs over MCP at a camera's pace — the textured scan
-appearing, the revolve, each nozzle with a quarter turn of the view between
-them, a slow turn in Visualize, then `view.accuracyReport` opening Views ▸
-Accuracy Report… on the two bodies so the app's own overlay appears on
-screen — and writes `take.mov` with a `timeline.json` of when each beat
-happened. `compose` resamples the recording to a constant 30 fps (the
+appearing and turning, the revolve, each nozzle with the view still
+turning, a slow turn in Visualize with the panel kept closed
+(`view.visualize` with `panel: false`), `view.accuracyReport` opening Views
+▸ Accuracy Report… on the two bodies so the app's own overlay appears on
+screen, and last a hook: the model steps aside (`feature.transform`; an
+imported mesh cannot move, so the feature body does) and a fresh, untinted
+copy of the scan is imported beside it, both turning in the studio. The
+film's copy of the scan stands with its fitted base at the origin
+(`scan_on_floor`), so the studio floor is under it and the ground shadow
+lands where a shadow should. The take writes `take.mov` and a
+`timeline.json` of when each beat happened (and when its picture was
+ready). `compose` resamples the recording to a constant 30 fps (the
 simulator writes a frame only when the screen changes, so a still moment
 has none and a cut through it is empty), turns it upright (the framebuffer
 stays portrait with the landscape picture inside it; a one-shot UI test,
-`RotateDeviceUITests`, turns the device), crops it to 16:9 with the toolbar
-in frame, cuts each beat to its narration, lays a caption pill over it, puts
-a title card before and the numbers and credits after, narrates it (Gemini
-TTS through Vertex AI when `gcloud auth` is current, else the edge-tts
-voice), adds a music bed (Lyria through Vertex AI, else a generated one)
-and writes `<name>.mp4` plus a contact sheet.
+`RotateDeviceUITests`, turns the device), crops each beat to 16:9 (the
+toolbar in frame for the build, closer on the pair for the opening and the
+ending, the whole screen on a blurred copy for the tall report sheet),
+cuts each beat to its narration and lays a caption pill over it. There are
+no cards: the film opens on the hook footage under the title and closes on
+it under the numbers and the credits, so nothing in it is a still. It
+narrates (Gemini TTS through Vertex AI when `gcloud auth` is current, else
+the edge-tts voice), adds a music bed (Lyria through Vertex AI, else a
+generated one; looped to the film's length first, because an endless
+`-stream_loop` input into `amix` never ends and the mux hangs) and writes
+`<name>.mp4` plus a contact sheet.
 
     venv/bin/python demo_video.py take --scan …/scan_cropped.glb --analysis …/analysis --out …/demo --port 8947
     venv/bin/python demo_video.py compose --out …/demo --name fire-hydrant-demo [--tts gemini --music lyria]

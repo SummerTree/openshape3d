@@ -1398,6 +1398,7 @@ struct EditorView: View {
             .overlay(alignment: .topTrailing) {
                 // Visualization panel (spec §14) in place of the Items panel.
                 if viewModel.visualizeActive {
+                    if !viewModel.visualizePanelHidden {
                     VisualizationPanelView(viewModel: viewModel, onCapture: { showScreenshotOptions = true },
                                            onAddDecal: { fromPhotos in
                         if fromPhotos {
@@ -1410,6 +1411,7 @@ struct EditorView: View {
                     })
                         .padding(.trailing, 14)
                         .padding(.top, 8)
+                    }
                 } else if showItemsPanel {
                     ItemsPanelView(viewModel: viewModel)
                         .padding(.trailing, 14)

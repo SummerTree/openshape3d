@@ -595,6 +595,7 @@ final class AgentBridge {
                 return execOK(viewModel, ["visualize": false, "undoSteps": 0])
             }
             viewModel.enterVisualize()
+            viewModel.visualizePanelHidden = !args.panel
             let environment = args.applied(to: viewModel.visualizationEnvironment)
             let before = viewModel.session.document.visualization
             viewModel.setEnvironment(environment)
@@ -602,7 +603,8 @@ final class AgentBridge {
             return execOK(viewModel, ["visualize": true, "preset": saved.preset,
                                       "lightRotation": saved.lightRotation, "sunElevation": saved.sunElevation,
                                       "lightIntensity": saved.lightIntensity, "background": saved.background.rawValue,
-                                      "groundShadow": saved.groundShadow, "undoSteps": saved == before ? 0 : 1])
+                                      "groundShadow": saved.groundShadow, "panel": args.panel,
+                                      "undoSteps": saved == before ? 0 : 1])
         }
     }
 

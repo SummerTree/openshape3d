@@ -169,6 +169,9 @@ nonisolated struct VisualizeArgs: Equatable, Sendable {
     var background: VisualizationEnvironment.Background?
     var backgroundColor: SIMD3<Double>?
     var groundShadow: Bool?
+    /// Show the Visualization panel (the default) or keep the viewport
+    /// clear of it — for screenshots and recordings of the model alone.
+    var panel: Bool = true
 
     /// `environment` with these fields applied; a preset brings its own sun.
     func applied(to environment: VisualizationEnvironment) -> VisualizationEnvironment {
@@ -1052,6 +1055,7 @@ nonisolated enum AgentExec {
                 out.backgroundColor = SIMD3(rgb[0], rgb[1], rgb[2])
             }
             out.groundShadow = a["groundShadow"] as? Bool
+            out.panel = a["panel"] as? Bool ?? true
             return .success(.visualize(on: true, environment: out))
         } catch let e as AgentExecError { return .failure(e) } catch { return .failure(unexpected) }
     }
