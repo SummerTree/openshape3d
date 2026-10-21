@@ -204,7 +204,7 @@ def take(args):
             cad_id = reply["producedBodyIDs"][0]
             mcp.os3d("body.setMaterial", {"bodyIDs": [cad_id], "color": [0.86, 0.17, 0.12], "roughness": 0.45})
             mcp.os3d("item.setHidden", {"allSketches": True})
-            turn(2.4)
+            turn(3.6)
 
             nozzle_no = 0
             for n, boss in enumerate(bosses, 1):
@@ -870,7 +870,15 @@ def compose(args):
             pieces = [(start, min(end, start + want))]
         else:
             pieces = [(start, start + want * 0.55), (end - want * 0.45, end)]
-        segs.append({"id": b["id"], "caption": b["caption"], "pieces": pieces, "say": say})
+        seg = {"id": b["id"], "caption": b["caption"], "pieces": pieces, "say": say}
+        # A beat whose footage is shorter than its line is slowed to fit
+        # (up to 1.6×; the camera is turning, nothing else moves), so the
+        # next beat's line never starts over this one. The report beat's
+        # line starts on the menu beat before it and is not measured here.
+        have = sum(q - p for p, q in pieces)
+        if say and b["id"] != "accuracy" and have > 0 and have < want:
+            seg["stretch"] = min(want / have, 1.6)
+        segs.append(seg)
 
     # Source clips at 1920×1080: the take is the iPad's screen; crop to 16:9
     # from the top (the toolbar) down, then scale.
@@ -939,11 +947,16 @@ def compose(args):
             crop = crop_for(seg["id"])
             vf = (crop + ",scale=%d:%d" % (W, H)) if crop else \
                 pre + "split[bg][fg];[bg]scale=%d:%d,boxblur=30:5,eq=brightness=-0.15[bgs];[fg]scale=-2:%d[fgs];[bgs][fgs]overlay=(W-w)/2:0" % (W, H, H)
-            # `-ss` before the input seeks; the length is an output `-t` (an
-            # input `-to` is not honoured by this ffmpeg and the clips ran long).
-            subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-ss", "%.3f" % a, "-i", take, "-t", "%.3f" % (b - a),
-                            "-an", "-vf", vf, "-r", str(FPS), "-c:v", "libx264", "-preset", "veryfast", "-crf", "18",
-                            "-pix_fmt", "yuv420p", path], check=True)
+            # `-ss` and `-t` before the input seek and bound the SOURCE; a
+            # stretched beat slows those frames with setpts and the output
+            # `-t` is the longer length (an input `-to` is not honoured by
+            # this ffmpeg and the clips ran long).
+            k = seg.get("stretch", 1.0)
+            if k > 1.0:
+                vf += ",setpts=PTS*%.3f" % k
+            subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-ss", "%.3f" % a, "-t", "%.3f" % (b - a), "-i", take,
+                            "-t", "%.3f" % ((b - a) * k), "-an", "-vf", vf, "-r", str(FPS), "-c:v", "libx264",
+                            "-preset", "veryfast", "-crf", "18", "-pix_fmt", "yuv420p", path], check=True)
             probe_len = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", path],
                                        capture_output=True, text=True).stdout.strip()
             try:
@@ -1044,7 +1057,9 @@ def compose(args):
     filters = []
     vin = "[0:v]"
     for i, png in enumerate(caption_inputs):
-        inputs += ["-loop", "1", "-framerate", str(FPS), "-i", png]
+        # Each looped picture is bounded to the film's length: an endless
+        # input left ffmpeg running after the last frame was written.
+        inputs += ["-loop", "1", "-framerate", str(FPS), "-t", "%.2f" % (total + 1.0), "-i", png]
         sid, a, b = overlays[i]
         # Top-left over the viewport; bottom-left while the report sheet is
         # up, so the pill never sits on the sheet's title.
@@ -1057,6 +1072,11 @@ def compose(args):
     # menu that opens it, when the take has that beat.
     if "accuracy-open" in starts:
         starts["accuracy"] = starts["accuracy-open"]
+    spoken = sorted((starts[sid] + 0.25, starts[sid] + 0.25 + clip["seconds"], sid) for sid, clip in clips.items() if sid in starts)
+    print("narration:", [(sid, round(a, 1), round(b, 1)) for a, b, sid in spoken])
+    for (a, b, sid), (a2, _, sid2) in zip(spoken, spoken[1:]):
+        if b > a2:
+            print("WARNING: the %s line (ends %.1f s) runs into the %s line (starts %.1f s)" % (sid, b, sid2, a2))
     n_caps = len(caption_inputs)
     aud_idx = n_caps + 1
     mix = []
