@@ -258,8 +258,11 @@ a 1.5× device scale, so the text is crisp at 1920), a sheet of the three
 orthographic overlays with their overlap, and the front view panned top to
 bottom at full width, so the blue (scan only) and orange (model only)
 margins read. There are no cards: the film opens on the hook footage under
-the title and closes on it under the numbers and the credits. It narrates (Gemini TTS through Vertex AI when `gcloud auth` is current, else
-the edge-tts voice), adds a music bed (Lyria through Vertex AI, else a
+the title and closes on it under the numbers and the credits. It narrates (Gemini TTS — `gemini-3.8-flash-tts` through the Developer API
+when a key is in `GEMINI_API_KEY` or `~/.config/openshape3d/gemini-api.key`,
+mode 600 and outside every repo; else the Vertex AI catalog through
+`gcloud auth`, which stops at `gemini-3.1-flash-tts-preview`; else the
+edge-tts voice — `--gemini-model` picks another), adds a music bed (Lyria through Vertex AI, else a
 generated one; looped to the film's length first, because an endless
 `-stream_loop` input into `amix` never ends and the mux hangs) and writes
 `<name>.mp4` plus a contact sheet.
