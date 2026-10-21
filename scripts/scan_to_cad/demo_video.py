@@ -9,7 +9,11 @@ is built over MCP — the scan appearing, the revolve, each nozzle, a slow
 turn in Visualize, then Views ▸ Accuracy Report… opening and computing on
 screen — and writes `take.mov` plus `timeline.json` (when each beat
 happened). The build itself is `build_hydrant.py`'s recipe, paced for the
-camera; exports and the JSON report are not filmed.
+camera; exports and the JSON report are not filmed. With `--ui` the app is
+launched by `TutorialTakeUITests` (the remote-controlled touch test the
+YouTube series uses) and the report is opened the way a person opens it:
+the Views menu, Accuracy Report…, Compare, a scroll through the results,
+Done — real taps on the recording, not an agent op.
 
 `compose` cuts the take to its beats, lays a caption pill over each, puts a
 title and a numbers card around it, narrates it (Gemini TTS through Vertex
@@ -124,6 +128,24 @@ def take(args):
     udid = udid_for(args.simulator)
     beats = []
 
+    touch, test, control = None, None, None
+    if args.ui:
+        # The touch half: the YouTube series' remote-controlled UI test
+        # launches the app (with the agent bridge on our port) and performs
+        # the taps we post to its control server.
+        sys.path.insert(0, os.path.join(HERE, "..", "youtube_series"))
+        import common as yt
+        yt.BRIDGE_PORT = str(args.port)
+        yt.CONTROL_PORT = args.control_port
+        yt.DD = args.derived_data or yt.DD
+        simctl("terminate", udid, BUNDLE, check=False)
+        control = yt.Control(port=args.control_port)
+        test = yt.start_test(udid, os.path.join(args.out, "xcodebuild.log"))
+        control.wait_event("ready", 900)
+        control.act("new_design")
+        time.sleep(2.0)
+        touch = control.act
+
     with MCPClient(port=args.port, log_dir=args.out) as mcp:
         mcp.initialize()
         health = mcp.os3d("health")
@@ -224,18 +246,55 @@ def take(args):
             mcp.os3d("item.setHidden", {"ids": [scan_id], "hidden": False})
             mcp.os3d("command.run", {"id": "view.isometric"})
             hold(1.0)
-            # The numbers for the cards, before the beat so the wait is not filmed.
+            # The numbers for the ending, before the report beat so the wait
+            # is not filmed (the cut keeps the check beat's start). Later —
+            # once the hook has moved the model aside — the same call ran
+            # past the MCP timeout.
             report = mcp.os3d("accuracy", {"reference": scan_id, "model": cad_id, "tolerance": args.tolerance})
-
-            beat("accuracy", "")
-            mcp.os3d("view.accuracyReport", {"reference": scan_id, "model": cad_id, "tolerance": args.tolerance})
-            # The sheet computes for about as long as the `accuracy` call took
-            # (the same kernel), then shows its overlays; film both, and let
-            # the cut skip the wait.
-            beats[-1]["computeSeconds"] = round(mcp.calls[-2]["seconds"], 1)
-            hold(mcp.calls[-2]["seconds"] + 12.0)
-            mcp.os3d("view.accuracyReport", {"off": True})
-            hold(0.5)
+            if touch:
+                # The report as a person opens it: the Views menu, Accuracy
+                # Report…, the sheet (its pickers default to the mesh as the
+                # reference and the solid as the model), Compare, the
+                # results, a scroll through them, Done. The cut skips the
+                # computing wait between `computeStart` and `computeEnd`.
+                # Taps go through SpringBoard (`raw_*`): an open menu and a
+                # computing sheet keep the app from reporting idle, and an
+                # app-side tap would wait up to 60 s for it. The menu is
+                # taller than a landscape iPad shows, so it scrolls first.
+                beat("accuracy-open", "Views › Accuracy Report…")
+                touch("raw_tap:ViewsMenu")
+                hold(1.0)
+                touch("raw_drag:0.90,0.45;0.90,0.22;0.08")
+                hold(0.7)
+                touch("raw_tap:AccuracyReportButton")
+                hold(2.2)
+                beat("accuracy", "")
+                beats[-1]["computeStart"] = rec.now()
+                touch("raw_tap:AccuracyCompareButton")
+                # The results are in when the button reads "Compare Again"
+                # (the summary row sits below the fold of the list, where a
+                # cell does not exist yet to be found).
+                until = time.time() + 180
+                while time.time() < until and touch("exists:Compare Again") != "done:yes":
+                    pass
+                beats[-1]["computeEnd"] = rec.now()
+                hold(2.4)
+                touch("raw_drag:0.5,0.80;0.5,0.34;0.1")
+                hold(1.8)
+                touch("raw_drag:0.5,0.80;0.5,0.34;0.1")
+                hold(2.0)
+                touch("raw_tap:Done")
+                hold(0.6)
+            else:
+                beat("accuracy", "")
+                mcp.os3d("view.accuracyReport", {"reference": scan_id, "model": cad_id, "tolerance": args.tolerance})
+                # The sheet computes for about as long as the `accuracy` call took
+                # (the same kernel), then shows its overlays; film both, and let
+                # the cut skip the wait.
+                beats[-1]["computeSeconds"] = round(mcp.calls[-2]["seconds"], 1)
+                hold(mcp.calls[-2]["seconds"] + 12.0)
+                mcp.os3d("view.accuracyReport", {"off": True})
+                hold(0.5)
 
             # The hook for the opening: the scan, photo texture and all,
             # beside the finished model, both turning in the studio view.
@@ -260,6 +319,13 @@ def take(args):
             end = rec.now()
         finally:
             rec.stop()
+            if control:
+                control.finish()
+                try:
+                    test.wait(timeout=120)
+                except subprocess.TimeoutExpired:
+                    test.kill()
+                control.server.shutdown()
 
     timeline = {"beats": beats, "end": end, "valid": bool(valid),
                 "accuracy": {"overallIoU": report["overallIoU"],
@@ -286,7 +352,8 @@ def script_for(timeline, title_say, scan_name):
         "boss3": "",
         "boss4": "",
         "check": "It's a valid solid, every step in the history, ready to export as STEP or STL.",
-        "accuracy": "Then the app grades its own work — silhouettes over the scan, every point measured. {:.0f} percent overlap.".format(
+        "accuracy": "Then the app grades its own work: Views, Accuracy Report. The scan is the reference, the solid is the model — "
+                    "compare, and it lays the silhouettes over each other and measures every point. {:.0f} percent overlap.".format(
             a["overallIoU"] * 100),
         "report": "Every run also writes a report: the three orthographic silhouettes — the scan filled in blue under the "
                   "model's outline — and the distance from every sampled point, both ways.",
@@ -688,11 +755,19 @@ def compose(args):
         # Keep the whole beat if it is short; otherwise show its first part
         # and its last part, so the result is always seen.
         length = end - start
-        if b["id"] == "accuracy":
+        if b["id"] == "accuracy" and "computeStart" in b and "computeEnd" in b:
+            # Opened by touch: Compare is tapped at `computeStart`, the
+            # results appear at `computeEnd`; the wait between is cut.
+            pieces = [(start, b["computeStart"] + 1.0), (max(start, b["computeEnd"] - 0.2), end)]
+        elif b["id"] == "accuracy":
             # The sheet opens (2.5 s), then the result — the computing wait
             # in between is cut out.
             wait = b.get("computeSeconds", 16.0) + 3.0
             pieces = [(start, start + 2.5), (min(start + wait, end - 1), end)] if end - start > wait + 2 else [(start, end)]
+        elif b["id"] == "accuracy-open":
+            pieces = [(start, end)]
+        elif b["id"] == "check":
+            pieces = [(start, min(end, start + want))]
         elif length <= want + 0.5:
             pieces = [(start, min(end, start + want))]
         else:
@@ -880,7 +955,10 @@ def compose(args):
         vin = "[v%d]" % i
     video_out = vin
 
-    # Narration at each segment's start.
+    # Narration at each segment's start; the report's line starts with the
+    # menu that opens it, when the take has that beat.
+    if "accuracy-open" in starts:
+        starts["accuracy"] = starts["accuracy-open"]
     n_caps = len(caption_inputs)
     aud_idx = n_caps + 1
     mix = []
@@ -945,6 +1023,10 @@ def main():
     t.add_argument("--tolerance", type=float, default=3.0)
     t.add_argument("--hook-background", type=float, nargs=3, default=[1, 1, 1], metavar=("R", "G", "B"),
                    help="the studio background behind the opening pair (0…1)")
+    t.add_argument("--ui", action="store_true",
+                   help="launch the app through TutorialTakeUITests and open the Accuracy Report by touch")
+    t.add_argument("--control-port", type=int, default=8930, help="the UI test's control server (with --ui)")
+    t.add_argument("--derived-data", default=None, help="xcodebuild -derivedDataPath for the UI test (with --ui)")
     c = sub.add_parser("compose")
     c.add_argument("--out", default="demo")
     c.add_argument("--name", default="hydrant-demo")

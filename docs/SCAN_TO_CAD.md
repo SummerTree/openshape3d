@@ -186,9 +186,19 @@ MCP tests pin the behaviour with boxes of known overlap.
 while the recipe runs over MCP at a camera's pace — the textured scan
 appearing and turning, the revolve, each nozzle with the view still
 turning, a slow turn in Visualize with the panel kept closed
-(`view.visualize` with `panel: false`), `view.accuracyReport` opening Views
-▸ Accuracy Report… on the two bodies so the app's own overlay appears on
-screen, and last a hook: the model steps aside (`feature.transform`; an
+(`view.visualize` with `panel: false`), the Accuracy Report on screen, and
+last a hook. With `--ui` the app is launched by `TutorialTakeUITests` (the
+YouTube series' remote-controlled touch test, `scripts/youtube_series/
+common.py`) and the report is opened the way a person opens it — the Views
+menu, Accuracy Report…, the sheet with its pickers already on the mesh and
+the solid, Compare, a scroll through the results, Done — real taps on the
+recording; the take marks `computeStart` / `computeEnd` so the cut skips
+the computing wait. Those taps go through SpringBoard (the test's
+`raw_tap` / `raw_tap_at` / `raw_drag` actions): an open menu and a sheet
+computing behind a ProgressView keep the app from reporting idle, and an
+app-side XCUITest tap then stalls for up to 60 s. The Views menu is taller
+than a landscape iPad shows, so the take scrolls it before tapping. Without `--ui`, `view.accuracyReport` opens the sheet
+from the agent. The hook: the model steps aside (`feature.transform`; an
 imported mesh cannot move, so the feature body does) and a fresh copy of
 the scan is imported beside it, both turning in the studio — on a dark
 backdrop (`--hook-background`, default white) so the photo texture and the
@@ -220,7 +230,7 @@ generated one; looped to the film's length first, because an endless
 `-stream_loop` input into `amix` never ends and the mux hangs) and writes
 `<name>.mp4` plus a contact sheet.
 
-    venv/bin/python demo_video.py take --scan …/scan_cropped.glb --analysis …/analysis --out …/demo --port 8947 --hook-background 0.13 0.14 0.16
+    venv/bin/python demo_video.py take --scan …/scan_cropped.glb --analysis …/analysis --out …/demo --port 8947 --hook-background 0.13 0.14 0.16 --ui --derived-data ~/Library/Developer/Xcode/DerivedData/openshape3d-…
     venv/bin/python demo_video.py compose --out …/demo --name fire-hydrant-demo --report …/report.html --overlays …/run/overlays [--tts gemini --music lyria]
 
 ### `report.py` and `make_video.py`

@@ -440,6 +440,13 @@ def analyze(mesh, band_mm=4.0, lump_margin_mm=6.0, out_dir=None, name="scan", ep
             why = "centred at %.0f mm, off the part" % b["centerHeightMM"]
         elif b["profile"] and b["profile"][0][0] > b["bodyRadiusMM"] * 1.15:
             why = "starts %.0f mm wide at a %.0f mm body — a flange, not a boss" % (b["profile"][0][0] * 2, b["bodyRadiusMM"] * 2)
+        elif b["profile"] and b["neckWidthMM"] > 0 and b["profile"][0][0] > b["neckWidthMM"]:
+            # A boss is roughly a cylinder: its root is about as wide as its
+            # neck. A root twice the neck is a thin thing on a wide base —
+            # a chain link, or a flange's underside caught in the band
+            # below it — not a nozzle or a lug.
+            why = "%.0f mm wide at the root but %.0f mm at the neck — a spike on a flange, not a boss" % (
+                b["profile"][0][0] * 2, b["neckWidthMM"])
         if why:
             dropped.append("boss az %.0f h %.0f reach %.0f — %s" % (b["azimuthDeg"], b["centerHeightMM"], b["reachMM"], why))
         else:
