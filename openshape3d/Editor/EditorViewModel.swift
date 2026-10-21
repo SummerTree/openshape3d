@@ -6971,7 +6971,9 @@ final class EditorViewModel {
             let meshFirst = selected.sorted { ($0.brep == nil ? 0 : 1) < ($1.brep == nil ? 0 : 1) }
             return (meshFirst[0].id, meshFirst[1].id)
         }
-        guard let reference = bodies.first(where: { $0.brep == nil }),
+        // No mesh body (two modelled parts compared): the first body is the
+        // reference and the next analytic one the model.
+        guard let reference = bodies.first(where: { $0.brep == nil }) ?? bodies.first,
               let model = bodies.first(where: { $0.brep != nil && $0.id != reference.id })
                 ?? bodies.first(where: { $0.id != reference.id }) else { return nil }
         return (reference.id, model.id)
@@ -17781,6 +17783,26 @@ final class EditorViewModel {
                 body.material = BodyMaterialSpec.default
                 session.perform(AddBodyCommand(body: body))
             }
+            return
+        }
+
+        // OS3D_DEBUG_SEED_PAIR: a 10 mm box inside a 30 mm one, neither
+        // selected — two bodies for Views ▸ Accuracy Report… and Views ▸
+        // Deviation Preview to compare (DeviationPreviewUITests).
+        if ProcessInfo.processInfo.environment["OS3D_DEBUG_SEED_PAIR"] != nil,
+           session.document.bodies.isEmpty {
+            var seedDoc = session.document
+            for (name, size) in [("Outer", 30.0), ("Inner", 10.0)] {
+                let spec = PrimitiveSpec.box(width: size, depth: size, height: size)
+                var body = Body(name: name, transform: .identity, primitive: nil,
+                                euclidMesh: Euclid.Mesh.primitive(spec), revision: seedDoc.nextRevision())
+                if let handle = OCCTKernel.primitiveShape(spec, placement: .identity) {
+                    body.adoptBRep(handle)
+                }
+                body.material = BodyMaterialSpec.default
+                session.perform(AddBodyCommand(body: body))
+            }
+            selection = []
             return
         }
 

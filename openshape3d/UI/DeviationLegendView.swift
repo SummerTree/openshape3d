@@ -22,11 +22,11 @@ struct DeviationLegendView: View {
                         .buttonStyle(.borderedProminent)
                         .controlSize(.small)
                         .accessibilityIdentifier("DeviationDone")
-                        .accessibilityHint(Text(String(format: "%.0f%% within tolerance", preview.stats.withinTolerance * 100)))
                 }
             }
             if let preview = viewModel.deviationPreview {
                 let tol = preview.toleranceMM, limit = preview.maxMM
+                let _ = preview.stats
                 LinearGradient(stops: [
                     .init(color: Color(red: 0.90, green: 0.42, blue: 0.08), location: 0),
                     .init(color: Color(red: 0.99, green: 0.80, blue: 0.58), location: max(0.5 - tol / (2 * limit) - 0.001, 0.02)),
@@ -62,6 +62,10 @@ struct DeviationLegendView: View {
         .padding(14)
         .frame(width: 340, alignment: .leading)
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))
+        // A container, not one merged element: the Done button and the
+        // stats line stay reachable by their own identifiers (a UI test and
+        // the demo film's take both look for `DeviationDone`).
+        .accessibilityElement(children: .contain)
         .accessibilityIdentifier("DeviationLegend")
     }
 }
