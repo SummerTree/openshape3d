@@ -209,6 +209,19 @@ final class ImportQATests: XCTestCase {
         XCTAssertEqual(last.x, 0, accuracy: 1e-9); XCTAssertEqual(last.y, 5, accuracy: 1e-9)
     }
 
+    func testDXFInsunitsIsReadPastHeaderVariablesThatUseGroupTwo() {
+        // AutoCAD writes $DIMSTYLE and $UCSNAME (group 2 values) before
+        // $INSUNITS; a reader that takes any group 2 as a section name
+        // leaves the header there and never sees the unit.
+        let inches = "0\nSECTION\n2\nHEADER\n9\n$ACADVER\n1\nAC1015\n9\n$DIMSTYLE\n2\nStandard\n9\n$UCSNAME\n2\n\n"
+            + "9\n$INSUNITS\n70\n1\n0\nENDSEC\n0\nSECTION\n2\nENTITIES\n0\nLINE\n8\n0\n10\n0\n20\n0\n30\n0\n11\n1\n21\n0\n31\n0\n0\nENDSEC\n0\nEOF\n"
+        let entities = DXFKit.importDXF(Data(inches.utf8))
+        guard case let .line(_, a, b)? = entities.first else { return XCTFail("line expected, got \(entities)") }
+        XCTAssertEqual(a.x, 0, accuracy: 1e-9)
+        XCTAssertEqual(b.x, 25.4, accuracy: 1e-9, "one inch, read past $DIMSTYLE and $UCSNAME")
+        XCTAssertEqual(entities.count, 1)
+    }
+
     func testDXFInsunitsScalesInchesToMillimetres() {
         let inches = "0\nSECTION\n2\nHEADER\n9\n$INSUNITS\n70\n1\n0\nENDSEC\n0\nSECTION\n2\nENTITIES\n0\nCIRCLE\n8\n0\n10\n1\n20\n2\n30\n0\n40\n0.5\n0\nENDSEC\n0\nEOF\n"
         let entities = DXFKit.importDXF(Data(inches.utf8))

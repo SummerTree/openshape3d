@@ -35,8 +35,19 @@ design), `FREECAD_PLAYBOOK.md` (the FreeCAD-derived hardening ledger),
   file picker itself was not driven this mission; `document.import` stays
   `developer_only` outside DEBUG.
 - **TEST_PLAN §5 (Shapr3D workflow exercises, Shapr3D-side references)**
-  remains manual. Runs `qa1`–`qa4` under `docs/qa/shapr3d-parity/runs/` are
-  the record of the progression (29/32 → 35/35) and can be pruned.
+  remains manual. Runs `qa1`–`qa4` (the progression 29/32 → 35/35) were
+  pruned at review; `qa5`, `qa6`, `qa6-ext`, `qa6-iges` and the review's
+  `qa7` (36/36 on a second Mac) are the record.
+- **Review, 2026-10-21 (a second session, this Mac):** `DXFKit` took any
+  group-2 line outside an entity as a section name, so `$DIMSTYLE` and
+  `$UCSNAME` — group-2 header variables AutoCAD writes before `$INSUNITS` —
+  ended the header early and an inch drawing from AutoCAD still imported
+  at millimetre scale (the fixtures' minimal headers never hit it). The
+  section name is now read only right after `0 SECTION`; pinned in
+  `ImportQATests`. Not fixed, worth watching: `/v1/state` now measures
+  every B-rep body's bounds with `BRepBndLib::AddOptimal` on exact geometry
+  on every call, which a dense STEP import could make slow — cache on the
+  body's mesh revision if an agent loop ever feels it.
 
 ## Mission log — 2026-10-21, importing other people's CAD over MCP: an oracle, a live runner, and five reader defects
 

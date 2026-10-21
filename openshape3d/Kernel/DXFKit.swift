@@ -174,6 +174,7 @@ nonisolated enum DXFKit {
         var entities = [SketchEntity]()
         var inEntitiesSection = false
         var inHeaderSection = false
+        var expectingSectionName = false      // the `2 NAME` right after `0 SECTION`
         var headerVariable: String?
         var scale = 1.0                        // mm per drawing unit ($INSUNITS)
         var currentType: String?
@@ -263,6 +264,7 @@ nonisolated enum DXFKit {
                 switch value {
                 case "SECTION", "ENDSEC", "EOF":
                     currentType = nil
+                    expectingSectionName = (value == "SECTION")
                     if value != "SECTION" { inEntitiesSection = false; inHeaderSection = false }
                 case "POLYLINE":
                     currentType = "POLYLINE"
@@ -273,8 +275,14 @@ nonisolated enum DXFKit {
                 }
                 continue
             }
-            if groupCode == 2, currentType == nil {
-                // Section name following a SECTION marker.
+            if groupCode == 2, currentType == nil, expectingSectionName {
+                // The section name right after a SECTION marker — and only
+                // there: inside HEADER, `$DIMSTYLE` and `$UCSNAME` carry
+                // their values on group 2 too, and reading those as a
+                // section name ended the header before `$INSUNITS`, which
+                // AutoCAD writes after them (an inch drawing then imported
+                // 25.4× too small; 2026-10-21 review).
+                expectingSectionName = false
                 inEntitiesSection = (value == "ENTITIES")
                 inHeaderSection = (value == "HEADER")
                 continue
