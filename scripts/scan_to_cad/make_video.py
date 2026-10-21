@@ -169,9 +169,13 @@ def heatmap(run, scan_path, out_path, tolerance):
     return {"meanMM": float(distance.mean()), "p95MM": float(np.percentile(distance, 95)), "maxMM": float(distance.max())}
 
 
-def contact_sheet(video, out, every=2.0):
+def contact_sheet(video, out, every=2.0, columns=6):
+    """A frame every `every` seconds on one sheet — review it before publishing."""
+    seconds = float(subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", video],
+                                   capture_output=True, text=True).stdout.strip() or 0)
+    rows = max(1, -(-int(seconds / every + 1) // columns))
     subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", video, "-vf",
-                    "fps=1/%g,scale=320:-1,tile=6x0" % every, "-frames:v", "1", out], check=True)
+                    "fps=1/%g,scale=320:-1,tile=%dx%d" % (every, columns, rows), "-frames:v", "1", out], check=True)
 
 
 def main():
