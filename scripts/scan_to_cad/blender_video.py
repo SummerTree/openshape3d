@@ -134,6 +134,33 @@ def import_glb(path, name, mat):
     return ob
 
 
+def import_scan(path, name, fallback):
+    """glTF/GLB or OBJ (with its MTL and photo texture, kept when present)."""
+    ext = os.path.splitext(path)[1].lower()
+    before = set(bpy.data.objects)
+    if ext in (".glb", ".gltf"):
+        bpy.ops.import_scene.gltf(filepath=path)
+    elif ext == ".obj":
+        bpy.ops.wm.obj_import(filepath=path, forward_axis="NEGATIVE_Z", up_axis="Y")
+    else:
+        raise SystemExit("unsupported scan format " + ext)
+    new = [o for o in bpy.data.objects if o not in before and o.type == "MESH"]
+    ob = new[0]
+    if len(new) > 1:
+        bpy.ops.object.select_all(action="DESELECT")
+        for o in new:
+            o.select_set(True)
+        bpy.context.view_layer.objects.active = ob
+        bpy.ops.object.join()
+    ob.name = name
+    textured = any(m and m.use_nodes and any(n.type == "TEX_IMAGE" and n.image for n in m.node_tree.nodes)
+                   for m in ob.data.materials)
+    if not textured:
+        ob.data.materials.clear()
+        ob.data.materials.append(fallback)
+    return ob
+
+
 def import_ply(path, name, mat):
     before = set(bpy.data.objects)
     bpy.ops.wm.ply_import(filepath=path, global_scale=1.0, forward_axis="NEGATIVE_Z", up_axis="Y")
@@ -255,7 +282,7 @@ fill.data.size = 3
 scan_mat = material("scan", (0.55, 0.62, 0.72, 1), roughness=0.9)
 scan_ghost = material("scan-ghost", (0.16, 0.44, 0.86, 1), alpha=0.2, roughness=0.6)
 cad_mat = material("cad", RED, roughness=0.45)
-scan = import_glb(SCAN, "Scan", scan_mat)
+scan = import_scan(SCAN, "Scan", scan_mat)
 scan_lo, scan_hi = bounds(scan)
 centre = (scan_lo + scan_hi) / 2
 size = max(scan_hi - scan_lo)
