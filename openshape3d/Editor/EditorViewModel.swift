@@ -6867,6 +6867,10 @@ final class EditorViewModel {
     /// Tools ▸ Visualize: the design is lit by its environment, without grid
     /// or edges, and the Visualization panel is up.
     private(set) var visualizeActive = false
+    /// An agent may enter Visualize without the panel (`view.visualize`
+    /// with `panel: false`), so a screenshot or a recording shows the
+    /// model alone. The hand-driven toolbar button always shows it.
+    var visualizePanelHidden = false
     var visualizationTab: VisualizationTab = .materials
     /// The environment while a slider is being dragged (committed — one undo
     /// step — when the drag ends).
@@ -6894,6 +6898,7 @@ final class EditorViewModel {
         visualizePicksFocus = false
         visualizePicksFaces = false
         visualizeActive = false
+        visualizePanelHidden = false
     }
 
     /// Change the environment. `live` keeps it as a draft (a slider still

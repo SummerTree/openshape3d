@@ -79,12 +79,38 @@ class Recorder:
         self.proc.wait(timeout=180)
 
 
+def scan_on_floor(path, base_mm, out):
+    """`path` (a GLB in metres) translated so `base_mm` lands at the origin."""
+    import trimesh
+    scene = trimesh.load(path, force="scene")
+    shift = -np.asarray(base_mm, dtype=float) / 1000.0
+    for node in scene.graph.nodes_geometry:
+        matrix, geom = scene.graph[node]
+        matrix = np.array(matrix, dtype=float)
+        matrix[:3, 3] += shift
+        scene.graph.update(frame_to=node, matrix=matrix)
+    scene.export(out)
+    return out
+
+
+def modelling_calls(calls):
+    """The calls that made the model: sketches, features, checks and the
+    report — not the camera moves, colours and hides that stage the film."""
+    staging = {"health", "state", "screenshot", "item.setHidden", "body.setMaterial", "view.visualize", "view.accuracyReport", "command.run"}
+    return sum(1 for c in calls if (c.get("arguments") or {}).get("op") not in staging)
+
+
 def take(args):
     with open(os.path.join(args.analysis, "profile.json")) as f:
         analysis = json.load(f)
     from build_hydrant import unit, world, lines_for
     axis_origin = np.array(analysis["axisOrigin"])
     axis = unit(analysis["axisDirection"])
+    # The film's copy of the scan stands with its fitted base at the origin,
+    # so the studio floor (y = 0) is under it and the ground shadow lands
+    # where a shadow should; the build shifts with it.
+    args.scan = scan_on_floor(args.scan, axis_origin, os.path.join(args.out, "scan-on-floor.glb"))
+    axis_origin = np.zeros(3)
     u = unit(analysis["azimuthZero"])
     v = unit(analysis["azimuthNinety"])
     profile = analysis["profile"]
@@ -115,16 +141,29 @@ def take(args):
         def hold(seconds):
             time.sleep(seconds)
 
+        def turn(seconds, step=0.5):
+            """Keep the camera moving: a 15° step every half second."""
+            until = rec.now() + seconds
+            while rec.now() < until:
+                mcp.os3d("command.run", {"id": "view.rotateLeft15"})
+                time.sleep(step)
+
         try:
             beat("import", "Import the iPhone scan")
             reply = mcp.os3d("document.import", {"path": os.path.abspath(args.scan), "fileName": os.path.basename(args.scan)})
             scan_id = reply["bodyIDs"][0]
+            # An import lands selected (tinted blue); hiding and showing it
+            # again clears the selection and leaves the photo texture alone.
+            mcp.os3d("item.setHidden", {"ids": [scan_id]})
+            mcp.os3d("item.setHidden", {"ids": [scan_id], "hidden": False})
             mcp.os3d("command.run", {"id": "view.fit"})
-            hold(1.2)
-            mcp.os3d("command.run", {"id": "view.isometric"})
-            hold(2.0)
-            mcp.os3d("body.setMaterial", {"bodyIDs": [scan_id], "color": [0.55, 0.62, 0.72, 0.42], "roughness": 0.9})
             hold(0.8)
+            mcp.os3d("command.run", {"id": "view.isometric"})
+            hold(0.6)
+            beats[-1]["ready"] = rec.now()
+            turn(3.5)
+            mcp.os3d("body.setMaterial", {"bodyIDs": [scan_id], "color": [0.55, 0.62, 0.72, 0.42], "roughness": 0.9})
+            turn(0.8)
 
             beat("revolve", "One sketch on the scan's own axis, one revolve")
             plane = {"origin": world(axis_origin, axis, u, v, 0, 0), "xAxis": [float(x) for x in u],
@@ -136,13 +175,13 @@ def take(args):
                 if abs(p[0] - cleaned[-1][0]) > 1e-6 or abs(p[1] - cleaned[-1][1]) > 1e-6:
                     cleaned.append(p)
             mcp.os3d("sketch.addEntities", {"sketchID": sketch, "entities": lines_for(cleaned)})
-            hold(1.2)
+            turn(1.2)
             reply = mcp.os3d("feature.revolve", {"sketchID": sketch, "seedPoint": [body_r * 0.5, height * 0.5],
                                                  "axisPoint": [0, 0], "axisDirection": [0, 1], "angleDegrees": 360})
             cad_id = reply["producedBodyIDs"][0]
             mcp.os3d("body.setMaterial", {"bodyIDs": [cad_id], "color": [0.86, 0.17, 0.12], "roughness": 0.45})
             mcp.os3d("item.setHidden", {"allSketches": True})
-            hold(2.2)
+            turn(2.4)
 
             nozzle_no = 0
             for n, boss in enumerate(bosses, 1):
@@ -165,25 +204,21 @@ def take(args):
                 sk = mcp.os3d("sketch.create", {"origin": origin, "xAxis": [float(x) for x in t],
                                                 "yAxis": [float(x) for x in d], "name": "Boss %d" % n})["sketchID"]
                 mcp.os3d("sketch.addEntities", {"sketchID": sk, "entities": lines_for(bc)})
-                hold(0.6)
+                turn(0.6)
                 mcp.os3d("feature.revolve", {"sketchID": sk, "seedPoint": [max(prof[0][0] * 0.4, 2.0), prof[-1][1] * 0.3],
                                              "axisPoint": [0, 0], "axisDirection": [0, 1], "angleDegrees": 360,
                                              "boolean": "union", "booleanTargets": [cad_id]})
                 mcp.os3d("item.setHidden", {"allSketches": True})
-                hold(0.5)
-                mcp.os3d("command.run", {"id": "view.rotateLeft15"})
-                hold(0.9)
+                turn(1.6)
 
             beat("check", "A valid solid, every step in the history")
             check = mcp.os3d("check", {"body": cad_id})
             valid = check["bodies"][0]["health"]["valid"]
             mcp.os3d("item.setHidden", {"ids": [scan_id]})
             mcp.os3d("view.visualize", {"preset": "Studio", "background": "color", "backgroundColor": [1, 1, 1],
-                                        "groundShadow": True})
-            hold(1.0)
-            for _ in range(12):
-                mcp.os3d("command.run", {"id": "view.rotateLeft15"})
-                hold(0.45)
+                                        "groundShadow": True, "panel": False})
+            hold(0.8)
+            turn(6.0, step=0.45)
             mcp.os3d("view.visualize", {"off": True})
             mcp.os3d("item.setHidden", {"ids": [scan_id], "hidden": False})
             mcp.os3d("command.run", {"id": "view.isometric"})
@@ -191,7 +226,7 @@ def take(args):
             # The numbers for the cards, before the beat so the wait is not filmed.
             report = mcp.os3d("accuracy", {"reference": scan_id, "model": cad_id, "tolerance": args.tolerance})
 
-            beat("accuracy", "The app grades it · Views ▸ Accuracy Report")
+            beat("accuracy", "")
             mcp.os3d("view.accuracyReport", {"reference": scan_id, "model": cad_id, "tolerance": args.tolerance})
             # The sheet computes for about as long as the `accuracy` call took
             # (the same kernel), then shows its overlays; film both, and let
@@ -200,6 +235,26 @@ def take(args):
             hold(mcp.calls[-2]["seconds"] + 12.0)
             mcp.os3d("view.accuracyReport", {"off": True})
             hold(0.5)
+
+            # The hook for the opening: the scan, photo texture and all,
+            # beside the finished model, both turning in the studio view.
+            beat("hook", "")
+            mcp.os3d("item.setHidden", {"ids": [scan_id]})
+            # The model steps aside (a feature body moves; an imported mesh
+            # cannot), and a fresh, untinted copy of the scan takes its place.
+            mcp.os3d("feature.transform", {"bodyID": cad_id, "translation": [400, 0, -400]})
+            reply = mcp.os3d("document.import", {"path": os.path.abspath(args.scan), "fileName": os.path.basename(args.scan)})
+            scan2 = reply["bodyIDs"][0]
+            mcp.os3d("item.setHidden", {"ids": [scan2]})
+            mcp.os3d("item.setHidden", {"ids": [scan2], "hidden": False})
+            mcp.os3d("view.visualize", {"preset": "Studio", "background": "color", "backgroundColor": [1, 1, 1],
+                                        "groundShadow": True, "panel": False})
+            mcp.os3d("command.run", {"id": "view.isometric"})
+            mcp.os3d("command.run", {"id": "view.fit"})
+            hold(1.6)
+            beats[-1]["ready"] = rec.now()
+            turn(20.0)
+            mcp.os3d("view.visualize", {"off": True})
 
             beat("end", "")
             end = rec.now()
@@ -210,7 +265,7 @@ def take(args):
                 "accuracy": {"overallIoU": report["overallIoU"],
                              "views": {o["view"]: o["iou"] for o in report["overlays"]},
                              "referenceToModel": report["referenceToModel"], "modelToReference": report["modelToReference"],
-                             "summary": report["summary"], "calls": len(mcp.calls)}}
+                             "summary": report["summary"], "calls": modelling_calls(mcp.calls)}}
     with open(os.path.join(args.out, "timeline.json"), "w") as f:
         json.dump(timeline, f, indent=1)
     print("take %.1f s, %d MCP calls -> %s" % (end, len(mcp.calls), os.path.join(args.out, "take.mov")))
@@ -231,9 +286,10 @@ def script_for(timeline, title_say, scan_name):
         "boss3": "",
         "boss4": "",
         "check": "It's a valid solid, every step in the history, ready to export as STEP or STL.",
-        "accuracy": "Then the app grades its own work: silhouettes laid over the scan view by view, and every scan point measured to the model. {:.0f} percent overlap, the model within {:.0f} millimetres on average.".format(
-            a["overallIoU"] * 100, a["modelToReference"]["meanMM"]),
-        "numbers": "From a phone scan to a parametric model in {} calls.".format(a["calls"]),
+        "accuracy": "Then the app grades its own work — silhouettes over the scan, every point measured. {:.0f} percent overlap.".format(
+            a["overallIoU"] * 100),
+        "numbers": "A phone scan to a parametric model in {} calls, within {:.0f} millimetres on average.".format(
+            a["calls"], a["modelToReference"]["meanMM"]),
         "outro": "OpenShape 3D is open source.",
     }
 
@@ -445,6 +501,29 @@ def card(path, title, lines, foot="", accent=(230, 72, 48)):
     im.save(path)
 
 
+def title_overlay(path, title_lines, subtitle, size=78):
+    """A band over footage: large lines and a subtitle under them — the
+    title at the start, the numbers and the credits at the end."""
+    from PIL import Image, ImageDraw, ImageFont
+    big = ImageFont.truetype("/System/Library/Fonts/HelveticaNeue.ttc", size, index=1)
+    small = ImageFont.truetype("/System/Library/Fonts/HelveticaNeue.ttc", 34, index=0)
+    pad = 36
+    line_h = int(size * 1.13)
+    h = pad * 2 + line_h * len(title_lines) + 54
+    probe = ImageDraw.Draw(Image.new("RGB", (10, 10)))
+    w = int(min(W - 112, max([probe.textlength(t, font=big) for t in title_lines]
+                             + [probe.textlength(subtitle, font=small)]) + 2 * pad))
+    im = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+    d = ImageDraw.Draw(im)
+    d.rounded_rectangle([0, 0, w - 1, h - 1], radius=26, fill=(20, 24, 32, 205))
+    y = pad - 8
+    for line in title_lines:
+        d.text((pad, y), line, font=big, fill=(255, 255, 255, 255))
+        y += line_h
+    d.text((pad, y + 6), subtitle, font=small, fill=(200, 208, 220, 255))
+    im.save(path)
+
+
 def caption(path, text, sub=""):
     from PIL import Image, ImageDraw, ImageFont
     font = ImageFont.truetype("/System/Library/Fonts/HelveticaNeue.ttc", 44, index=1)
@@ -488,10 +567,26 @@ def compose(args):
     # 2. Cut list: every beat of the take, trimmed to its narration (plus a
     #    beat of air), with a title card before and cards after.
     segs = []
+    hook = None
     for i, b in enumerate(beats[:-1]):
         start, end = b["start"], beats[i + 1]["start"]
+        if b["id"] == "hook":
+            # Opens and closes the film: scan beside model, turning. The
+            # opener runs as long as the title line; the ending carries the
+            # numbers and the credits.
+            say = clips.get("title")
+            first = b.get("ready", start + 2.0)
+            open_len = (say["seconds"] + 1.2) if say else 6.0
+            close_len = (clips["numbers"]["seconds"] if "numbers" in clips else 4.0) + \
+                        (clips["outro"]["seconds"] if "outro" in clips else 3.0) + 2.4
+            hook = {"id": "hook", "caption": "", "pieces": [(first, min(end, first + open_len))], "say": say}
+            ender = {"id": "ender", "caption": "", "pieces": [(max(first, end - close_len), end)], "say": None}
+            continue
         say = clips.get(b["id"])
         want = (say["seconds"] + 0.8) if say else (end - start)
+        # A beat may name the moment its picture is ready (the scan framed
+        # after the import); the cut starts there.
+        start = max(start, b.get("ready", start))
         # Keep the whole beat if it is short; otherwise show its first part
         # and its last part, so the result is always seen.
         length = end - start
@@ -518,20 +613,34 @@ def compose(args):
     if sw < sh and args.landscape:
         pre = "transpose=2,"
         sw, sh = sh, sw
-    if sw >= sh:
+    def crop_for(seg_id):
+        if sw < sh or seg_id == "accuracy":
+            # A portrait screen, or the tall report sheet: the whole screen
+            # on a blurred copy of itself.
+            return None
+        if seg_id in ("hook", "ender"):
+            # The opening and the ending: closer on the pair of hydrants,
+            # which a fit of two bodies leaves small. Still a downscale.
+            w = int(sw * 0.78) & ~1
+            h = int(w * 9 / 16) & ~1
+            x = (sw - w) // 2
+            y = max(0, min(sh - h, int(sh * 0.46) - h // 2))
+            return pre + "crop=%d:%d:%d:%d" % (w, h, x, y)
         crop_h = int(sw * 9 / 16)
+        spare = max(0, sh - crop_h)
         # 16:9 from near the top, so the app's toolbar stays in frame.
-        crop = pre + "crop=%d:%d:0:%d" % (sw, min(crop_h, sh), min(60, max(0, sh - crop_h)))
-    else:
-        # A portrait screen: show it whole on a blurred copy of itself.
-        crop = None
+        return pre + "crop=%d:%d:0:%d" % (sw, min(crop_h, sh), min(spare, 60))
 
     clip_paths = []
+    if hook:
+        segs.insert(0, hook)
+        segs.append(ender)
     for seg in segs:
         for j, (a, b) in enumerate(seg["pieces"]):
             path = os.path.join(work, "%s-%d.mp4" % (seg["id"], j))
+            crop = crop_for(seg["id"])
             vf = (crop + ",scale=%d:%d" % (W, H)) if crop else \
-                "split[bg][fg];[bg]scale=%d:%d,boxblur=30:5,eq=brightness=-0.15[bgs];[fg]scale=-2:%d[fgs];[bgs][fgs]overlay=(W-w)/2:0" % (W, H, H)
+                pre + "split[bg][fg];[bg]scale=%d:%d,boxblur=30:5,eq=brightness=-0.15[bgs];[fg]scale=-2:%d[fgs];[bgs][fgs]overlay=(W-w)/2:0" % (W, H, H)
             # `-ss` before the input seeks; the length is an output `-t` (an
             # input `-to` is not honoured by this ffmpeg and the clips ran long).
             subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-ss", "%.3f" % a, "-i", take, "-t", "%.3f" % (b - a),
@@ -568,11 +677,12 @@ def compose(args):
     def hold_for(key, floor):
         return max(floor, clips[key]["seconds"] + 0.9) if key in clips else floor
 
-    sequence = [("title", still("title", hold_for("title", 4.0)), hold_for("title", 4.0))]
+    sequence = [] if hook else [("title", still("title", hold_for("title", 4.0)), hold_for("title", 4.0))]
     for seg, path, length in clip_paths:
         sequence.append((seg["id"], path, length))
-    sequence.append(("numbers", still("numbers", hold_for("numbers", 5.0)), hold_for("numbers", 5.0)))
-    sequence.append(("outro", still("outro", hold_for("outro", 3.5)), hold_for("outro", 3.5)))
+    if not hook:
+        sequence.append(("numbers", still("numbers", hold_for("numbers", 5.0)), hold_for("numbers", 5.0)))
+        sequence.append(("outro", still("outro", hold_for("outro", 3.5)), hold_for("outro", 3.5)))
 
     # 4. Concatenate the picture, then captions, narration and music in one pass.
     concat = os.path.join(work, "concat.txt")
@@ -589,10 +699,36 @@ def compose(args):
         starts.setdefault(sid, t)
         t += length
     total = t
+    if hook:
+        # The title line is spoken over the opening footage.
+        starts["title"] = starts["hook"]
 
     # Captions: one pill per beat, shown over its clips.
     caption_inputs, overlays = [], []
     seen = set()
+    if hook:
+        png = os.path.join(work, "cap-hook.png")
+        title_overlay(png, args.title.split("|"), args.subtitle)
+        caption_inputs.append(png)
+        overlays.append(("hook", starts["hook"], starts["hook"] + sum(l for sg, _, l in clip_paths if sg["id"] == "hook")))
+        # The ending: the numbers while their line is read, then the credits.
+        ender_start = starts["ender"]
+        ender_len = sum(l for sg, _, l in clip_paths if sg["id"] == "ender")
+        numbers_len = (clips["numbers"]["seconds"] + 1.0) if "numbers" in clips else 4.0
+        png_n = os.path.join(work, "cap-numbers.png")
+        title_overlay(png_n, ["%.0f%% silhouette overlap · %.0f mm mean deviation" % (acc["overallIoU"] * 100, m2r["meanMM"]),
+                              "%d MCP calls · one parametric model" % acc["calls"]],
+                      "front %.0f%% · top %.0f%% · right %.0f%%" % tuple(acc["views"].get(k, 0) * 100 for k in ("front", "top", "right")),
+                      size=56)
+        caption_inputs.append(png_n)
+        overlays.append(("ender", ender_start, ender_start + numbers_len))
+        png_o = os.path.join(work, "cap-outro.png")
+        title_overlay(png_o, ["OpenShape 3D is open source"], "app.openshape3d.com  ·  github.com/laanlabs/openshape3d  ·  scan CC-BY laanlabs on Sketchfab", size=64)
+        caption_inputs.append(png_o)
+        overlays.append(("outro-overlay", ender_start + numbers_len, ender_start + ender_len))
+        # Narration for the ending rides on the ender segment.
+        starts["numbers"] = ender_start
+        starts["outro"] = ender_start + numbers_len
     for seg, path, length in clip_paths:
         if seg["id"] in seen or not seg["caption"]:
             continue
@@ -614,7 +750,7 @@ def compose(args):
         sid, a, b = overlays[i]
         # Top-left over the viewport; bottom-left while the report sheet is
         # up, so the pill never sits on the sheet's title.
-        y = "H-h-48" if sid == "accuracy" else "40"
+        y = "H-h-48" if sid in ("accuracy", "hook", "ender", "outro-overlay") else "40"
         filters.append("%s[%d:v]overlay=56:%s:enable='between(t,%.2f,%.2f)'[v%d]" % (vin, i + 1, y, a + 0.15, b - 0.15, i))
         vin = "[v%d]" % i
     video_out = vin
@@ -649,7 +785,12 @@ def compose(args):
     elif args.music not in ("lyria", "generated", "none"):
         music = args.music
     if music and args.music != "none":
-        inputs += ["-stream_loop", "-1", "-i", music]
+        # Loop the bed to the film's length first: an endless `-stream_loop`
+        # input into amix never signals its end, and the mux hangs.
+        looped = os.path.join(work, "music-looped.m4a")
+        subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-stream_loop", "-1", "-i", music,
+                        "-t", "%.2f" % (total + 1.0), "-c", "copy", looped], check=True)
+        inputs += ["-i", looped]
         filters.append("[%d:a]volume=%.2f,atrim=0:%.2f,afade=t=out:st=%.2f:d=2.5[mus]" % (aud_idx, args.music_gain, total, total - 2.5))
         mix.append("[mus]")
     filters.append("".join(mix) + "amix=inputs=%d:normalize=0,alimiter=limit=0.95[aout]" % len(mix))
@@ -688,7 +829,7 @@ def main():
     c.add_argument("--project", default="openshape3d")
     c.add_argument("--region", default="us-central1")
     c.add_argument("--music", default="lyria", help="lyria | generated | none | a file")
-    c.add_argument("--music-prompt", default="upbeat, clean, modern electronic product-demo music, light and optimistic, no vocals, 100 bpm")
+    c.add_argument("--music-prompt", default="bright instrumental synth groove, light drums, warm pads, optimistic, steady tempo, background music")
     c.add_argument("--music-gain", type=float, default=0.22)
     c.add_argument("--landscape", action=argparse.BooleanOptionalAction, default=True,
                    help="the take was filmed on a landscape device (the recording needs a quarter turn)")

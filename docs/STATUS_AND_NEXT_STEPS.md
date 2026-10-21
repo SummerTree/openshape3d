@@ -2,7 +2,7 @@
 
 > **Current unfinished-work register:** [Sketch parity open status](SKETCH_PARITY_OPEN_STATUS.md). Maintained at every meaningful checkpoint; older mission logs below are historical.
 
-Last updated: 2026-10-20 — **Accuracy Report** (one body measured against
+Last updated: 2026-10-20 (night: the demo film, `view.visualize` `panel: false`) — **Accuracy Report** (one body measured against
 another: orthographic silhouette overlays per view, outline and surface
 deviation both ways; `Kernel/AccuracyKit.swift`, Views ▸ Accuracy Report…,
 `/v1/accuracy` + `/v1/accuracy/image`, MCP ops `accuracy` /
@@ -84,6 +84,20 @@ the zip in Downloads, on the real scan (`docs/SCAN_TO_CAD.md`).
   opens the sheet on screen (`AccuracyReportRequest`), the sheet shows its
   first overlay above the fold (page sizing on iOS 18), and
   `RotateDeviceUITests` turns a simulator on its side for a take.
+  Made YouTube-style later that night (`feat/demo-film`): no cards at all
+  — the film opens on the textured scan beside the finished model, both
+  turning in the studio, under the title, and closes on the same footage
+  under the numbers and the credits; the view keeps turning through the
+  build; the tall report sheet is shown whole on a blurred copy of itself;
+  Gemini TTS (Charon) and Lyria through Vertex AI. For it, `view.visualize`
+  gained `panel: false` (`EditorViewModel.visualizePanelHidden`), which
+  keeps the Visualization panel off a screenshot or a recording
+  (`VisualizationTests`). Lessons: `view.fit` animates, so a standard view
+  sent right after it reads the mid-flight camera (hold ~0.8 s); the Move
+  feature cannot move an imported mesh (`brokenRef`) — move the feature
+  body instead; the studio ground is y = 0, so the film's scan copy stands
+  base-at-origin; a looped `-stream_loop -1` music input into `amix` never
+  ends and hangs the mux — loop the bed to length first.
 - **Not yet in the web app**: the kernel compiles there unchanged, but the
   sheet is not ported (openshape-cloud `docs/IOS_PARITY.md` lists it).
 

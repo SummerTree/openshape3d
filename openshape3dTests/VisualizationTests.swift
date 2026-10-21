@@ -140,6 +140,11 @@ final class VisualizationTests: XCTestCase {
         XCTAssertEqual(applied.lightIntensity, 1.5, "explicit fields win over the preset's")
         XCTAssertEqual(applied.background, .transparent)
 
+        XCTAssertTrue(args.panel, "the panel shows unless asked not to")
+        guard case let .success(.visualize(true, bare)) = AgentExec.parse(
+            ["op": "view.visualize", "args": ["preset": "Studio", "panel": false]])
+        else { return XCTFail("panel: false parses") }
+        XCTAssertFalse(bare.panel)
         guard case .success(.visualize(false, _)) = AgentExec.parse(["op": "view.visualize", "args": ["off": true]])
         else { return XCTFail("off parses") }
         guard case let .failure(error) = AgentExec.parse(["op": "view.visualize", "args": ["preset": "Mars"]])
