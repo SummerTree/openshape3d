@@ -96,7 +96,7 @@ nonisolated enum MeasureKit {
         var result: (min: SIMD3<Double>, max: SIMD3<Double>)?
         for body in bodies where !body.render.positions.isEmpty || body.brep != nil {
             let local: (min: SIMD3<Double>, max: SIMD3<Double>)
-            if let brep = body.brep, let exact = OCCTKernel.bounds(brep) {
+            if let brep = body.brep, let exact = exactBounds.bounds(for: body, compute: { OCCTKernel.bounds(brep) }) {
                 local = exact
             } else if !body.render.positions.isEmpty {
                 let aabb = body.render.localAABB
@@ -120,6 +120,38 @@ nonisolated enum MeasureKit {
         }
         return result
     }
+
+    /// Exact bounds per (body, mesh revision). `BRepBndLib::AddOptimal`
+    /// walks the exact surfaces, and `/v1/state` asks for every body on
+    /// every call — an agent loop over a dense STEP import would pay it
+    /// each time. The key moves with the geometry (`meshRevision` bumps on
+    /// every rebuild), so a stale entry is never served; the transform is
+    /// applied after, so a moved body needs no new entry.
+    private final class ExactBoundsCache: @unchecked Sendable {
+        private struct Key: Hashable {
+            let id: UUID
+            let revision: UInt64
+        }
+        private let lock = NSLock()
+        private var entries: [Key: (min: SIMD3<Double>, max: SIMD3<Double>)] = [:]
+
+        func bounds(for body: Body,
+                    compute: () -> (min: SIMD3<Double>, max: SIMD3<Double>)?) -> (min: SIMD3<Double>, max: SIMD3<Double>)? {
+            let key = Key(id: body.id.raw, revision: body.meshRevision)
+            lock.lock()
+            let hit = entries[key]
+            lock.unlock()
+            if let hit { return hit }
+            guard let value = compute() else { return nil }
+            lock.lock()
+            if entries.count >= 512 { entries.removeAll(keepingCapacity: true) }
+            entries[key] = value
+            lock.unlock()
+            return value
+        }
+    }
+
+    private static let exactBounds = ExactBoundsCache()
 
     /// Perimeter of a closed 2D loop (last point connects back to the first).
     static func perimeter(of loop: [SIMD2<Double>]) -> Double {

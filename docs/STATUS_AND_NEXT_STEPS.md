@@ -282,7 +282,22 @@ the zip in Downloads, on the real scan (`docs/SCAN_TO_CAD.md`).
   a modelling error the numbers had hidden: the pumper nozzle's top half
   read blue — the model's pumper sat 20 mm low, because the boss centre
   was its top edge minus a neck radius inflated by the flared root; the
-  centre is now the median height of the cap face's points. The web app has no
+  centre is now the median height of the cap face's points.
+  Follow-up the same day (code-base pass): `DeviationPreviewUITests` on a
+  two-box seed (`OS3D_DEBUG_SEED_PAIR`) — Views ▸ Deviation Preview, the
+  legend, Done, and the sheet's row. It caught what the film's take had
+  worked around: the legend's container identifier merged its children,
+  so `DeviationDone` was not an element; `.accessibilityElement(children:
+  .contain)` keeps them. `deviationPreviewDefaults` now compares two
+  solids when there is no mesh (first body against the next analytic
+  one). `MeasureKit.boundingBox` caches a body's exact B-rep bounds per
+  mesh revision, so `/v1/state` no longer walks every surface on every
+  call. `DeviationPreview.signedDistances` runs serially where there is no
+  Dispatch (the web's WebAssembly build). The superseded Blender film
+  scripts (`make_video.py`, `blender_video.py`) are gone. Web parity: the
+  Accuracy Report sheet and the Deviation Preview legend are ported
+  (openshape-cloud `Web/WebAccuracy.swift`, Views menu entries); the
+  viewport colours needed nothing, since `scene` already carried them. The web app has no
   Accuracy Report yet, so the preview is a parity gap there too
   (`openshape-cloud/docs/IOS_PARITY.md`).
 - **Not yet in the web app**: the kernel compiles there unchanged, but the

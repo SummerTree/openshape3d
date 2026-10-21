@@ -20,6 +20,9 @@
 
 import Foundation
 import simd
+#if canImport(Dispatch)
+import Dispatch
+#endif
 
 /// Per-vertex deviation of a reference from a model, summarised.
 nonisolated struct DeviationPreviewStats: Sendable, Equatable {
@@ -76,7 +79,10 @@ nonisolated struct DeviationPreview: Sendable, Equatable {
         var signed = [Double](repeating: 0, count: count)
         // Nearest-point queries are independent: spread them over the cores
         // in runs of a few hundred vertices (a dense scan has tens of
-        // thousands, a few seconds on one core).
+        // thousands, a few seconds on one core). The web app compiles this
+        // file unchanged for WebAssembly, which has no Dispatch and one
+        // thread: there the same loop runs in order.
+        #if canImport(Dispatch) && !os(WASI)
         let chunk = 512
         let chunks = (count + chunk - 1) / chunk
         signed.withUnsafeMutableBufferPointer { out in
@@ -91,6 +97,13 @@ nonisolated struct DeviationPreview: Sendable, Equatable {
                 }
             }
         }
+        #else
+        for i in 0..<count where used.contains(UInt32(i)) {
+            if let hit = grid.nearest(to: reference.positions[i]) {
+                signed[i] = hit.signedDistance
+            }
+        }
+        #endif
         return signed
     }
 

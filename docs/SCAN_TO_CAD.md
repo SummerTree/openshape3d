@@ -5,7 +5,7 @@ without anyone touching the app: a script reads the scan, an MCP client
 drives the app's one `os3d` tool call by call, and the app itself measures
 how close the result is — orthographic silhouette overlays per view and the
 distance from every sampled scan point to the model. The run writes a
-transcript, pictures, an HTML report and a narrated video (Blender).
+transcript, pictures, an HTML report and a narrated film shot in the app.
 
 Everything lives in `scripts/scan_to_cad/`; the app side is
 `Kernel/AccuracyKit.swift`, `/v1/accuracy` (docs/AGENT_CONTROL.md), the
@@ -68,8 +68,6 @@ venv/bin/python build_hydrant.py --scan /tmp/hydrant/analysis/scan_cropped.glb -
 
 # 4. the report and the video
 venv/bin/python report.py /tmp/hydrant/run --title "Fire hydrant"
-venv/bin/python make_video.py --run /tmp/hydrant/run --scan /tmp/hydrant/analysis/scan_cropped.glb --out /tmp/hydrant/video --preview
-venv/bin/python make_video.py --run /tmp/hydrant/run --scan /tmp/hydrant/analysis/scan_cropped.glb --out /tmp/hydrant/video
 ```
 
 `document.import` by path is a development-build op (it reads the host's
@@ -270,7 +268,7 @@ generated one; looped to the film's length first, because an endless
     venv/bin/python demo_video.py take --scan …/scan_cropped.glb --analysis …/analysis --out …/demo --port 8947 --hook-background 0.13 0.14 0.16 --ui --derived-data ~/Library/Developer/Xcode/DerivedData/openshape3d-…
     venv/bin/python demo_video.py compose --out …/demo --name fire-hydrant-demo --report …/report.html --overlays …/run/overlays [--tts gemini --music lyria]
 
-### `report.py` and `make_video.py`
+### `report.py`
 
 `view.deviationPreview` (2026-10-21) puts the comparison on the part in
 the viewport: the scan coloured by its distance to the model — blue where
@@ -284,16 +282,10 @@ show as colour where they are, before any number is read.
 
 `report.py` inlines the app's overlay pictures, screenshots, the deviation
 histograms (SVG), the size table, the recipe and the MCP transcript into
-one HTML file. `make_video.py` narrates each segment (edge-tts; the system
-voice offline), colours the scan by its distance to the model (trimesh →
-`heatmap.ply`), and runs `blender_video.py` in Blender 5.2 (EEVEE, 1920 ×
-1080, 30 fps): title, the scan turning, the analysis charts, the MCP calls
-appearing one by one, the model taking shape over the ghosted scan, scan
-and model in place, the heatmap, the app's overlays, the numbers, outro;
-Blender writes JPEG frames (PNGs of a 100 s film ran to several gigabytes
-of scratch and filled the disk once; this Blender build has no video
-output), ffmpeg encodes them under the narration and writes a contact sheet
-to review.
+one HTML file. (The first film was rendered in Blender by `make_video.py`
+and `blender_video.py`; `demo_video.py`, shot in the app itself, replaced
+them on 2026-10-20 and they were removed on 2026-10-21. `synthetic_hydrant.py`
+still uses Blender, to make the stand-in scan.)
 
 ## Gotchas
 
