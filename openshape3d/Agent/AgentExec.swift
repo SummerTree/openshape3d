@@ -59,9 +59,12 @@ nonisolated struct LoftSection: Sendable, Equatable {
 
 nonisolated enum AgentExecOp: Sendable, Equatable {
     case createSketch(name: String, plane: SketchPlane)
-    /// Import a mesh file (glb/gltf/usdz/obj/zip) from a path on the host
-    /// — the simulator shares the Mac's file system — exactly as the Import
-    /// menu would. `fileName` overrides the name the parts are labelled with.
+    /// Import a file from a path on the host — the simulator shares the
+    /// Mac's file system — exactly as the Import menu would: STEP (.step/.stp) and IGES (.iges/.igs)
+    /// keeps its B-rep, DXF lands in the ground sketch, and glb/gltf/usdz/obj/
+    /// stl/zip are meshes (`unitScale` applies to meshes only; STEP and DXF
+    /// are millimetres). `fileName` overrides the name the parts are
+    /// labelled with.
     case importFile(path: String, fileName: String?, unitScale: Double?)
     case addEntities(sketch: SketchID, entities: [SketchEntity], constructionIndices: Set<Int>)
     /// `taperDegrees` ≠ 0 makes this a DRAFT extrude (the profile lofts to an

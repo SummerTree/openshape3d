@@ -1,0 +1,404 @@
+{
+ "occt": "7.8.1",
+ "file": "/Users/jclaan/projects/open-source-projects/openshape3d-project/openshape3d/docs/qa/shapr3d-parity/runs/qa5/exports/M11_six_pin_pattern.step",
+ "readOK": true,
+ "roots": 6,
+ "sewing": {
+  "rawSolids": 6,
+  "freeFaces": 0,
+  "sewnSolids": 0,
+  "openShells": 0,
+  "dropped": 0
+ },
+ "metrics": {
+  "mesh": false,
+  "solids": 6,
+  "volume": 753.982236861551,
+  "centroid": [
+   -5.57892850793008e-15,
+   2.99211506246931e-12,
+   5
+  ],
+  "bounds": {
+   "min": [
+    -22,
+    -19.32050807568,
+    0
+   ],
+   "max": [
+    22,
+    19.320508075689,
+    10
+   ]
+  },
+  "faces": {
+   "total": 18,
+   "planar": 12,
+   "cylindrical": 6,
+   "conical": 0,
+   "spherical": 0,
+   "toroidal": 0,
+   "bspline": 0,
+   "other": 0
+  },
+  "valid": true,
+  "tolerance": {
+   "min": 1e-07,
+   "avg": 1e-07,
+   "max": 1e-07
+  },
+  "perSolid": [
+   {
+    "volume": 125.663706143592,
+    "centroid": [
+     20,
+     -1.8240510045076e-16,
+     5
+    ],
+    "bounds": {
+     "min": [
+      18,
+      -2,
+      0
+     ],
+     "max": [
+      22,
+      2,
+      10
+     ]
+    },
+    "faces": 3,
+    "planar": 2,
+    "cylindrical": 1
+   },
+   {
+    "volume": 125.663706143592,
+    "centroid": [
+     10,
+     17.320508075689,
+     5
+    ],
+    "bounds": {
+     "min": [
+      8,
+      15.320508075689,
+      0
+     ],
+     "max": [
+      12,
+      19.320508075689,
+      10
+     ]
+    },
+    "faces": 3,
+    "planar": 2,
+    "cylindrical": 1
+   },
+   {
+    "volume": 125.663706143592,
+    "centroid": [
+     -10,
+     17.320508075689,
+     5
+    ],
+    "bounds": {
+     "min": [
+      -12,
+      15.320508075689,
+      0
+     ],
+     "max": [
+      -8,
+      19.320508075689,
+      10
+     ]
+    },
+    "faces": 3,
+    "planar": 2,
+    "cylindrical": 1
+   },
+   {
+    "volume": 125.663706143592,
+    "centroid": [
+     -20,
+     2.26688849784414e-15,
+     5
+    ],
+    "bounds": {
+     "min": [
+      -22,
+      -2,
+      0
+     ],
+     "max": [
+      -18,
+      2,
+      10
+     ]
+    },
+    "faces": 3,
+    "planar": 2,
+    "cylindrical": 1
+   },
+   {
+    "volume": 125.663706143592,
+    "centroid": [
+     -10,
+     -17.32050807568,
+     5
+    ],
+    "bounds": {
+     "min": [
+      -12,
+      -19.32050807568,
+      0
+     ],
+     "max": [
+      -8,
+      -15.32050807568,
+      10
+     ]
+    },
+    "faces": 3,
+    "planar": 2,
+    "cylindrical": 1
+   },
+   {
+    "volume": 125.663706143592,
+    "centroid": [
+     10,
+     -17.32050807568,
+     5
+    ],
+    "bounds": {
+     "min": [
+      8,
+      -19.32050807568,
+      0
+     ],
+     "max": [
+      12,
+      -15.32050807568,
+      10
+     ]
+    },
+    "faces": 3,
+    "planar": 2,
+    "cylindrical": 1
+   }
+  ]
+ },
+ "reference": {
+  "readOK": true,
+  "file": "/Users/jclaan/projects/open-source-projects/openshape3d-project/openshape3d/docs/qa/shapr3d-parity/fixtures/M11_six_pin_pattern.step",
+  "sewing": {
+   "rawSolids": 6,
+   "freeFaces": 0,
+   "sewnSolids": 0,
+   "openShells": 0,
+   "dropped": 0
+  },
+  "metrics": {
+   "mesh": false,
+   "solids": 6,
+   "volume": 753.982236861551,
+   "centroid": [
+    -5.57892850793008e-15,
+    2.99211506246931e-12,
+    5
+   ],
+   "bounds": {
+    "min": [
+     -22,
+     -19.32050807568,
+     0
+    ],
+    "max": [
+     22,
+     19.320508075689,
+     10
+    ]
+   },
+   "faces": {
+    "total": 18,
+    "planar": 12,
+    "cylindrical": 6,
+    "conical": 0,
+    "spherical": 0,
+    "toroidal": 0,
+    "bspline": 0,
+    "other": 0
+   },
+   "valid": true,
+   "tolerance": {
+    "min": 1e-07,
+    "avg": 1e-07,
+    "max": 1e-07
+   },
+   "perSolid": [
+    {
+     "volume": 125.663706143592,
+     "centroid": [
+      20,
+      -1.8240510045076e-16,
+      5
+     ],
+     "bounds": {
+      "min": [
+       18,
+       -2,
+       0
+      ],
+      "max": [
+       22,
+       2,
+       10
+      ]
+     },
+     "faces": 3,
+     "planar": 2,
+     "cylindrical": 1
+    },
+    {
+     "volume": 125.663706143592,
+     "centroid": [
+      10,
+      17.320508075689,
+      5
+     ],
+     "bounds": {
+      "min": [
+       8,
+       15.320508075689,
+       0
+      ],
+      "max": [
+       12,
+       19.320508075689,
+       10
+      ]
+     },
+     "faces": 3,
+     "planar": 2,
+     "cylindrical": 1
+    },
+    {
+     "volume": 125.663706143592,
+     "centroid": [
+      -10,
+      17.320508075689,
+      5
+     ],
+     "bounds": {
+      "min": [
+       -12,
+       15.320508075689,
+       0
+      ],
+      "max": [
+       -8,
+       19.320508075689,
+       10
+      ]
+     },
+     "faces": 3,
+     "planar": 2,
+     "cylindrical": 1
+    },
+    {
+     "volume": 125.663706143592,
+     "centroid": [
+      -20,
+      2.26688849784414e-15,
+      5
+     ],
+     "bounds": {
+      "min": [
+       -22,
+       -2,
+       0
+      ],
+      "max": [
+       -18,
+       2,
+       10
+      ]
+     },
+     "faces": 3,
+     "planar": 2,
+     "cylindrical": 1
+    },
+    {
+     "volume": 125.663706143592,
+     "centroid": [
+      -10,
+      -17.32050807568,
+      5
+     ],
+     "bounds": {
+      "min": [
+       -12,
+       -19.32050807568,
+       0
+      ],
+      "max": [
+       -8,
+       -15.32050807568,
+       10
+      ]
+     },
+     "faces": 3,
+     "planar": 2,
+     "cylindrical": 1
+    },
+    {
+     "volume": 125.663706143592,
+     "centroid": [
+      10,
+      -17.32050807568,
+      5
+     ],
+     "bounds": {
+      "min": [
+       8,
+       -19.32050807568,
+       0
+      ],
+      "max": [
+       12,
+       -15.32050807568,
+       10
+      ]
+     },
+     "faces": 3,
+     "planar": 2,
+     "cylindrical": 1
+    }
+   ]
+  }
+ },
+ "deviation": {
+  "volumeError": 0,
+  "centroidError": [
+   0,
+   0,
+   0
+  ],
+  "boundsMaxError": 0,
+  "booleanOK": true,
+  "refMinusActual": 0,
+  "actualMinusRef": 0,
+  "symmetricRatio": 0,
+  "surfaceDistance": {
+   "actualToRef": 1.77635683940025e-15,
+   "refToActual": 1.77635683940025e-15,
+   "max": 1.77635683940025e-15,
+   "samples": [
+    1020,
+    1020
+   ],
+   "deflection": 0.02,
+   "estimate": true
+  }
+ }
+}

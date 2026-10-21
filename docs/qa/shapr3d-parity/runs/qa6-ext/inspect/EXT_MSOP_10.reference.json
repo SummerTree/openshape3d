@@ -1,0 +1,76 @@
+{
+ "occt": "7.8.1",
+ "file": "/Users/jclaan/projects/reference/FreeCAD/src/Mod/Idf/Idflibs/MSOP_10.stp",
+ "readOK": true,
+ "roots": 1,
+ "sewing": {
+  "rawSolids": 1,
+  "freeFaces": 0,
+  "sewnSolids": 0,
+  "openShells": 0,
+  "dropped": 0
+ },
+ "metrics": {
+  "mesh": false,
+  "solids": 1,
+  "volume": 9.35177137465567,
+  "centroid": [
+   7.55855033776808e-05,
+   9.07026040554287e-05,
+   0.586569827317064
+  ],
+  "bounds": {
+   "min": [
+    -1.5,
+    -2.45,
+    -0.00080000000000058
+   ],
+   "max": [
+    1.50000000000002,
+    2.45,
+    1.09920000000001
+   ]
+  },
+  "faces": {
+   "total": 157,
+   "planar": 115,
+   "cylindrical": 42,
+   "conical": 0,
+   "spherical": 0,
+   "toroidal": 0,
+   "bspline": 0,
+   "other": 0
+  },
+  "valid": true,
+  "tolerance": {
+   "min": 1e-07,
+   "avg": 1e-07,
+   "max": 1e-07
+  },
+  "perSolid": [
+   {
+    "volume": 9.35177137465567,
+    "centroid": [
+     7.55855033776808e-05,
+     9.07026040554287e-05,
+     0.586569827317064
+    ],
+    "bounds": {
+     "min": [
+      -1.5,
+      -2.45,
+      -0.00080000000000058
+     ],
+     "max": [
+      1.50000000000002,
+      2.45,
+      1.09920000000001
+     ]
+    },
+    "faces": 157,
+    "planar": 115,
+    "cylindrical": 42
+   }
+  ]
+ }
+}

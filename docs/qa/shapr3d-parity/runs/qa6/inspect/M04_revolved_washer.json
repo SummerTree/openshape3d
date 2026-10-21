@@ -1,0 +1,52 @@
+{
+ "occt": "7.8.1",
+ "file": "/Users/jclaan/projects/open-source-projects/openshape3d-project/openshape3d/docs/qa/shapr3d-parity/fixtures/M04_revolved_washer.stl",
+ "readOK": true,
+ "roots": 1,
+ "sewing": {
+  "rawSolids": 0,
+  "freeFaces": 0,
+  "sewnSolids": 0,
+  "openShells": 0,
+  "dropped": 0
+ },
+ "metrics": {
+  "mesh": true,
+  "solids": 0,
+  "volume": 4042.95635811247,
+  "centroid": [
+   -9.85477222998175e-08,
+   -4.29100476139992e-16,
+   4.00000000000001
+  ],
+  "bounds": {
+   "min": [
+    -14.9902211235596,
+    -14.9975548790527,
+    -1e-07
+   ],
+   "max": [
+    15.0000001,
+    14.9975548790527,
+    8.0000001
+   ]
+  },
+  "faces": {
+   "total": 1,
+   "planar": 0,
+   "cylindrical": 0,
+   "conical": 0,
+   "spherical": 0,
+   "toroidal": 0,
+   "bspline": 0,
+   "other": 1
+  },
+  "valid": false,
+  "tolerance": {
+   "min": 1e-07,
+   "avg": 1e-07,
+   "max": 1e-07
+  },
+  "perSolid": []
+ }
+}

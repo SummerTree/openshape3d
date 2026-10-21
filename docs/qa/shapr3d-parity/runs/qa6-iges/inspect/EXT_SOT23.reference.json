@@ -1,0 +1,76 @@
+{
+ "occt": "7.8.1",
+ "file": "/Users/jclaan/projects/reference/FreeCAD/src/Mod/Idf/Idflibs/SOT23.igs",
+ "readOK": true,
+ "roots": 73,
+ "sewing": {
+  "rawSolids": 0,
+  "freeFaces": 73,
+  "sewnSolids": 1,
+  "openShells": 0,
+  "dropped": 0
+ },
+ "metrics": {
+  "mesh": false,
+  "solids": 1,
+  "volume": 3.55281675276793,
+  "centroid": [
+   -1.05939436629558e-10,
+   0.0121357547930615,
+   0.53620212912561
+  ],
+  "bounds": {
+   "min": [
+    -1.460000099984,
+    -1.22605775235,
+    -2.94369528752725e-11
+   ],
+   "max": [
+    1.460000099984,
+    1.250000000122,
+    1.02000009998251
+   ]
+  },
+  "faces": {
+   "total": 73,
+   "planar": 0,
+   "cylindrical": 0,
+   "conical": 0,
+   "spherical": 0,
+   "toroidal": 0,
+   "bspline": 37,
+   "other": 36
+  },
+  "valid": true,
+  "tolerance": {
+   "min": 1e-07,
+   "avg": 1.00022878252128e-07,
+   "max": 1.00108310924577e-07
+  },
+  "perSolid": [
+   {
+    "volume": 3.55281675276793,
+    "centroid": [
+     -1.05939436629558e-10,
+     0.0121357547930615,
+     0.53620212912561
+    ],
+    "bounds": {
+     "min": [
+      -1.460000099984,
+      -1.22605775235,
+      -2.94369528752725e-11
+     ],
+     "max": [
+      1.460000099984,
+      1.250000000122,
+      1.02000009998251
+     ]
+    },
+    "faces": 73,
+    "planar": 0,
+    "cylindrical": 0
+   }
+  ]
+ }
+}

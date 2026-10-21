@@ -297,24 +297,70 @@ final class AgentBridge {
                 return .failure(404, "Not Found", error: "unreadable_path",
                                 message: "Could not read \(path).")
             }
+            let name = fileName ?? url.lastPathComponent
+            // Route by extension exactly as the Import menu does
+            // (`EditorView`): STEP and IGES keep their B-rep, a FreeCAD document
+            // its bodies, DXF lands in the ground sketch, everything else is
+            // a mesh. The FILE's extension decides,
+            // so a `fileName` label never changes which parser runs. Until
+            // 2026-10-21 everything went to the mesh importer, which refused
+            // STEP and DXF as "unsupported" — the whole CAD test pack
+            // (docs/qa/shapr3d-parity) was unreachable from an agent.
+            let ext = url.pathExtension.lowercased()
             let before = Set(session.document.bodies.map(\.id))
+            let sketchesBefore = Dictionary(uniqueKeysWithValues:
+                session.document.sketches.map { ($0.id, $0.entities.count) })
             viewModel.errorMessage = nil
-            // A loose .obj/.gltf/.blend needs the files beside it; the host
-            // directory is readable here, so hand them over.
-            let loose = ["obj", "gltf", "blend"].contains(url.pathExtension.lowercased())
-            viewModel.importMesh(data: data, fileName: fileName ?? url.lastPathComponent,
-                                 siblings: loose ? MeshImportKit.folderSiblings(of: url) : [:],
-                                 unitScale: unitScale)
+            switch ext {
+            case "step", "stp":
+                viewModel.importSTEP(data: data, fileName: name)
+            case "iges", "igs":
+                viewModel.importSTEP(data: data, fileName: name, format: .iges)
+            case "fcstd":
+                viewModel.importFreeCAD(data: data, fileName: name)
+            case "dxf":
+                viewModel.importDXF(data: data, fileName: name)
+            default:
+                // A loose .obj/.gltf/.blend needs the files beside it; the
+                // host directory is readable here, so hand them over.
+                let loose = ["obj", "gltf", "blend"].contains(ext)
+                viewModel.importMesh(data: data, fileName: name,
+                                     siblings: loose ? MeshImportKit.folderSiblings(of: url) : [:],
+                                     unitScale: unitScale)
+            }
             if let message = viewModel.errorMessage {
                 return .failure(422, "Unprocessable Entity", error: "import_failed", message: message)
             }
             let added = session.document.bodies.filter { !before.contains($0.id) }
-            return execOK(viewModel, [
+            var reply: [String: Any] = [
+                "format": ext,
                 "bodyIDs": added.map { $0.id.raw.uuidString },
                 "names": added.map(\.name),
+                "analytic": added.filter { $0.brep != nil }.count,
                 "textured": added.filter { $0.material?.baseColorTexture != nil }.count,
                 "triangles": added.reduce(0) { $0 + $1.render.indices.count / 3 },
-                "undoSteps": 1])
+                "undoSteps": 1]
+            // A DXF grows a sketch rather than adding bodies: say which and
+            // by how much, so a caller can verify the entities landed.
+            let grown: [[String: Any]] = session.document.sketches.compactMap { sketch in
+                let had = sketchesBefore[sketch.id] ?? 0
+                guard sketch.entities.count > had else { return nil }
+                return ["sketchID": sketch.id.raw.uuidString, "name": sketch.name,
+                        "entitiesAdded": sketch.entities.count - had]
+            }
+            if !grown.isEmpty { reply["sketches"] = grown }
+            // "Imported 3 of 4 solids" is a notice, not an error — surface it,
+            // or a partial import reads as a clean success.
+            if let notice = viewModel.notice { reply["notice"] = notice }
+            // The STEP read's own ledger, so a caller can tell a file of
+            // declared solids from one that was stitched, kept as sheets or
+            // partly dropped without parsing the notice.
+            if ["step", "stp", "iges", "igs"].contains(ext), let read = viewModel.lastSTEPReadSummary {
+                reply["step"] = ["solids": read.solids, "sewnSolids": read.sewnSolids,
+                                 "openShells": read.openShells, "freeFaces": read.freeFaces,
+                                 "dropped": read.dropped]
+            }
+            return execOK(viewModel, reply)
 
         case let .createSketch(name, plane):
             let sketch = Sketch(name: name, plane: plane)

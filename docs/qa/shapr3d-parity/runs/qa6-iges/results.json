@@ -1,0 +1,2145 @@
+{
+ "run_id": "qa6-iges",
+ "source_commit": "26451d7b",
+ "units": "mm",
+ "gates": {
+  "volume": "max(0.001, 1e-5\u00b7V) mm3",
+  "bounds_mm": 0.01,
+  "centroid_mm": 0.01,
+  "mesh_volume": 0.001,
+  "mesh_bounds_mm": 0.05,
+  "symmetric_ratio": 1e-05,
+  "surface_distance_mm": 0.01
+ },
+ "cases": [
+  {
+   "run_id": "qa6-iges",
+   "case_id": "EXT_SOT404",
+   "file": "SOT404.igs",
+   "path": "/Users/jclaan/projects/reference/FreeCAD/src/Mod/Idf/Idflibs/SOT404.igs",
+   "format": "igs",
+   "sha256": "df0d5783256aa7c2068249bfe63d7b76d36841716f0677731449da48a488ab89",
+   "source_commit": "26451d7b",
+   "status": "PASS",
+   "checks": [
+    {
+     "check": "app alive after import",
+     "ok": true,
+     "detail": "health: ok",
+     "advisory": false
+    },
+    {
+     "check": "read ledger matches oracle sewing (sewn/open/dropped)",
+     "ok": true,
+     "detail": "app {'sewnSolids': 4, 'openShells': 1, 'dropped': 0}, oracle {'sewnSolids': 4, 'openShells': 1, 'dropped': 0}",
+     "advisory": true
+    },
+    {
+     "check": "solid count",
+     "ok": true,
+     "detail": "expected 4, got 4 solid bodies (1 sheet)",
+     "advisory": false
+    },
+    {
+     "check": "sheet bodies",
+     "ok": true,
+     "detail": "expected 1, got 1",
+     "advisory": false
+    },
+    {
+     "check": "import says what it did (notice)",
+     "ok": true,
+     "detail": "Stitched 75 loose faces into 4 solids the file had not declared. 1 open surface imported as a sheet, not a solid \u2014 booleans and STEP export need closed solids.",
+     "advisory": false
+    },
+    {
+     "check": "every body analytic (brep)",
+     "ok": true,
+     "detail": "5 of 5 carry a B-rep",
+     "advisory": false
+    },
+    {
+     "check": "sheet body reads 0 mm3",
+     "ok": true,
+     "detail": "SOT404 5 reads 0",
+     "advisory": false
+    },
+    {
+     "check": "volume",
+     "ok": true,
+     "detail": "expected 7.258755, got 7.258755, |err| 2.21612e-08, gate 0.001",
+     "advisory": false
+    },
+    {
+     "check": "bounds",
+     "ok": true,
+     "detail": "max coordinate error 4.44089e-15 mm, gate 0.01",
+     "advisory": false
+    },
+    {
+     "check": "valid B-rep (BRepCheck)",
+     "ok": true,
+     "detail": "all valid",
+     "advisory": false
+    },
+    {
+     "check": "no self-intersections (BOP)",
+     "ok": false,
+     "detail": "[{'status': 'invalidCurveOnSurface', 'subshape': 'Edge1', 'type': 'Edge'}, {'status': 'invalidCurveOnSurface', 'subshape': 'Face1', 'type': 'Face'}, {'status': 'invalidCurveOnSurface', 'subshape': 'Ed",
+     "advisory": true
+    },
+    {
+     "check": "no open free wires",
+     "ok": true,
+     "detail": "0",
+     "advisory": true
+    },
+    {
+     "check": "face classes match reference (diagnostic)",
+     "ok": true,
+     "detail": "app planar/cyl/other 0/0/75, reference 0/0/75",
+     "advisory": true
+    },
+    {
+     "check": "STEP export",
+     "ok": true,
+     "detail": "{'ok': True, 'path': '/Users/jclaan/projects/open-source-projects/openshape3d-project/openshape3d/docs/qa/shapr3d-parity/runs/qa6-iges/exports/EXT_SOT404.step', 'fileName': 'EXT_SOT404.step', 'bytes':",
+     "advisory": false
+    },
+    {
+     "check": "exported STEP readable by OCCT",
+     "ok": true,
+     "detail": "",
+     "advisory": false
+    },
+    {
+     "check": "round-trip solid count",
+     "ok": true,
+     "detail": "export 4, reference 4",
+     "advisory": false
+    },
+    {
+     "check": "round-trip volume",
+     "ok": true,
+     "detail": "error 6.29176e-09 mm3, gate 0.001",
+     "advisory": false
+    },
+    {
+     "check": "round-trip centroid",
+     "ok": true,
+     "detail": "max coordinate error 9.61592e-10 mm",
+     "advisory": false
+    },
+    {
+     "check": "round-trip bounds",
+     "ok": true,
+     "detail": "max error 5.30243e-13 mm",
+     "advisory": false
+    },
+    {
+     "check": "exported STEP valid (BRepCheck)",
+     "ok": true,
+     "detail": "",
+     "advisory": false
+    },
+    {
+     "check": "symmetric-difference volume",
+     "ok": true,
+     "detail": "ref\u2212act 0 + act\u2212ref 0 mm3, ratio 0",
+     "advisory": false
+    },
+    {
+     "check": "surface distance (sampled estimate)",
+     "ok": true,
+     "detail": "max 5.03132e-13 mm over [561, 561] samples at 0.02 deflection",
+     "advisory": false
+    },
+    {
+     "check": "undo returns to an empty design",
+     "ok": true,
+     "detail": "undo steps 1",
+     "advisory": false
+    }
+   ],
+   "metrics": {
+    "health": [
+     {
+      "bopCheckRan": true,
+      "bopFindings": [],
+      "closedFreeWires": 0,
+      "counts": {
+       "edges": 70,
+       "faces": 25,
+       "shells": 1,
+       "solids": 1,
+       "vertices": 48,
+       "wires": 26
+      },
+      "findings": [],
+      "openFreeWires": 0,
+      "tolerance": {
+       "avg": 1.000055732401683e-07,
+       "max": 1.0001000082960704e-07,
+       "min": 1e-07
+      },
+      "valid": true,
+      "volumeMM3": 3.3824505214723426
+     },
+     {
+      "bopCheckRan": true,
+      "bopFindings": [],
+      "closedFreeWires": 0,
+      "counts": {
+       "edges": 66,
+       "faces": 24,
+       "shells": 1,
+       "solids": 1,
+       "vertices": 44,
+       "wires": 24
+      },
+      "findings": [],
+      "openFreeWires": 0,
+      "tolerance": {
+       "avg": 1.0000500012564048e-07,
+       "max": 1.0001000082960704e-07,
+       "min": 1e-07
+      },
+      "valid": true,
+      "volumeMM3": 3.382450571703425
+     },
+     {
+      "bopCheckRan": true,
+      "bopFindings": [],
+      "closedFreeWires": 0,
+      "counts": {
+       "edges": 12,
+       "faces": 6,
+       "shells": 1,
+       "solids": 1,
+       "vertices": 8,
+       "wires": 6
+      },
+      "findings": [],
+      "openFreeWires": 0,
+      "tolerance": {
+       "avg": 1e-07,
+       "max": 1e-07,
+       "min": 1e-07
+      },
+      "valid": true,
+      "volumeMM3": 0.4859995955508823
+     },
+     {
+      "bopCheckRan": true,
+      "bopFindings": [
+       {
+        "status": "invalidCurveOnSurface",
+        "subshape": "Edge1",
+        "type": "Edge"
+       },
+       {
+        "status": "invalidCurveOnSurface",
+        "subshape": "Face1",
+        "type": "Face"
+       },
+       {
+        "status": "invalidCurveOnSurface",
+        "subshape": "Edge3",
+        "type": "Edge"
+       },
+       {
+        "status": "invalidCurveOnSurface",
+        "subshape": "Face1",
+        "type": "Face"
+       },
+       {
+        "status": "invalidCurveOnSurface",
+        "subshape": "Edge1",
+        "type": "Edge"
+       },
+       {
+        "status": "invalidCurveOnSurface",
+        "subshape": "Face2",
+        "type": "Face"
+       },
+       {
+        "status": "invalidCurveOnSurface",
+        "subshape": "Edge3",
+        "type": "Edge"
+       },
+       {
+        "status": "invalidCurveOnSurface",
+        "subshape": "Face3",
+        "type": "Face"
+       }
+      ],
+      "closedFreeWires": 0,
+      "counts": {
+       "edges": 3,
+       "faces": 3,
+       "shells": 1,
+       "solids": 1,
+       "vertices": 2,
+       "wires": 3
+      },
+      "findings": [],
+      "openFreeWires": 0,
+      "tolerance": {
+       "avg": 7.0832128510097954e-06,
+       "max": 1.000287163793238e-05,
+       "min": 1e-07
+      },
+      "valid": true,
+      "volumeMM3": 0.007853983030776451
+     },
+     {
+      "bopCheckRan": true,
+      "bopFindings": [],
+      "closedFreeWires": 2,
+      "counts": {
+       "edges": 49,
+       "faces": 17,
+       "shells": 1,
+       "solids": 0,
+       "vertices": 32,
+       "wires": 17
+      },
+      "findings": [],
+      "openFreeWires": 0,
+      "tolerance": {
+       "avg": 1.1065338145334521e-07,
+       "max": 3.4670999977670646e-07,
+       "min": 1e-07
+      },
+      "valid": true,
+      "volumeMM3": 327.672239387221
+     }
+    ],
+    "body_count": 5,
+    "solid_count": 4,
+    "sheet_count": 1,
+    "analytic_bodies": 5,
+    "volume_mm3": 7.258754671757426,
+    "bounds_min_mm": [
+     -5.0199882328,
+     -7.735979321,
+     -0.0013340480400520019
+    ],
+    "bounds_max_mm": [
+     4.9800120871999995,
+     7.9340198189999995,
+     4.798667312400024
+    ],
+    "names": [
+     "SOT404",
+     "SOT404 2",
+     "SOT404 3",
+     "SOT404 4",
+     "SOT404 5"
+    ],
+    "notice": "Stitched 75 loose faces into 4 solids the file had not declared. 1 open surface imported as a sheet, not a solid \u2014 booleans and STEP export need closed solids.",
+    "step": {
+     "dropped": 0,
+     "freeFaces": 75,
+     "openShells": 1,
+     "sewnSolids": 4,
+     "solids": 0
+    },
+    "volume_error_mm3": 2.2161243506957362e-08,
+    "bounds_error_mm": 4.440892098500626e-15,
+    "faces": {
+     "planar": 0,
+     "cylindrical": 0,
+     "other": 75
+    },
+    "export": {
+     "solids": 4,
+     "volume_mm3": 7.25875470021043,
+     "centroid_mm": [
+      -0.0242111507875656,
+      -4.80421933822166,
+      1.95461512571524
+     ],
+     "bounds": {
+      "min": [
+       -5.0199882328,
+       -7.735979321,
+       -0.001334048040052
+      ],
+      "max": [
+       4.9800120872,
+       7.93401981900053,
+       4.79866731240024
+      ]
+     },
+     "valid": true,
+     "faces": {
+      "total": 75,
+      "planar": 0,
+      "cylindrical": 0,
+      "conical": 0,
+      "spherical": 0,
+      "toroidal": 0,
+      "bspline": 74,
+      "other": 1
+     },
+     "tolerance": {
+      "min": 1e-07,
+      "avg": 1.85884229561959e-07,
+      "max": 6.71793441671805e-06
+     }
+    },
+    "reference": {
+     "solids": 4,
+     "volume_mm3": 7.25875469391867,
+     "centroid_mm": [
+      -0.0242111515195233,
+      -4.80421933726007,
+      1.95461512506028
+     ],
+     "bounds": {
+      "min": [
+       -5.0199882328,
+       -7.735979321,
+       -0.001334048040052
+      ],
+      "max": [
+       4.9800120872,
+       7.934019819,
+       4.79866731240002
+      ]
+     },
+     "valid": true,
+     "faces": {
+      "total": 75,
+      "planar": 0,
+      "cylindrical": 0,
+      "conical": 0,
+      "spherical": 0,
+      "toroidal": 0,
+      "bspline": 74,
+      "other": 1
+     }
+    },
+    "centroid_error_mm": 9.61591695158859e-10,
+    "residual_volume_mm3": 0,
+    "symmetric_ratio": 0,
+    "surface_distance_mm": 5.03131908544989e-13,
+    "surface_distance_is_estimate": true,
+    "rss_mb_before": 375.5,
+    "rss_mb_after": 493.8
+   },
+   "expected": {
+    "external": true,
+    "solid_count": 4,
+    "sheet_bodies": 1,
+    "sewing": {
+     "rawSolids": 0,
+     "freeFaces": 75,
+     "sewnSolids": 4,
+     "openShells": 1,
+     "dropped": 0
+    },
+    "expect_notice": true,
+    "expected_aggregate_volume_mm3": 7.25875469391867,
+    "bounds_min_mm": [
+     -5.0199882328,
+     -7.735979321,
+     -0.001334048040052
+    ],
+    "bounds_max_mm": [
+     4.9800120872,
+     7.934019819,
+     4.79866731240002
+    ],
+    "valid_reference": true,
+    "units": "mm",
+    "occt_roundtrip": {
+     "planar_faces": 0,
+     "cylindrical_faces": 0,
+     "other_faces": 75
+    }
+   },
+   "timing_s": {
+    "import": 0.07,
+    "check": 0.541,
+    "export": 0.016,
+    "inspect": 3.38,
+    "undo": 0.021,
+    "total": 4.081
+   },
+   "repro": {
+    "tool": "os3d_exec",
+    "arguments": {
+     "op": "document.import",
+     "args": {
+      "path": "/Users/jclaan/projects/reference/FreeCAD/src/Mod/Idf/Idflibs/SOT404.igs"
+     }
+    }
+   },
+   "import_reply": {
+    "analytic": 5,
+    "bodies": [
+     {
+      "bounds": [
+       [
+        1.9200131325339997,
+        -7.735979321,
+        -0.0013340480400520019
+       ],
+       [
+        3.1200107272,
+        -2.735979161,
+        3.4286673615999996
+       ]
+      ],
+      "brep": true,
+      "hidden": false,
+      "id": "E09F87E1-27B1-455E-83F1-0E4B7515597D",
+      "name": "SOT404",
+      "volumeMM3": 3.3824505214723426
+     },
+     {
+      "bounds": [
+       [
+        -3.1599868728,
+        -7.735979321,
+        -0.0013340480400520019
+       ],
+       [
+        -1.959989267466,
+        -2.735979161,
+        3.4286673615999996
+       ]
+      ],
+      "brep": true,
+      "hidden": false,
+      "id": "E448EA57-706E-47EE-B08A-09917C8C7483",
+      "name": "SOT404 2",
+      "volumeMM3": 3.382450571703425
+     },
+     {
+      "bounds": [
+       [
+        -0.619986867466,
+        -3.545980081,
+        2.9286671423999997
+       ],
+       [
+        0.5800107325339999,
+        -2.735979161,
+        3.4286671583999997
+       ]
+      ],
+      "brep": true,
+      "hidden": false,
+      "id": "C6ADF18F-253C-42B6-90DC-9FBD9F63CE76",
+      "name": "SOT404 3",
+      "volumeMM3": 0.4859995955508823
+     },
+     {
+      "bounds": [
+       [
+        -4.4239300731651285,
+        -2.146969793245029,
+        4.788667106999992
+       ],
+       [
+        -3.423930410495362,
+        -1.1469639356129684,
+        4.798667312400024
+       ]
+      ],
+      "brep": true,
+      "hidden": false,
+      "id": "552EE4CE-3E18-4382-AD10-B74E8F2CE453",
+      "name": "SOT404 4",
+      "volumeMM3": 0.007853983030776451
+     },
+     {
+      "bounds": [
+       [
+        -5.0199882328,
+        -2.745979141000001,
+        0.00406797196056
+       ],
+       [
+        4.9800120871999995,
+        7.9340198189999995,
+        4.786365332
+       ]
+      ],
+      "brep": true,
+      "hidden": false,
+      "id": "D1723697-ECE0-4FF6-81EE-C9424B11ED0F",
+      "name": "SOT404 5",
+      "volumeMM3": 0
+     }
+    ],
+    "bodyIDs": [
+     "E09F87E1-27B1-455E-83F1-0E4B7515597D",
+     "E448EA57-706E-47EE-B08A-09917C8C7483",
+     "C6ADF18F-253C-42B6-90DC-9FBD9F63CE76",
+     "552EE4CE-3E18-4382-AD10-B74E8F2CE453",
+     "D1723697-ECE0-4FF6-81EE-C9424B11ED0F"
+    ],
+    "canRedo": false,
+    "canUndo": true,
+    "commandSearchActive": false,
+    "document": "Untitled 16",
+    "featureCount": 0,
+    "format": "igs",
+    "itemFolders": [],
+    "measurements": [],
+    "mode": "idle",
+    "names": [
+     "SOT404",
+     "SOT404 2",
+     "SOT404 3",
+     "SOT404 4",
+     "SOT404 5"
+    ],
+    "notice": "Stitched 75 loose faces into 4 solids the file had not declared. 1 open surface imported as a sheet, not a solid \u2014 booleans and STEP export need closed solids.",
+    "ok": true,
+    "platform": "simulator",
+    "selectedSketchEntities": 0,
+    "selection": [
+     "552EE4CE-3E18-4382-AD10-B74E8F2CE453",
+     "D1723697-ECE0-4FF6-81EE-C9424B11ED0F",
+     "C6ADF18F-253C-42B6-90DC-9FBD9F63CE76",
+     "E448EA57-706E-47EE-B08A-09917C8C7483",
+     "E09F87E1-27B1-455E-83F1-0E4B7515597D"
+    ],
+    "sketchCount": 0,
+    "step": {
+     "dropped": 0,
+     "freeFaces": 75,
+     "openShells": 1,
+     "sewnSolids": 4,
+     "solids": 0
+    },
+    "textured": 0,
+    "triangles": 921,
+    "undoSteps": 1,
+    "undoTitle": "Import IGES"
+   }
+  },
+  {
+   "run_id": "qa6-iges",
+   "case_id": "EXT_SOD_323",
+   "file": "SOD_323.igs",
+   "path": "/Users/jclaan/projects/reference/FreeCAD/src/Mod/Idf/Idflibs/SOD_323.igs",
+   "format": "igs",
+   "sha256": "86a8a1c7c4ed36ca994ec3f51adf82d517a608b54ab8eb38ed1c1a01403814e2",
+   "source_commit": "26451d7b",
+   "status": "PASS",
+   "checks": [
+    {
+     "check": "app alive after import",
+     "ok": true,
+     "detail": "health: ok",
+     "advisory": false
+    },
+    {
+     "check": "read ledger matches oracle sewing (sewn/open/dropped)",
+     "ok": true,
+     "detail": "app {'sewnSolids': 1, 'openShells': 1, 'dropped': 1}, oracle {'sewnSolids': 1, 'openShells': 1, 'dropped': 1}",
+     "advisory": true
+    },
+    {
+     "check": "solid count",
+     "ok": true,
+     "detail": "expected 1, got 1 solid bodies (1 sheet)",
+     "advisory": false
+    },
+    {
+     "check": "sheet bodies",
+     "ok": true,
+     "detail": "expected 1, got 1",
+     "advisory": false
+    },
+    {
+     "check": "import says what it did (notice)",
+     "ok": true,
+     "detail": "Stitched 75 loose faces into 1 solid the file had not declared. 1 open surface imported as a sheet, not a solid \u2014 booleans and STEP export need closed solids. 1 shape could not be healed and was left out.",
+     "advisory": false
+    },
+    {
+     "check": "every body analytic (brep)",
+     "ok": true,
+     "detail": "2 of 2 carry a B-rep",
+     "advisory": false
+    },
+    {
+     "check": "sheet body reads 0 mm3",
+     "ok": true,
+     "detail": "SOD_323 reads 0",
+     "advisory": false
+    },
+    {
+     "check": "volume",
+     "ok": true,
+     "detail": "expected 1.069375, got 1.069375, |err| 3.33067e-15, gate 0.001",
+     "advisory": false
+    },
+    {
+     "check": "bounds",
+     "ok": true,
+     "detail": "max coordinate error 0 mm, gate 0.01",
+     "advisory": false
+    },
+    {
+     "check": "valid B-rep (BRepCheck)",
+     "ok": true,
+     "detail": "all valid",
+     "advisory": false
+    },
+    {
+     "check": "no self-intersections (BOP)",
+     "ok": false,
+     "detail": "[{'status': 'selfIntersect', 'subshape': 'Edge69', 'type': 'Edge'}, {'status': 'selfIntersect', 'subshape': 'Face18', 'type': 'Face'}, {'status': 'selfIntersect', 'subshape': 'Edge86', 'type': 'Edge'}",
+     "advisory": true
+    },
+    {
+     "check": "no open free wires",
+     "ok": true,
+     "detail": "0",
+     "advisory": true
+    },
+    {
+     "check": "face classes match reference (diagnostic)",
+     "ok": true,
+     "detail": "app planar/cyl/other 0/0/75, reference 0/0/75",
+     "advisory": true
+    },
+    {
+     "check": "STEP export",
+     "ok": true,
+     "detail": "{'ok': True, 'path': '/Users/jclaan/projects/open-source-projects/openshape3d-project/openshape3d/docs/qa/shapr3d-parity/runs/qa6-iges/exports/EXT_SOD_323.step', 'fileName': 'EXT_SOD_323.step', 'bytes",
+     "advisory": false
+    },
+    {
+     "check": "exported STEP readable by OCCT",
+     "ok": true,
+     "detail": "",
+     "advisory": false
+    },
+    {
+     "check": "round-trip solid count",
+     "ok": true,
+     "detail": "export 1, reference 1",
+     "advisory": false
+    },
+    {
+     "check": "round-trip volume",
+     "ok": true,
+     "detail": "error -1.13243e-13 mm3, gate 0.001",
+     "advisory": false
+    },
+    {
+     "check": "round-trip centroid",
+     "ok": true,
+     "detail": "max coordinate error 7.49843e-14 mm",
+     "advisory": false
+    },
+    {
+     "check": "round-trip bounds",
+     "ok": true,
+     "detail": "max error 1.11848e-11 mm",
+     "advisory": false
+    },
+    {
+     "check": "exported STEP valid (BRepCheck)",
+     "ok": true,
+     "detail": "",
+     "advisory": false
+    },
+    {
+     "check": "symmetric-difference volume",
+     "ok": true,
+     "detail": "ref\u2212act 0 + act\u2212ref 0 mm3, ratio 0",
+     "advisory": false
+    },
+    {
+     "check": "surface distance (sampled estimate)",
+     "ok": true,
+     "detail": "max 3.7683e-07 mm over [349, 354] samples at 0.02 deflection",
+     "advisory": false
+    },
+    {
+     "check": "undo returns to an empty design",
+     "ok": true,
+     "detail": "undo steps 1",
+     "advisory": false
+    }
+   ],
+   "metrics": {
+    "health": [
+     {
+      "bopCheckRan": true,
+      "bopFindings": [
+       {
+        "status": "selfIntersect",
+        "subshape": "Edge69",
+        "type": "Edge"
+       },
+       {
+        "status": "selfIntersect",
+        "subshape": "Face18",
+        "type": "Face"
+       },
+       {
+        "status": "selfIntersect",
+        "subshape": "Edge86",
+        "type": "Edge"
+       },
+       {
+        "status": "selfIntersect",
+        "subshape": "Face4",
+        "type": "Face"
+       },
+       {
+        "status": "selfIntersect",
+        "subshape": "Edge28",
+        "type": "Edge"
+       },
+       {
+        "status": "selfIntersect",
+        "subshape": "Edge36",
+        "type": "Edge"
+       },
+       {
+        "status": "selfIntersect",
+        "subshape": "Face4",
+        "type": "Face"
+       },
+       {
+        "status": "selfIntersect",
+        "subshape": "Face48",
+        "type": "Face"
+       },
+       {
+        "status": "selfIntersect",
+        "subshape": "Vertex53",
+        "type": "Vertex"
+       },
+       {
+        "status": "selfIntersect",
+        "subshape": "Face4",
+        "type": "Face"
+       },
+       {
+        "status": "selfIntersect",
+        "subshape": "Vertex54",
+        "type": "Vertex"
+       },
+       {
+        "status": "selfIntersect",
+        "subshape": "Face4",
+        "type": "Face"
+       },
+       {
+        "status": "selfIntersect",
+        "subshape": "Vertex14",
+        "type": "Vertex"
+       },
+       {
+        "status": "selfIntersect",
+        "subshape": "Vertex15",
+        "type": "Vertex"
+       },
+       {
+        "status": "selfIntersect",
+        "subshape": "Edge93",
+        "type": "Edge"
+       },
+       {
+        "status": "selfIntersect",
+        "subshape": "Face4",
+        "type": "Face"
+       },
+       {
+        "status": "selfIntersect",
+        "subshape": "Vertex38",
+        "type": "Vertex"
+       },
+       {
+        "status": "selfIntersect",
+        "subshape": "Vertex45",
+        "type": "Vertex"
+       },
+       {
+        "status": "selfIntersect",
+        "subshape": "Edge59",
+        "type": "Edge"
+       },
+       {
+        "status": "selfIntersect",
+        "subshape": "Edge70",
+        "type": "Edge"
+       },
+       {
+        "status": "selfIntersect",
+        "subshape": "Vertex21",
+        "type": "Vertex"
+       },
+       {
+        "status": "selfIntersect",
+        "subshape": "Vertex23",
+        "type": "Vertex"
+       },
+       {
+        "status": "selfIntersect",
+        "subshape": "Edge134",
+        "type": "Edge"
+       },
+       {
+        "status": "selfIntersect",
+        "subshape": "Face4",
+        "type": "Face"
+       },
+       {
+        "status": "selfIntersect",
+        "subshape": "Edge67",
+        "type": "Edge"
+       },
+       {
+        "status": "selfIntersect",
+        "subshape": "Edge80",
+        "type": "Edge"
+       },
+       {
+        "status": "selfIntersect",
+        "subshape": "Edge85",
+        "type": "Edge"
+       },
+       {
+        "status": "selfIntersect",
+        "subshape": "Face4",
+        "type": "Face"
+       },
+       {
+        "status": "selfIntersect",
+        "subshape": "Vertex36",
+        "type": "Vertex"
+       },
+       {
+        "status": "selfIntersect",
+        "subshape": "Vertex44",
+        "type": "Vertex"
+       },
+       {
+        "status": "tooSmallEdge",
+        "subshape": "Edge16",
+        "type": "Edge"
+       },
+       {
+        "status": "tooSmallEdge",
+        "subshape": "Edge32",
+        "type": "Edge"
+       },
+       {
+        "status": "tooSmallEdge",
+        "subshape": "Edge33",
+        "type": "Edge"
+       },
+       {
+        "status": "tooSmallEdge",
+        "subshape": "Edge33",
+        "type": "Edge"
+       },
+       {
+        "status": "tooSmallEdge",
+        "subshape": "Edge57",
+        "type": "Edge"
+       },
+       {
+        "status": "tooSmallEdge",
+        "subshape": "Edge58",
+        "type": "Edge"
+       },
+       {
+        "status": "tooSmallEdge",
+        "subshape": "Edge69",
+        "type": "Edge"
+       },
+       {
+        "status": "tooSmallEdge",
+        "subshape": "Edge71",
+        "type": "Edge"
+       },
+       {
+        "status": "tooSmallEdge",
+        "subshape": "Edge69",
+        "type": "Edge"
+       },
+       {
+        "status": "tooSmallEdge",
+        "subshape": "Edge93",
+        "type": "Edge"
+       },
+       {
+        "status": "tooSmallEdge",
+        "subshape": "Edge93",
+        "type": "Edge"
+       },
+       {
+        "status": "tooSmallEdge",
+        "subshape": "Edge133",
+        "type": "Edge"
+       },
+       {
+        "status": "tooSmallEdge",
+        "subshape": "Edge16",
+        "type": "Edge"
+       },
+       {
+        "status": "tooSmallEdge",
+        "subshape": "Edge133",
+        "type": "Edge"
+       }
+      ],
+      "closedFreeWires": 2,
+      "counts": {
+       "edges": 135,
+       "faces": 48,
+       "shells": 1,
+       "solids": 0,
+       "vertices": 80,
+       "wires": 50
+      },
+      "findings": [],
+      "openFreeWires": 0,
+      "tolerance": {
+       "avg": 3.332856717703063e-05,
+       "max": 0.0005806605353158047,
+       "min": 1e-07
+      },
+      "valid": true,
+      "volumeMM3": -0.289499631968101
+     },
+     {
+      "bopCheckRan": true,
+      "bopFindings": [],
+      "closedFreeWires": 0,
+      "counts": {
+       "edges": 63,
+       "faces": 27,
+       "shells": 1,
+       "solids": 1,
+       "vertices": 42,
+       "wires": 31
+      },
+      "findings": [],
+      "openFreeWires": 0,
+      "tolerance": {
+       "avg": 1.0000251852386671e-07,
+       "max": 1.0001000005551669e-07,
+       "min": 1e-07
+      },
+      "valid": true,
+      "volumeMM3": 1.0693750468959966
+     }
+    ],
+    "body_count": 2,
+    "solid_count": 1,
+    "sheet_count": 1,
+    "analytic_bodies": 2,
+    "volume_mm3": 1.0693750468959966,
+    "bounds_min_mm": [
+     -1.34499828,
+     -0.6750002,
+     -0.08382
+    ],
+    "bounds_max_mm": [
+     1.35499886,
+     0.6750003,
+     0.79069948
+    ],
+    "names": [
+     "SOD_323",
+     "SOD_323 2"
+    ],
+    "notice": "Stitched 75 loose faces into 1 solid the file had not declared. 1 open surface imported as a sheet, not a solid \u2014 booleans and STEP export need closed solids. 1 shape could not be healed and was left out.",
+    "step": {
+     "dropped": 1,
+     "freeFaces": 75,
+     "openShells": 1,
+     "sewnSolids": 1,
+     "solids": 0
+    },
+    "volume_error_mm3": 3.3306690738754696e-15,
+    "bounds_error_mm": 0.0,
+    "faces": {
+     "planar": 0,
+     "cylindrical": 0,
+     "other": 75
+    },
+    "export": {
+     "solids": 1,
+     "volume_mm3": 1.06937504689588,
+     "centroid_mm": [
+      0.00500029000010182,
+      3.26163281520436e-11,
+      0.509461980916836
+     ],
+     "bounds": {
+      "min": [
+       -1.34499828,
+       -0.675000200011185,
+       -0.08382
+      ],
+      "max": [
+       1.35499886,
+       0.6750003,
+       0.79069948
+      ]
+     },
+     "valid": true,
+     "faces": {
+      "total": 77,
+      "planar": 0,
+      "cylindrical": 0,
+      "conical": 0,
+      "spherical": 0,
+      "toroidal": 0,
+      "bspline": 77,
+      "other": 0
+     },
+     "tolerance": {
+      "min": 1e-07,
+      "avg": 1.73779436798217e-05,
+      "max": 0.000282036177895042
+     }
+    },
+    "reference": {
+     "solids": 1,
+     "volume_mm3": 1.069375046896,
+     "centroid_mm": [
+      0.00500029000017681,
+      3.25817691364732e-11,
+      0.509461980916766
+     ],
+     "bounds": {
+      "min": [
+       -1.34499828,
+       -0.6750002,
+       -0.08382
+      ],
+      "max": [
+       1.35499886,
+       0.6750003,
+       0.79069948
+      ]
+     },
+     "valid": true,
+     "faces": {
+      "total": 75,
+      "planar": 0,
+      "cylindrical": 0,
+      "conical": 0,
+      "spherical": 0,
+      "toroidal": 0,
+      "bspline": 75,
+      "other": 0
+     }
+    },
+    "centroid_error_mm": 7.49842896108355e-14,
+    "residual_volume_mm3": 0,
+    "symmetric_ratio": 0,
+    "surface_distance_mm": 3.76830000037298e-07,
+    "surface_distance_is_estimate": true,
+    "rss_mb_before": 493.8,
+    "rss_mb_after": 591.4
+   },
+   "expected": {
+    "external": true,
+    "solid_count": 1,
+    "sheet_bodies": 1,
+    "sewing": {
+     "rawSolids": 0,
+     "freeFaces": 75,
+     "sewnSolids": 1,
+     "openShells": 1,
+     "dropped": 1
+    },
+    "expect_notice": true,
+    "expected_aggregate_volume_mm3": 1.069375046896,
+    "bounds_min_mm": [
+     -1.34499828,
+     -0.6750002,
+     -0.08382
+    ],
+    "bounds_max_mm": [
+     1.35499886,
+     0.6750003,
+     0.79069948
+    ],
+    "valid_reference": true,
+    "units": "mm",
+    "occt_roundtrip": {
+     "planar_faces": 0,
+     "cylindrical_faces": 0,
+     "other_faces": 75
+    }
+   },
+   "timing_s": {
+    "import": 0.088,
+    "check": 0.413,
+    "export": 0.012,
+    "inspect": 1.873,
+    "undo": 0.01,
+    "total": 2.42
+   },
+   "repro": {
+    "tool": "os3d_exec",
+    "arguments": {
+     "op": "document.import",
+     "args": {
+      "path": "/Users/jclaan/projects/reference/FreeCAD/src/Mod/Idf/Idflibs/SOD_323.igs"
+     }
+    }
+   },
+   "import_reply": {
+    "analytic": 2,
+    "bodies": [
+     {
+      "bounds": [
+       [
+        -1.34499828,
+        -0.6750002,
+        -0.08382
+       ],
+       [
+        1.35499886,
+        0.6750003,
+        0.79069948
+       ]
+      ],
+      "brep": true,
+      "hidden": false,
+      "id": "16F6F395-667F-4E76-AAE6-5A1387CEE18C",
+      "name": "SOD_323",
+      "volumeMM3": 0
+     },
+     {
+      "bounds": [
+       [
+        -0.884424761,
+        -0.664425501,
+        0.26269999999999993
+       ],
+       [
+        0.894425341,
+        0.664425501,
+        0.7806994800000001
+       ]
+      ],
+      "brep": true,
+      "hidden": false,
+      "id": "2627133C-02B0-43D3-8C6D-E8EC7B0BEBA4",
+      "name": "SOD_323 2",
+      "volumeMM3": 1.0693750468959966
+     }
+    ],
+    "bodyIDs": [
+     "16F6F395-667F-4E76-AAE6-5A1387CEE18C",
+     "2627133C-02B0-43D3-8C6D-E8EC7B0BEBA4"
+    ],
+    "canRedo": false,
+    "canUndo": true,
+    "commandSearchActive": false,
+    "document": "Untitled 16",
+    "featureCount": 0,
+    "format": "igs",
+    "itemFolders": [],
+    "measurements": [],
+    "mode": "idle",
+    "names": [
+     "SOD_323",
+     "SOD_323 2"
+    ],
+    "notice": "Stitched 75 loose faces into 1 solid the file had not declared. 1 open surface imported as a sheet, not a solid \u2014 booleans and STEP export need closed solids. 1 shape could not be healed and was left out.",
+    "ok": true,
+    "platform": "simulator",
+    "selectedSketchEntities": 0,
+    "selection": [
+     "16F6F395-667F-4E76-AAE6-5A1387CEE18C",
+     "2627133C-02B0-43D3-8C6D-E8EC7B0BEBA4"
+    ],
+    "sketchCount": 0,
+    "step": {
+     "dropped": 1,
+     "freeFaces": 75,
+     "openShells": 1,
+     "sewnSolids": 1,
+     "solids": 0
+    },
+    "textured": 0,
+    "triangles": 219,
+    "undoSteps": 1,
+    "undoTitle": "Import IGES"
+   }
+  },
+  {
+   "run_id": "qa6-iges",
+   "case_id": "EXT_SOT23",
+   "file": "SOT23.igs",
+   "path": "/Users/jclaan/projects/reference/FreeCAD/src/Mod/Idf/Idflibs/SOT23.igs",
+   "format": "igs",
+   "sha256": "01f02f298d5e97387fe3641b61b20f09a4ff31ccb34379c910dd0c41fd2be23a",
+   "source_commit": "26451d7b",
+   "status": "PASS",
+   "checks": [
+    {
+     "check": "app alive after import",
+     "ok": true,
+     "detail": "health: ok",
+     "advisory": false
+    },
+    {
+     "check": "read ledger matches oracle sewing (sewn/open/dropped)",
+     "ok": true,
+     "detail": "app {'sewnSolids': 1, 'openShells': 0, 'dropped': 0}, oracle {'sewnSolids': 1, 'openShells': 0, 'dropped': 0}",
+     "advisory": true
+    },
+    {
+     "check": "solid count",
+     "ok": true,
+     "detail": "expected 1, got 1 solid bodies (0 sheet)",
+     "advisory": false
+    },
+    {
+     "check": "sheet bodies",
+     "ok": true,
+     "detail": "expected 0, got 0",
+     "advisory": false
+    },
+    {
+     "check": "import says what it did (notice)",
+     "ok": true,
+     "detail": "Stitched 73 loose faces into 1 solid the file had not declared.",
+     "advisory": false
+    },
+    {
+     "check": "every body analytic (brep)",
+     "ok": true,
+     "detail": "1 of 1 carry a B-rep",
+     "advisory": false
+    },
+    {
+     "check": "volume",
+     "ok": true,
+     "detail": "expected 3.552817, got 3.552817, |err| 1.8403e-10, gate 0.001",
+     "advisory": false
+    },
+    {
+     "check": "bounds",
+     "ok": true,
+     "detail": "max coordinate error 6.66134e-16 mm, gate 0.01",
+     "advisory": false
+    },
+    {
+     "check": "valid B-rep (BRepCheck)",
+     "ok": true,
+     "detail": "all valid",
+     "advisory": false
+    },
+    {
+     "check": "no self-intersections (BOP)",
+     "ok": true,
+     "detail": "[]",
+     "advisory": true
+    },
+    {
+     "check": "no open free wires",
+     "ok": true,
+     "detail": "0",
+     "advisory": false
+    },
+    {
+     "check": "face classes match reference (diagnostic)",
+     "ok": true,
+     "detail": "app planar/cyl/other 0/0/73, reference 0/0/73",
+     "advisory": true
+    },
+    {
+     "check": "STEP export",
+     "ok": true,
+     "detail": "{'ok': True, 'path': '/Users/jclaan/projects/open-source-projects/openshape3d-project/openshape3d/docs/qa/shapr3d-parity/runs/qa6-iges/exports/EXT_SOT23.step', 'fileName': 'EXT_SOT23.step', 'bytes': 6",
+     "advisory": false
+    },
+    {
+     "check": "exported STEP readable by OCCT",
+     "ok": true,
+     "detail": "",
+     "advisory": false
+    },
+    {
+     "check": "round-trip solid count",
+     "ok": true,
+     "detail": "export 1, reference 1",
+     "advisory": false
+    },
+    {
+     "check": "round-trip volume",
+     "ok": true,
+     "detail": "error -6.09957e-12 mm3, gate 0.001",
+     "advisory": false
+    },
+    {
+     "check": "round-trip centroid",
+     "ok": true,
+     "detail": "max coordinate error 1.46443e-12 mm",
+     "advisory": false
+    },
+    {
+     "check": "round-trip bounds",
+     "ok": true,
+     "detail": "max error 4.36956e-13 mm",
+     "advisory": false
+    },
+    {
+     "check": "exported STEP valid (BRepCheck)",
+     "ok": true,
+     "detail": "",
+     "advisory": false
+    },
+    {
+     "check": "symmetric-difference volume",
+     "ok": true,
+     "detail": "ref\u2212act 0 + act\u2212ref 0 mm3, ratio 0",
+     "advisory": false
+    },
+    {
+     "check": "surface distance (sampled estimate)",
+     "ok": true,
+     "detail": "max 1.41203e-11 mm over [1462, 1462] samples at 0.02 deflection",
+     "advisory": false
+    },
+    {
+     "check": "undo returns to an empty design",
+     "ok": true,
+     "detail": "undo steps 1",
+     "advisory": false
+    }
+   ],
+   "metrics": {
+    "health": [
+     {
+      "bopCheckRan": true,
+      "bopFindings": [],
+      "closedFreeWires": 0,
+      "counts": {
+       "edges": 189,
+       "faces": 73,
+       "shells": 1,
+       "solids": 1,
+       "vertices": 110,
+       "wires": 73
+      },
+      "findings": [],
+      "openFreeWires": 0,
+      "tolerance": {
+       "avg": 1.0002287825212791e-07,
+       "max": 1.0010831092457717e-07,
+       "min": 1e-07
+      },
+      "valid": true,
+      "volumeMM3": 3.5528167525839005
+     }
+    ],
+    "body_count": 1,
+    "solid_count": 1,
+    "sheet_count": 0,
+    "analytic_bodies": 1,
+    "volume_mm3": 3.5528167525839005,
+    "bounds_min_mm": [
+     -1.460000099984,
+     -1.2260577523499998,
+     -2.943695287527248e-11
+    ],
+    "bounds_max_mm": [
+     1.460000099984,
+     1.250000000122,
+     1.0200000999825107
+    ],
+    "names": [
+     "SOT23"
+    ],
+    "notice": "Stitched 73 loose faces into 1 solid the file had not declared.",
+    "step": {
+     "dropped": 0,
+     "freeFaces": 73,
+     "openShells": 0,
+     "sewnSolids": 1,
+     "solids": 0
+    },
+    "volume_error_mm3": 1.8402968038344625e-10,
+    "bounds_error_mm": 6.661338147750939e-16,
+    "faces": {
+     "planar": 0,
+     "cylindrical": 0,
+     "other": 73
+    },
+    "export": {
+     "solids": 1,
+     "volume_mm3": 3.55281675276183,
+     "centroid_mm": [
+      -1.06239166561472e-10,
+      0.012135754791597,
+      0.536202129126683
+     ],
+     "bounds": {
+      "min": [
+       -1.460000099984,
+       -1.22605775235,
+       -2.89999968483556e-11
+      ],
+      "max": [
+       1.460000099984,
+       1.250000000122,
+       1.02000009998251
+      ]
+     },
+     "valid": true,
+     "faces": {
+      "total": 73,
+      "planar": 0,
+      "cylindrical": 0,
+      "conical": 0,
+      "spherical": 0,
+      "toroidal": 0,
+      "bspline": 37,
+      "other": 36
+     },
+     "tolerance": {
+      "min": 1e-07,
+      "avg": 1e-07,
+      "max": 1e-07
+     }
+    },
+    "reference": {
+     "solids": 1,
+     "volume_mm3": 3.55281675276793,
+     "centroid_mm": [
+      -1.05939436629558e-10,
+      0.0121357547930615,
+      0.53620212912561
+     ],
+     "bounds": {
+      "min": [
+       -1.460000099984,
+       -1.22605775235,
+       -2.94369528752725e-11
+      ],
+      "max": [
+       1.460000099984,
+       1.250000000122,
+       1.02000009998251
+      ]
+     },
+     "valid": true,
+     "faces": {
+      "total": 73,
+      "planar": 0,
+      "cylindrical": 0,
+      "conical": 0,
+      "spherical": 0,
+      "toroidal": 0,
+      "bspline": 37,
+      "other": 36
+     }
+    },
+    "centroid_error_mm": 1.464425802844e-12,
+    "residual_volume_mm3": 0,
+    "symmetric_ratio": 0,
+    "surface_distance_mm": 1.41202878289588e-11,
+    "surface_distance_is_estimate": true,
+    "rss_mb_before": 591.4,
+    "rss_mb_after": 616.5
+   },
+   "expected": {
+    "external": true,
+    "solid_count": 1,
+    "sheet_bodies": 0,
+    "sewing": {
+     "rawSolids": 0,
+     "freeFaces": 73,
+     "sewnSolids": 1,
+     "openShells": 0,
+     "dropped": 0
+    },
+    "expect_notice": true,
+    "expected_aggregate_volume_mm3": 3.55281675276793,
+    "bounds_min_mm": [
+     -1.460000099984,
+     -1.22605775235,
+     -2.94369528752725e-11
+    ],
+    "bounds_max_mm": [
+     1.460000099984,
+     1.250000000122,
+     1.02000009998251
+    ],
+    "valid_reference": true,
+    "units": "mm",
+    "occt_roundtrip": {
+     "planar_faces": 0,
+     "cylindrical_faces": 0,
+     "other_faces": 73
+    }
+   },
+   "timing_s": {
+    "import": 0.399,
+    "check": 1.05,
+    "export": 0.136,
+    "inspect": 8.528,
+    "undo": 0.019,
+    "total": 10.296
+   },
+   "repro": {
+    "tool": "os3d_exec",
+    "arguments": {
+     "op": "document.import",
+     "args": {
+      "path": "/Users/jclaan/projects/reference/FreeCAD/src/Mod/Idf/Idflibs/SOT23.igs"
+     }
+    }
+   },
+   "import_reply": {
+    "analytic": 1,
+    "bodies": [
+     {
+      "bounds": [
+       [
+        -1.460000099984,
+        -1.2260577523499998,
+        -2.943695287527248e-11
+       ],
+       [
+        1.460000099984,
+        1.250000000122,
+        1.0200000999825107
+       ]
+      ],
+      "brep": true,
+      "hidden": false,
+      "id": "5F9C71BF-167D-42D7-B1E7-972D24EF595B",
+      "name": "SOT23",
+      "volumeMM3": 3.5528167525839005
+     }
+    ],
+    "bodyIDs": [
+     "5F9C71BF-167D-42D7-B1E7-972D24EF595B"
+    ],
+    "canRedo": false,
+    "canUndo": true,
+    "commandSearchActive": false,
+    "document": "Untitled 16",
+    "featureCount": 0,
+    "format": "igs",
+    "itemFolders": [],
+    "measurements": [],
+    "mode": "idle",
+    "names": [
+     "SOT23"
+    ],
+    "notice": "Stitched 73 loose faces into 1 solid the file had not declared.",
+    "ok": true,
+    "platform": "simulator",
+    "selectedSketchEntities": 0,
+    "selection": [
+     "5F9C71BF-167D-42D7-B1E7-972D24EF595B"
+    ],
+    "sketchCount": 0,
+    "step": {
+     "dropped": 0,
+     "freeFaces": 73,
+     "openShells": 0,
+     "sewnSolids": 1,
+     "solids": 0
+    },
+    "textured": 0,
+    "triangles": 12352,
+    "undoSteps": 1,
+    "undoTitle": "Import IGES"
+   }
+  },
+  {
+   "run_id": "qa6-iges",
+   "case_id": "EXT_RLF_12545",
+   "file": "RLF_12545.igs",
+   "path": "/Users/jclaan/projects/reference/FreeCAD/src/Mod/Idf/Idflibs/RLF_12545.igs",
+   "format": "igs",
+   "sha256": "c3934b1a42ab377dc76917e5f096f1fa0e68314a32ef1f7e2311db3cc1f70c30",
+   "source_commit": "26451d7b",
+   "status": "PASS",
+   "checks": [
+    {
+     "check": "app alive after import",
+     "ok": true,
+     "detail": "health: ok",
+     "advisory": false
+    },
+    {
+     "check": "read ledger matches oracle sewing (sewn/open/dropped)",
+     "ok": true,
+     "detail": "app {'sewnSolids': 3, 'openShells': 0, 'dropped': 0}, oracle {'sewnSolids': 3, 'openShells': 0, 'dropped': 0}",
+     "advisory": true
+    },
+    {
+     "check": "solid count",
+     "ok": true,
+     "detail": "expected 3, got 3 solid bodies (0 sheet)",
+     "advisory": false
+    },
+    {
+     "check": "sheet bodies",
+     "ok": true,
+     "detail": "expected 0, got 0",
+     "advisory": false
+    },
+    {
+     "check": "import says what it did (notice)",
+     "ok": true,
+     "detail": "Stitched 47 loose faces into 3 solids the file had not declared.",
+     "advisory": false
+    },
+    {
+     "check": "every body analytic (brep)",
+     "ok": true,
+     "detail": "3 of 3 carry a B-rep",
+     "advisory": false
+    },
+    {
+     "check": "volume",
+     "ok": true,
+     "detail": "expected 718.977193, got 718.977193, |err| 8.92794e-09, gate 0.00718977",
+     "advisory": false
+    },
+    {
+     "check": "bounds",
+     "ok": true,
+     "detail": "max coordinate error 8.88178e-16 mm, gate 0.01",
+     "advisory": false
+    },
+    {
+     "check": "valid B-rep (BRepCheck)",
+     "ok": true,
+     "detail": "all valid",
+     "advisory": false
+    },
+    {
+     "check": "no self-intersections (BOP)",
+     "ok": true,
+     "detail": "[]",
+     "advisory": true
+    },
+    {
+     "check": "no open free wires",
+     "ok": true,
+     "detail": "0",
+     "advisory": false
+    },
+    {
+     "check": "face classes match reference (diagnostic)",
+     "ok": true,
+     "detail": "app planar/cyl/other 0/0/47, reference 0/0/47",
+     "advisory": true
+    },
+    {
+     "check": "STEP export",
+     "ok": true,
+     "detail": "{'ok': True, 'path': '/Users/jclaan/projects/open-source-projects/openshape3d-project/openshape3d/docs/qa/shapr3d-parity/runs/qa6-iges/exports/EXT_RLF_12545.step', 'fileName': 'EXT_RLF_12545.step', 'b",
+     "advisory": false
+    },
+    {
+     "check": "exported STEP readable by OCCT",
+     "ok": true,
+     "detail": "",
+     "advisory": false
+    },
+    {
+     "check": "round-trip solid count",
+     "ok": true,
+     "detail": "export 3, reference 3",
+     "advisory": false
+    },
+    {
+     "check": "round-trip volume",
+     "ok": true,
+     "detail": "error 1.21063e-07 mm3, gate 0.00718977",
+     "advisory": false
+    },
+    {
+     "check": "round-trip centroid",
+     "ok": true,
+     "detail": "max coordinate error 3.77658e-10 mm",
+     "advisory": false
+    },
+    {
+     "check": "round-trip bounds",
+     "ok": true,
+     "detail": "max error 8.88178e-16 mm",
+     "advisory": false
+    },
+    {
+     "check": "exported STEP valid (BRepCheck)",
+     "ok": true,
+     "detail": "",
+     "advisory": false
+    },
+    {
+     "check": "symmetric-difference volume",
+     "ok": true,
+     "detail": "ref\u2212act 0 + act\u2212ref 0 mm3, ratio 0",
+     "advisory": false
+    },
+    {
+     "check": "surface distance (sampled estimate)",
+     "ok": true,
+     "detail": "max 4.47253e-13 mm over [240, 240] samples at 0.02 deflection",
+     "advisory": false
+    },
+    {
+     "check": "undo returns to an empty design",
+     "ok": true,
+     "detail": "undo steps 1",
+     "advisory": false
+    }
+   ],
+   "metrics": {
+    "health": [
+     {
+      "bopCheckRan": true,
+      "bopFindings": [],
+      "closedFreeWires": 0,
+      "counts": {
+       "edges": 24,
+       "faces": 10,
+       "shells": 1,
+       "solids": 1,
+       "vertices": 16,
+       "wires": 10
+      },
+      "findings": [],
+      "openFreeWires": 0,
+      "tolerance": {
+       "avg": 1.0000545470384435e-07,
+       "max": 1.000100006471187e-07,
+       "min": 1e-07
+      },
+      "valid": true,
+      "volumeMM3": 66.31359549686786
+     },
+     {
+      "bopCheckRan": true,
+      "bopFindings": [],
+      "closedFreeWires": 0,
+      "counts": {
+       "edges": 72,
+       "faces": 27,
+       "shells": 1,
+       "solids": 1,
+       "vertices": 48,
+       "wires": 28
+      },
+      "findings": [],
+      "openFreeWires": 0,
+      "tolerance": {
+       "avg": 1.000058826261253e-07,
+       "max": 1.0001000117579339e-07,
+       "min": 1e-07
+      },
+      "valid": true,
+      "volumeMM3": 586.350002118701
+     },
+     {
+      "bopCheckRan": true,
+      "bopFindings": [],
+      "closedFreeWires": 0,
+      "counts": {
+       "edges": 24,
+       "faces": 10,
+       "shells": 1,
+       "solids": 1,
+       "vertices": 16,
+       "wires": 10
+      },
+      "findings": [],
+      "openFreeWires": 0,
+      "tolerance": {
+       "avg": 1.0000545469951846e-07,
+       "max": 1.000100006471187e-07,
+       "min": 1e-07
+      },
+      "valid": true,
+      "volumeMM3": 66.31359549657023
+     }
+    ],
+    "body_count": 3,
+    "solid_count": 3,
+    "sheet_count": 0,
+    "analytic_bodies": 3,
+    "volume_mm3": 718.977193112139,
+    "bounds_min_mm": [
+     -6.2382090628,
+     -6.2516416496,
+     0.00999999999996
+    ],
+    "bounds_max_mm": [
+     6.2617909562000005,
+     6.2483583694,
+     4.7100000034
+    ],
+    "names": [
+     "RLF_12545",
+     "RLF_12545 2",
+     "RLF_12545 3"
+    ],
+    "notice": "Stitched 47 loose faces into 3 solids the file had not declared.",
+    "step": {
+     "dropped": 0,
+     "freeFaces": 47,
+     "openShells": 0,
+     "sewnSolids": 3,
+     "solids": 0
+    },
+    "volume_error_mm3": 8.927941053116228e-09,
+    "bounds_error_mm": 8.881784197001252e-16,
+    "faces": {
+     "planar": 0,
+     "cylindrical": 0,
+     "other": 47
+    },
+    "export": {
+     "solids": 3,
+     "volume_mm3": 718.97719324213,
+     "centroid_mm": [
+      0.0117996399715322,
+      -0.00164164010875289,
+      2.36095176027796
+     ],
+     "bounds": {
+      "min": [
+       -6.2382090628,
+       -6.2516416496,
+       0.00999999999995982
+      ],
+      "max": [
+       6.2617909562,
+       6.2483583694,
+       4.7100000034
+      ]
+     },
+     "valid": true,
+     "faces": {
+      "total": 47,
+      "planar": 0,
+      "cylindrical": 0,
+      "conical": 0,
+      "spherical": 0,
+      "toroidal": 0,
+      "bspline": 47,
+      "other": 0
+     },
+     "tolerance": {
+      "min": 1e-07,
+      "avg": 1e-07,
+      "max": 1e-07
+     }
+    },
+    "reference": {
+     "solids": 3,
+     "volume_mm3": 718.977193121067,
+     "centroid_mm": [
+      0.011799639593874,
+      -0.0016416400576201,
+      2.36095176021457
+     ],
+     "bounds": {
+      "min": [
+       -6.2382090628,
+       -6.2516416496,
+       0.00999999999996
+      ],
+      "max": [
+       6.2617909562,
+       6.2483583694,
+       4.7100000034
+      ]
+     },
+     "valid": true,
+     "faces": {
+      "total": 47,
+      "planar": 0,
+      "cylindrical": 0,
+      "conical": 0,
+      "spherical": 0,
+      "toroidal": 0,
+      "bspline": 47,
+      "other": 0
+     }
+    },
+    "centroid_error_mm": 3.77658191177965e-10,
+    "residual_volume_mm3": 0,
+    "symmetric_ratio": 0,
+    "surface_distance_mm": 4.47253355808314e-13,
+    "surface_distance_is_estimate": true,
+    "rss_mb_before": 616.5,
+    "rss_mb_after": 619.3
+   },
+   "expected": {
+    "external": true,
+    "solid_count": 3,
+    "sheet_bodies": 0,
+    "sewing": {
+     "rawSolids": 0,
+     "freeFaces": 47,
+     "sewnSolids": 3,
+     "openShells": 0,
+     "dropped": 0
+    },
+    "expect_notice": true,
+    "expected_aggregate_volume_mm3": 718.977193121067,
+    "bounds_min_mm": [
+     -6.2382090628,
+     -6.2516416496,
+     0.00999999999996
+    ],
+    "bounds_max_mm": [
+     6.2617909562,
+     6.2483583694,
+     4.7100000034
+    ],
+    "valid_reference": true,
+    "units": "mm",
+    "occt_roundtrip": {
+     "planar_faces": 0,
+     "cylindrical_faces": 0,
+     "other_faces": 47
+    }
+   },
+   "timing_s": {
+    "import": 0.058,
+    "check": 0.324,
+    "export": 0.009,
+    "inspect": 3.256,
+    "undo": 0.02,
+    "total": 3.698
+   },
+   "repro": {
+    "tool": "os3d_exec",
+    "arguments": {
+     "op": "document.import",
+     "args": {
+      "path": "/Users/jclaan/projects/reference/FreeCAD/src/Mod/Idf/Idflibs/RLF_12545.igs"
+     }
+    }
+   },
+   "import_reply": {
+    "analytic": 3,
+    "bodies": [
+     {
+      "bounds": [
+       [
+        3.7717909578,
+        -3.7516416458,
+        0.00999999999996
+       ],
+       [
+        6.2617909562,
+        3.7483583656,
+        4.7100000034
+       ]
+      ],
+      "brep": true,
+      "hidden": false,
+      "id": "D94EAC59-35D8-44EA-B7AC-258620563078",
+      "name": "RLF_12545",
+      "volumeMM3": 66.31359549686786
+     },
+     {
+      "bounds": [
+       [
+        -6.2382090628,
+        -6.2516416496,
+        0.00999999999996
+       ],
+       [
+        6.2617909562000005,
+        6.2483583694,
+        4.7100000034
+       ]
+      ],
+      "brep": true,
+      "hidden": false,
+      "id": "E089BF9E-A094-4503-BEE0-A57CAD823EAC",
+      "name": "RLF_12545 2",
+      "volumeMM3": 586.350002118701
+     },
+     {
+      "bounds": [
+       [
+        -6.238209062799999,
+        -3.7516416458,
+        0.00999999999996
+       ],
+       [
+        -3.7482090643999997,
+        3.7483583656,
+        4.7100000034
+       ]
+      ],
+      "brep": true,
+      "hidden": false,
+      "id": "E1B8CC91-F8A8-412A-AA92-46BE5E0D3F9A",
+      "name": "RLF_12545 3",
+      "volumeMM3": 66.31359549657023
+     }
+    ],
+    "bodyIDs": [
+     "D94EAC59-35D8-44EA-B7AC-258620563078",
+     "E089BF9E-A094-4503-BEE0-A57CAD823EAC",
+     "E1B8CC91-F8A8-412A-AA92-46BE5E0D3F9A"
+    ],
+    "canRedo": false,
+    "canUndo": true,
+    "commandSearchActive": false,
+    "document": "Untitled 16",
+    "featureCount": 0,
+    "format": "igs",
+    "itemFolders": [],
+    "measurements": [],
+    "mode": "idle",
+    "names": [
+     "RLF_12545",
+     "RLF_12545 2",
+     "RLF_12545 3"
+    ],
+    "notice": "Stitched 47 loose faces into 3 solids the file had not declared.",
+    "ok": true,
+    "platform": "simulator",
+    "selectedSketchEntities": 0,
+    "selection": [
+     "E1B8CC91-F8A8-412A-AA92-46BE5E0D3F9A",
+     "D94EAC59-35D8-44EA-B7AC-258620563078",
+     "E089BF9E-A094-4503-BEE0-A57CAD823EAC"
+    ],
+    "sketchCount": 0,
+    "step": {
+     "dropped": 0,
+     "freeFaces": 47,
+     "openShells": 0,
+     "sewnSolids": 3,
+     "solids": 0
+    },
+    "textured": 0,
+    "triangles": 148,
+    "undoSteps": 1,
+    "undoTitle": "Import IGES"
+   }
+  }
+ ]
+}

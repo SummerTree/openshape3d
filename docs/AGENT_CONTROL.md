@@ -159,6 +159,14 @@ that much there. (Before 2026-09-02 every body used the mesh figure.)
 `brep` says whether a body is still analytic or has been flattened to its
 tessellation — the distinction the OCCT port exists for.
 
+`bounds` are the exact B-rep box whenever `brep` is true (since 2026-10-21;
+before that the render mesh's box, which reads a chord short on anything
+curved — 3 µm on a 15 mm washer, enough to fail a 0.01 mm gate for a part
+that was right). A sheet body — an open shell kept at STEP import, see
+`document.import` — reads `volumeMM3: 0`: it encloses nothing, and neither
+the face integral nor the mesh figure would be a volume. `/v1/check` tells
+a sheet from a solid by `counts.solids`.
+
 When any feature failed to replay, the state also carries `evalErrors` — one
 `{featureID, feature, error}` row per failing node, in graph order: the same
 signal the History badges render, so a session that drove the UI (not
@@ -395,6 +403,7 @@ graph, and shows up in History like any other feature.
 | `view.section` | `normal` `[x,y,z]` (the side that stays visible) and optional `origin` (default `[0,0,0]`), `sectionOnly`, `twoD`; or `off: true`. Section View as a display state — no undo step; the reply's `interferingBodyIDs` lists bodies whose cuts overlap |
 | `view.accuracyReport` | `reference`, `model` (body ids), optional `tolerance` mm; or `off: true`. Opens Views ▸ Accuracy Report… on those bodies and runs the comparison on screen (the sheet, not the numbers — those are `GET /v1/accuracy`). A display state, no undo step; how a recording of an assistant at work shows the app's own report |
 | `view.deviationPreview` | `reference`, `model` (body ids), optional `tolerance` mm (1), `maxMM` (full colour, default five tolerances), `panel` (false keeps the legend off screen); or `off: true`. `DeviationPreview`: every vertex of the reference measured to the model's surface (`SurfaceGrid`, spread over the cores) and drawn through the textured pipeline on a 256 × 1 colour ramp — blue beyond +tolerance (the model lacks material), orange beyond −tolerance (it has too much), grey within — with the model ghosted at 28 %. The reply carries `vertices`, `meanMM`, `p95MM`, `maxMM`, `meanSignedMM`, `withinTolerance`, `missing`, `excess`; while it is on or measuring, `GET /v1/state` carries the same under `deviationPreview` (`active`, `computing`, …). Also Views ▸ Deviation Preview and the Accuracy Report sheet's "Show Deviation in Viewport" row. A display state, no undo step |
+| `document.import` | `path` (a file the app can read; `developer_only` outside DEBUG); optional `fileName`, `unitScale` (meshes only). Routed by the FILE's extension exactly as the Import menu: `.step`/`.stp` and `.iges`/`.igs` keep the B-rep, `.fcstd` imports the FreeCAD document's bodies, `.dxf` lands in the ground sketch, everything else (`stl`, `obj`, `gltf`/`glb`, `3mf`, `usdz`, `blend`…) is a mesh. One undo step. Reply: `format`, `bodyIDs`, `names`, `analytic` (bodies with a B-rep), `textured`, `triangles`, `sketches[]` (`{sketchID, name, entitiesAdded}` for DXF), `notice` (what the UI would show — a partial import, an open mesh, stitched or dropped shapes), and for STEP or IGES a `step` ledger `{solids, sewnSolids, openShells, freeFaces, dropped}`. Since 2026-10-21 a STEP or IGES file's faces outside any solid are sewn (1e-3 mm): each closed shell becomes a solid (`sewnSolids`), each open one a sheet body (`openShells`, volume 0), and a shape that will not heal is counted in `dropped` rather than lost silently; a DXF is scaled by `$INSUNITS` and ELLIPSE entities import. Until then everything went to the mesh importer, which refused STEP and DXF. |
 
 Entity kinds: `line` (`a`,`b`), `circle` (`center`,`radius`), `arc`
 (`center`,`radius`,`startAngle`,`endAngle`), `spline` (`points[]`,`closed`),

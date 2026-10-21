@@ -179,6 +179,10 @@ final class EditorViewModel {
     /// something the user can simply retry differently. Clears itself.
     private(set) var notice: String?
     private var noticeToken = 0
+    /// What the last STEP read made of its file — declared solids, stitched
+    /// solids, open sheets, dropped shapes — for the agent reply, which has
+    /// to say in numbers what the notice says in words.
+    private(set) var lastSTEPReadSummary: STEPReadSummary?
 
     func showNotice(_ text: String) {
         notice = text
@@ -987,9 +991,13 @@ final class EditorViewModel {
     /// shelled and booleaned on the OCCT path exactly like one modelled here.
     /// All of them land as ONE undo step.
     func importSTEP(data: Data, fileName: String, format: ExchangeFormat = .step) {
-        let solids = STEPKit.solids(from: data, format: format)
+        let read = STEPKit.read(from: data, format: format)
+        lastSTEPReadSummary = read.summary
+        let solids = read.solids
         guard !solids.isEmpty else {
-            errorMessage = "Couldn't import “\(fileName)” — no solids found in the \(format.title) file."
+            errorMessage = read.summary.dropped > 0
+                ? "Couldn't import “\(fileName)” — its \(read.summary.dropped) shape\(read.summary.dropped == 1 ? "" : "s") could not be healed into valid geometry."
+                : "Couldn't import “\(fileName)” — no solids found in the \(format.title) file."
             return
         }
         let stem = (fileName as NSString).deletingPathExtension
@@ -1017,10 +1025,16 @@ final class EditorViewModel {
         selection = Set(bodies.map(\.id))
         mode = .idle
         fitImported(bodies)
+        var notes: [String] = []
         if bodies.count < solids.count {
-            showNotice("Imported \(bodies.count) of \(solids.count) solids — "
-                       + "the rest could not be meshed.")
+            notes.append("Imported \(bodies.count) of \(solids.count) shapes — "
+                         + "the rest could not be meshed.")
         }
+        // Stitched shells, open sheets, dropped shapes: say so, or a file
+        // that lost its package body reads as a clean success.
+        let summary = read.summary.notice
+        if !summary.isEmpty { notes.append(summary) }
+        if !notes.isEmpty { showNotice(notes.joined(separator: " ")) }
     }
 
     /// Frame what an import added, from the bodies themselves: the scene
@@ -1159,10 +1173,26 @@ final class EditorViewModel {
         mode = .idle
         cameraControl?.fitScene()
         let textured = bodies.filter { $0.material?.baseColorTexture != nil }.count
-        if bodies.count > 1 || textured > 0 {
-            showNotice("Imported \(bodies.count) part\(bodies.count == 1 ? "" : "s")"
-                       + (textured > 0 ? ", \(textured) textured" : "") + ".")
+        // An open mesh — a scan, a single sheet, a file that lost half its
+        // triangles — imports fine, but it is not a solid: it encloses no
+        // volume and booleans and STEP have nothing to work on. Say so
+        // rather than let a zero-volume body pass as a clean success (the
+        // CAD test pack's open-triangle case, 2026-10-21).
+        let open = bodies.compactMap { body -> String? in
+            let edges = MeshIntegrity.openEdgeCount(body.render)
+            return edges > 0 ? "\(body.name) (\(edges) open edge\(edges == 1 ? "" : "s"))" : nil
         }
+        var notice = ""
+        if bodies.count > 1 || textured > 0 {
+            notice = "Imported \(bodies.count) part\(bodies.count == 1 ? "" : "s")"
+                     + (textured > 0 ? ", \(textured) textured" : "") + "."
+        }
+        if !open.isEmpty {
+            notice += (notice.isEmpty ? "" : " ")
+                + "Open mesh, not a solid: \(open.joined(separator: ", ")) — "
+                + "no enclosed volume; booleans and STEP export need a closed mesh."
+        }
+        if !notice.isEmpty { showNotice(notice) }
     }
 
     func saveThumbnail() {
