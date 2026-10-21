@@ -96,7 +96,8 @@ def scan_on_floor(path, base_mm, out):
 def modelling_calls(calls):
     """The calls that made the model: sketches, features, checks and the
     report — not the camera moves, colours and hides that stage the film."""
-    staging = {"health", "state", "screenshot", "item.setHidden", "body.setMaterial", "view.visualize", "view.accuracyReport", "command.run"}
+    staging = {"health", "state", "screenshot", "item.setHidden", "item.select", "body.setMaterial", "view.visualize",
+               "view.accuracyReport", "command.run"}
     return sum(1 for c in calls if (c.get("arguments") or {}).get("op") not in staging)
 
 
@@ -152,10 +153,10 @@ def take(args):
             beat("import", "Import the iPhone scan")
             reply = mcp.os3d("document.import", {"path": os.path.abspath(args.scan), "fileName": os.path.basename(args.scan)})
             scan_id = reply["bodyIDs"][0]
-            # An import lands selected (tinted blue); hiding and showing it
-            # again clears the selection and leaves the photo texture alone.
-            mcp.os3d("item.setHidden", {"ids": [scan_id]})
-            mcp.os3d("item.setHidden", {"ids": [scan_id], "hidden": False})
+            # An import lands selected, and a selected body is drawn with the
+            # accent tint mixed into its texture (45% blue); clear it so the
+            # scan shows its own photo texture.
+            mcp.os3d("item.select", {"ids": []})
             mcp.os3d("command.run", {"id": "view.fit"})
             hold(0.8)
             mcp.os3d("command.run", {"id": "view.isometric"})
@@ -245,9 +246,8 @@ def take(args):
             mcp.os3d("feature.transform", {"bodyID": cad_id, "translation": [400, 0, -400]})
             reply = mcp.os3d("document.import", {"path": os.path.abspath(args.scan), "fileName": os.path.basename(args.scan)})
             scan2 = reply["bodyIDs"][0]
-            mcp.os3d("item.setHidden", {"ids": [scan2]})
-            mcp.os3d("item.setHidden", {"ids": [scan2], "hidden": False})
-            mcp.os3d("view.visualize", {"preset": "Studio", "background": "color", "backgroundColor": [1, 1, 1],
+            mcp.os3d("item.select", {"ids": []})
+            mcp.os3d("view.visualize", {"preset": "Studio", "background": "color", "backgroundColor": list(args.hook_background),
                                         "groundShadow": True, "panel": False})
             mcp.os3d("command.run", {"id": "view.isometric"})
             mcp.os3d("command.run", {"id": "view.fit"})
@@ -288,6 +288,8 @@ def script_for(timeline, title_say, scan_name):
         "check": "It's a valid solid, every step in the history, ready to export as STEP or STL.",
         "accuracy": "Then the app grades its own work — silhouettes over the scan, every point measured. {:.0f} percent overlap.".format(
             a["overallIoU"] * 100),
+        "report": "Every run also writes a report: the three orthographic silhouettes — the scan filled in blue under the "
+                  "model's outline — and the distance from every sampled point, both ways.",
         "numbers": "A phone scan to a parametric model in {} calls, within {:.0f} millimetres on average.".format(
             a["calls"], a["modelToReference"]["meanMM"]),
         "outro": "OpenShape 3D is open source.",
@@ -515,7 +517,7 @@ def title_overlay(path, title_lines, subtitle, size=78):
                              + [probe.textlength(subtitle, font=small)]) + 2 * pad))
     im = Image.new("RGBA", (w, h), (0, 0, 0, 0))
     d = ImageDraw.Draw(im)
-    d.rounded_rectangle([0, 0, w - 1, h - 1], radius=26, fill=(20, 24, 32, 205))
+    d.rounded_rectangle([0, 0, w - 1, h - 1], radius=26, fill=(20, 24, 32, 205), outline=(255, 255, 255, 48), width=2)
     y = pad - 8
     for line in title_lines:
         d.text((pad, y), line, font=big, fill=(255, 255, 255, 255))
@@ -536,11 +538,107 @@ def caption(path, text, sub=""):
     h = 44 + 2 * pad + (40 if sub else 0)
     im = Image.new("RGBA", (w, h), (0, 0, 0, 0))
     d = ImageDraw.Draw(im)
-    d.rounded_rectangle([0, 0, w - 1, h - 1], radius=22, fill=(20, 24, 32, 215))
+    d.rounded_rectangle([0, 0, w - 1, h - 1], radius=22, fill=(20, 24, 32, 215), outline=(255, 255, 255, 48), width=2)
     d.text((pad, pad - 6), text, font=font, fill=(255, 255, 255, 255))
     if sub:
         d.text((pad, pad + 48), sub, font=small, fill=(190, 198, 210, 255))
     im.save(path)
+
+
+CHROME = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+PAPER = (250, 248, 243)
+
+
+def still_clip(png, path, seconds, vf):
+    subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-loop", "1", "-framerate", str(FPS), "-i", png, "-t", "%.2f" % seconds,
+                    "-vf", vf, "-r", str(FPS), "-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-pix_fmt", "yuv420p", path],
+                   check=True)
+    return path
+
+
+def report_page_clip(html, work, seconds):
+    """The report page itself, rendered by headless Chrome at a 1280-px
+    window with a 1.5× device scale (crisp text at 1920), scrolling from its
+    title down to the three overlays."""
+    if not os.path.exists(CHROME):
+        print("no Chrome at %s; the report page is not filmed" % CHROME)
+        return None
+    png = os.path.join(work, "report-page.png")
+    subprocess.run([CHROME, "--headless=new", "--disable-gpu", "--hide-scrollbars", "--force-device-scale-factor=1.5",
+                    "--window-size=1280,2200", "--screenshot=" + png, "file://" + os.path.abspath(html)],
+                   capture_output=True, check=True)
+    from PIL import Image
+    ih = Image.open(png).size[1]
+    # Down to the overlays grid (the heading sits about 820 px down at
+    # this scale) and no further; an ease-in-out scroll that settles there
+    # for the last third.
+    travel = max(0, min(ih - H, 820))
+    y = "(%d)*(0.5-0.5*cos(PI*min(1,t/%.2f)))" % (travel, seconds * 0.68)
+    return still_clip(png, os.path.join(work, "report-0.mp4"), seconds, "crop=%d:%d:0:'%s'" % (W, H, y))
+
+
+def overlay_triptych(overlays, views, path):
+    """The three orthographic overlays on one sheet, each captioned with its
+    overlap — front, top, right — and the legend the report uses."""
+    from PIL import Image, ImageDraw, ImageFont
+
+    def font(size, bold=False):
+        return ImageFont.truetype("/System/Library/Fonts/HelveticaNeue.ttc", size, index=1 if bold else 0)
+
+    im = Image.new("RGB", (W, H), PAPER)
+    d = ImageDraw.Draw(im)
+    d.text((72, 48), "Orthographic overlays", font=font(58, True), fill=(28, 32, 40))
+    lx = 72
+    for swatch, label in (((86, 140, 214), "scan silhouette"), ((232, 132, 50), "model outline"), ((190, 192, 196), "where they agree")):
+        d.rounded_rectangle([lx, 134, lx + 26, 160], radius=6, fill=swatch)
+        d.text((lx + 38, 128), label, font=font(30), fill=(90, 96, 108))
+        lx += 38 + int(d.textlength(label, font=font(30))) + 48
+    top, bottom = 196, H - 120
+    boxes = []
+    for view in ("front", "top", "right"):
+        src = os.path.join(overlays, view + ".jpg")
+        if not os.path.exists(src):
+            continue
+        pic = Image.open(src).convert("RGB")
+        # The overlay carries its own small header and legend; crop them.
+        pic = pic.crop((0, int(pic.height * 0.035), pic.width, pic.height))
+        scale = (bottom - top) / pic.height
+        boxes.append((view, pic, int(pic.width * scale), bottom - top))
+    gap = 64
+    total = sum(w for _, _, w, _ in boxes) + gap * (len(boxes) - 1)
+    scale_all = min(1.0, (W - 144) / max(total, 1))
+    x = (W - int(total * scale_all)) // 2
+    for view, pic, w, h in boxes:
+        w2, h2 = int(w * scale_all), int(h * scale_all)
+        y = top + (bottom - top - h2) // 2
+        im.paste(pic.resize((w2, h2), Image.LANCZOS), (x, y))
+        d.rectangle([x - 1, y - 1, x + w2, y + h2], outline=(214, 210, 200))
+        label = "%s · %.0f%% overlap" % (view.capitalize(), views.get(view, 0) * 100)
+        d.text((x + (w2 - d.textlength(label, font=font(34, True))) // 2, bottom + 26), label, font=font(34, True), fill=(28, 32, 40))
+        x += w2 + int(gap * scale_all)
+    im.save(path)
+    return path
+
+
+def overlay_pan_clip(overlays, view, work, seconds):
+    """One overlay filling the frame's width, panned top to bottom, so the
+    blue (scan only) and orange (model only) margins read at full size."""
+    src = os.path.join(overlays, view + ".jpg")
+    if not os.path.exists(src):
+        return None
+    from PIL import Image
+    pic = Image.open(src).convert("RGB")
+    pic = pic.crop((0, int(pic.height * 0.035), pic.width, pic.height))
+    # Fit to the frame's width with paper margins, on the report's paper.
+    inner = int(W * 0.72)
+    pic = pic.resize((inner, int(pic.height * inner / pic.width)), Image.LANCZOS)
+    page = Image.new("RGB", (W, pic.height + 160), PAPER)
+    page.paste(pic, ((W - inner) // 2, 80))
+    png = os.path.join(work, "report-%s.png" % view)
+    page.save(png)
+    travel = max(0, page.height - H)
+    y = "(%d)*(0.5-0.5*cos(PI*min(1,t/%.2f)))" % (travel, seconds)
+    return still_clip(png, os.path.join(work, "report-%s.mp4" % view), seconds, "crop=%d:%d:0:'%s'" % (W, H, y))
 
 
 def compose(args):
@@ -620,11 +718,13 @@ def compose(args):
             return None
         if seg_id in ("hook", "ender"):
             # The opening and the ending: closer on the pair of hydrants,
-            # which a fit of two bodies leaves small. Still a downscale.
-            w = int(sw * 0.78) & ~1
+            # which a fit of two bodies leaves small (still a downscale),
+            # and the pair right of centre so the title band at the lower
+            # left sits beside them, not on them.
+            w = int(sw * 0.74) & ~1
             h = int(w * 9 / 16) & ~1
-            x = (sw - w) // 2
-            y = max(0, min(sh - h, int(sh * 0.46) - h // 2))
+            x = max(0, (sw - w) // 2 - int(sw * 0.09))
+            y = max(0, min(sh - h, int(sh * 0.50) - h // 2))
             return pre + "crop=%d:%d:%d:%d" % (w, h, x, y)
         crop_h = int(sw * 9 / 16)
         spare = max(0, sh - crop_h)
@@ -634,8 +734,33 @@ def compose(args):
     clip_paths = []
     if hook:
         segs.insert(0, hook)
+    report_clips = []
+    if args.overlays and os.path.isdir(args.overlays):
+        # The report beat: as long as its narration, split across the page
+        # scroll, the three overlays and the front view close up.
+        say = clips.get("report")
+        span = (say["seconds"] + 2.0) if say else 12.0
+        page = report_page_clip(args.report, work, span * 0.36) if args.report else None
+        if page:
+            report_clips.append(("report", "The accuracy report · one HTML file", page))
+        sheet = overlay_triptych(args.overlays, acc["views"], os.path.join(work, "report-sheet.png"))
+        # A slow push in on the sheet (zoompan wants an oversampled source to stay smooth).
+        tri = still_clip(sheet, os.path.join(work, "report-1.mp4"), span * (0.34 if page else 0.5),
+                         "scale=%d:%d,zoompan=z='1+0.0006*on':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=1:s=%dx%d:fps=%d" % (
+                             W * 2, H * 2, W, H, FPS))
+        report_clips.append(("report-sheet", "", tri))
+        pan = overlay_pan_clip(args.overlays, "front", work, span * (0.30 if page else 0.5))
+        if pan:
+            report_clips.append(("report-front", "Front view · the scan in blue, the model's outline in orange", pan))
+    if hook:
         segs.append(ender)
     for seg in segs:
+        if seg["id"] == "ender" and report_clips:
+            for sid, cap, path in report_clips:
+                length = float(subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", path],
+                                              capture_output=True, text=True).stdout.strip())
+                clip_paths.append(({"id": sid, "caption": cap, "pieces": [(0, length)], "say": clips.get("report") if sid == "report" else None},
+                                   path, length))
         for j, (a, b) in enumerate(seg["pieces"]):
             path = os.path.join(work, "%s-%d.mp4" % (seg["id"], j))
             crop = crop_for(seg["id"])
@@ -750,7 +875,7 @@ def compose(args):
         sid, a, b = overlays[i]
         # Top-left over the viewport; bottom-left while the report sheet is
         # up, so the pill never sits on the sheet's title.
-        y = "H-h-48" if sid in ("accuracy", "hook", "ender", "outro-overlay") else "40"
+        y = "H-h-48" if sid in ("accuracy", "hook", "ender", "outro-overlay") or sid.startswith("report") else "40"
         filters.append("%s[%d:v]overlay=56:%s:enable='between(t,%.2f,%.2f)'[v%d]" % (vin, i + 1, y, a + 0.15, b - 0.15, i))
         vin = "[v%d]" % i
     video_out = vin
@@ -818,11 +943,13 @@ def main():
     t.add_argument("--port", type=int, default=8787)
     t.add_argument("--simulator", default="os3d-hydrant")
     t.add_argument("--tolerance", type=float, default=3.0)
+    t.add_argument("--hook-background", type=float, nargs=3, default=[1, 1, 1], metavar=("R", "G", "B"),
+                   help="the studio background behind the opening pair (0…1)")
     c = sub.add_parser("compose")
     c.add_argument("--out", default="demo")
     c.add_argument("--name", default="hydrant-demo")
     c.add_argument("--title", default="From an iPhone scan|to a CAD model")
-    c.add_argument("--subtitle", default="A fire hydrant, built in OpenShape 3D by an assistant over MCP")
+    c.add_argument("--subtitle", default="Built in OpenShape 3D by an assistant, over MCP")
     c.add_argument("--title-say", default="A fire hydrant, scanned with an iPhone — turned into a CAD model inside OpenShape 3D by an assistant, over MCP.")
     c.add_argument("--tts", choices=["gemini", "edge"], default="gemini")
     c.add_argument("--gemini-voice", default="Charon")
@@ -831,6 +958,8 @@ def main():
     c.add_argument("--music", default="lyria", help="lyria | generated | none | a file")
     c.add_argument("--music-prompt", default="bright instrumental synth groove, light drums, warm pads, optimistic, steady tempo, background music")
     c.add_argument("--music-gain", type=float, default=0.22)
+    c.add_argument("--report", default=None, help="the run's HTML accuracy report, filmed scrolling (needs Chrome)")
+    c.add_argument("--overlays", default=None, help="the run's overlays/ folder (front/top/right.jpg) for the report beat")
     c.add_argument("--landscape", action=argparse.BooleanOptionalAction, default=True,
                    help="the take was filmed on a landscape device (the recording needs a quarter turn)")
     args = ap.parse_args()

@@ -2,7 +2,7 @@
 
 > **Current unfinished-work register:** [Sketch parity open status](SKETCH_PARITY_OPEN_STATUS.md). Maintained at every meaningful checkpoint; older mission logs below are historical.
 
-Last updated: 2026-10-20 (night: the demo film, `view.visualize` `panel: false`) — **Accuracy Report** (one body measured against
+Last updated: 2026-10-21 (the demo film shows the scan's texture and the report's overlays; `item.select` agent op) — **Accuracy Report** (one body measured against
 another: orthographic silhouette overlays per view, outline and surface
 deviation both ways; `Kernel/AccuracyKit.swift`, Views ▸ Accuracy Report…,
 `/v1/accuracy` + `/v1/accuracy/image`, MCP ops `accuracy` /
@@ -98,6 +98,17 @@ the zip in Downloads, on the real scan (`docs/SCAN_TO_CAD.md`).
   body instead; the studio ground is y = 0, so the film's scan copy stands
   base-at-origin; a looped `-stream_loop -1` music input into `amix` never
   ends and hangs the mux — loop the bed to length first.
+  2026-10-21 (`feat/demo-film-texture`): the scan had been blue in every
+  shot — an import leaves its body selected, and a selected body is drawn
+  with 45% of the accent mixed into its texture (hiding and showing it
+  does not deselect). The agent had no way to clear a selection, so
+  `item.select` (`ids[]`; `[]` clears; no undo step) joined the exec ops
+  (`AgentExec` / `AgentBridge`, skill, catalog, `AGENT_CONTROL.md`,
+  `AgentExecTests`); the take clears it after each import, the opening
+  pair turns on a dark studio backdrop, and a report beat (`--report`,
+  `--overlays`) films the HTML report scrolling to its overlays, a sheet of
+  the three orthographic overlays with their overlap, and the front view
+  panned at full width.
 - **Not yet in the web app**: the kernel compiles there unchanged, but the
   sheet is not ported (openshape-cloud `docs/IOS_PARITY.md` lists it).
 
