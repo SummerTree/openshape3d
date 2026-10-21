@@ -33,6 +33,38 @@ nonisolated enum ExchangeFormat: String, Sendable {
     var fileExtension: String { self == .step ? "step" : "igs" }
 }
 
+/// What a STEP or IGES read found, beyond the shapes: how many solids the file
+/// declared, how many were stitched closed from loose faces, how many open
+/// sheets were kept, how many loose faces there were, and how many shapes
+/// would not heal and were left out. A file that only ever held declared
+/// solids reads as all zeros but `solids`.
+nonisolated struct STEPReadSummary: Sendable, Equatable {
+    var solids = 0
+    var sewnSolids = 0
+    var openShells = 0
+    var freeFaces = 0
+    var dropped = 0
+
+    /// Wording for the import notice; empty when there is nothing to say.
+    var notice: String {
+        var notes: [String] = []
+        if sewnSolids > 0 {
+            notes.append("Stitched \(freeFaces) loose face\(freeFaces == 1 ? "" : "s") into "
+                         + "\(sewnSolids) solid\(sewnSolids == 1 ? "" : "s") the file had not declared.")
+        }
+        if openShells > 0 {
+            notes.append("\(openShells) open surface\(openShells == 1 ? "" : "s") imported as "
+                         + "\(openShells == 1 ? "a sheet" : "sheets"), not \(openShells == 1 ? "a solid" : "solids") — "
+                         + "booleans and STEP export need closed solids.")
+        }
+        if dropped > 0 {
+            notes.append("\(dropped) shape\(dropped == 1 ? "" : "s") could not be healed and "
+                         + "\(dropped == 1 ? "was" : "were") left out.")
+        }
+        return notes.joined(separator: " ")
+    }
+}
+
 nonisolated enum STEPKit {
 
     /// What `export(bodies:)` managed to do. `skipped` names the mesh-only
@@ -81,12 +113,22 @@ nonisolated enum STEPKit {
     /// file or carry no solid — the caller reports that as one recoverable
     /// import error either way, since neither gives us anything to place.
     static func solids(from data: Data, format: ExchangeFormat = .step) -> [BRepHandle] {
+        read(from: data, format: format).solids
+    }
+
+    /// Everything importable in a STEP or IGES payload — declared solids,
+    /// solids stitched closed from loose faces, and open sheets — with the
+    /// summary that says which was which, for the import notice.
+    static func read(from data: Data, format: ExchangeFormat = .step) -> (solids: [BRepHandle], summary: STEPReadSummary) {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("os3d-\(format.rawValue)-in-\(UUID().uuidString)")
             .appendingPathExtension(format.fileExtension)
         defer { try? FileManager.default.removeItem(at: url) }
-        guard (try? data.write(to: url)) != nil else { return [] }
-        return format == .step ? OCCTKernel.readSTEP(from: url) : OCCTKernel.readIGES(from: url)
+        guard (try? data.write(to: url)) != nil else { return ([], STEPReadSummary()) }
+        let read = format == .step
+            ? OCCTKernel.readSTEPWithSummary(from: url)
+            : OCCTKernel.readIGESWithSummary(from: url)
+        return (solids: read.handles, summary: read.summary)
     }
 
     /// Turn one imported solid into a body. Identity transform with the solid

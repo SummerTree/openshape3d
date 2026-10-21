@@ -33,6 +33,7 @@
 #include <BRepTools.hxx>
 #include <BRepGProp_Face.hxx>
 #include <BRep_Builder.hxx>
+#include <BRepClass3d_SolidClassifier.hxx>
 #include <BRepFilletAPI_MakeFillet.hxx>
 #include <BRepAlgoAPI_Defeaturing.hxx>
 #include <BRepAlgoAPI_Splitter.hxx>
@@ -3824,6 +3825,22 @@ static void OS3DCollectMakerHistoryThrough(BRepBuilderAPI_MakeShape &builder,
     return OS3DVolume(shape->_shape);
 }
 
++ (BOOL)boundsOfShape:(OCCTShape *)shape min:(double *)outMin max:(double *)outMax {
+    if (shape == nil || shape->_shape.IsNull() || outMin == nullptr || outMax == nullptr) return NO;
+    try {
+        Bnd_Box box;
+        BRepBndLib::AddOptimal(shape->_shape, box, Standard_False, Standard_False);
+        if (box.IsVoid()) return NO;
+        box.Get(outMin[0], outMin[1], outMin[2], outMax[0], outMax[1], outMax[2]);
+        for (int i = 0; i < 3; ++i) {
+            if (!std::isfinite(outMin[i]) || !std::isfinite(outMax[i])) return NO;
+        }
+        return YES;
+    } catch (...) {
+        return NO;
+    }
+}
+
 + (double)maxToleranceOfShape:(OCCTShape *)shape {
     if (shape == nil || shape->_shape.IsNull()) return 0.0;
     try {
@@ -3850,38 +3867,140 @@ static void OS3DCollectMakerHistoryThrough(BRepBuilderAPI_MakeShape &builder,
 }
 
 + (NSArray<OCCTShape *> *)readSTEPFromPath:(NSString *)path {
+    return [self readSTEPFromPath:path stats:nil];
+}
+
+static void OS3DZeroLedger(NSMutableDictionary<NSString *, NSNumber *> *stats) {
+    if (stats == nil) return;
+    for (NSString *key in @[@"solids", @"sewnSolids", @"openShells", @"freeFaces", @"dropped"]) stats[key] = @0;
+}
+
+// Everything importable in `roots` — the shape(s) a STEP or IGES transfer
+// produced — appended to `out`, each solid and each sheet its own body, with
+// the ledger written into `stats` (nil to skip it).
+//
+// Imported geometry is a TRUST BOUNDARY: heal-and-validate each shape on
+// the way in (one ShapeFix pass — FreeCAD heals at import too,
+// docs/FREECAD_PLAYBOOK.md H1) and DROP what still doesn't validate, so a
+// dirty export can't seed a body every later op chokes on.
+//
+// Every solid becomes its own body. Faces that belong to NO solid — a
+// surface model, a part exported as a shell, the package body of an
+// electronics footprint beside its declared pin solids, most of what IGES
+// carries — are sewn together across all roots and closed into solids
+// where the shell closes; what stays open is kept as a sheet and reported,
+// not dropped. Until 2026-10-21 a STEP root with any solid silently lost
+// its loose shells (SOT404.stp: 4 pins kept, the package body — declared a
+// solid, but 17 faces that never close — gone without a word), and a
+// shell-only file (SOT23.stp, 73 OPEN_SHELLs) became one body of
+// unconnected faces instead of the 3.55 mm³ solid they stitch into.
+static void OS3DCollectImportable(const TopoDS_Shape &roots,
+                                  NSMutableArray<OCCTShape *> *out,
+                                  NSMutableDictionary<NSString *, NSNumber *> *stats) {
+    int solids = 0, sewnSolids = 0, openShells = 0, freeFaces = 0, dropped = 0;
+    const auto append = [out, &dropped](const TopoDS_Shape &candidate) -> bool {
+        if (!OS3DFiniteBounds(candidate)) { ++dropped; return false; }
+        const TopoDS_Shape valid = OS3DHealAndValidate(candidate);
+        if (valid.IsNull()) { ++dropped; return false; }
+        OCCTShape *w = [OCCTShape new];
+        w->_shape = valid;
+        [out addObject:w];
+        return true;
+    };
+    TopTools_IndexedMapOfShape inSolids;
+    BRepBuilderAPI_Sewing sewing(1e-3);   // mm; the gaps a STEP writer leaves
+    for (TopExp_Explorer ex(roots, TopAbs_SOLID); ex.More(); ex.Next()) {
+        if (append(ex.Current())) ++solids;
+        TopExp::MapShapes(ex.Current(), TopAbs_FACE, inSolids);
+    }
+    for (TopExp_Explorer ex(roots, TopAbs_FACE); ex.More(); ex.Next()) {
+        if (inSolids.Contains(ex.Current())) continue;
+        sewing.Add(ex.Current());
+        ++freeFaces;
+    }
+    if (freeFaces > 0) {
+        sewing.Perform();
+        const TopoDS_Shape sewed = sewing.SewedShape();
+        // A sheet that will not validate as a whole is usually one bad
+        // face — SOD_323.stp: a wire the sewing could not close, 1 face
+        // of 48 — and it must not take the other 47 with it. Keep the
+        // faces that validate, re-stitched, and count only the bad ones
+        // as dropped.
+        const auto appendSheet = [&](const TopoDS_Shape &sheet) {
+            if (append(sheet)) { ++openShells; return; }
+            --dropped;   // not lost yet: retried face by face
+            BRepBuilderAPI_Sewing resew(1e-3);
+            int kept = 0;
+            for (TopExp_Explorer fx(sheet, TopAbs_FACE); fx.More(); fx.Next()) {
+                if (BRepCheck_Analyzer(fx.Current()).IsValid()) { resew.Add(fx.Current()); ++kept; }
+                else ++dropped;
+            }
+            if (kept == 0) return;
+            resew.Perform();
+            const TopoDS_Shape pieces = resew.SewedShape();
+            TopTools_IndexedMapOfShape inPieces;
+            for (TopExp_Explorer sx(pieces, TopAbs_SHELL); sx.More(); sx.Next()) {
+                TopExp::MapShapes(sx.Current(), TopAbs_FACE, inPieces);
+                if (append(sx.Current())) ++openShells;
+            }
+            for (TopExp_Explorer fx(pieces, TopAbs_FACE); fx.More(); fx.Next()) {
+                if (inPieces.Contains(fx.Current())) continue;
+                if (append(fx.Current())) ++openShells;
+            }
+        };
+        TopTools_IndexedMapOfShape inShells;
+        for (TopExp_Explorer ex(sewed, TopAbs_SHELL); ex.More(); ex.Next()) {
+            const TopoDS_Shell shell = TopoDS::Shell(ex.Current());
+            TopExp::MapShapes(shell, TopAbs_FACE, inShells);
+            if (BRep_Tool::IsClosed(shell)) {
+                BRepBuilderAPI_MakeSolid maker(shell);
+                if (maker.IsDone()) {
+                    TopoDS_Solid solid = maker.Solid();
+                    // A shell wound inside out makes a negative solid:
+                    // if infinity reads as "inside", flip it.
+                    BRepClass3d_SolidClassifier classifier(solid);
+                    classifier.PerformInfinitePoint(Precision::Confusion());
+                    if (classifier.State() == TopAbs_IN) solid.Reverse();
+                    if (append(solid)) { ++sewnSolids; continue; }
+                    --dropped;   // its faces may still stand as a sheet
+                }
+            }
+            appendSheet(shell);
+        }
+        // A face the sewing could attach to nothing is a sheet of one.
+        for (TopExp_Explorer ex(sewed, TopAbs_FACE); ex.More(); ex.Next()) {
+            if (inShells.Contains(ex.Current())) continue;
+            if (append(ex.Current())) ++openShells;
+        }
+    }
+    if (stats != nil) {
+        stats[@"solids"] = @(solids);
+        stats[@"sewnSolids"] = @(sewnSolids);
+        stats[@"openShells"] = @(openShells);
+        stats[@"freeFaces"] = @(freeFaces);
+        stats[@"dropped"] = @(dropped);
+    }
+}
+
++ (NSArray<OCCTShape *> *)readSTEPFromPath:(NSString *)path
+                                     stats:(NSMutableDictionary<NSString *, NSNumber *> *)stats {
     NSMutableArray<OCCTShape *> *out = [NSMutableArray array];
+    OS3DZeroLedger(stats);
     if (path.length == 0) return out;
     try {
         STEPControl_Reader reader;
         if (reader.ReadFile(path.fileSystemRepresentation) != IFSelect_RetDone) return out;
         reader.TransferRoots();
-        // Imported geometry is a TRUST BOUNDARY: heal-and-validate each
-        // solid on the way in (one ShapeFix pass — FreeCAD heals at import
-        // too, docs/FREECAD_PLAYBOOK.md H1) and DROP what still doesn't
-        // validate, so a dirty export can't seed a body every later op
-        // chokes on.
-        const auto append = [out](const TopoDS_Shape &candidate) {
-            if (!OS3DFiniteBounds(candidate)) return;
-            const TopoDS_Shape valid = OS3DHealAndValidate(candidate);
-            if (valid.IsNull()) return;
-            OCCTShape *w = [OCCTShape new];
-            w->_shape = valid;
-            [out addObject:w];
-        };
+        TopoDS_Compound roots;
+        BRep_Builder builder;
+        builder.MakeCompound(roots);
         for (Standard_Integer i = 1; i <= reader.NbShapes(); ++i) {
             const TopoDS_Shape shape = reader.Shape(i);
-            if (shape.IsNull()) continue;
-            // A STEP root can be a compound; emit each solid separately so each
-            // becomes its own body.
-            TopExp_Explorer solids(shape, TopAbs_SOLID);
-            if (solids.More()) {
-                for (; solids.More(); solids.Next()) append(solids.Current());
-            } else {
-                append(shape);
-            }
+            if (!shape.IsNull()) builder.Add(roots, shape);
         }
+        OS3DCollectImportable(roots, out, stats);
     } catch (...) {
+        OS3DZeroLedger(stats);
         return [NSMutableArray array];
     }
     return out;
@@ -3910,7 +4029,15 @@ static void OS3DCollectMakerHistoryThrough(BRepBuilderAPI_MakeShape &builder,
 }
 
 + (NSArray<OCCTShape *> *)readIGESFromPath:(NSString *)path {
+    return [self readIGESFromPath:path stats:nil];
+}
+
+// IGES mostly arrives as loose trimmed surfaces, which is exactly the case
+// the collector sews; a file with declared solids keeps them.
++ (NSArray<OCCTShape *> *)readIGESFromPath:(NSString *)path
+                                     stats:(NSMutableDictionary<NSString *, NSNumber *> *)stats {
     NSMutableArray<OCCTShape *> *out = [NSMutableArray array];
+    OS3DZeroLedger(stats);
     if (path.length == 0) return out;
     try {
         IGESControl_Controller::Init();
@@ -3919,34 +4046,19 @@ static void OS3DCollectMakerHistoryThrough(BRepBuilderAPI_MakeShape &builder,
         reader.TransferRoots();
         const TopoDS_Shape shape = reader.OneShape();
         if (shape.IsNull()) return out;
-        const auto append = [out](const TopoDS_Shape &candidate) {
-            if (!OS3DFiniteBounds(candidate)) return;
-            const TopoDS_Shape valid = OS3DHealAndValidate(candidate);
-            if (valid.IsNull()) return;
-            OCCTShape *w = [OCCTShape new];
-            w->_shape = valid;
-            [out addObject:w];
-        };
-        TopExp_Explorer solids(shape, TopAbs_SOLID);
-        if (solids.More()) {
-            for (; solids.More(); solids.Next()) append(solids.Current());
-            return out;
-        }
-        // Surfaces only: sew them, and close each closed shell into a solid.
-        BRepBuilderAPI_Sewing sewing(1e-3);
-        sewing.Add(shape);
-        sewing.Perform();
-        const TopoDS_Shape sewn = sewing.SewedShape();
-        for (TopExp_Explorer shells(sewn, TopAbs_SHELL); shells.More(); shells.Next()) {
-            const TopoDS_Shell &shell = TopoDS::Shell(shells.Current());
-            if (!BRep_Tool::IsClosed(shell)) continue;
-            BRepBuilderAPI_MakeSolid makeSolid(shell);
-            if (makeSolid.IsDone()) append(makeSolid.Solid());
-        }
+        OS3DCollectImportable(shape, out, stats);
     } catch (...) {
+        OS3DZeroLedger(stats);
         return [NSMutableArray array];
     }
     return out;
+}
+
++ (NSInteger)solidCountOfShape:(OCCTShape *)shape {
+    if (shape == nil || shape->_shape.IsNull()) return 0;
+    NSInteger n = 0;
+    for (TopExp_Explorer ex(shape->_shape, TopAbs_SOLID); ex.More(); ex.Next()) ++n;
+    return n;
 }
 
 // MARK: - Geometry health (docs/FREECAD_PLAYBOOK.md D1)

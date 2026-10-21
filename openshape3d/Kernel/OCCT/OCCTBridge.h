@@ -569,6 +569,13 @@ typedef NS_ENUM(NSInteger, OCCTOpCode) {
 /// pin against analytically-derived values.
 + (double)volumeOfShape:(OCCTShape *)shape;
 
+/// Tight axis-aligned bounds of the exact geometry (`BRepBndLib::AddOptimal`
+/// without triangulation or tolerance padding), in the shape's own frame.
+/// `outMin`/`outMax` take three doubles each. NO when the shape is null or
+/// empty. The render mesh is an inscribed tessellation, so its box reads a
+/// chord error short of a curved part; this one does not.
++ (BOOL)boundsOfShape:(OCCTShape *)shape min:(double *)outMin max:(double *)outMax;
+
 /// The largest tolerance any sub-shape of `shape` carries
 /// (`ShapeAnalysis_ShapeTolerance`). Healthy analytic solids sit at
 /// `Precision::Confusion()` (1e-7); a shape that has been through healing can
@@ -596,6 +603,20 @@ typedef NS_ENUM(NSInteger, OCCTOpCode) {
 /// SURFACES rather than solids: those are sewn and closed into solids where
 /// they form closed shells. Healed and validated like STEP; empty on failure.
 + (NSArray<OCCTShape *> *)readIGESFromPath:(NSString *)path NS_SWIFT_NAME(readIGES(fromPath:));
+
+/// `readSTEPFromPath:` / `readIGESFromPath:` reporting what was found into
+/// `stats` (each an NSNumber): `solids` the file declared, `sewnSolids`
+/// closed from loose faces, `openShells` kept as sheet bodies, `freeFaces`
+/// seen outside any solid, and `dropped` shapes that would not heal. Loose
+/// faces are sewn at 1e-3 mm.
++ (NSArray<OCCTShape *> *)readSTEPFromPath:(NSString *)path
+                                     stats:(NSMutableDictionary<NSString *, NSNumber *> * _Nullable)stats;
++ (NSArray<OCCTShape *> *)readIGESFromPath:(NSString *)path
+                                     stats:(NSMutableDictionary<NSString *, NSNumber *> * _Nullable)stats NS_SWIFT_NAME(readIGES(fromPath:stats:));
+
+/// How many solids `shape` holds — 0 for a sheet body (an open shell kept
+/// at import) whose "volume" would otherwise be a meaningless integral.
++ (NSInteger)solidCountOfShape:(OCCTShape *)shape;
 
 // MARK: - Geometry health + capture replay (docs/FREECAD_PLAYBOOK.md D1/D2)
 

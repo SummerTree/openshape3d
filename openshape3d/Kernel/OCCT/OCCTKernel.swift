@@ -1035,6 +1035,16 @@ nonisolated enum OCCTKernel {
         OCCTBridge.volume(of: handle.shape)
     }
 
+    /// Tight bounds of the exact geometry in the body's own frame — no
+    /// tessellation chord error, no tolerance padding. Nil for an empty
+    /// shape.
+    static func bounds(_ handle: BRepHandle) -> (min: SIMD3<Double>, max: SIMD3<Double>)? {
+        var lo = [Double](repeating: 0, count: 3)
+        var hi = [Double](repeating: 0, count: 3)
+        guard OCCTBridge.bounds(of: handle.shape, min: &lo, max: &hi) else { return nil }
+        return (SIMD3(lo[0], lo[1], lo[2]), SIMD3(hi[0], hi[1], hi[2]))
+    }
+
     /// The largest fillet radius the edges nearest `points` can actually
     /// take — bisection over real, fully-checked `BRepFilletAPI` builds, so
     /// the drag clamp and the commit agree by construction
@@ -1085,7 +1095,26 @@ nonisolated enum OCCTKernel {
     /// Read every solid from a STEP file; empty when the file is unreadable or
     /// holds no solids, so the caller surfaces a recoverable import error.
     static func readSTEP(from url: URL) -> [BRepHandle] {
-        OCCTBridge.readSTEP(fromPath: url.path).map(BRepHandle.init)
+        readSTEPWithSummary(from: url).handles
+    }
+
+    /// The same read, with what it found: the solids the file declared, the
+    /// ones stitched closed from loose faces, the open sheets kept, the loose
+    /// faces seen, and the shapes dropped as unhealable — the import notice
+    /// is written from these.
+    static func readSTEPWithSummary(from url: URL) -> (handles: [BRepHandle], summary: STEPReadSummary) {
+        let stats = NSMutableDictionary()
+        let handles = OCCTBridge.readSTEP(fromPath: url.path, stats: stats).map(BRepHandle.init)
+        func count(_ key: String) -> Int { (stats[key] as? NSNumber)?.intValue ?? 0 }
+        return (handles, STEPReadSummary(
+            solids: count("solids"), sewnSolids: count("sewnSolids"), openShells: count("openShells"),
+            freeFaces: count("freeFaces"), dropped: count("dropped")))
+    }
+
+    /// Solids in a handle: 0 for a sheet body, whose volume is not a number
+    /// worth showing.
+    static func solidCount(_ handle: BRepHandle) -> Int {
+        OCCTBridge.solidCount(of: handle.shape)
     }
 
     /// Write analytic solids to an IGES file (B-rep, millimetres).
@@ -1097,7 +1126,18 @@ nonisolated enum OCCTKernel {
     /// Read the solids from an IGES file (surfaces are sewn into solids where
     /// they close); empty when unreadable or there are none.
     static func readIGES(from url: URL) -> [BRepHandle] {
-        OCCTBridge.readIGES(fromPath: url.path).map(BRepHandle.init)
+        readIGESWithSummary(from: url).handles
+    }
+
+    /// `readIGES(from:)` with the ledger `readSTEPWithSummary(from:)` keeps:
+    /// IGES is the format most likely to arrive as loose trimmed surfaces.
+    static func readIGESWithSummary(from url: URL) -> (handles: [BRepHandle], summary: STEPReadSummary) {
+        let stats = NSMutableDictionary()
+        let handles = OCCTBridge.readIGES(fromPath: url.path, stats: stats).map(BRepHandle.init)
+        func count(_ key: String) -> Int { (stats[key] as? NSNumber)?.intValue ?? 0 }
+        return (handles, STEPReadSummary(
+            solids: count("solids"), sewnSolids: count("sewnSolids"), openShells: count("openShells"),
+            freeFaces: count("freeFaces"), dropped: count("dropped")))
     }
 
     /// Serialize a solid so the analytic geometry survives a document reload.

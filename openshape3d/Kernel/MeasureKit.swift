@@ -45,6 +45,11 @@ nonisolated enum MeasureKit {
     static func volume(of body: Body) -> Double {
         let s = body.transform.scale
         if let brep = body.brep {
+            // A sheet body — an open shell kept at STEP import — encloses
+            // nothing. The integral over its faces is a number, not a
+            // volume, and the render mesh's would be another; neither is
+            // worth showing.
+            guard OCCTKernel.solidCount(brep) > 0 else { return 0 }
             let exact = OCCTKernel.volume(brep)
             if exact > 0 { return exact * s * s * s }
         }
@@ -81,15 +86,29 @@ nonisolated enum MeasureKit {
 
     /// World-space AABB of the given bodies: transform the 8 local-AABB
     /// corners per body (cheap and correct for TRS). Nil when no geometry.
+    ///
+    /// A body with a B-rep is measured on the exact geometry; the render
+    /// mesh is an inscribed tessellation and its box reads a chord error
+    /// short on anything curved (3 µm on a 15 mm washer, 20 µm on a 100 mm
+    /// one — enough to fail the 0.01 mm bounds gate the CAD test pack
+    /// applies, for a part that was right).
     static func boundingBox(bodies: [Body]) -> (min: SIMD3<Double>, max: SIMD3<Double>)? {
         var result: (min: SIMD3<Double>, max: SIMD3<Double>)?
-        for body in bodies where !body.render.positions.isEmpty {
-            let aabb = body.render.localAABB
+        for body in bodies where !body.render.positions.isEmpty || body.brep != nil {
+            let local: (min: SIMD3<Double>, max: SIMD3<Double>)
+            if let brep = body.brep, let exact = OCCTKernel.bounds(brep) {
+                local = exact
+            } else if !body.render.positions.isEmpty {
+                let aabb = body.render.localAABB
+                local = (SIMD3<Double>(aabb.min), SIMD3<Double>(aabb.max))
+            } else {
+                continue
+            }
             for i in 0..<8 {
                 let corner = SIMD3<Double>(
-                    Double((i & 1) == 0 ? aabb.min.x : aabb.max.x),
-                    Double((i & 2) == 0 ? aabb.min.y : aabb.max.y),
-                    Double((i & 4) == 0 ? aabb.min.z : aabb.max.z)
+                    (i & 1) == 0 ? local.min.x : local.max.x,
+                    (i & 2) == 0 ? local.min.y : local.max.y,
+                    (i & 4) == 0 ? local.min.z : local.max.z
                 )
                 let world = body.transform.applying(to: corner)
                 if let current = result {
