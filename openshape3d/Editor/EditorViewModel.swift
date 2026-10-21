@@ -1311,6 +1311,30 @@ final class EditorViewModel {
                 drawable.drawnIndices = drawn.indices
                 drawable.drawnRevision = drawn.revision
             }
+            if let preview = deviationPreview, preview.reference == body.id,
+               preview.meshRevision == body.meshRevision, preview.texcoords.count == body.render.positions.count {
+                // The reference wears the deviation colours: its own mesh
+                // with texcoords into the ramp, drawn through the textured
+                // pipeline like an imported photo; its own material and
+                // selection tint step aside so the colours mean one thing.
+                var mesh = body.render
+                mesh.texcoords = preview.texcoords
+                drawable.renderMesh = mesh
+                drawable.meshRevision = body.meshRevision &+ preview.stamp
+                drawable.drawnIndices = nil
+                drawable.drawnRevision = nil
+                drawable.selectionState = SelectionStateNone.rawValue
+                drawable.material = BodyMaterial(baseColor: SIMD4(1, 1, 1, 1), metallic: 0, roughness: 0.9,
+                                                 textureData: preview.ramp, textureRevision: preview.stamp)
+            } else if let preview = deviationPreview, preview.model == body.id {
+                // The model, ghosted behind the colours.
+                var material = drawable.material ?? BodyMaterial(baseColor: drawable.baseColor)
+                material.baseColor.w = 0.28
+                material.textureData = nil
+                material.textureRevision = 0
+                drawable.material = material
+                drawable.selectionState = SelectionStateNone.rawValue
+            }
             drawables.append(drawable)
             patches += facePatches(body, selectionState: selectionState)
         }
@@ -6871,6 +6895,57 @@ final class EditorViewModel {
     /// with `panel: false`), so a screenshot or a recording shows the
     /// model alone. The hand-driven toolbar button always shows it.
     var visualizePanelHidden = false
+
+    // MARK: Deviation preview (the Accuracy Report on the part itself)
+
+    /// The reference body coloured by its distance to the model, when on
+    /// — a display state like a section view: nothing in the document, no
+    /// undo step. See `DeviationPreview`.
+    var deviationPreview: DeviationPreview?
+    /// While `showDeviationPreview` measures (a few seconds on a dense scan).
+    var deviationPreviewComputing = false
+    /// `view.deviationPreview` with `panel: false` keeps the legend off a
+    /// screenshot or a recording.
+    var deviationPanelHidden = false
+
+    /// Measure `reference` against `model` off the main actor and colour it
+    /// in the viewport; the preview is also returned.
+    @discardableResult
+    func showDeviationPreview(reference: BodyID, model: BodyID, toleranceMM: Double,
+                              maxMM: Double? = nil) async -> DeviationPreview? {
+        guard let ref = session.document.body(with: reference),
+              let mdl = session.document.body(with: model), ref.id != mdl.id else { return nil }
+        deviationPreviewComputing = true
+        let limit = maxMM ?? max(toleranceMM * 5, 1)
+        let preview = await Task.detached(priority: .userInitiated) {
+            DeviationPreview.make(reference: ref, model: mdl, toleranceMM: toleranceMM, maxMM: limit)
+        }.value
+        deviationPreviewComputing = false
+        deviationPreview = preview
+        return preview
+    }
+
+    func endDeviationPreview() {
+        deviationPreview = nil
+        deviationPreviewComputing = false
+        deviationPanelHidden = false
+    }
+
+    /// The pair a one-tap preview compares, the way the Accuracy Report
+    /// sheet picks its defaults: two selected bodies, else the first mesh
+    /// body (a scan has no B-rep) against the first analytic one.
+    func deviationPreviewDefaults() -> (reference: BodyID, model: BodyID)? {
+        let bodies = session.document.bodies
+        let selected = bodies.filter { selection.contains($0.id) }
+        if selected.count >= 2 {
+            let meshFirst = selected.sorted { ($0.brep == nil ? 0 : 1) < ($1.brep == nil ? 0 : 1) }
+            return (meshFirst[0].id, meshFirst[1].id)
+        }
+        guard let reference = bodies.first(where: { $0.brep == nil }),
+              let model = bodies.first(where: { $0.brep != nil && $0.id != reference.id })
+                ?? bodies.first(where: { $0.id != reference.id }) else { return nil }
+        return (reference.id, model.id)
+    }
     var visualizationTab: VisualizationTab = .materials
     /// The environment while a slider is being dragged (committed — one undo
     /// step — when the drag ends).

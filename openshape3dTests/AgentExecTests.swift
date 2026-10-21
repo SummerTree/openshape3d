@@ -191,6 +191,33 @@ final class AgentExecTests: XCTestCase {
         XCTAssertEqual(code(#"{"op":"item.select","args":{"ids":["nope"]}}"#), "bad_uuid")
     }
 
+    func testDeviationPreviewParsesBodiesToleranceAndMax() throws {
+        let a = UUID(), b = UUID()
+        guard case let .deviationPreview(reference, model, tolerance, maxMM, panel, show)? = op(
+            #"{"op":"view.deviationPreview","args":{"reference":"\#(a.uuidString)","model":"\#(b.uuidString)","tolerance":2,"maxMM":12,"panel":false}}"#) else {
+            return XCTFail("expected .deviationPreview")
+        }
+        XCTAssertEqual(reference.raw, a)
+        XCTAssertEqual(model.raw, b)
+        XCTAssertEqual(tolerance, 2)
+        XCTAssertEqual(maxMM, 12)
+        XCTAssertFalse(panel)
+        XCTAssertTrue(show)
+        guard case let .deviationPreview(_, _, _, none, shown, on)? = op(
+            #"{"op":"view.deviationPreview","args":{"reference":"\#(a.uuidString)","model":"\#(b.uuidString)"}}"#) else {
+            return XCTFail("expected .deviationPreview")
+        }
+        XCTAssertNil(none, "maxMM defaults in the bridge (five tolerances)")
+        XCTAssertTrue(shown, "the legend shows unless panel: false")
+        XCTAssertTrue(on)
+        guard case let .deviationPreview(_, _, _, _, _, off)? = op(#"{"op":"view.deviationPreview","args":{"off":true}}"#) else {
+            return XCTFail("expected .deviationPreview off")
+        }
+        XCTAssertFalse(off)
+        XCTAssertEqual(code(#"{"op":"view.deviationPreview","args":{"reference":"\#(a.uuidString)","model":"\#(b.uuidString)","maxMM":0.5}}"#), "bad_maxMM")
+        XCTAssertEqual(code(#"{"op":"view.deviationPreview","args":{"model":"\#(b.uuidString)"}}"#), "missing_reference")
+    }
+
     func testReplaceFaceParsesPlaneAndRejectsDegenerateNormal() throws {
         let id = UUID().uuidString
         let parsed = op(#"{"op":"feature.replaceFace","args":{"bodyID":"\#(id)","face":[2],"targetOrigin":[0,5,0],"targetNormal":[0,2,0],"flip":true}}"#)

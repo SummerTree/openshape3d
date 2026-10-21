@@ -229,6 +229,21 @@ struct AccuracyReportSheet: View {
                     Section { Text(problem).foregroundStyle(.red) }
                 }
                 if let report {
+                    Section {
+                        Button {
+                            guard let referenceID, let modelID else { return }
+                            let tolerance = toleranceMM
+                            dismiss()
+                            Task { await viewModel.showDeviationPreview(reference: referenceID, model: modelID,
+                                                                       toleranceMM: tolerance) }
+                        } label: {
+                            Label("Show Deviation in Viewport", systemImage: "paintpalette")
+                        }
+                        .accessibilityIdentifier("AccuracyShowDeviationButton")
+                    } footer: {
+                        Text("The reference coloured by its distance to the model, on the part itself: "
+                             + "blue where the model is missing material, orange where it has too much, grey within tolerance.")
+                    }
                     results(report)
                 }
             }

@@ -93,6 +93,7 @@ design. Launching the app is `docs/AI_MODELING_SETUP.md`.
 | `item.select` | `ids[]` — select exactly these bodies; `[]` clears the selection. An import or a feature leaves its result selected (drawn with the blue accent tint), so clear it before a screenshot or a recording to see the model in its own colours and textures |
 | `view.visualize` | enter Visualize (no grid or edges, lit by the design's environment) and optionally set `preset` (Studio, Daylight, Sunset, Overcast, Warm Interior, Night), `lightRotation` °, `sunElevation` 0…90°, `lightIntensity` 0…2, `background` (`environment` / `color` / `transparent`), `backgroundColor` `[r,g,b]`, `groundShadow`; `panel: false` keeps the Visualization panel closed so the viewport shows the model alone; `off: true` leaves. Take the screenshot while it is on for a render-style picture |
 | `view.accuracyReport` | `reference`, `model` (body ids), optional `tolerance` mm — opens Views ▸ Accuracy Report… in the app on those two bodies and runs the comparison, so the person sees the report on screen; `off: true` closes it. The numbers themselves come from the `accuracy` read op below |
+| `view.deviationPreview` | `reference`, `model` (body ids), optional `tolerance` mm (1), `maxMM` (full colour; five tolerances), `panel: false` (no legend); or `off: true`. Colours the reference in the viewport by its distance to the model — blue where the model is missing material, orange where it has too much, grey within tolerance — with the model ghosted behind it, and replies with the per-vertex numbers (`meanMM`, `p95MM`, `maxMM`, `withinTolerance`, `missing`, `excess`, 0…1). Take a `screenshot` while it is on to SEE where a model is wrong, then turn it off |
 | `command.run` | `id` — a view, `edit.undo`, `edit.redo` (MCP; over curl it is `POST /v1/command`) |
 | `document.export` | `format` (`stl` / `3mf` / `obj` / `step`), `up` (`"z"` for slicers), `body` `[ids]`, `name` (MCP; over curl it is `GET /v1/export`) |
 | `health`, `guide`, `state`, `sketches`, `commands` | no args — reads (MCP; over curl `GET /v1/…`) |
@@ -167,6 +168,29 @@ target; start the sketch `0.5 mm` inside the body so the union overlaps.
 **Several parts** — every new-body feature returns its id. Move one beside
 another with `feature.transform`; export them one file each with `body`.
 
+**Over a 3D scan (scan → CAD)** — `document.import` the scan (it lands
+selected: `item.select` `[]` before any picture), and build ON its axis and
+base so `accuracy` compares in place. Measure before modelling: a part of
+revolution is its radius-by-height profile plus the lumps that stand proud
+of it (nozzles, lugs, pegs). Read the body radius at each height from the
+sectors that AGREE — the densest cluster of per-sector radii — never from
+the median or a percentile across all sectors: a nozzle, its flared root,
+the chain from its cap and a scanner hole all pull those, and a profile
+traced from them grows rings the part does not have. Draw design intent,
+not the trace: a cylinder is ONE vertical line (a run of heights whose
+radii agree within the scan's noise, 2–3 mm, with no drift from one end to
+the other, is one segment at their median), a flange is a level step, a
+cone or a dome a few straight segments that follow the drift (collapsing
+those runs cuts a dome into terraces); nothing smaller than the noise. A boss is roughly a cylinder —
+its root about as wide as its neck; a thin spike on a wide base is a chain
+link or a flange's edge, not a boss. One revolve for the body, one
+union-revolve per boss, nothing else. Then `accuracy` and `accuracy.image`
+on every view: when the model's outline shows steps, rings or a lump the
+scan's silhouette does not, the profile is wrong — undo, re-sketch it
+cleaner (fewer points at the agreed radii), and compare again. More points
+never fix a ridged profile; the right radius does. `view.deviationPreview`
+then shows the person where the model still misses the scan, on the scan.
+
 ## Checking a model against a scan or a reference part
 
 `accuracy` with `{"reference": "<id>", "model": "<id>"}` measures how
@@ -185,10 +209,15 @@ closed, and a `summary` paragraph to repeat to the person. Options:
 axis and base; `boundsCenter` or `base` first moves the model onto the
 reference), `resolution` (pixels across the overlay, default 512).
 `accuracy.image` with `"view": "front"` returns the overlay as a picture:
-the reference silhouette filled, the model's outline over it. Aim for an
-overlap above 95 % and a 95th-percentile deviation under the tolerance;
-compare after every change that matters, not only at the end, and report
-the numbers in millimetres and percent.
+the reference silhouette filled, the model's outline over it.
+`view.deviationPreview` puts the same measurement on the part in the
+viewport — blue where the model is missing material, orange where it has
+too much — for the person, and for you through `screenshot`: a ring the
+scan does not have, a nozzle set too low, a lug that should not be there
+all show as colour where they are. Aim for an overlap above 95 % and a
+95th-percentile deviation under the tolerance; compare after every change
+that matters, not only at the end, and report the numbers in millimetres
+and percent.
 
 ## Exporting for 3D printing
 

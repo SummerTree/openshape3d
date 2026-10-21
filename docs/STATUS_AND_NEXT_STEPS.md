@@ -2,7 +2,7 @@
 
 > **Current unfinished-work register:** [Sketch parity open status](SKETCH_PARITY_OPEN_STATUS.md). Maintained at every meaningful checkpoint; older mission logs below are historical.
 
-Last updated: 2026-10-21 (the demo film shows the scan's texture and the report's overlays; `item.select` agent op) — **Accuracy Report** (one body measured against
+Last updated: 2026-10-21 (Deviation Preview — the Accuracy Report's colours on the part; the scan's profile straightened; `item.select`) — **Accuracy Report** (one body measured against
 another: orthographic silhouette overlays per view, outline and surface
 deviation both ways; `Kernel/AccuracyKit.swift`, Views ▸ Accuracy Report…,
 `/v1/accuracy` + `/v1/accuracy/image`, MCP ops `accuracy` /
@@ -121,6 +121,48 @@ the zip in Downloads, on the real scan (`docs/SCAN_TO_CAD.md`).
   `raw_drag`, which synthesise the event through SpringBoard and wait for
   SpringBoard's idle instead. The menu is taller than the landscape iPad
   shows, so the take scrolls it to reach Accuracy Report….
+  Then the barrel: it had come out ridged ("a lot of ridges that are not on
+  the original") — the revolve traced the scan band by band. Two causes in
+  `analyze_scan.py`: the axis fit voted with every slice (flanges, nozzle
+  band, dome) and sat 12 mm beside the barrel, so each sector read a
+  different radius; and the band radius was a percentile across sectors,
+  which at the nozzle band climbed onto the caps. Now only clean ring
+  slices vote for the axis, the band radius is the densest cluster of
+  sector medians carried by continuity through the nozzle band, spikes of
+  one or two bands are removed, and `straighten` makes a run of agreeing
+  bands one vertical segment and a radius jump a level step — the barrel is
+  one line from 262 to 578 mm. Bosses are centred on their widest band,
+  measured within their own azimuth span, and flange hardware (bolts,
+  eyelets, chains under the bonnet flange) is dropped. The modelling skill
+  gained "Over a 3D scan (scan → CAD)" with these rules for assistants.
+- **Deviation Preview** (2026-10-21, the user: "build an MCP feedback
+  preview into the app so a user can look and see what is missing in a
+  model"): `Kernel/DeviationPreview.swift` measures every vertex of the
+  reference (a scan) to the model's surface (`SurfaceGrid`, spread over the
+  cores — a 64k-vertex scan in a few seconds) and the viewport draws the
+  reference through the textured pipeline on a 256 × 1 colour ramp: blue
+  beyond +tolerance (the model is missing that material), orange beyond
+  −tolerance (it has too much), grey within; the model is ghosted at 28 %.
+  No new shader or buffer kind — the reference keeps its mesh and gets
+  texcoords into the ramp, keyed on a stamp so the GPU caches reload. A
+  display state on `EditorViewModel` (`deviationPreview`, `…Computing`,
+  `deviationPanelHidden`; `showDeviationPreview` off the main actor,
+  `endDeviationPreview`), with `DeviationLegendView` (top-trailing, like the
+  Visualization panel, so a 16:9 crop of a recording keeps it) and three
+  ways in: Views ▸ Deviation Preview (command `view.deviationPreview`,
+  one tap on the sheet's default pair), the Accuracy Report sheet's "Show
+  Deviation in Viewport" row, and the agent op `view.deviationPreview`
+  (`reference`, `model`, `tolerance`, `maxMM`, `panel`, `off`), which
+  measures in the call and replies with the per-vertex numbers so an
+  assistant can `screenshot` where its model is wrong. Tests:
+  `AccuracyKitTests` (a cube inside a larger cube reads as excess; the ramp
+  is grey exactly within tolerance), `AgentExecTests`. Its first use found
+  a modelling error the numbers had hidden: the pumper nozzle's top half
+  read blue — the model's pumper sat 20 mm low, because the boss centre
+  was its top edge minus a neck radius inflated by the flared root; the
+  centre is now the median height of the cap face's points. The web app has no
+  Accuracy Report yet, so the preview is a parity gap there too
+  (`openshape-cloud/docs/IOS_PARITY.md`).
 - **Not yet in the web app**: the kernel compiles there unchanged, but the
   sheet is not ported (openshape-cloud `docs/IOS_PARITY.md` lists it).
 

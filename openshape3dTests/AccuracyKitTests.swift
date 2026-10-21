@@ -8,6 +8,7 @@
 //
 
 import XCTest
+import UIKit
 import simd
 @testable import openshape3d
 
@@ -38,6 +39,47 @@ final class AccuracyKitTests: XCTestCase {
     private func options(_ views: [DrawingViewDirection] = [.front, .top, .right],
                          tolerance: Double = 1, alignment: AccuracyAlignment = .none) -> AccuracyOptions {
         AccuracyOptions(views: views, resolution: 256, toleranceMM: tolerance, maxSamples: 2000, alignment: alignment)
+    }
+
+    // MARK: The deviation preview
+
+    func testDeviationPreviewColoursAVertexInsideTheModelAsExcess() throws {
+        // A 20 mm cube inside a 24 mm cube centred on it: every vertex of
+        // the small cube sits 2 mm inside the model — excess, orange side.
+        let reference = box(SIMD3(20, 20, 20))
+        let model = box(SIMD3(24, 24, 24), at: SIMD3(-2, -2, -2))
+        let signed = try XCTUnwrap(DeviationPreview.signedDistances(reference: reference, model: model))
+        XCTAssertEqual(signed.count, 8)
+        for d in signed { XCTAssertEqual(d, -2, accuracy: 1e-6) }
+        let stats = DeviationPreview.stats(of: signed, toleranceMM: 1)
+        XCTAssertEqual(stats.excess, 1, accuracy: 1e-9)
+        XCTAssertEqual(stats.missing, 0, accuracy: 1e-9)
+        XCTAssertEqual(stats.withinTolerance, 0, accuracy: 1e-9)
+        XCTAssertEqual(stats.meanSignedMM, -2, accuracy: 1e-6)
+        // On the ramp: below the middle, and at the middle for a perfect match.
+        XCTAssertLessThan(DeviationPreview.rampCoordinate(-2, maxMM: 5), 0.5)
+        XCTAssertEqual(DeviationPreview.rampCoordinate(0, maxMM: 5), 0.5)
+        XCTAssertEqual(DeviationPreview.rampCoordinate(50, maxMM: 5), 1, "clamped at full colour")
+        let same = try XCTUnwrap(DeviationPreview.signedDistances(reference: reference, model: reference))
+        XCTAssertEqual(DeviationPreview.stats(of: same, toleranceMM: 1).withinTolerance, 1, accuracy: 1e-9)
+        // The ramp is grey exactly within the tolerance and coloured beyond it.
+        let grey = DeviationPreview.rampColor(at: 0.5, toleranceMM: 1, maxMM: 5)
+        let justInside = DeviationPreview.rampColor(at: 0.5 + 0.9 / 10, toleranceMM: 1, maxMM: 5)
+        let justOutside = DeviationPreview.rampColor(at: 0.5 + 1.1 / 10, toleranceMM: 1, maxMM: 5)
+        XCTAssertEqual(grey.r, justInside.r, accuracy: 1e-9)
+        XCTAssertGreaterThan(justOutside.b, justOutside.r, "missing material reads blue")
+        let excess = DeviationPreview.rampColor(at: 0.5 - 1.1 / 10, toleranceMM: 1, maxMM: 5)
+        XCTAssertGreaterThan(excess.r, excess.b, "excess material reads orange")
+        let preview = try XCTUnwrap(DeviationPreview.make(reference: reference, model: model, referenceID: BodyID(), modelID: BodyID(),
+                                                          meshRevision: 1, toleranceMM: 1, maxMM: 5))
+        XCTAssertEqual(preview.texcoords.count, 8)
+        XCTAssertFalse(preview.ramp.isEmpty, "a PNG for the texture cache")
+        // The hand-written PNG decodes: signature, IHDR of 256 × 1, and an
+        // image framework reads it back pixel for pixel.
+        XCTAssertEqual(Array(preview.ramp.prefix(8)), [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A])
+        let image = try XCTUnwrap(UIImage(data: preview.ramp)?.cgImage)
+        XCTAssertEqual(image.width, 256)
+        XCTAssertEqual(image.height, 1)
     }
 
     // MARK: Whole comparisons

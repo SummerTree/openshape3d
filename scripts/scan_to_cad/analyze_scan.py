@@ -86,7 +86,8 @@ def fit_circle(pu, pv, iterations=4, ransac=120, inlier_mm=2.5, seed=7):
     """Centre of a ring of points in the plane, ignoring the lumps on it:
     RANSAC picks the circle through three points that most points sit on
     (a nozzle's points never do), then an algebraic (Kåsa) fit on the
-    inliers, re-run without far residuals. Returns (cu, cv, radius)."""
+    inliers, re-run without far residuals. Returns (cu, cv, radius, the
+    share of the points on the final circle)."""
     n = len(pu)
     rng = np.random.default_rng(seed)
     keep = np.ones(n, dtype=bool)
@@ -120,19 +121,24 @@ def fit_circle(pu, pv, iterations=4, ransac=120, inlier_mm=2.5, seed=7):
         residual = np.hypot(pu - cu, pv - cv) - r
         mad = np.median(np.abs(residual[keep] - np.median(residual[keep]))) + 1e-6
         keep = np.abs(residual) < max(3 * 1.4826 * mad, 1.5)
-    return cu, cv, r
+    return cu, cv, r, float(keep.sum()) / max(n, 1)
 
 
 def fit_axis(points, up_guess, iterations=4, bands=40):
-    """Refine the axis as the line through the centroids of slices along it;
-    returns (point on axis, unit direction)."""
+    """Refine the axis as the line through the centres of slices along it;
+    returns (point on axis, unit direction). Only the slices that are a
+    clean ring vote — a barrel band, with most of its points on one circle
+    of about the typical radius. A flange, the nozzle band and the dome
+    give centres that are off by a nozzle or a bolt ring, and a line fit
+    through all of them sat 12 mm beside the hydrant's barrel: every
+    sector then read a different radius and no profile could be clean."""
     axis = up_guess / np.linalg.norm(up_guess)
     origin = points.mean(axis=0)
     for _ in range(iterations):
         h = (points - origin) @ axis
         lo, hi = np.percentile(h, 3), np.percentile(h, 97)
         edges = np.linspace(lo, hi, bands + 1)
-        centroids, heights = [], []
+        centroids, radii, shares = [], [], []
         for i in range(bands):
             sel = (h >= edges[i]) & (h < edges[i + 1])
             if sel.sum() < 30:
@@ -146,18 +152,119 @@ def fit_axis(points, up_guess, iterations=4, bands=40):
             u = np.cross(axis, [1, 0, 0] if abs(axis[0]) < 0.9 else [0, 1, 0]); u /= np.linalg.norm(u)
             v = np.cross(axis, u)
             pu, pv = perp @ u, perp @ v
-            cu, cv, _ = fit_circle(pu, pv)
+            cu, cv, rr, share = fit_circle(pu, pv)
             centroids.append(origin + cu * u + cv * v + axis * ((edges[i] + edges[i + 1]) / 2))
-            heights.append((edges[i] + edges[i + 1]) / 2)
-        centroids = np.array(centroids)
+            radii.append(rr)
+            shares.append(share)
+        centroids, radii, shares = np.array(centroids), np.array(radii), np.array(shares)
         if len(centroids) < 3:
             break
-        direction, _, _ = principal_axis(centroids)
+        clean = shares > 0.5
+        typical = float(np.median(radii[clean])) if clean.sum() >= 3 else float(np.median(radii))
+        good = clean & (np.abs(radii - typical) < 0.15 * typical)
+        if good.sum() < 3:
+            good = np.ones(len(centroids), dtype=bool)
+        voters = centroids[good]
+        direction, _, _ = principal_axis(voters)
         if direction @ axis < 0:
             direction = -direction
+        centre = voters.mean(axis=0)
+        # Once more without the centres that still sit off the line.
+        off = voters - centre
+        dist = np.linalg.norm(off - np.outer(off @ direction, direction), axis=1)
+        near = dist < max(3.0, 3 * np.median(dist) + 1e-6)
+        if near.sum() >= 3:
+            voters = voters[near]
+            direction, _, _ = principal_axis(voters)
+            if direction @ axis < 0:
+                direction = -direction
+            centre = voters.mean(axis=0)
         axis = direction
-        origin = centroids.mean(axis=0)
+        origin = centre
     return origin, axis
+
+
+def agreed_radius(values, window=3.0, previous=None, min_share=0.06, continuity_mm=6.0):
+    """The centre of the densest cluster of `values`: the value most others
+    sit within `window` of, then the median of that cluster. Ties go to the
+    smaller value — a body, not a lump on it. With `previous` (the band
+    below), a cluster that continues it wins over a denser one when it still
+    holds a quarter of the sectors: at the nozzle band three caps and their
+    flares fill most sectors at one radius, but the barrel is still there
+    in the rest, and a barrel does not jump 100 mm between two bands. A
+    flange does step — its cluster is not within `continuity_mm` of the
+    band below, so the densest wins there as it should."""
+    values = np.sort(np.asarray(values, dtype=float))
+
+    def cluster_of(v):
+        return values[(values >= v - window) & (values <= v + window)]
+
+    best, best_count = values[0], -1
+    for v in values:
+        count = len(cluster_of(v))
+        if count > best_count:
+            best, best_count = v, count
+    if previous is not None:
+        near = values[np.argmin(np.abs(values - previous))]
+        members = cluster_of(near)
+        if abs(near - previous) <= continuity_mm and len(members) >= max(2, min_share * len(values)):
+            return float(np.median(members))
+    return float(np.median(cluster_of(best)))
+
+
+def straighten(points, tol=3.0, min_run=4, step_ratio=3.0):
+    """Design intent from a traced profile of (radius, height) points, one
+    per band: a run of bands whose radii agree within ±`tol` is ONE
+    vertical segment at their median (a cylinder), a jump in radius over
+    little height is a horizontal step (a flange face), and what is left —
+    a cone, a dome — keeps its points for the simplifier. A scan's noise
+    is a millimetre or two; a revolve that follows it band by band comes
+    out ridged where the part is smooth."""
+    if len(points) < 3:
+        return points
+    radii = np.array([r for r, _ in points], dtype=float)
+    heights = np.array([h for _, h in points], dtype=float)
+    out = []
+    i = 0
+    n = len(points)
+    while i < n:
+        # Grow a run while every radius stays within tol of the run's median.
+        j = i + 1
+        while j < n:
+            run = radii[i:j + 1]
+            if np.abs(run - np.median(run)).max() <= tol:
+                j += 1
+            else:
+                break
+        # A run is a cylinder only when its radius has no trend: a dome or
+        # a cone drifts a millimetre or two a band and stays within tol for
+        # a few bands, and collapsing those runs cut the dome into terraces.
+        third = max(1, (j - i) // 3)
+        trend = abs(float(np.median(radii[j - third:j]) - np.median(radii[i:i + third]))) if j - i >= min_run else 0.0
+        if j - i >= min_run and trend <= tol * 0.5:
+            r = float(np.median(radii[i:j]))
+            out.append((r, float(heights[i])))
+            out.append((r, float(heights[j - 1])))
+            i = j
+        else:
+            out.append((float(radii[i]), float(heights[i])))
+            i += 1
+    # Steps: a radius change several times the height it happens over is a
+    # flange face — make it level, at the step's mid-height.
+    snapped = [out[0]]
+    for (r0, h0), (r1, h1) in zip(out, out[1:]):
+        dr, dh = abs(r1 - r0), abs(h1 - h0)
+        if dr > 8.0 and dr > step_ratio * dh and dh > 0:
+            hm = (h0 + h1) / 2
+            snapped.append((r0, hm))
+            snapped.append((r1, hm))
+        snapped.append((r1, h1))
+    # Drop repeats.
+    cleaned = [snapped[0]]
+    for pt in snapped[1:]:
+        if abs(pt[0] - cleaned[-1][0]) > 1e-6 or abs(pt[1] - cleaned[-1][1]) > 1e-6:
+            cleaned.append(pt)
+    return cleaned
 
 
 def douglas_peucker(points, epsilon):
@@ -245,6 +352,7 @@ def analyze(mesh, band_mm=4.0, lump_margin_mm=6.0, out_dir=None, name="scan", ep
     bands = []
     grid_max = []      # per band: max radius per 10° sector (nan when empty)
     grid_med = []
+    previous_body = None
     for i in range(len(edges) - 1):
         sel = (h >= edges[i]) & (h < edges[i + 1])
         if sel.sum() < 12:
@@ -258,11 +366,17 @@ def analyze(mesh, band_mm=4.0, lump_margin_mm=6.0, out_dir=None, name="scan", ep
             if len(rj) >= 2:
                 smax[j] = rj.max()
                 smed[j] = np.median(rj)
-        # The body radius of the band: what most sectors agree on. A nozzle
-        # fills a few sectors; a scanner hole empties a few; the 40th
-        # percentile of the sector medians ignores both.
+        # The body radius of the band: what most sectors agree on — the
+        # densest cluster of the sector medians (within ±3 mm), not a
+        # percentile of them. At the nozzle band three nozzles, their flared
+        # roots and the chains hanging from their caps fill well over half
+        # the sectors, so even a low percentile climbed onto them and the
+        # revolve grew rings the hydrant does not have; the clean sectors
+        # still agree with each other to a millimetre, and the cluster
+        # finds them however many sectors the lumps take.
         agreed = smed[~np.isnan(smed)]
-        body = float(np.percentile(agreed, 30)) if len(agreed) >= 4 else float(np.median(r))
+        body = agreed_radius(agreed, previous=previous_body) if len(agreed) >= 4 else float(np.median(r))
+        previous_body = body
         k = int(np.argmax(r))
         bands.append({"h": float((edges[i] + edges[i + 1]) / 2), "median": body,
                       "p20": float(np.percentile(r, 20)), "p80": float(np.percentile(r, 80)),
@@ -270,6 +384,15 @@ def analyze(mesh, band_mm=4.0, lump_margin_mm=6.0, out_dir=None, name="scan", ep
         grid_max.append(smax)
         grid_med.append(smed)
     grid_max = np.array(grid_max) if grid_max else np.zeros((0, sectors))
+    # A spike of one or two bands between bands that agree is a cap's face
+    # filling the sectors for 8 mm, not an 8 mm flange; the part continues.
+    for width in (1, 2):
+        for i in range(1, len(bands) - width):
+            below, above = bands[i - 1]["median"], bands[i + width]["median"]
+            here = [bands[k]["median"] for k in range(i, i + width)]
+            if abs(below - above) <= 4 and all(abs(x - below) > 8 and abs(x - above) > 8 for x in here):
+                for k in range(i, i + width):
+                    bands[k]["median"] = (below + above) / 2
     body_r = np.array([b["median"] for b in bands])
 
     # Lumps: cells of the (band × sector) grid whose maximum stands proud of
@@ -353,16 +476,25 @@ def analyze(mesh, band_mm=4.0, lump_margin_mm=6.0, out_dir=None, name="scan", ep
             dropped.append(tag + " — spans %d sectors" % len(set(cj for ci, cj in cells)))
             continue
         excess = np.array([grid_max[ci, cj] - body_r[ci] for ci, cj in cells])
-        heights = np.array([bands[ci]["h"] for ci, cj in cells])
         angles = np.radians(np.array([(cj + 0.5) * (360 / sectors) - 180 for ci, cj in cells]))
         w = excess / excess.sum()
-        centre_h = float((heights * w).sum())
+        # The boss is centred on its widest band — a cap fills many sectors,
+        # the chain hanging from it one or two, and it reaches as far as the
+        # cap does, so neither the farthest cell nor the blob's weighted
+        # centre is safe from it.
+        band_width = {ci: len(s) for ci, s in per_band_core.items() if ci in wide}
+        widest = max(band_width, key=lambda ci: (band_width[ci], excess_grid[ci].max()))
+        centre_h = float(bands[widest]["h"])
         az = math.degrees(math.atan2((np.sin(angles) * w).sum(), (np.cos(angles) * w).sum()))
         # Reach along the boss direction and width across it, from the raw
-        # points near the blob.
-        near = (np.abs(h - centre_h) < (heights.max() - heights.min()) / 2 + band_mm * 2)
+        # points within a cap's height of the centre.
+        near = np.abs(h - centre_h) < 100.0
         da = (azimuth[near] - az + 180) % 360 - 180
-        near_idx = np.where(near)[0][np.abs(da) < 60]
+        # As wide in azimuth as the lump itself plus a sector each side:
+        # a fixed 60° reached the next nozzle's cap on a hydrant whose
+        # nozzles sit 90° apart, and its points widened this one.
+        half_span = len(set(cj for ci, cj in cells)) * (360 / sectors) / 2 + 360 / sectors
+        near_idx = np.where(near)[0][np.abs(da) < max(15.0, half_span)]
         if len(near_idx) < 20:
             dropped.append(tag + " — too few points near it")
             continue
@@ -397,24 +529,44 @@ def analyze(mesh, band_mm=4.0, lump_margin_mm=6.0, out_dir=None, name="scan", ep
         slices = []
         hh = h[near_idx]
         for lo in np.arange(inner, reach + step, step):
-            m = (along >= lo) & (along < lo + step) & (np.abs(hh - centre_h) < 160)
+            m = (along >= lo) & (along < lo + step) & (np.abs(hh - centre_h) < 100)
             if m.sum() < 8:
                 continue
             slices.append((float(lo + step / 2 - inner), float(np.percentile(np.abs(across[m]), 95))))
         if len(slices) < 3:
             dropped.append(tag + " — too few slices along it")
             continue
+        if debug:
+            print("slices az %.0f h %.0f (±%.0f°): %s" % (az, centre_h, max(15.0, half_span),
+                                                          " ".join("%.0f@%.0f" % (rr, ss) for ss, rr in slices)))
         # The cap's rim and the barrel's own surface near the root cannot be
         # wider than the barrel; the nut on the face is the last slices.
         radii_along = np.array([r for _, r in slices])
         radii_along[0] = min(radii_along[0], radii_along[1])
+        # Solidity: a cast boss fills its box on the (band × sector) grid; a
+        # chain, or the eyelet it hangs from, is a thin line through it.
+        rows = len(set(ci for ci, cj in cells))
+        cols = len(set(cj for ci, cj in cells))
+        solidity = len(cells) / float(max(rows * cols, 1))
+        if debug:
+            print("solidity az %.0f h %.0f: %d cells in %d×%d → %.2f" % (az, centre_h, len(cells), rows, cols, solidity))
         slices = [(s, float(r)) for (s, _), r in zip(slices, radii_along)]
         boss_profile = douglas_peucker([(r, s) for s, r in slices], epsilon=2.0)   # (radius, along)
         # Centre height: the boss's top edge minus its radius, since nothing
         # hangs above a nozzle but a chain hangs below it.
         neck_sel = out & (along > body_here + protrusion * 0.3) & (along < body_here + protrusion * 0.7)
         neck_r = float(np.interp(body_here + protrusion * 0.5 - inner, [s for s, _ in slices], [r for _, r in slices]))
-        if neck_sel.sum() >= 20:
+        # The cap's face is a disc: the median height of its points is the
+        # nozzle's centre. (The top edge minus the neck radius put the
+        # pumper 20 mm low — its flared root is wider than its cap, and the
+        # deviation preview showed the model missing the cap's top half.)
+        # Only the bands where the lump is wide count, so the chain hanging
+        # from the rim does not vote.
+        wide_h = [bands[ci]["h"] for ci in wide]
+        face_sel = out & (along > reach - 40.0) & (hh >= min(wide_h) - band_mm) & (hh <= max(wide_h) + band_mm)
+        if face_sel.sum() >= 20:
+            centre_h = float(np.median(hh[face_sel]))
+        elif neck_sel.sum() >= 20:
             centre_h = float(np.percentile(hh[neck_sel], 97) - neck_r)
         width = 2 * float(max(r for _, r in slices[len(slices) // 2:]))
         neck = 2 * neck_r
@@ -422,12 +574,21 @@ def analyze(mesh, band_mm=4.0, lump_margin_mm=6.0, out_dir=None, name="scan", ep
         bosses.append({"azimuthDeg": round(az, 1), "centerHeightMM": round(centre_h, 1),
                        "reachMM": round(reach, 1), "widthMM": round(width, 1), "neckWidthMM": round(neck, 1),
                        "heightSpanMM": round(tall, 1), "bodyRadiusMM": round(body_here, 1), "cells": len(cells),
-                       "innerStartMM": round(inner, 1),
+                       "innerStartMM": round(inner, 1), "solidity": round(solidity, 2),
                        "profile": [[round(r, 2), round(s, 2)] for r, s in boss_profile]})
     # A boss has height: a ring of proud cells one or two bands tall is a
     # step in the profile caught between two bands, not a nozzle; and it is
     # about as tall as it is wide — a sliver of flange is wide and flat.
     kept = []
+    band_h = np.array([b["h"] for b in bands])
+
+    def shadow_radius(b):
+        """The widest the body gets from the lump's foot to 40 mm above its
+        top: a flange there casts the lump in its shadow."""
+        lo, hi = b["centerHeightMM"] - b["heightSpanMM"] / 2, b["centerHeightMM"] + b["heightSpanMM"] / 2 + 40.0
+        sel = (band_h >= lo) & (band_h <= hi)
+        return float(body_r[sel].max()) if sel.any() else b["bodyRadiusMM"]
+
     for b in bosses:
         why = None
         if b["reachMM"] - b["bodyRadiusMM"] < 20:
@@ -440,6 +601,11 @@ def analyze(mesh, band_mm=4.0, lump_margin_mm=6.0, out_dir=None, name="scan", ep
             why = "centred at %.0f mm, off the part" % b["centerHeightMM"]
         elif b["profile"] and b["profile"][0][0] > b["bodyRadiusMM"] * 1.15:
             why = "starts %.0f mm wide at a %.0f mm body — a flange, not a boss" % (b["profile"][0][0] * 2, b["bodyRadiusMM"] * 2)
+        elif b["reachMM"] < shadow_radius(b) + 30.0:
+            # Bolts, eyelets and the chains hung from them sit just under a
+            # flange and reach a little past its rim; a nozzle reaches far
+            # beyond anything around it.
+            why = "reaches %.0f mm under a %.0f mm flange — the flange's hardware, not a boss" % (b["reachMM"], shadow_radius(b))
         elif b["profile"] and b["neckWidthMM"] > 0 and b["profile"][0][0] > b["neckWidthMM"]:
             # A boss is roughly a cylinder: its root is about as wide as its
             # neck. A root twice the neck is a thin thing on a wide base —
@@ -499,6 +665,9 @@ def analyze(mesh, band_mm=4.0, lump_margin_mm=6.0, out_dir=None, name="scan", ep
         if trio.max() - trio.min() < 8:
             smoothed[i] = np.median(trio)
     profile = [(float(r), b["h"]) for r, b in zip(smoothed, bands)]
+    # Cylinders as single segments, flanges as level steps, the rest to the
+    # simplifier: the revolve is the part's design, not the scanner's noise.
+    profile = straighten(profile, tol=max(2.5, epsilon * 1.5))
     if profile:
         profile = [(profile[0][0], 0.0)] + profile + [(profile[-1][0], height)]
     simplified = douglas_peucker(profile, epsilon=epsilon)

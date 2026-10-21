@@ -89,7 +89,14 @@ calls ships in the store app.
    the barrel's circle, so they are ignored rather than pulling the centre
    toward the nozzle. The first version used the slice's bounding-box
    centre and sat 12 mm off toward the pumper nozzle; the top-view overlay
-   showed it as a crescent.
+   showed it as a crescent. Only the slices that are a clean ring vote for
+   the line — more than half their points on one circle, of about the
+   typical radius — and the vote is taken twice, without the centres that
+   still sit off the line: a flange, the nozzle band and the dome give
+   centres that are off by a bolt ring or a cap, and a line through all
+   forty again sat 12 mm beside the barrel, so that every sector read a
+   different radius (93 to 121 mm around one 107 mm band) and no profile
+   taken from them could be clean.
 2. **Up.** The wider end is the base. The scanner's ground — bottom bands
    whose radii spread over a wide range, where a band of the part is a thin
    ring — is trimmed, and the scan is written out again without it
@@ -97,10 +104,24 @@ calls ships in the store app.
    against hydrant. The revolve starts where the scan has solid coverage,
    not in the sparse last bands above the sidewalk.
 3. **Profile.** Vertices are binned in 4 mm height bands. The band's body
-   radius is what most 10° sectors agree on — the 30th percentile of the
-   per-sector median radii — which ignores the sectors a nozzle fills and
-   the ones a scanner hole empties. Douglas–Peucker at 1.5 mm turns the
-   band medians into the ~30 corners a revolve sketch wants.
+   radius is what most 10° sectors agree on — the densest ±3 mm cluster of
+   the per-sector median radii, not a percentile of them: at the nozzle
+   band three caps, their flared roots and the chains hung from them fill
+   most sectors, only 2–9 of 36 still show the barrel, and a percentile
+   climbed onto the caps (the revolve grew rings there). A cluster that
+   continues the band below (within 6 mm, at least two sectors) wins over a
+   denser one — a barrel does not jump 100 mm between bands; a flange does,
+   and its cluster is nowhere near the band below. A spike of one or two
+   bands between bands that agree is a cap filling the sectors, not an
+   8 mm flange. Then `straighten`: a run of bands whose radii agree within
+   ±3 mm with no trend from its first third to its last becomes ONE
+   vertical segment at their median (a cylinder; a run that drifts is a
+   dome or a cone, and collapsing it cut the bonnet into terraces), a jump
+   in radius over little height a level step (a flange face), and what is
+   left — a cone, the dome — keeps its points for Douglas–Peucker at
+   1.5 mm. The hydrant's barrel is one segment from 262 to 578 mm; the
+   first films had traced the scan band by band and the barrel came out
+   ridged where the casting is smooth.
 4. **Bosses.** On the (band × sector) grid, cells whose maximum radius
    stands more than 6 mm proud of the band's body radius are grouped by a
    watershed from their peaks (regions merge only across a saddle at least
@@ -109,13 +130,26 @@ calls ships in the store app.
    sectors wide — because a cap's chain hangs as far from the axis as the
    cap and would otherwise tie it to a flange ring below or drag its centre
    down. Rings (a flange step straddling two bands, broken into pieces by
-   scanner holes) are dropped by angular extent. A boss then gets its
-   direction from its cap's face (the farthest points), its centre height
-   from its top edge minus its radius (nothing hangs above a nozzle), and a
-   radius-along profile read in 8 mm slices as the horizontal half-extent
-   (chains hang down, so the horizontal extent is clean) — the flared
-   casting, the threads, the cap and the nut on its face come out as steps.
-   `--debug` says why every candidate lump was dropped.
+   scanner holes) are dropped by angular extent. A boss is centred on its
+   widest band (a cap fills many sectors, the chain hanging from it one or
+   two — and it reaches as far as the cap, so neither the farthest cell nor
+   a weighted centre is safe from it), gets its direction from its cap's
+   face (the farthest points), its centre height from the median height of
+   that face's points within the wide bands (a cap is a disc; the top edge
+   minus the neck radius had put the pumper 20 mm low because its flared
+   root is wider than its cap — the deviation preview showed the model
+   missing the cap's top half), and a radius-along profile
+   read in 8 mm slices as the horizontal half-extent (chains hang down, so
+   the horizontal extent is clean) among the points within the lump's own
+   azimuth span plus a sector each side (a fixed 60° reached the next
+   nozzle's cap) — the flared casting, the threads, the cap and the nut on
+   its face come out as steps. Dropped afterwards: a lump whose root is
+   wider than twice its neck (a thin spike on a wide base — a chain link, a
+   flange's edge), and one that sits within 40 mm under a flange and
+   reaches less than 30 mm past its rim (bolts, the eyelets the chains hang
+   from, the chains). The pumper nozzle really is ~200 mm wide. `--debug`
+   says why every candidate lump was dropped, and prints each kept one's
+   slices.
 
 `profile.png` (radius by height, with the polyline) and `azimuth.png` (the
 band × azimuth map: nozzles are blobs) are written for the report.
@@ -234,6 +268,16 @@ generated one; looped to the film's length first, because an endless
     venv/bin/python demo_video.py compose --out …/demo --name fire-hydrant-demo --report …/report.html --overlays …/run/overlays [--tts gemini --music lyria]
 
 ### `report.py` and `make_video.py`
+
+`view.deviationPreview` (2026-10-21) puts the comparison on the part in
+the viewport: the scan coloured by its distance to the model — blue where
+the model is missing material, orange where it has too much, grey within
+tolerance — the model ghosted behind it, a legend with the per-vertex
+numbers. The Accuracy Report sheet's "Show Deviation in Viewport" row and
+Views ▸ Deviation Preview do the same by hand; the film's report beat ends
+on it. It is the feedback loop the rules above ask for: a ring the scan
+does not have, a nozzle set too low, a lug that should not be there all
+show as colour where they are, before any number is read.
 
 `report.py` inlines the app's overlay pictures, screenshots, the deviation
 histograms (SVG), the size table, the recipe and the MCP transcript into
