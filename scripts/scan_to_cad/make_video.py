@@ -163,7 +163,9 @@ def heatmap(run, scan_path, out_path, tolerance):
     red = np.array([0.86, 0.20, 0.16])
     rgb = np.where(t < 0.5, green + (yellow - green) * (t * 2), yellow + (red - yellow) * ((t - 0.5) * 2))
     colors = np.concatenate([rgb, np.ones((len(t), 1))], axis=1)
-    scan.visual.vertex_colors = (colors * 255).astype(np.uint8)
+    # Replace the visual outright: a textured scan carries TextureVisuals,
+    # which drop vertex colours on export and leave the heatmap black.
+    scan.visual = trimesh.visual.ColorVisuals(mesh=scan, vertex_colors=(colors * 255).astype(np.uint8))
     scan.apply_scale(0.001)                      # back to metres for Blender
     scan.export(out_path)
     return {"meanMM": float(distance.mean()), "p95MM": float(np.percentile(distance, 95)), "maxMM": float(distance.max())}

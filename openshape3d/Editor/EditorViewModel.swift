@@ -6779,6 +6779,9 @@ final class EditorViewModel {
     /// Views ▸ Accuracy Report… (`AccuracyReportSheet`): one body measured
     /// against another, overlays and surface deviation.
     var showAccuracyReportSheet = false
+    /// Set by `view.accuracyReport` over the bridge: the sheet runs this
+    /// comparison as soon as it appears.
+    var accuracyReportRequest: AccuracyReportRequest?
 
     func setFieldOfView(_ degrees: Double) {
         let clamped = min(max(degrees, 0), 100)

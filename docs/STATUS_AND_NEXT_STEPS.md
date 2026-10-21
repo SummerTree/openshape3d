@@ -78,6 +78,12 @@ the zip in Downloads, on the real scan (`docs/SCAN_TO_CAD.md`).
   faces; IoU front 84.8 % / top 90.3 % / right 86.9 %; scan→model mean
   12.1 mm, model→scan 8.1 mm; size within 3 / 14 / 16 mm. What remains is
   the chains, the bonnet's off-axis casting and the ragged bottom edge.
+- **The demo film is shot in the app** (`scripts/scan_to_cad/demo_video.py`,
+  2026-10-20 evening): the simulator recorded while the recipe runs over
+  MCP, captions, narration, a music bed; `view.accuracyReport` over exec
+  opens the sheet on screen (`AccuracyReportRequest`), the sheet shows its
+  first overlay above the fold (page sizing on iOS 18), and
+  `RotateDeviceUITests` turns a simulator on its side for a take.
 - **Not yet in the web app**: the kernel compiles there unchanged, but the
   sheet is not ported (openshape-cloud `docs/IOS_PARITY.md` lists it).
 

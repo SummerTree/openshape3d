@@ -575,6 +575,20 @@ final class AgentBridge {
             let interfering = viewModel.sectionInterferingBodyIDs.map(\.raw.uuidString).sorted()
             return execOK(viewModel, ["section": true, "interferingBodyIDs": interfering, "undoSteps": 0])
 
+        case let .accuracyReport(reference, model, tolerance, show):
+            // The sheet itself, on screen, exactly as the person would open
+            // it — so a recording of an assistant at work shows the app's
+            // own report, not a number in a reply.
+            guard show else {
+                viewModel.accuracyReportRequest = nil
+                viewModel.showAccuracyReportSheet = false
+                return execOK(viewModel, ["accuracyReport": false, "undoSteps": 0])
+            }
+            if let missing = missingBody([reference, model], session) { return missing }
+            viewModel.accuracyReportRequest = AccuracyReportRequest(reference: reference, model: model, toleranceMM: tolerance)
+            viewModel.showAccuracyReportSheet = true
+            return execOK(viewModel, ["accuracyReport": true, "undoSteps": 0])
+
         case let .visualize(on, args):
             guard on else {
                 viewModel.exitVisualize()

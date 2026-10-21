@@ -180,6 +180,28 @@ and draws the overlays with SwiftUI `Canvas`; Share saves the page as an
 image or copies the summary / JSON. `AccuracyKitTests` (11), the router and
 MCP tests pin the behaviour with boxes of known overlap.
 
+### `demo_video.py` — the film, shot in the app
+
+`demo_video.py take` records the iPad simulator (`simctl io recordVideo`)
+while the recipe runs over MCP at a camera's pace — the textured scan
+appearing, the revolve, each nozzle with a quarter turn of the view between
+them, a slow turn in Visualize, then `view.accuracyReport` opening Views ▸
+Accuracy Report… on the two bodies so the app's own overlay appears on
+screen — and writes `take.mov` with a `timeline.json` of when each beat
+happened. `compose` resamples the recording to a constant 30 fps (the
+simulator writes a frame only when the screen changes, so a still moment
+has none and a cut through it is empty), turns it upright (the framebuffer
+stays portrait with the landscape picture inside it; a one-shot UI test,
+`RotateDeviceUITests`, turns the device), crops it to 16:9 with the toolbar
+in frame, cuts each beat to its narration, lays a caption pill over it, puts
+a title card before and the numbers and credits after, narrates it (Gemini
+TTS through Vertex AI when `gcloud auth` is current, else the edge-tts
+voice), adds a music bed (Lyria through Vertex AI, else a generated one)
+and writes `<name>.mp4` plus a contact sheet.
+
+    venv/bin/python demo_video.py take --scan …/scan_cropped.glb --analysis …/analysis --out …/demo --port 8947
+    venv/bin/python demo_video.py compose --out …/demo --name fire-hydrant-demo [--tts gemini --music lyria]
+
 ### `report.py` and `make_video.py`
 
 `report.py` inlines the app's overlay pictures, screenshots, the deviation

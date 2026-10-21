@@ -155,6 +155,9 @@ nonisolated enum AgentExecOp: Sendable, Equatable {
     /// Tools ▸ Visualize (spec §14): enter or leave the workspace, and set
     /// any of the environment's fields (one undo step when it changes).
     case visualize(on: Bool, environment: VisualizeArgs)
+    /// Open Views ▸ Accuracy Report… on two bodies and run the comparison
+    /// (`show: true`), or close it. A display state, no undo step.
+    case accuracyReport(reference: BodyID, model: BodyID, tolerance: Double, show: Bool)
 }
 
 /// `view.visualize`'s environment fields; nil leaves a field as it is.
@@ -244,6 +247,7 @@ nonisolated enum AgentExec {
         case "item.setHidden":     return parseSetHidden(args)
         case "view.section":       return parseSection(args)
         case "view.visualize":     return parseVisualize(args)
+        case "view.accuracyReport": return parseAccuracyReport(args)
         default:
             return .failure(.init(code: "unknown_op",
                                   message: "No exec op '\(op)'. Known ops: \(opNames.joined(separator: ", "))."))
@@ -993,6 +997,21 @@ nonisolated enum AgentExec {
                 }
             }
             return .success(.setMaterial(bodies: bodies, material: spec))
+        } catch let e as AgentExecError { return .failure(e) } catch { return .failure(unexpected) }
+    }
+
+    private static func parseAccuracyReport(_ a: [String: Any]) -> Result<AgentExecOp, AgentExecError> {
+        if a["off"] as? Bool == true {
+            return .success(.accuracyReport(reference: BodyID(), model: BodyID(), tolerance: 0, show: false))
+        }
+        do {
+            let reference = BodyID(raw: try uuid(a, "reference"))
+            let model = BodyID(raw: try uuid(a, "model"))
+            let tolerance = try optionalDouble(a, "tolerance") ?? 1
+            guard tolerance >= 0 else {
+                return .failure(.init(code: "bad_tolerance", message: "args.tolerance is millimetres, 0 or more."))
+            }
+            return .success(.accuracyReport(reference: reference, model: model, tolerance: tolerance, show: true))
         } catch let e as AgentExecError { return .failure(e) } catch { return .failure(unexpected) }
     }
 

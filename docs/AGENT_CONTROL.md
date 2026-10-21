@@ -392,6 +392,7 @@ graph, and shows up in History like any other feature.
 | `body.setMaterial` | `bodyIDs[]`, and `preset` (a Material sheet name, case-insensitive: Steel, Aluminum, Brass, Plastic Matte, Plastic Gloss, Rubber, Wood) or `color` `[r,g,b(,a)]` in 0…1; optional `metallic`, `roughness` (0…1, override the preset's). The sheet's Apply — one `SetMaterialCommand`, one undo step, not a feature |
 | `item.setHidden` | `ids[]` (any mix of body, sketch and plane ids) and/or `allSketches: true`; optional `hidden` (default true; false shows). The Items panel's eye — one `SetItemVisibilityCommand` per item, reported as `undoSteps` |
 | `view.section` | `normal` `[x,y,z]` (the side that stays visible) and optional `origin` (default `[0,0,0]`), `sectionOnly`, `twoD`; or `off: true`. Section View as a display state — no undo step; the reply's `interferingBodyIDs` lists bodies whose cuts overlap |
+| `view.accuracyReport` | `reference`, `model` (body ids), optional `tolerance` mm; or `off: true`. Opens Views ▸ Accuracy Report… on those bodies and runs the comparison on screen (the sheet, not the numbers — those are `GET /v1/accuracy`). A display state, no undo step; how a recording of an assistant at work shows the app's own report |
 
 Entity kinds: `line` (`a`,`b`), `circle` (`center`,`radius`), `arc`
 (`center`,`radius`,`startAngle`,`endAngle`), `spline` (`points[]`,`closed`),

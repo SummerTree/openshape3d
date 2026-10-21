@@ -419,7 +419,7 @@ for i, line in enumerate(calls[:14]):
 
 # Build-up labels.
 stage_labels = ["Revolve the profile on the scan's axis"] + [
-    "Nozzle %d: circle → extrude → union" % i for i in range(1, len(stages))]
+    "Boss %d: its own profile, revolved and unioned in" % i for i in range(1, len(stages))]
 build_title = card(text_object("BuildTitle", "3 · The model takes shape", 0.55, INK, on_board(-7.3, 3.7)), None)
 
 # Comparison / heatmap titles live in 3D space as HUD text parented to the camera.

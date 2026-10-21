@@ -191,6 +191,25 @@ final class AgentRouterTests: XCTestCase {
         XCTAssertEqual(status, 405)
     }
 
+    func testAccuracyReportSheetOpTakesTwoBodiesOrOff() {
+        let a = "0F1B9F7E-3A8E-4C6C-9F2A-1D7E5B6C8A01", b = "6A2C4E8D-1B3F-4D5E-8C7A-9B0D2E4F6A13"
+        let open = route("POST", "/v1/exec",
+                         body: #"{"op":"view.accuracyReport","args":{"reference":"\#(a)","model":"\#(b)","tolerance":2.5}}"#)
+        XCTAssertEqual(open, .exec(.accuracyReport(reference: BodyID(raw: UUID(uuidString: a)!),
+                                                   model: BodyID(raw: UUID(uuidString: b)!), tolerance: 2.5, show: true)))
+        guard case let .exec(.accuracyReport(_, _, _, show)) = route("POST", "/v1/exec",
+                                                                   body: #"{"op":"view.accuracyReport","args":{"off":true}}"#) else {
+            return XCTFail("off should route")
+        }
+        XCTAssertFalse(show)
+        guard case let .reply(status, error, _) = route("POST", "/v1/exec",
+                                                       body: #"{"op":"view.accuracyReport","args":{"reference":"\#(a)"}}"#) else {
+            return XCTFail("a missing model should be refused")
+        }
+        XCTAssertEqual(status, 400)
+        XCTAssertEqual(error, "missing_model")
+    }
+
     func testUnknownPathIs404() {
         guard case let .reply(status, error, _) = route("GET", "/v1/nope") else {
             return XCTFail("expected a reply")
