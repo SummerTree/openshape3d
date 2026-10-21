@@ -1,0 +1,855 @@
+{
+ "revision": "1.1",
+ "source_commit": "23693fd404e8c7714ae8ed783ff29e04bcac0c6b",
+ "coordinate_convention": "right-handed XYZ; X width, Y depth, Z height; intended lengths mm",
+ "origin": "Original synthetic QA geometry, not Shapr3D exports",
+ "validation_scope": "OCCT 7.8.1 construction validity, mathematical aggregate volume, STEP re-import validity/count/volume; no app/UI parity execution",
+ "files": [
+  {
+   "file": "M01_block.step",
+   "bytes": 15416,
+   "sha256": "a7f2b238a1677047b27ff5e78dc5e02454e9d85107b3642eb947978a35062311",
+   "valid_reference": true,
+   "units": "mm",
+   "expected_aggregate_volume_mm3": 12000.0,
+   "solid_count": 1,
+   "bounds_min_mm": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "bounds_max_mm": [
+    40.0,
+    30.0,
+    10.0
+   ],
+   "occt_roundtrip": {
+    "valid": true,
+    "measured_volume_mm3": 12000.0,
+    "planar_faces": 6,
+    "cylindrical_faces": 0,
+    "other_faces": 0
+   }
+  },
+  {
+   "file": "M01_block.stl",
+   "bytes": 684,
+   "sha256": "641cfd1aee2c0b6e749187deeff27128076310b17b26741064080bfc9f8c3177",
+   "valid_reference": true,
+   "units": "mm (intended, not encoded in STL)",
+   "expected_aggregate_volume_mm3": 12000.0,
+   "solid_count": 1,
+   "bounds_min_mm": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "bounds_max_mm": [
+    40.0,
+    30.0,
+    10.0
+   ]
+  },
+  {
+   "file": "M02_four_hole_plate.step",
+   "bytes": 29850,
+   "sha256": "53104faa3ec7621df813b7982e2090b8845c34dcf78782d679b31a1c10c474c3",
+   "valid_reference": true,
+   "units": "mm",
+   "expected_aggregate_volume_mm3": 31095.2213157661,
+   "solid_count": 1,
+   "bounds_min_mm": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "bounds_max_mm": [
+    80.0,
+    50.0,
+    8.0
+   ],
+   "occt_roundtrip": {
+    "valid": true,
+    "measured_volume_mm3": 31095.2213157661,
+    "planar_faces": 6,
+    "cylindrical_faces": 4,
+    "other_faces": 0
+   }
+  },
+  {
+   "file": "M02_four_hole_plate.stl",
+   "bytes": 68684,
+   "sha256": "3480408dbb058245186e84b8d855f9667df825cd959d3d0a2db2d37567ba5e44",
+   "valid_reference": true,
+   "units": "mm (intended, not encoded in STL)",
+   "expected_aggregate_volume_mm3": 31095.2213157661,
+   "solid_count": 1,
+   "bounds_min_mm": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "bounds_max_mm": [
+    80.0,
+    50.0,
+    8.0
+   ]
+  },
+  {
+   "file": "M02_plate_sketch.dxf",
+   "bytes": 413,
+   "sha256": "23424dd2353b97848c9ad1c53f1bba64deda5bf6a51257363c67c3358e4cb7cc",
+   "valid_reference": true,
+   "units": "mm",
+   "expected_entities": {
+    "lines": 4,
+    "circles": 4,
+    "outline_mm": [
+     80,
+     50
+    ],
+    "circle_radius_mm": 3,
+    "centers_mm": [
+     [
+      10,
+      10
+     ],
+     [
+      10,
+      40
+     ],
+     [
+      70,
+      10
+     ],
+     [
+      70,
+      40
+     ]
+    ]
+   }
+  },
+  {
+   "file": "M03_open_tray.step",
+   "bytes": 29632,
+   "sha256": "d4c80f46ddd5b6fe3d4a32b49797326774b2d468d152cf898b8512fdf39c284f",
+   "valid_reference": true,
+   "units": "mm",
+   "expected_aggregate_volume_mm3": 13632.0,
+   "solid_count": 1,
+   "bounds_min_mm": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "bounds_max_mm": [
+    60.0,
+    40.0,
+    25.0
+   ],
+   "occt_roundtrip": {
+    "valid": true,
+    "measured_volume_mm3": 13632.0,
+    "planar_faces": 11,
+    "cylindrical_faces": 0,
+    "other_faces": 0
+   }
+  },
+  {
+   "file": "M03_open_tray.stl",
+   "bytes": 1484,
+   "sha256": "7ea2b7192751feef55225e80a4c6ab1f1b95d3d6c1beb13a484e794756d327ad",
+   "valid_reference": true,
+   "units": "mm (intended, not encoded in STL)",
+   "expected_aggregate_volume_mm3": 13632.0,
+   "solid_count": 1,
+   "bounds_min_mm": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "bounds_max_mm": [
+    60.0,
+    40.0,
+    25.0
+   ]
+  },
+  {
+   "file": "M04_revolved_washer.step",
+   "bytes": 9305,
+   "sha256": "2b0b102005deb43360d2787492e9ec3907a2905ea8180d3bc492e5c4def98fc4",
+   "valid_reference": true,
+   "units": "mm",
+   "expected_aggregate_volume_mm3": 4046.37133782365,
+   "solid_count": 1,
+   "bounds_min_mm": [
+    -15.0,
+    -15.0,
+    0.0
+   ],
+   "bounds_max_mm": [
+    15.0,
+    15.0,
+    8.0
+   ],
+   "occt_roundtrip": {
+    "valid": true,
+    "measured_volume_mm3": 4046.37133782374,
+    "planar_faces": 2,
+    "cylindrical_faces": 2,
+    "other_faces": 0
+   }
+  },
+  {
+   "file": "M04_revolved_washer.stl",
+   "bytes": 34284,
+   "sha256": "ba0ece6aeee5233b6ca13157292d2c12ec7f9b8528840897a5ea7c4fb3f5aef1",
+   "valid_reference": true,
+   "units": "mm (intended, not encoded in STL)",
+   "expected_aggregate_volume_mm3": 4046.37133782365,
+   "solid_count": 1,
+   "bounds_min_mm": [
+    -15.0,
+    -15.0,
+    0.0
+   ],
+   "bounds_max_mm": [
+    15.0,
+    15.0,
+    8.0
+   ]
+  },
+  {
+   "file": "M05_L_bracket.step",
+   "bytes": 27861,
+   "sha256": "5484d70776a6cca7e26a64207feded91b3fa7ad1ee342a2b431fa190e90718c0",
+   "valid_reference": true,
+   "units": "mm",
+   "expected_aggregate_volume_mm3": 22560.0,
+   "solid_count": 1,
+   "bounds_min_mm": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "bounds_max_mm": [
+    60.0,
+    40.0,
+    40.0
+   ],
+   "occt_roundtrip": {
+    "valid": true,
+    "measured_volume_mm3": 22560.0,
+    "planar_faces": 11,
+    "cylindrical_faces": 0,
+    "other_faces": 0
+   }
+  },
+  {
+   "file": "M05_L_bracket.stl",
+   "bytes": 1284,
+   "sha256": "b1dcb11b0a69dab93bd464b110a74f4c60964b04b22ab936f9c60f4796007dd0",
+   "valid_reference": true,
+   "units": "mm (intended, not encoded in STL)",
+   "expected_aggregate_volume_mm3": 22560.0,
+   "solid_count": 1,
+   "bounds_min_mm": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "bounds_max_mm": [
+    60.0,
+    40.0,
+    40.0
+   ]
+  },
+  {
+   "file": "M06_boolean_inputs.step",
+   "bytes": 30415,
+   "sha256": "dfc2994ad0a40836065b8a60e5bdde75b7dd6ec5db30be3244cf1968f83f1aad",
+   "valid_reference": true,
+   "units": "mm",
+   "expected_aggregate_volume_mm3": 16000.0,
+   "solid_count": 2,
+   "bounds_min_mm": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "bounds_max_mm": [
+    30.0,
+    20.0,
+    20.0
+   ],
+   "occt_roundtrip": {
+    "valid": true,
+    "measured_volume_mm3": 16000.0,
+    "planar_faces": 12,
+    "cylindrical_faces": 0,
+    "other_faces": 0
+   }
+  },
+  {
+   "file": "M06_intersect.step",
+   "bytes": 15431,
+   "sha256": "3ebecab10eacd6b797b2e911b314d6684c7a0ba20bad1a90bdb82a86e5fef5b6",
+   "valid_reference": true,
+   "units": "mm",
+   "expected_aggregate_volume_mm3": 4000.0,
+   "solid_count": 1,
+   "bounds_min_mm": [
+    10.0,
+    0.0,
+    0.0
+   ],
+   "bounds_max_mm": [
+    20.0,
+    20.0,
+    20.0
+   ],
+   "occt_roundtrip": {
+    "valid": true,
+    "measured_volume_mm3": 4000.0,
+    "planar_faces": 6,
+    "cylindrical_faces": 0,
+    "other_faces": 0
+   }
+  },
+  {
+   "file": "M06_subtract.step",
+   "bytes": 15416,
+   "sha256": "5ea607b8f41531b09e9297f3e88518081c6c3ffef1892b0fae60bff1461b992e",
+   "valid_reference": true,
+   "units": "mm",
+   "expected_aggregate_volume_mm3": 4000.0,
+   "solid_count": 1,
+   "bounds_min_mm": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "bounds_max_mm": [
+    10.0,
+    20.0,
+    20.0
+   ],
+   "occt_roundtrip": {
+    "valid": true,
+    "measured_volume_mm3": 4000.0,
+    "planar_faces": 6,
+    "cylindrical_faces": 0,
+    "other_faces": 0
+   }
+  },
+  {
+   "file": "M06_union.step",
+   "bytes": 33721,
+   "sha256": "42ea3bd84b78f59ea8c30175bf052e41183f52b709fa7bc675233d0286556476",
+   "valid_reference": true,
+   "units": "mm",
+   "expected_aggregate_volume_mm3": 12000.0,
+   "solid_count": 1,
+   "bounds_min_mm": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "bounds_max_mm": [
+    30.0,
+    20.0,
+    20.0
+   ],
+   "occt_roundtrip": {
+    "valid": true,
+    "measured_volume_mm3": 12000.0,
+    "planar_faces": 14,
+    "cylindrical_faces": 0,
+    "other_faces": 0
+   }
+  },
+  {
+   "file": "M07_single_edge_chamfer.step",
+   "bytes": 19105,
+   "sha256": "2a18d874fff98703e23f79440937a8916ac8fc246ac6e53323c533b32ee79a2c",
+   "valid_reference": true,
+   "units": "mm",
+   "expected_aggregate_volume_mm3": 980.0,
+   "solid_count": 1,
+   "bounds_min_mm": [
+    -2.93725419021616e-16,
+    -2.93725419021616e-16,
+    -5.262086905766e-34
+   ],
+   "bounds_max_mm": [
+    10.0,
+    10.0,
+    10.0
+   ],
+   "occt_roundtrip": {
+    "valid": true,
+    "measured_volume_mm3": 980.0,
+    "planar_faces": 7,
+    "cylindrical_faces": 0,
+    "other_faces": 0
+   }
+  },
+  {
+   "file": "M07_single_edge_fillet.step",
+   "bytes": 19026,
+   "sha256": "35f12eb686dfdbaf42a945377dda44e234af75162422152bc1f6658d99308d96",
+   "valid_reference": true,
+   "units": "mm",
+   "expected_aggregate_volume_mm3": 991.415926535898,
+   "solid_count": 1,
+   "bounds_min_mm": [
+    -4.440892098501e-16,
+    -4.440892098501e-16,
+    0.0
+   ],
+   "bounds_max_mm": [
+    10.0,
+    10.0,
+    10.0
+   ],
+   "occt_roundtrip": {
+    "valid": true,
+    "measured_volume_mm3": 991.415926535901,
+    "planar_faces": 6,
+    "cylindrical_faces": 1,
+    "other_faces": 0
+   }
+  },
+  {
+   "file": "M07_single_edge_fillet.stl",
+   "bytes": 4884,
+   "sha256": "12762087f2fa758d16720088e180f1d839b4d2efa5f49239c2f8bdaf4c507b25",
+   "valid_reference": true,
+   "units": "mm (intended, not encoded in STL)",
+   "expected_aggregate_volume_mm3": 991.415926535898,
+   "solid_count": 1,
+   "bounds_min_mm": [
+    -4.440892098501e-16,
+    -4.440892098501e-16,
+    0.0
+   ],
+   "bounds_max_mm": [
+    10.0,
+    10.0,
+    10.0
+   ]
+  },
+  {
+   "file": "M08_straight_sweep.step",
+   "bytes": 5658,
+   "sha256": "c6b908af22b4bc3dd3f976766973a3ad5ba4b618a2e96f0a9dafd0ed2cb9a259",
+   "valid_reference": true,
+   "units": "mm",
+   "expected_aggregate_volume_mm3": 1413.71669411541,
+   "solid_count": 1,
+   "bounds_min_mm": [
+    -3.0,
+    -3.0,
+    0.0
+   ],
+   "bounds_max_mm": [
+    3.0,
+    3.0,
+    50.0
+   ],
+   "occt_roundtrip": {
+    "valid": true,
+    "measured_volume_mm3": 1413.71669411541,
+    "planar_faces": 2,
+    "cylindrical_faces": 1,
+    "other_faces": 0
+   }
+  },
+  {
+   "file": "M09_conical_loft.step",
+   "bytes": 5730,
+   "sha256": "221d371274472078c27b2ae5f250c9b56f8823948b2d48ad7edad9303fdc3816",
+   "valid_reference": true,
+   "units": "mm",
+   "expected_aggregate_volume_mm3": 17132.1519375763,
+   "solid_count": 1,
+   "bounds_min_mm": [
+    -15.0,
+    -15.0,
+    0.0
+   ],
+   "bounds_max_mm": [
+    15.0,
+    15.0,
+    40.0000000000021
+   ],
+   "occt_roundtrip": {
+    "valid": true,
+    "measured_volume_mm3": 17132.1519375913,
+    "planar_faces": 2,
+    "cylindrical_faces": 0,
+    "other_faces": 1
+   }
+  },
+  {
+   "file": "M10_split_halves.step",
+   "bytes": 30419,
+   "sha256": "b12c8581ce387f357b32f994de231cd259c858f44881787d53b67ebfd4ef2f96",
+   "valid_reference": true,
+   "units": "mm",
+   "expected_aggregate_volume_mm3": 12000.0,
+   "solid_count": 2,
+   "bounds_min_mm": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "bounds_max_mm": [
+    40.0,
+    30.0,
+    10.0
+   ],
+   "occt_roundtrip": {
+    "valid": true,
+    "measured_volume_mm3": 12000.0,
+    "planar_faces": 12,
+    "cylindrical_faces": 0,
+    "other_faces": 0
+   }
+  },
+  {
+   "file": "M11_six_pin_pattern.step",
+   "bytes": 32083,
+   "sha256": "16adbbf3a6d1085539596d1df748a02518405e388d53b5a5d842557ade0a8238",
+   "valid_reference": true,
+   "units": "mm",
+   "expected_aggregate_volume_mm3": 753.98223686155,
+   "solid_count": 6,
+   "bounds_min_mm": [
+    -22.0,
+    -19.32050807568,
+    0.0
+   ],
+   "bounds_max_mm": [
+    22.0,
+    19.320508075689,
+    10.0
+   ],
+   "occt_roundtrip": {
+    "valid": true,
+    "measured_volume_mm3": 753.982236861551,
+    "planar_faces": 12,
+    "cylindrical_faces": 6,
+    "other_faces": 0
+   }
+  },
+  {
+   "file": "M12_replace_face_result.step",
+   "bytes": 15418,
+   "sha256": "04927c15bc387d8cd720fdd1bda1ab9dcddca3ee50441a23c14b591ec688cfce",
+   "valid_reference": true,
+   "units": "mm",
+   "expected_aggregate_volume_mm3": 8000.0,
+   "solid_count": 1,
+   "bounds_min_mm": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "bounds_max_mm": [
+    40.0,
+    20.0,
+    10.0
+   ],
+   "occt_roundtrip": {
+    "valid": true,
+    "measured_volume_mm3": 8000.0,
+    "planar_faces": 6,
+    "cylindrical_faces": 0,
+    "other_faces": 0
+   }
+  },
+  {
+   "file": "M12_replace_face_start.step",
+   "bytes": 27889,
+   "sha256": "81e128705427ce8c75b7fa49194f124ac3c3e9cb86a4de8534d209e4106a5aa1",
+   "valid_reference": true,
+   "units": "mm",
+   "expected_aggregate_volume_mm3": 6000.0,
+   "solid_count": 1,
+   "bounds_min_mm": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "bounds_max_mm": [
+    40.0,
+    20.0,
+    10.0
+   ],
+   "occt_roundtrip": {
+    "valid": true,
+    "measured_volume_mm3": 6000.0,
+    "planar_faces": 11,
+    "cylindrical_faces": 0,
+    "other_faces": 0
+   }
+  },
+  {
+   "file": "M13_thin_frame.step",
+   "bytes": 30002,
+   "sha256": "47016c5e28e6afa489b1f9783223ae272bccb3c524833d5f60f769ac2972e5cd",
+   "valid_reference": true,
+   "units": "mm",
+   "expected_aggregate_volume_mm3": 152.0,
+   "solid_count": 1,
+   "bounds_min_mm": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "bounds_max_mm": [
+    20.0,
+    20.0,
+    2.0
+   ],
+   "occt_roundtrip": {
+    "valid": true,
+    "measured_volume_mm3": 152.0,
+    "planar_faces": 10,
+    "cylindrical_faces": 0,
+    "other_faces": 0
+   }
+  },
+  {
+   "file": "M14_asymmetric_tag.step",
+   "bytes": 19000,
+   "sha256": "002b5785bef0486898a3c763eb59c0feb8149428e684ec7d98cd5c8271663c1e",
+   "valid_reference": true,
+   "units": "mm",
+   "expected_aggregate_volume_mm3": 3149.73451754256,
+   "solid_count": 1,
+   "bounds_min_mm": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "bounds_max_mm": [
+    40.0,
+    20.0,
+    4.0
+   ],
+   "occt_roundtrip": {
+    "valid": true,
+    "measured_volume_mm3": 3149.73451754257,
+    "planar_faces": 6,
+    "cylindrical_faces": 1,
+    "other_faces": 0
+   }
+  },
+  {
+   "file": "M14_placed_tag.step",
+   "bytes": 19452,
+   "sha256": "612a48e5edd7d33b0eec20a7faea628c62feb697bfc9a3fdf62ca4fb7e158dc0",
+   "valid_reference": true,
+   "units": "mm",
+   "expected_aggregate_volume_mm3": 3149.73451754256,
+   "solid_count": 1,
+   "bounds_min_mm": [
+    80.0,
+    -50.0,
+    25.0
+   ],
+   "bounds_max_mm": [
+    100.0,
+    -10.0,
+    29.0
+   ],
+   "occt_roundtrip": {
+    "valid": true,
+    "measured_volume_mm3": 3149.73451754257,
+    "planar_faces": 6,
+    "cylindrical_faces": 1,
+    "other_faces": 0
+   }
+  },
+  {
+   "file": "M15_curve_coupon.dxf",
+   "bytes": 302,
+   "sha256": "90164285bd4c6cdb4e0be57b39b3691e8d295e7af21c7fe58cea1f73ea4c9416",
+   "valid_reference": true,
+   "units": "mm",
+   "expected_entities": {
+    "ellipse": {
+     "center": [
+      0,
+      0
+     ],
+     "semiaxes": [
+      10,
+      5
+     ]
+    },
+    "arc": {
+     "center": [
+      20,
+      0
+     ],
+     "radius": 5,
+     "start_deg": 0,
+     "end_deg": 90
+    },
+    "circle": {
+     "center": [
+      30,
+      0
+     ],
+     "radius": 3
+    },
+    "line": {
+     "start": [
+      20,
+      -10
+     ],
+     "end": [
+      30,
+      -10
+     ]
+    }
+   }
+  },
+  {
+   "file": "NEGATIVE_not_step.step",
+   "bytes": 49,
+   "sha256": "c2bfbeb4d6900e3590673836955b4243a0bd0071150adbb8b68eb88cee8c528e",
+   "valid_reference": false,
+   "expected": "Recoverable import failure or explicit partial-recovery notice; preserve existing project; no silent success"
+  },
+  {
+   "file": "NEGATIVE_open_triangle.stl",
+   "bytes": 113,
+   "sha256": "677b138c6012b6090dd30b77db33ceb6cb605f6b146a9731d414503e8f38fbd8",
+   "valid_reference": false,
+   "expected": "Reject or explicitly classify as open/reference mesh; do not report a closed solid"
+  },
+  {
+   "file": "NEGATIVE_truncated.step",
+   "bytes": 7708,
+   "sha256": "7f03104e194523d71a0195709314eefea1a11ada43809f8615983c0eef43520b",
+   "valid_reference": false,
+   "expected": "Recoverable import failure or explicit partial-recovery notice; preserve existing project; no silent success"
+  },
+  {
+   "file": "NEGATIVE_truncated_binary.stl",
+   "bytes": 84,
+   "sha256": "ae04e7c3c2ab4c811fe1eabbd8378aa5b758de93dd49002359461abea077810c",
+   "valid_reference": false,
+   "expected": "Recoverable import failure or explicit partial-recovery notice; preserve existing project; no silent success"
+  },
+  {
+   "file": "M17_shell_only_box.step",
+   "valid_reference": true,
+   "units": "mm",
+   "origin": "Synthetic (generate_sewing_fixtures.cpp, 2026-10-21): a 40\u00d730\u00d710 box written as a closed SHELL, no SOLID entity, as surface-modelled parts and many PCB footprint libraries are.",
+   "expected_aggregate_volume_mm3": 12000.0,
+   "solid_count": 1,
+   "sheet_bodies": 0,
+   "bounds_min_mm": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "bounds_max_mm": [
+    40.0,
+    30.0,
+    10.0
+   ],
+   "expect_notice": true,
+   "occt_roundtrip": {
+    "valid": true,
+    "measured_volume_mm3": 12000.0,
+    "planar_faces": 6,
+    "cylindrical_faces": 0,
+    "other_faces": 0
+   },
+   "expected": "The closed shell is sewn into one solid; the import says it stitched faces the file had not declared as a solid.",
+   "bytes": 15427,
+   "sha256": "7b5de2b630f35fa02b5b39eaa49a0281582c4a4f32331bbdcc20f0f9ea417eb9",
+   "sewing": {
+    "sewnSolids": 1,
+    "openShells": 0,
+    "dropped": 0
+   }
+  },
+  {
+   "file": "M18_solid_and_free_shell.step",
+   "valid_reference": true,
+   "units": "mm",
+   "origin": "Synthetic (generate_sewing_fixtures.cpp, 2026-10-21): a 10 mm cube solid beside a second cube that is only a closed shell \u2014 the SOT404 shape: declared pins, undeclared body.",
+   "expected_aggregate_volume_mm3": 2000.0,
+   "solid_count": 2,
+   "sheet_bodies": 0,
+   "bounds_min_mm": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "bounds_max_mm": [
+    30.0,
+    10.0,
+    10.0
+   ],
+   "expect_notice": true,
+   "occt_roundtrip": {
+    "valid": true,
+    "measured_volume_mm3": 2000.0,
+    "planar_faces": 12,
+    "cylindrical_faces": 0,
+    "other_faces": 0
+   },
+   "expected": "Both bodies import; the loose shell is sewn into a solid rather than dropped; the import says so.",
+   "bytes": 32583,
+   "sha256": "3c2b335c65836076844ce220e97e7f6f6d4ea5c85f9a33e6489ddc65147090c0",
+   "sewing": {
+    "sewnSolids": 1,
+    "openShells": 0,
+    "dropped": 0
+   }
+  },
+  {
+   "file": "M19_open_sheet.step",
+   "valid_reference": true,
+   "units": "mm",
+   "origin": "Synthetic (generate_sewing_fixtures.cpp, 2026-10-21): five faces of a 10 mm cube \u2014 a sheet that does not close.",
+   "expected_aggregate_volume_mm3": 0.0,
+   "solid_count": 0,
+   "sheet_bodies": 1,
+   "bounds_min_mm": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "bounds_max_mm": [
+    10.0,
+    10.0,
+    10.0
+   ],
+   "expect_notice": true,
+   "occt_roundtrip": {
+    "valid": true,
+    "measured_volume_mm3": 0.0,
+    "planar_faces": 5,
+    "cylindrical_faces": 0,
+    "other_faces": 0
+   },
+   "expected": "Imported as one sheet body with an explicit open-surface notice; it reads 0 mm\u00b3, never a face integral; nothing is silently dropped.",
+   "bytes": 24584,
+   "sha256": "c02e656e5477c9a1679d25605b9a01a1dde869c2fab732a80d75ae0968900943",
+   "sewing": {
+    "sewnSolids": 0,
+    "openShells": 1,
+    "dropped": 0
+   }
+  }
+ ]
+}

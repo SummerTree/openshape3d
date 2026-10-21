@@ -1,0 +1,160 @@
+{
+ "occt": "7.8.1",
+ "file": "/Users/jclaan/projects/open-source-projects/openshape3d-project/openshape3d/docs/qa/shapr3d-parity/runs/qa2/exports/M12_replace_face_result.step",
+ "readOK": true,
+ "roots": 1,
+ "metrics": {
+  "mesh": false,
+  "solids": 1,
+  "volume": 8000,
+  "centroid": [
+   20,
+   10,
+   5
+  ],
+  "bounds": {
+   "min": [
+    0,
+    0,
+    0
+   ],
+   "max": [
+    40,
+    20,
+    10
+   ]
+  },
+  "faces": {
+   "total": 6,
+   "planar": 6,
+   "cylindrical": 0,
+   "conical": 0,
+   "spherical": 0,
+   "toroidal": 0,
+   "bspline": 0,
+   "other": 0
+  },
+  "valid": true,
+  "tolerance": {
+   "min": 1e-07,
+   "avg": 1e-07,
+   "max": 1e-07
+  },
+  "perSolid": [
+   {
+    "volume": 8000,
+    "centroid": [
+     20,
+     10,
+     5
+    ],
+    "bounds": {
+     "min": [
+      0,
+      0,
+      0
+     ],
+     "max": [
+      40,
+      20,
+      10
+     ]
+    },
+    "faces": 6,
+    "planar": 6,
+    "cylindrical": 0
+   }
+  ]
+ },
+ "reference": {
+  "readOK": true,
+  "file": "/Users/jclaan/projects/open-source-projects/openshape3d-project/openshape3d/docs/qa/shapr3d-parity/fixtures/M12_replace_face_result.step",
+  "metrics": {
+   "mesh": false,
+   "solids": 1,
+   "volume": 8000,
+   "centroid": [
+    20,
+    10,
+    5
+   ],
+   "bounds": {
+    "min": [
+     0,
+     0,
+     0
+    ],
+    "max": [
+     40,
+     20,
+     10
+    ]
+   },
+   "faces": {
+    "total": 6,
+    "planar": 6,
+    "cylindrical": 0,
+    "conical": 0,
+    "spherical": 0,
+    "toroidal": 0,
+    "bspline": 0,
+    "other": 0
+   },
+   "valid": true,
+   "tolerance": {
+    "min": 1e-07,
+    "avg": 1e-07,
+    "max": 1e-07
+   },
+   "perSolid": [
+    {
+     "volume": 8000,
+     "centroid": [
+      20,
+      10,
+      5
+     ],
+     "bounds": {
+      "min": [
+       0,
+       0,
+       0
+      ],
+      "max": [
+       40,
+       20,
+       10
+      ]
+     },
+     "faces": 6,
+     "planar": 6,
+     "cylindrical": 0
+    }
+   ]
+  }
+ },
+ "deviation": {
+  "volumeError": 0,
+  "centroidError": [
+   0,
+   0,
+   0
+  ],
+  "boundsMaxError": 0,
+  "booleanOK": true,
+  "refMinusActual": 0,
+  "actualMinusRef": 0,
+  "symmetricRatio": 0,
+  "surfaceDistance": {
+   "actualToRef": 0,
+   "refToActual": 0,
+   "max": 0,
+   "samples": [
+    24,
+    24
+   ],
+   "deflection": 0.02,
+   "estimate": true
+  }
+ }
+}

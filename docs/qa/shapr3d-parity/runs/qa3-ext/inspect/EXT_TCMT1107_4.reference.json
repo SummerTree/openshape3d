@@ -1,0 +1,75 @@
+{
+ "occt": "7.8.1",
+ "file": "/Users/jclaan/projects/reference/FreeCAD/src/Mod/Idf/Idflibs/TCMT1107_4.stp",
+ "readOK": true,
+ "roots": 1,
+ "sewing": {
+  "rawSolids": 1,
+  "freeFaces": 0,
+  "sewnSolids": 0,
+  "openShells": 0
+ },
+ "metrics": {
+  "mesh": false,
+  "solids": 1,
+  "volume": 21.9684209838534,
+  "centroid": [
+   -0.00345435175869162,
+   0.00507468019296442,
+   1.1449279194062
+  ],
+  "bounds": {
+   "min": [
+    -1.40044771782505,
+    -3.494925319807,
+    0
+   ],
+   "max": [
+    1.399552282175,
+    3.505074680193,
+    2.10000000000006
+   ]
+  },
+  "faces": {
+   "total": 70,
+   "planar": 54,
+   "cylindrical": 16,
+   "conical": 0,
+   "spherical": 0,
+   "toroidal": 0,
+   "bspline": 0,
+   "other": 0
+  },
+  "valid": true,
+  "tolerance": {
+   "min": 1e-07,
+   "avg": 1e-07,
+   "max": 1e-07
+  },
+  "perSolid": [
+   {
+    "volume": 21.9684209838534,
+    "centroid": [
+     -0.00345435175869162,
+     0.00507468019296442,
+     1.1449279194062
+    ],
+    "bounds": {
+     "min": [
+      -1.40044771782505,
+      -3.494925319807,
+      0
+     ],
+     "max": [
+      1.399552282175,
+      3.505074680193,
+      2.10000000000006
+     ]
+    },
+    "faces": 70,
+    "planar": 54,
+    "cylindrical": 16
+   }
+  ]
+ }
+}

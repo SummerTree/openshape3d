@@ -2,7 +2,7 @@
 
 > **Current unfinished-work register:** [Sketch parity open status](SKETCH_PARITY_OPEN_STATUS.md). Maintained at every meaningful checkpoint; older mission logs below are historical.
 
-Last updated: 2026-10-21 (Deviation Preview — the Accuracy Report's colours on the part; the scan's profile straightened; `item.select`) — **Accuracy Report** (one body measured against
+Last updated: 2026-10-21 (CAD import over MCP: STEP and IGES sew loose faces into solids and sheet bodies, exact bounds, DXF units and ellipses, an open-mesh notice, and agents import STEP / IGES / DXF / FCStd; an OCCT oracle, a live MCP runner and offline XCTests behind it; test pack 35 / 35, FreeCAD IDF + NIST corpus 32 / 32 — newest mission log. Also today: Deviation Preview — the Accuracy Report's colours on the part; the scan's profile straightened; `item.select`) — **Accuracy Report** (one body measured against
 another: orthographic silhouette overlays per view, outline and surface
 deviation both ways; `Kernel/AccuracyKit.swift`, Views ▸ Accuracy Report…,
 `/v1/accuracy` + `/v1/accuracy/image`, MCP ops `accuracy` /
@@ -19,6 +19,107 @@ design), `FREECAD_PLAYBOOK.md` (the FreeCAD-derived hardening ledger),
 `TOPO_NAMING_HISTORY_DESIGN.md` (element-naming design, now complete), and
 `AGENT_CONTROL.md` (the `/v1/exec` scripting surface).
 
+## Open work — 2026-10-21, CAD import
+
+- **A declared solid that fails validation after ShapeFix is still dropped**
+  (counted in the `step` ledger and the notice). A sheet that fails is now
+  kept face by face; the same fallback for a failed solid — keep its faces as
+  a sheet — was not done because no file asked for it. First file that does
+  decides.
+- **The oracle mirrors the reader's policy for sheet counts** (sew at 1e-3 mm,
+  heal-validate-or-drop, face-by-face fallback), so corpus expectations are
+  "what a careful importer makes of the file", not independent evidence.
+  Its volume, bounds and centroid references are policy-free (solids only).
+- **The Import menu path was not re-exercised.** It calls the same
+  `importSTEP` / `importDXF` / `importMesh`, so the fixes reach it, but the
+  file picker itself was not driven this mission; `document.import` stays
+  `developer_only` outside DEBUG.
+- **TEST_PLAN §5 (Shapr3D workflow exercises, Shapr3D-side references)**
+  remains manual. Runs `qa1`–`qa4` under `docs/qa/shapr3d-parity/runs/` are
+  the record of the progression (29/32 → 35/35) and can be pruned.
+
+## Mission log — 2026-10-21, importing other people's CAD over MCP: an oracle, a live runner, and five reader defects
+
+**The ask.** Test importing other CAD models through MCP, run reports with
+deviation, and build a fixing pipeline. Everything is in
+`docs/qa/shapr3d-parity/tools/README.md`; this is the account.
+
+**What exists now.**
+
+- `tools/inspect_step.cpp` → `build/qa/occt_inspect`: an OCCT-only oracle.
+  Volume, centroid, bounds, face classes, validity; with `--ref`, the
+  deviation against a reference file — volume, centroid and bounds error,
+  boolean symmetric difference, sampled surface distance. Reproduces the
+  manifest's volumes to 1e-8. Its `sewing` block says what an importer can
+  make of a file (declared solids, free faces, sewn solids, open shells,
+  dropped).
+- `tools/import_qa.py`: the live half. Imports every fixture and any
+  `--extra` file or folder through `document.import`, measures through
+  `/v1/state`, `/v1/check` and `/v1/faces`, exports STEP through
+  `/v1/export`, runs the oracle on the export against the original, applies
+  the TEST_PLAN §3 gates, undoes, and writes `runs/<id>/` (REPORT.md,
+  results.json, exports, oracle JSON, every MCP call).
+- `openshape3dTests/ImportQATests.swift`: the offline half, manifest-driven
+  (ten tests, half a second).
+- `tools/generate_sewing_fixtures.cpp` and fixtures M17–M19 (a box written
+  as a shell with no solid; a solid beside a loose closed shell; an open
+  five-face sheet), manifest revision 1.1 with their sewing ledgers.
+- `document.import` replies carry `format`, `bodyIDs`, `names`, `analytic`,
+  `textured`, `triangles`, `sketches` (DXF), `notice`, and for STEP a `step`
+  ledger `{solids, sewnSolids, openShells, freeFaces, dropped}`
+  (`docs/AGENT_CONTROL.md`).
+
+**What the runs found, and what was fixed.** Each is pinned by a test or a
+fixture.
+
+1. **Agents could not import STEP or DXF at all.** `document.import` sent
+   every file to the mesh importer, which refused them as unsupported — the
+   whole test pack was unreachable from MCP. Routed by the file's extension
+   exactly as the Import menu (`AgentBridge`).
+2. **DXF ignored `$INSUNITS`** (an inch drawing landed at 1/25.4 scale),
+   **skipped ELLIPSE entities**, and the unit table written to fix it had
+   mils at 25.4 mm and microinches at a mil. `DXFKit` now scales by the
+   full `$INSUNITS` table and imports ellipses (arcs sampled to polylines).
+3. **An open mesh imported silently as a body.** `NEGATIVE_open_triangle.stl`
+   became "a solid" with no notice. `MeshIntegrity.openEdgeCount` (welded
+   edge incidence) now drives an "open mesh, not a solid" notice.
+4. **`/v1/state` bounds were the render mesh's box**: 3 µm short on a 15 mm
+   washer, 20 µm on a 100 mm one — enough to fail the 0.01 mm bounds gate
+   for a part that was right. `MeasureKit.boundingBox` uses the exact B-rep
+   box (`BRepBndLib::AddOptimal`) whenever a body has one.
+5. **The STEP reader dropped every face outside a solid.** FreeCAD's IDF
+   footprints showed it: SOT404.stp kept its 4 pin solids and lost the
+   package body without a word; SOT23.stp and SOD_323.stp (73 and 75
+   `OPEN_SHELL`s, one face each) became a single pseudo-body of unconnected
+   faces with BOP self-intersections and a volume that meant nothing. The
+   reader now sews faces outside any solid across all roots (1e-3 mm):
+   each closed shell becomes an oriented solid (`BRepClass3d_SolidClassifier`
+   flip — SOD_323's body came out inside-out, −1.069 → +1.069 mm³), each
+   open shell a sheet body, and the notice says so (`STEPReadSummary`). A
+   sheet that fails BRepCheck after ShapeFix is retried face by face:
+   SOD_323 has one face of 48 whose wire the sewing cannot close, and the
+   other 47 are kept. A sheet body reads 0 mm³ (`MeasureKit.volume` via
+   `OCCTKernel.solidCount`); `/v1/check`'s `counts.solids` tells it from a
+   solid. SOT404's package turned out to be declared a solid but built of 17
+   faces with 12 free edges (7 remain even at 0.5 mm sewing): it is a sheet,
+   and is now reported as one — not the lost closed body first assumed.
+
+**Numbers (runs `qa5` and `qa5-ext`).** The pack: 35 of 35 (20 STEP
+including M17–M19, 6 STL, 2 DXF, 4 negatives). The corpus: 32 of 32 —
+FreeCAD's 28 IDF footprint STEPs, `Schenkel.stp` (121 134.10 mm³; the app
+reads 121 134.12, 1.4e-7 relative), NIST `as1-ac-214` (18 solids, exact)
+and its small variant, and `geometry_out` (refused, as it should be).
+Volume, bounds and centroid errors are 0 on every analytic case; round-trip
+symmetric difference 0; sampled surface distance 0. Imports take ≤ 0.07 s
+for any fixture and 7.8 s for the whole corpus (Schenkel 1.68 s); the
+oracle's sampled distance dominates a run. Eleven advisory BOP findings on
+IDF models (`invalidCurveOnSurface`, `c0Continuity`) are the files' own
+tolerances — BRepCheck passes them and they round-trip exactly.
+
+**How to work a failure.** Run both halves, read `REPORT.md`, reproduce on
+the kernel alone with the oracle or a probe built the same way, fix, pin
+with a test or a synthetic fixture, rerun. The three IDF cases became
+M17–M19 this way.
 ## Mission log — 2026-10-20, Accuracy Report and scan-to-CAD over MCP
 
 The request: download laanlabs' fire-hydrant TrueDepth scan from Sketchfab,

@@ -1,0 +1,45 @@
+{
+ "occt": "7.8.1",
+ "file": "/Users/jclaan/projects/open-source-projects/openshape3d-project/openshape3d/docs/qa/shapr3d-parity/fixtures/M03_open_tray.stl",
+ "readOK": true,
+ "roots": 1,
+ "metrics": {
+  "mesh": true,
+  "solids": 0,
+  "volume": 13632,
+  "centroid": [
+   30,
+   20,
+   9.09859154929577
+  ],
+  "bounds": {
+   "min": [
+    -1e-07,
+    -1e-07,
+    -1e-07
+   ],
+   "max": [
+    60.0000001,
+    40.0000001,
+    25.0000001
+   ]
+  },
+  "faces": {
+   "total": 1,
+   "planar": 0,
+   "cylindrical": 0,
+   "conical": 0,
+   "spherical": 0,
+   "toroidal": 0,
+   "bspline": 0,
+   "other": 1
+  },
+  "valid": false,
+  "tolerance": {
+   "min": 1e-07,
+   "avg": 1e-07,
+   "max": 1e-07
+  },
+  "perSolid": []
+ }
+}

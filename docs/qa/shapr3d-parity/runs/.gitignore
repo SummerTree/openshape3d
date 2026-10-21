@@ -1,0 +1,2 @@
+# Corpus STEP exports are regenerable from the runner; the fixture runs keep theirs.
+*-ext/exports/

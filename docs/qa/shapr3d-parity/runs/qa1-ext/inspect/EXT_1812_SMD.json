@@ -1,0 +1,160 @@
+{
+ "occt": "7.8.1",
+ "file": "/Users/jclaan/projects/open-source-projects/openshape3d-project/openshape3d/docs/qa/shapr3d-parity/runs/qa1-ext/exports/EXT_1812_SMD.step",
+ "readOK": true,
+ "roots": 1,
+ "metrics": {
+  "mesh": false,
+  "solids": 1,
+  "volume": 22.8653753567057,
+  "centroid": [
+   1.79275572073984e-06,
+   1.45035214618578e-05,
+   0.800016716093365
+  ],
+  "bounds": {
+   "min": [
+    -2.25,
+    -1.6,
+    -3.219646771413e-16
+   ],
+   "max": [
+    2.25,
+    1.6,
+    1.6020001
+   ]
+  },
+  "faces": {
+   "total": 91,
+   "planar": 34,
+   "cylindrical": 20,
+   "conical": 0,
+   "spherical": 8,
+   "toroidal": 0,
+   "bspline": 29,
+   "other": 0
+  },
+  "valid": true,
+  "tolerance": {
+   "min": 1e-07,
+   "avg": 1e-07,
+   "max": 1e-07
+  },
+  "perSolid": [
+   {
+    "volume": 22.8653753567057,
+    "centroid": [
+     1.79275572073984e-06,
+     1.45035214618578e-05,
+     0.800016716093365
+    ],
+    "bounds": {
+     "min": [
+      -2.25,
+      -1.6,
+      -3.219646771413e-16
+     ],
+     "max": [
+      2.25,
+      1.6,
+      1.6020001
+     ]
+    },
+    "faces": 91,
+    "planar": 34,
+    "cylindrical": 20
+   }
+  ]
+ },
+ "reference": {
+  "readOK": true,
+  "file": "/Users/jclaan/projects/reference/FreeCAD/src/Mod/Idf/Idflibs/1812_SMD.stp",
+  "metrics": {
+   "mesh": false,
+   "solids": 1,
+   "volume": 22.8653753567057,
+   "centroid": [
+    1.79275572073984e-06,
+    1.45035214618578e-05,
+    0.800016716093365
+   ],
+   "bounds": {
+    "min": [
+     -2.25,
+     -1.6,
+     -3.219646771413e-16
+    ],
+    "max": [
+     2.25,
+     1.6,
+     1.6020001
+    ]
+   },
+   "faces": {
+    "total": 91,
+    "planar": 34,
+    "cylindrical": 20,
+    "conical": 0,
+    "spherical": 8,
+    "toroidal": 0,
+    "bspline": 29,
+    "other": 0
+   },
+   "valid": true,
+   "tolerance": {
+    "min": 1e-07,
+    "avg": 1e-07,
+    "max": 1e-07
+   },
+   "perSolid": [
+    {
+     "volume": 22.8653753567057,
+     "centroid": [
+      1.79275572073984e-06,
+      1.45035214618578e-05,
+      0.800016716093365
+     ],
+     "bounds": {
+      "min": [
+       -2.25,
+       -1.6,
+       -3.219646771413e-16
+      ],
+      "max": [
+       2.25,
+       1.6,
+       1.6020001
+      ]
+     },
+     "faces": 91,
+     "planar": 34,
+     "cylindrical": 20
+    }
+   ]
+  }
+ },
+ "deviation": {
+  "volumeError": 0,
+  "centroidError": [
+   0,
+   0,
+   0
+  ],
+  "boundsMaxError": 0,
+  "booleanOK": true,
+  "refMinusActual": 0,
+  "actualMinusRef": 0,
+  "symmetricRatio": 0,
+  "surfaceDistance": {
+   "actualToRef": 2.28878339926112e-16,
+   "refToActual": 2.28878339926112e-16,
+   "max": 2.28878339926112e-16,
+   "samples": [
+    1303,
+    1303
+   ],
+   "deflection": 0.02,
+   "estimate": true
+  }
+ }
+}

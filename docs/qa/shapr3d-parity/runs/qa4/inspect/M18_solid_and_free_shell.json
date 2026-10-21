@@ -1,0 +1,220 @@
+{
+ "occt": "7.8.1",
+ "file": "/Users/jclaan/projects/open-source-projects/openshape3d-project/openshape3d/docs/qa/shapr3d-parity/runs/qa4/exports/M18_solid_and_free_shell.step",
+ "readOK": true,
+ "roots": 2,
+ "sewing": {
+  "rawSolids": 2,
+  "freeFaces": 0,
+  "sewnSolids": 0,
+  "openShells": 0,
+  "dropped": 0
+ },
+ "metrics": {
+  "mesh": false,
+  "solids": 2,
+  "volume": 2000,
+  "centroid": [
+   15,
+   5,
+   5
+  ],
+  "bounds": {
+   "min": [
+    0,
+    0,
+    0
+   ],
+   "max": [
+    30,
+    10,
+    10
+   ]
+  },
+  "faces": {
+   "total": 12,
+   "planar": 12,
+   "cylindrical": 0,
+   "conical": 0,
+   "spherical": 0,
+   "toroidal": 0,
+   "bspline": 0,
+   "other": 0
+  },
+  "valid": true,
+  "tolerance": {
+   "min": 1e-07,
+   "avg": 1e-07,
+   "max": 1e-07
+  },
+  "perSolid": [
+   {
+    "volume": 1000,
+    "centroid": [
+     5,
+     5,
+     5
+    ],
+    "bounds": {
+     "min": [
+      0,
+      0,
+      0
+     ],
+     "max": [
+      10,
+      10,
+      10
+     ]
+    },
+    "faces": 6,
+    "planar": 6,
+    "cylindrical": 0
+   },
+   {
+    "volume": 1000,
+    "centroid": [
+     25,
+     5,
+     5
+    ],
+    "bounds": {
+     "min": [
+      20,
+      0,
+      0
+     ],
+     "max": [
+      30,
+      10,
+      10
+     ]
+    },
+    "faces": 6,
+    "planar": 6,
+    "cylindrical": 0
+   }
+  ]
+ },
+ "reference": {
+  "readOK": true,
+  "file": "/Users/jclaan/projects/open-source-projects/openshape3d-project/openshape3d/docs/qa/shapr3d-parity/fixtures/M18_solid_and_free_shell.step",
+  "sewing": {
+   "rawSolids": 1,
+   "freeFaces": 6,
+   "sewnSolids": 1,
+   "openShells": 0,
+   "dropped": 0
+  },
+  "metrics": {
+   "mesh": false,
+   "solids": 2,
+   "volume": 2000,
+   "centroid": [
+    15,
+    5,
+    5
+   ],
+   "bounds": {
+    "min": [
+     0,
+     0,
+     0
+    ],
+    "max": [
+     30,
+     10,
+     10
+    ]
+   },
+   "faces": {
+    "total": 12,
+    "planar": 12,
+    "cylindrical": 0,
+    "conical": 0,
+    "spherical": 0,
+    "toroidal": 0,
+    "bspline": 0,
+    "other": 0
+   },
+   "valid": true,
+   "tolerance": {
+    "min": 1e-07,
+    "avg": 1e-07,
+    "max": 1e-07
+   },
+   "perSolid": [
+    {
+     "volume": 1000,
+     "centroid": [
+      5,
+      5,
+      5
+     ],
+     "bounds": {
+      "min": [
+       0,
+       0,
+       0
+      ],
+      "max": [
+       10,
+       10,
+       10
+      ]
+     },
+     "faces": 6,
+     "planar": 6,
+     "cylindrical": 0
+    },
+    {
+     "volume": 1000,
+     "centroid": [
+      25,
+      5,
+      5
+     ],
+     "bounds": {
+      "min": [
+       20,
+       0,
+       0
+      ],
+      "max": [
+       30,
+       10,
+       10
+      ]
+     },
+     "faces": 6,
+     "planar": 6,
+     "cylindrical": 0
+    }
+   ]
+  }
+ },
+ "deviation": {
+  "volumeError": 0,
+  "centroidError": [
+   0,
+   0,
+   0
+  ],
+  "boundsMaxError": 0,
+  "booleanOK": true,
+  "refMinusActual": 0,
+  "actualMinusRef": 0,
+  "symmetricRatio": 0,
+  "surfaceDistance": {
+   "actualToRef": 0,
+   "refToActual": 0,
+   "max": 0,
+   "samples": [
+    48,
+    48
+   ],
+   "deflection": 0.02,
+   "estimate": true
+  }
+ }
+}
