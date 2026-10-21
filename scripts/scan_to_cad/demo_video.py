@@ -247,6 +247,25 @@ def gcloud_token():
         return None
 
 
+def vertex_post(url, body, token, timeout=180):
+    """POST JSON to Vertex AI through curl: this Mac's Python cannot verify
+    Google's certificate chain (urllib: CERTIFICATE_VERIFY_FAILED), curl can."""
+    import tempfile
+    with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as f:
+        json.dump(body, f)
+        payload = f.name
+    try:
+        out = subprocess.run(["curl", "-s", "-m", str(timeout), "-X", "POST", "-H", "Authorization: Bearer " + token,
+                              "-H", "Content-Type: application/json", "--data-binary", "@" + payload, url],
+                             capture_output=True, text=True, check=True)
+    finally:
+        os.remove(payload)
+    reply = json.loads(out.stdout)
+    if "error" in reply:
+        raise RuntimeError(reply["error"].get("message", str(reply["error"]))[:200])
+    return reply
+
+
 def gemini_tts(text, path, voice, project, region):
     """Gemini 2.5 TTS through Vertex AI; raw 24 kHz PCM → the given path (m4a)."""
     token = gcloud_token()
@@ -257,10 +276,7 @@ def gemini_tts(text, path, voice, project, region):
     body = {"contents": [{"role": "user", "parts": [{"text": text}]}],
             "generationConfig": {"responseModalities": ["AUDIO"],
                                  "speechConfig": {"voiceConfig": {"prebuiltVoiceConfig": {"voiceName": voice}}}}}
-    req = urllib.request.Request(url, data=json.dumps(body).encode(), method="POST",
-                                 headers={"Authorization": "Bearer " + token, "Content-Type": "application/json"})
-    with urllib.request.urlopen(req, timeout=120) as r:
-        reply = json.load(r)
+    reply = vertex_post(url, body, token, timeout=120)
     part = reply["candidates"][0]["content"]["parts"][0]["inlineData"]
     mime = part.get("mimeType", "audio/L16;codec=pcm;rate=24000")
     rate = 24000
@@ -328,10 +344,7 @@ def lyria_music(path, project, region, prompt):
     url = ("https://{r}-aiplatform.googleapis.com/v1/projects/{p}/locations/{r}/publishers/google/models/"
            "lyria-002:predict").format(r=region, p=project)
     body = {"instances": [{"prompt": prompt, "negative_prompt": "vocals, lyrics, distortion"}], "parameters": {"sample_count": 1}}
-    req = urllib.request.Request(url, data=json.dumps(body).encode(), method="POST",
-                                 headers={"Authorization": "Bearer " + token, "Content-Type": "application/json"})
-    with urllib.request.urlopen(req, timeout=180) as r:
-        reply = json.load(r)
+    reply = vertex_post(url, body, token, timeout=180)
     pred = reply["predictions"][0]
     data = base64.b64decode(pred.get("bytesBase64Encoded") or pred.get("audioContent"))
     wav = path + ".wav"
