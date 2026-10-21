@@ -108,7 +108,19 @@ the zip in Downloads, on the real scan (`docs/SCAN_TO_CAD.md`).
   pair turns on a dark studio backdrop, and a report beat (`--report`,
   `--overlays`) films the HTML report scrolling to its overlays, a sheet of
   the three orthographic overlays with their overlap, and the front view
-  panned at full width.
+  panned at full width. Later that morning: the model had a fourth boss —
+  a thin spike on a wide base under the bonnet flange (a chain link or the
+  flange's underside caught in the band below) that the detector took for
+  a lug; `analyze_scan.py` now drops a boss whose root is more than twice
+  its neck (a boss is roughly a cylinder), leaving the three nozzles. And
+  the film opens the Accuracy Report by touch (`take --ui`, through
+  `TutorialTakeUITests`' remote loop): Views › Accuracy Report…, Compare,
+  scroll, Done. Lesson: with the Views menu open (or the sheet computing)
+  the app never reports idle, so an app-side XCUITest tap stalled 34 s
+  and the take timed out; the test gained `raw_tap` / `raw_tap_at` /
+  `raw_drag`, which synthesise the event through SpringBoard and wait for
+  SpringBoard's idle instead. The menu is taller than the landscape iPad
+  shows, so the take scrolls it to reach Accuracy Report….
 - **Not yet in the web app**: the kernel compiles there unchanged, but the
   sheet is not ported (openshape-cloud `docs/IOS_PARITY.md` lists it).
 

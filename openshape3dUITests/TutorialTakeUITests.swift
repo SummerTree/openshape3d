@@ -52,6 +52,18 @@ final class TutorialTakeUITests: XCTestCase {
             let match = NSPredicate(format: "identifier == %@ OR label == %@", arg, arg)
             return app.descendants(matching: .any).matching(match).firstMatch
         }
+        // Events through SpringBoard land on whatever is on screen without
+        // XCTest first waiting for *our* app to go idle — an open menu, a
+        // sheet computing behind a ProgressView, a turning viewport keep
+        // the app "busy", and an app-side tap then stalls up to 60 s.
+        let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
+        func sbPoint(_ pt: CGPoint) -> XCUICoordinate {
+            springboard.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: pt.x, dy: pt.y))
+        }
+        func rawWindowPoint(_ x: Double, _ y: Double) -> CGPoint {
+            let f = window.frame
+            return CGPoint(x: f.minX + f.width * x, y: f.minY + f.height * y)
+        }
 
         let deadline = Date().addingTimeInterval(1200)
         while Date() < deadline {
@@ -104,6 +116,26 @@ final class TutorialTakeUITests: XCTestCase {
             case "button":                            // button:Exit Sketching (id or label)
                 let b = byIdOrLabel(arg)
                 if b.waitForExistence(timeout: 5) { b.tap() } else { result = "done:missing" }
+            case "raw_tap":                           // raw_tap:AccuracyReportButton — through SpringBoard, no idle wait
+                let b = byIdOrLabel(arg)
+                if b.waitForExistence(timeout: 5) {
+                    let f = b.frame
+                    sbPoint(CGPoint(x: f.midX, y: f.midY)).tap()
+                } else { result = "done:missing" }
+            case "raw_tap_at":                        // raw_tap_at:0.5,0.5 (window-normalised), through SpringBoard
+                let (x, y) = point(Substring(arg)); sbPoint(rawWindowPoint(x, y)).tap()
+            case "raw_drag":                          // raw_drag:x,y;x,y[;pressSeconds], through SpringBoard
+                let parts = arg.split(separator: ";")
+                let (x1, y1) = point(parts[0]), (x2, y2) = point(parts[1])
+                let hold = parts.count > 2 ? Double(parts[2]) ?? 0.1 : 0.1
+                sbPoint(rawWindowPoint(x1, y1)).press(forDuration: hold, thenDragTo: sbPoint(rawWindowPoint(x2, y2)),
+                                                  withVelocity: .slow, thenHoldForDuration: 0.2)
+            case "frame":                             // frame:AccuracyReportButton → done:x,y,w,h (screen points) / done:missing
+                let b = byIdOrLabel(arg)
+                if b.waitForExistence(timeout: 5) {
+                    let f = b.frame
+                    result = String(format: "done:%.1f,%.1f,%.1f,%.1f", f.minX, f.minY, f.width, f.height)
+                } else { result = "done:missing" }
             case "toolbar":                           // toolbar:HistoryButton — folds into … on narrow bars
                 let b = byIdOrLabel(arg)
                 if !(b.exists && b.isHittable) {
