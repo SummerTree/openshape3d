@@ -24,10 +24,10 @@ design), `FREECAD_PLAYBOOK.md` (the FreeCAD-derived hardening ledger),
 The request: download laanlabs' fire-hydrant TrueDepth scan from Sketchfab,
 turn it into a CAD model through the MCP, document and film the process in
 Blender, and have the app produce an accuracy report with orthographic
-overlays. Everything shipped; the one open item is the scan itself —
-Sketchfab serves the download only to a signed-in account, so the run was
-proven on a stand-in (`scripts/scan_to_cad/synthetic_hydrant.py`) and the
-real file drops into the same commands (`docs/SCAN_TO_CAD.md`).
+overlays. Everything shipped. Sketchfab serves the download only to a
+signed-in account, so the run was proven on a stand-in
+(`scripts/scan_to_cad/synthetic_hydrant.py`) and then, once Jason dropped
+the zip in Downloads, on the real scan (`docs/SCAN_TO_CAD.md`).
 
 - **`Kernel/AccuracyKit.swift`** (pure values): both bodies placed in the
   world, rasterised per standard view on one grid (pixel-centre test, no
@@ -70,6 +70,14 @@ real file drops into the same commands (`docs/SCAN_TO_CAD.md`).
   equal to Pappus to 0.00 %; IoU front 97.4 % / top 98.3 % / right 97.5 %;
   scan→model mean 1.04 mm, 95 % within 3.26 mm, 87.9 % within 2 mm (the
   stand-in's own 0.7 mm noise plus a 4 mm voxel remesh).
+- **Real scan** (textured OBJ, sidewalk, chains, undersides missing): the
+  ground is trimmed by radial spread and the scan re-exported without it
+  (`scan_cropped.glb`); bosses are judged on their core (chains hang as far
+  out as the caps) and built as revolves about their own axis from an 8 mm
+  radius-along profile (neck, cap, nut); 86 calls, 56 s; valid B-rep, 152
+  faces; IoU front 84.8 % / top 90.3 % / right 86.9 %; scan→model mean
+  12.1 mm, model→scan 8.1 mm; size within 3 / 14 / 16 mm. What remains is
+  the chains, the bonnet's off-axis casting and the ragged bottom edge.
 - **Not yet in the web app**: the kernel compiles there unchanged, but the
   sheet is not ported (openshape-cloud `docs/IOS_PARITY.md` lists it).
 

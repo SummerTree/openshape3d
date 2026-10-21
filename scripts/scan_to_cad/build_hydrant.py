@@ -199,37 +199,70 @@ def build(args):
             az = boss["azimuthDeg"]
             d = unit(math.cos(math.radians(az)) * u + math.sin(math.radians(az)) * v)
             t = unit(np.cross(axis, d))
-            inner = boss["bodyRadiusMM"] - 12.0                 # start inside the body: unions want overlap
             reach = boss["reachMM"]
-            protrusion = reach - boss["bodyRadiusMM"]
-            cap_len = max(min(protrusion * 0.3, 30.0), 8.0)
-            neck_r = max(boss.get("neckWidthMM", boss["widthMM"] * 0.85) / 2, 8.0)
-            cap_r = max(boss["widthMM"] / 2, neck_r + 2.0)
-            origin = world(axis_origin, axis, u, v, inner, boss["centerHeightMM"], az)
-            sk = mcp.os3d("sketch.create", {"origin": origin, "xAxis": [float(x) for x in t],
-                                            "yAxis": [float(x) for x in axis], "name": "Boss %d" % n},
-                          note="a sketch facing along the boss")["sketchID"]
-            mcp.os3d("sketch.addEntities", {"sketchID": sk, "entities": [
-                {"kind": "circle", "center": [0, 0], "radius": round(neck_r, 2)}]})
-            length = reach - cap_len - inner
-            reply = mcp.os3d("feature.extrude", {"sketchID": sk, "seedPoint": [0, 0], "distance": round(length, 2),
-                                                 "boolean": "union", "booleanTargets": [cad_id]},
-                             note="the nozzle, unioned into the body")
-            vol_after_neck = next(b for b in reply["bodies"] if b["id"] == cad_id)["volumeMM3"]
-            cap_origin = world(axis_origin, axis, u, v, reach - cap_len - 2.0, boss["centerHeightMM"], az)
-            sk2 = mcp.os3d("sketch.create", {"origin": cap_origin, "xAxis": [float(x) for x in t],
-                                             "yAxis": [float(x) for x in axis], "name": "Cap %d" % n})["sketchID"]
-            mcp.os3d("sketch.addEntities", {"sketchID": sk2, "entities": [
-                {"kind": "circle", "center": [0, 0], "radius": round(cap_r, 2)}]})
-            reply = mcp.os3d("feature.extrude", {"sketchID": sk2, "seedPoint": [0, 0], "distance": round(cap_len + 2.0, 2),
-                                                 "boolean": "union", "booleanTargets": [cad_id]},
-                             note="the cap")
-            vol = next(b for b in reply["bodies"] if b["id"] == cad_id)["volumeMM3"]
-            print("   neck r %.1f length %.1f, cap r %.1f length %.1f; volume %.0f → %.0f mm³" % (
-                neck_r, length, cap_r, cap_len, vol_after_neck, vol))
-            s.summary.setdefault("bosses", []).append({
-                "azimuthDeg": az, "centerHeightMM": boss["centerHeightMM"], "neckRadiusMM": neck_r,
-                "capRadiusMM": cap_r, "reachMM": reach, "volumeMM3": vol})
+            if boss.get("profile"):
+                # A body of revolution about the boss's own axis: the sketch's
+                # u is across (t), v is along the boss (d); the measured
+                # radius-along profile, closed back along the axis.
+                inner = boss.get("innerStartMM", boss["bodyRadiusMM"] - 12.0)
+                prof = [[max(r, 1.0), s] for r, s in boss["profile"]]
+                loop = [[0.0, 0.0], [prof[0][0], 0.0]] + prof + [[0.0, prof[-1][1]]]
+                cleaned = [loop[0]]
+                for p_ in loop[1:]:
+                    if abs(p_[0] - cleaned[-1][0]) > 1e-6 or abs(p_[1] - cleaned[-1][1]) > 1e-6:
+                        cleaned.append(p_)
+                origin = world(axis_origin, axis, u, v, inner, boss["centerHeightMM"], az)
+                sk = mcp.os3d("sketch.create", {"origin": origin, "xAxis": [float(x) for x in t],
+                                                "yAxis": [float(x) for x in d], "name": "Boss %d" % n},
+                              note="a sketch through the boss's own axis")["sketchID"]
+                entities = lines_for(cleaned)
+                mcp.os3d("sketch.addEntities", {"sketchID": sk, "entities": entities},
+                         note="%d lines: the boss's half-profile, its axis at u = 0" % len(entities))
+                seed = [max(prof[0][0] * 0.4, 2.0), prof[-1][1] * 0.3]
+                reply = mcp.os3d("feature.revolve", {"sketchID": sk, "seedPoint": seed, "axisPoint": [0, 0],
+                                                     "axisDirection": [0, 1], "angleDegrees": 360,
+                                                     "boolean": "union", "booleanTargets": [cad_id]},
+                                 note="revolved about its axis and unioned into the body")
+                vol = next(b for b in reply["bodies"] if b["id"] == cad_id)["volumeMM3"]
+                print("   %d-point profile, radius %.0f → %.0f mm over %.0f mm; volume → %.0f mm³" % (
+                    len(prof), prof[0][0], prof[-1][0], prof[-1][1], vol))
+                s.summary.setdefault("bosses", []).append({
+                    "azimuthDeg": az, "centerHeightMM": boss["centerHeightMM"], "reachMM": reach,
+                    "neckRadiusMM": boss.get("neckWidthMM", 0) / 2, "capRadiusMM": boss.get("widthMM", 0) / 2,
+                    "profilePoints": len(prof), "volumeMM3": vol})
+            else:
+                inner = boss["bodyRadiusMM"] - 12.0                 # start inside the body: unions want overlap
+                protrusion = reach - boss["bodyRadiusMM"]
+                cap_len = max(min(protrusion * 0.3, 30.0), 8.0)
+                # The neck never reads wider than the cap: a chain or a flared
+                # casting beside the neck inflates its measured width.
+                neck_r = max(min(boss.get("neckWidthMM", boss["widthMM"] * 0.85), boss["widthMM"] * 0.88) / 2, 8.0)
+                cap_r = max(boss["widthMM"] / 2, neck_r + 2.0)
+                origin = world(axis_origin, axis, u, v, inner, boss["centerHeightMM"], az)
+                sk = mcp.os3d("sketch.create", {"origin": origin, "xAxis": [float(x) for x in t],
+                                                "yAxis": [float(x) for x in axis], "name": "Boss %d" % n},
+                              note="a sketch facing along the boss")["sketchID"]
+                mcp.os3d("sketch.addEntities", {"sketchID": sk, "entities": [
+                    {"kind": "circle", "center": [0, 0], "radius": round(neck_r, 2)}]})
+                length = reach - cap_len - inner
+                reply = mcp.os3d("feature.extrude", {"sketchID": sk, "seedPoint": [0, 0], "distance": round(length, 2),
+                                                     "boolean": "union", "booleanTargets": [cad_id]},
+                                 note="the nozzle, unioned into the body")
+                vol_after_neck = next(b for b in reply["bodies"] if b["id"] == cad_id)["volumeMM3"]
+                cap_origin = world(axis_origin, axis, u, v, reach - cap_len - 2.0, boss["centerHeightMM"], az)
+                sk2 = mcp.os3d("sketch.create", {"origin": cap_origin, "xAxis": [float(x) for x in t],
+                                                 "yAxis": [float(x) for x in axis], "name": "Cap %d" % n})["sketchID"]
+                mcp.os3d("sketch.addEntities", {"sketchID": sk2, "entities": [
+                    {"kind": "circle", "center": [0, 0], "radius": round(cap_r, 2)}]})
+                reply = mcp.os3d("feature.extrude", {"sketchID": sk2, "seedPoint": [0, 0], "distance": round(cap_len + 2.0, 2),
+                                                     "boolean": "union", "booleanTargets": [cad_id]},
+                                 note="the cap")
+                vol = next(b for b in reply["bodies"] if b["id"] == cad_id)["volumeMM3"]
+                print("   neck r %.1f length %.1f, cap r %.1f length %.1f; volume %.0f → %.0f mm³" % (
+                    neck_r, length, cap_r, cap_len, vol_after_neck, vol))
+                s.summary.setdefault("bosses", []).append({
+                    "azimuthDeg": az, "centerHeightMM": boss["centerHeightMM"], "neckRadiusMM": neck_r,
+                    "capRadiusMM": cap_r, "reachMM": reach, "volumeMM3": vol})
             mcp.os3d("item.setHidden", {"allSketches": True})
             s.shot("03-boss-%d-iso" % n, "isometric")
             s.stage("stage-%d-boss-%d" % (n + 1, n), cad_id)

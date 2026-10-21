@@ -179,7 +179,7 @@ def douglas_peucker(points, epsilon):
     return [points[0], points[-1]]
 
 
-def analyze(mesh, band_mm=4.0, lump_margin_mm=6.0, out_dir=None, name="scan"):
+def analyze(mesh, band_mm=4.0, lump_margin_mm=6.0, out_dir=None, name="scan", epsilon=1.5, debug=False):
     points = np.asarray(mesh.vertices, dtype=float)
     direction, _, values = principal_axis(points)
     origin, axis = fit_axis(points, direction)
@@ -197,22 +197,32 @@ def analyze(mesh, band_mm=4.0, lump_margin_mm=6.0, out_dir=None, name="scan"):
         axis = -axis
         h = -h
         perp = (points - origin) - np.outer(h, axis)
-    # The scanner's ground: a band at the bottom whose radius jumps far
-    # beyond the base flange. Trim it.
+    # The scanner's ground: the bottom bands of a standing scan hold a flat
+    # ring of sidewalk whose radii spread over a wide range, where a band of
+    # the part itself is a thin ring. Trim every band up to the last wide one
+    # among the first dozen.
     bottom = np.percentile(h, 0.5)
     edges = np.arange(bottom, h.max() + band_mm, band_mm)
-    med = []
+    spread = []
     for i in range(len(edges) - 1):
         sel = (h >= edges[i]) & (h < edges[i + 1])
-        med.append(np.median(radius[sel]) if sel.sum() >= 20 else np.nan)
-    med = np.array(med)
-    valid = np.where(~np.isnan(med))[0]
-    base_index = valid[0]
-    body_radius = np.nanmedian(med[valid[: max(3, len(valid) // 6)]])
-    for i in valid[:6]:
-        if med[i] > body_radius * 1.6:
+        spread.append(np.percentile(radius[sel], 80) - np.percentile(radius[sel], 20) if sel.sum() >= 20 else np.nan)
+    spread = np.array(spread)
+    base_index = 0
+    for i in range(min(12, len(spread))):
+        if not np.isnan(spread[i]) and spread[i] > 60:
             base_index = i + 1
     base_h = edges[base_index]
+    # The scan without its ground: every triangle whose corners all sit
+    # above the trim. The comparison and the film use this copy, so the
+    # sidewalk the scanner caught never counts against the model.
+    cropped = None
+    if base_index > 0:
+        keep_v = h >= base_h
+        faces = np.asarray(mesh.faces)
+        cropped = mesh.copy()
+        cropped.update_faces(keep_v[faces].all(axis=1))
+        cropped.remove_unreferenced_vertices()
     keep = h >= base_h
     points, h, perp, radius = points[keep], h[keep] - base_h, perp[keep], radius[keep]
     origin = origin + axis * base_h
@@ -305,15 +315,42 @@ def analyze(mesh, band_mm=4.0, lump_margin_mm=6.0, out_dir=None, name="scan"):
         blobs[joined].append((i, j))
     blobs = [b for b in blobs if b]
     bosses = []
+    dropped = []
     for cells in blobs:
         if len(cells) < 4:
             continue
-        # A blob that runs round most of a band is a ring — a flange step or
-        # the dome's shoulder straddling two bands — not a boss.
+        peak_i, peak_j = max(cells, key=lambda c: excess_grid[c[0], c[1]])
+        peak = excess_grid[peak_i, peak_j]
+        tag = "blob %3d cells, peak +%.0f mm at h %.0f az %.0f" % (
+            len(cells), peak, bands[peak_i]["h"], (peak_j + 0.5) * (360 / sectors) - 180)
+        # The boss proper is the blob's core — cells at least half as proud
+        # as its peak. A cap's chain hangs down the barrel as a thin trail
+        # of faint cells and can tie the cap to a flange ring below; judged
+        # on the core, the cap stays a boss and the ring stays a ring.
+        cells = [c for c in cells if excess_grid[c[0], c[1]] >= 0.5 * peak]
+        # A chain hangs from a cap's rim as far from the axis as the cap
+        # itself, so it is in the core too — but it is one or two sectors
+        # wide where the cap is many. Keep only the bands with a wide
+        # presence; the centre height is then the cap's, not the chain's.
+        per_band_core = {}
+        for ci, cj in cells:
+            per_band_core.setdefault(ci, set()).add(cj)
+        wide = {ci for ci, s in per_band_core.items() if len(s) >= 3}
+        cells = [c for c in cells if c[0] in wide]
+        if len(cells) < 8:
+            dropped.append(tag + " — a core of only %d cells" % len(cells))
+            continue
+        # A blob that runs round much of the circumference is a ring — a
+        # flange step or the dome's shoulder straddling two bands, with
+        # scanner holes breaking it into pieces — not a boss.
         per_band = {}
         for ci, cj in cells:
             per_band.setdefault(ci, set()).add(cj)
         if max(len(s) for s in per_band.values()) >= sectors * 0.45:
+            dropped.append(tag + " — a ring in one band")
+            continue
+        if len(set(cj for ci, cj in cells)) >= sectors * 0.42:
+            dropped.append(tag + " — spans %d sectors" % len(set(cj for ci, cj in cells)))
             continue
         excess = np.array([grid_max[ci, cj] - body_r[ci] for ci, cj in cells])
         heights = np.array([bands[ci]["h"] for ci, cj in cells])
@@ -323,30 +360,94 @@ def analyze(mesh, band_mm=4.0, lump_margin_mm=6.0, out_dir=None, name="scan"):
         az = math.degrees(math.atan2((np.sin(angles) * w).sum(), (np.cos(angles) * w).sum()))
         # Reach along the boss direction and width across it, from the raw
         # points near the blob.
-        d = math.cos(math.radians(az)) * u + math.sin(math.radians(az)) * v
-        t = np.cross(axis, d)
         near = (np.abs(h - centre_h) < (heights.max() - heights.min()) / 2 + band_mm * 2)
         da = (azimuth[near] - az + 180) % 360 - 180
         near_idx = np.where(near)[0][np.abs(da) < 60]
+        if len(near_idx) < 20:
+            dropped.append(tag + " — too few points near it")
+            continue
+        # The boss points where its cap's face is: the farthest points from
+        # the axis. A scanner sees a cap from the front, so the grid's
+        # excess-weighted azimuth leans toward the side it captured; the
+        # face's own mean direction does not.
+        r_near = radius[near_idx]
+        far = r_near >= np.percentile(r_near, 94)
+        az_far = np.radians(azimuth[near_idx][far])
+        az = math.degrees(math.atan2(np.sin(az_far).mean(), np.cos(az_far).mean()))
+        d = math.cos(math.radians(az)) * u + math.sin(math.radians(az)) * v
+        t = np.cross(axis, d)
         along = perp[near_idx] @ d
         across = perp[near_idx] @ t
         body_here = float(np.interp(centre_h, [b["h"] for b in bands], body_r))
         out = along > body_here + lump_margin_mm * 0.5
         if out.sum() < 20:
+            dropped.append(tag + " — too few points proud of the body")
             continue
-        reach = float(np.percentile(along[out], 99))
-        width = float(np.percentile(across[out], 97.5) - np.percentile(across[out], 2.5))
-        tall = float(np.percentile(h[near_idx][out], 97.5) - np.percentile(h[near_idx][out], 2.5))
-        # Where the boss meets the body, it is narrower than at its cap: the
-        # width over the inner half of the protrusion.
-        inner = out & (along < body_here + (reach - body_here) * 0.5)
-        neck = float(np.percentile(across[inner], 97.5) - np.percentile(across[inner], 2.5)) if inner.sum() >= 20 else width
+        reach = float(np.percentile(along[out], 95))
+        protrusion = reach - body_here
+        # The boss as a body of revolution about its own axis: its radius
+        # slice by slice along that axis — a nozzle's flared casting, the
+        # threads, the cap, the nut on the cap's face all come out as steps.
+        # The radius is read across (horizontally): chains hang down from a
+        # cap's rim, so a horizontal extent is clean where a vertical one is
+        # not; and the scanner sees a cap from one side, so |across| is
+        # taken, not the span between the two sides.
+        inner = body_here - 12.0
+        step = 8.0
+        slices = []
+        hh = h[near_idx]
+        for lo in np.arange(inner, reach + step, step):
+            m = (along >= lo) & (along < lo + step) & (np.abs(hh - centre_h) < 160)
+            if m.sum() < 8:
+                continue
+            slices.append((float(lo + step / 2 - inner), float(np.percentile(np.abs(across[m]), 95))))
+        if len(slices) < 3:
+            dropped.append(tag + " — too few slices along it")
+            continue
+        # The cap's rim and the barrel's own surface near the root cannot be
+        # wider than the barrel; the nut on the face is the last slices.
+        radii_along = np.array([r for _, r in slices])
+        radii_along[0] = min(radii_along[0], radii_along[1])
+        slices = [(s, float(r)) for (s, _), r in zip(slices, radii_along)]
+        boss_profile = douglas_peucker([(r, s) for s, r in slices], epsilon=2.0)   # (radius, along)
+        # Centre height: the boss's top edge minus its radius, since nothing
+        # hangs above a nozzle but a chain hangs below it.
+        neck_sel = out & (along > body_here + protrusion * 0.3) & (along < body_here + protrusion * 0.7)
+        neck_r = float(np.interp(body_here + protrusion * 0.5 - inner, [s for s, _ in slices], [r for _, r in slices]))
+        if neck_sel.sum() >= 20:
+            centre_h = float(np.percentile(hh[neck_sel], 97) - neck_r)
+        width = 2 * float(max(r for _, r in slices[len(slices) // 2:]))
+        neck = 2 * neck_r
+        tall = 2 * neck_r
         bosses.append({"azimuthDeg": round(az, 1), "centerHeightMM": round(centre_h, 1),
                        "reachMM": round(reach, 1), "widthMM": round(width, 1), "neckWidthMM": round(neck, 1),
-                       "heightSpanMM": round(tall, 1), "bodyRadiusMM": round(body_here, 1), "cells": len(cells)})
+                       "heightSpanMM": round(tall, 1), "bodyRadiusMM": round(body_here, 1), "cells": len(cells),
+                       "innerStartMM": round(inner, 1),
+                       "profile": [[round(r, 2), round(s, 2)] for r, s in boss_profile]})
     # A boss has height: a ring of proud cells one or two bands tall is a
-    # step in the profile caught between two bands, not a nozzle.
-    bosses = [b for b in bosses if b["reachMM"] - b["bodyRadiusMM"] >= 12 and b["heightSpanMM"] >= 3 * band_mm]
+    # step in the profile caught between two bands, not a nozzle; and it is
+    # about as tall as it is wide — a sliver of flange is wide and flat.
+    kept = []
+    for b in bosses:
+        why = None
+        if b["reachMM"] - b["bodyRadiusMM"] < 20:
+            why = "protrudes %.0f mm" % (b["reachMM"] - b["bodyRadiusMM"])
+        elif b["heightSpanMM"] < 3 * band_mm:
+            why = "only %.0f mm tall" % b["heightSpanMM"]
+        elif b["widthMM"] < 20:
+            why = "only %.0f mm wide" % b["widthMM"]
+        elif not (10 <= b["centerHeightMM"] <= height - 10):
+            why = "centred at %.0f mm, off the part" % b["centerHeightMM"]
+        elif b["profile"] and b["profile"][0][0] > b["bodyRadiusMM"] * 1.15:
+            why = "starts %.0f mm wide at a %.0f mm body — a flange, not a boss" % (b["profile"][0][0] * 2, b["bodyRadiusMM"] * 2)
+        if why:
+            dropped.append("boss az %.0f h %.0f reach %.0f — %s" % (b["azimuthDeg"], b["centerHeightMM"], b["reachMM"], why))
+        else:
+            kept.append(b)
+    bosses = kept
+    if debug:
+        for line in dropped:
+            print("dropped:", line)
     bosses.sort(key=lambda b: -(b["reachMM"] - b["bodyRadiusMM"]))
     # A sliver the watershed split off a cap's rim (same azimuth, touching
     # heights) belongs to the boss beside it.
@@ -361,11 +462,39 @@ def analyze(mesh, band_mm=4.0, lump_margin_mm=6.0, out_dir=None, name="scan"):
             merged.append(b)
     bosses = merged
 
-    # Polyline for the revolve: (radius, height) from the median profile.
-    profile = [(b["median"], b["h"]) for b in bands]
+    # The revolve starts where the scan has solid coverage: the bottom of a
+    # standing scan thins out into the ground, and a few sparse bands there
+    # would put the model's base where the scanner saw almost nothing.
+    counts = np.array([b["count"] for b in bands])
+    typical = float(np.median(counts[: max(8, len(counts) // 4)]))
+    first = 0
+    for i, b in enumerate(bands):
+        if b["h"] > 150:
+            break
+        if counts[i] < 0.3 * typical:
+            first = i + 1
+    if first:
+        bands = bands[first:]
+        drop_h = bands[0]["h"] - band_mm / 2
+        height -= drop_h
+        for b in bands:
+            b["h"] -= drop_h
+        for b in bosses:
+            b["centerHeightMM"] = round(b["centerHeightMM"] - drop_h, 1)
+        origin = origin + axis * drop_h
+    # Polyline for the revolve: (radius, height) from the body radii, with a
+    # three-band running median against scanner noise, except where the
+    # profile steps (a flange edge must stay sharp).
+    radii = np.array([b["median"] for b in bands])
+    smoothed = radii.copy()
+    for i in range(1, len(radii) - 1):
+        trio = radii[i - 1:i + 2]
+        if trio.max() - trio.min() < 8:
+            smoothed[i] = np.median(trio)
+    profile = [(float(r), b["h"]) for r, b in zip(smoothed, bands)]
     if profile:
         profile = [(profile[0][0], 0.0)] + profile + [(profile[-1][0], height)]
-    simplified = douglas_peucker(profile, epsilon=1.5)
+    simplified = douglas_peucker(profile, epsilon=epsilon)
 
     analysis = {
         "name": name,
@@ -382,6 +511,22 @@ def analyze(mesh, band_mm=4.0, lump_margin_mm=6.0, out_dir=None, name="scan"):
     }
     if out_dir:
         os.makedirs(out_dir, exist_ok=True)
+        if cropped is not None:
+            # glTF is metres by definition, so every consumer (the app, Blender,
+            # trimesh) reads it the same way; the photo texture travels inside.
+            scaled = cropped.copy()
+            scaled.apply_scale(0.001)
+            path = os.path.join(out_dir, "scan_cropped.glb")
+            try:
+                scaled.export(path)
+                analysis["croppedScan"] = path
+                analysis["groundTrimmedMM"] = round(float(base_h - bottom), 1)
+            except Exception as error:  # noqa: BLE001 — a texture the exporter cannot carry
+                scaled.visual = trimesh.visual.ColorVisuals()
+                scaled.export(path)
+                analysis["croppedScan"] = path
+                analysis["groundTrimmedMM"] = round(float(base_h - bottom), 1)
+                print("cropped scan written without its texture:", error)
         with open(os.path.join(out_dir, "profile.json"), "w") as f:
             json.dump(analysis, f, indent=1)
         try:
@@ -453,17 +598,20 @@ def main():
     ap.add_argument("--out", default="analysis")
     ap.add_argument("--units", type=float, default=None, help="mm per file unit (default: by format)")
     ap.add_argument("--band", type=float, default=4.0, help="height band, mm")
+    ap.add_argument("--epsilon", type=float, default=1.5, help="polyline simplification, mm (2–3 for a noisy scan)")
+    ap.add_argument("--debug", action="store_true", help="say why each candidate lump was dropped")
     args = ap.parse_args()
     mesh, scale = load_mesh(args.scan, args.units)
     name = os.path.splitext(os.path.basename(args.scan))[0]
-    a = analyze(mesh, band_mm=args.band, out_dir=args.out, name=name)
+    a = analyze(mesh, band_mm=args.band, out_dir=args.out, name=name, epsilon=args.epsilon, debug=args.debug)
     print("scan: %d triangles, %.0f mm tall, body radius %.1f mm (file units x%g)" % (
         a["triangles"], a["heightMM"], a["bodyRadiusMM"], scale))
     print("axis origin", np.round(a["axisOrigin"], 1), "direction", np.round(a["axisDirection"], 3))
     print("profile points:", len(a["profile"]))
     for b in a["bosses"]:
-        print("boss at %6.1f° height %5.1f reach %5.1f width %5.1f span %5.1f" % (
-            b["azimuthDeg"], b["centerHeightMM"], b["reachMM"], b["widthMM"], b["heightSpanMM"]))
+        print("boss at %6.1f° height %5.1f reach %5.1f width %5.1f neck %5.1f profile %s" % (
+            b["azimuthDeg"], b["centerHeightMM"], b["reachMM"], b["widthMM"], b["neckWidthMM"],
+            " ".join("%.0f@%.0f" % (r, s) for r, s in b.get("profile", []))))
     print("wrote", os.path.join(args.out, "profile.json"))
 
 
