@@ -177,6 +177,20 @@ final class AgentExecTests: XCTestCase {
         XCTAssertEqual(code(#"{"op":"item.setHidden","args":{"ids":["nope"]}}"#), "bad_uuid")
     }
 
+    func testSelectTakesBodyIdsAndAnEmptyListClears() throws {
+        let id = UUID()
+        guard case let .select(ids)? = op(#"{"op":"item.select","args":{"ids":["\#(id.uuidString)"]}}"#) else {
+            return XCTFail("expected .select")
+        }
+        XCTAssertEqual(ids, [id])
+        guard case let .select(none)? = op(#"{"op":"item.select","args":{"ids":[]}}"#) else {
+            return XCTFail("expected .select with nothing — that clears the selection")
+        }
+        XCTAssertTrue(none.isEmpty)
+        XCTAssertEqual(code(#"{"op":"item.select","args":{}}"#), "missing_ids", "ids is required, even empty")
+        XCTAssertEqual(code(#"{"op":"item.select","args":{"ids":["nope"]}}"#), "bad_uuid")
+    }
+
     func testReplaceFaceParsesPlaneAndRejectsDegenerateNormal() throws {
         let id = UUID().uuidString
         let parsed = op(#"{"op":"feature.replaceFace","args":{"bodyID":"\#(id)","face":[2],"targetOrigin":[0,5,0],"targetNormal":[0,2,0],"flip":true}}"#)

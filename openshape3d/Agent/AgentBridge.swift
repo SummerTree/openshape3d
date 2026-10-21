@@ -563,6 +563,14 @@ final class AgentBridge {
             for item in items { session.perform(SetItemVisibilityCommand(item: item, isHidden: hidden)) }
             return execOK(viewModel, ["count": items.count, "undoSteps": items.count])
 
+        case let .select(ids):
+            let document = session.document
+            for raw in ids where !document.bodies.contains(where: { $0.id.raw == raw }) {
+                return execMissing("body", raw.uuidString)
+            }
+            viewModel.selection = Set(ids.map { BodyID(raw: $0) })
+            return execOK(viewModel, ["selection": ids.map(\.uuidString), "undoSteps": 0])
+
         case let .section(origin, normal, sectionOnly, twoD):
             guard let normal else {
                 viewModel.endSection()

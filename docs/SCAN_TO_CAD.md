@@ -189,9 +189,14 @@ turning, a slow turn in Visualize with the panel kept closed
 (`view.visualize` with `panel: false`), `view.accuracyReport` opening Views
 ▸ Accuracy Report… on the two bodies so the app's own overlay appears on
 screen, and last a hook: the model steps aside (`feature.transform`; an
-imported mesh cannot move, so the feature body does) and a fresh, untinted
-copy of the scan is imported beside it, both turning in the studio. The
-film's copy of the scan stands with its fitted base at the origin
+imported mesh cannot move, so the feature body does) and a fresh copy of
+the scan is imported beside it, both turning in the studio — on a dark
+backdrop (`--hook-background`, default white) so the photo texture and the
+red model pop. An import lands selected, and a selected body is drawn with
+45% of the accent blue mixed into its texture (hiding and showing it does
+not clear that), so the take clears the selection with `item.select`
+(`ids: []`) right after each import — the one agent op this film added.
+The film's copy of the scan stands with its fitted base at the origin
 (`scan_on_floor`), so the studio floor is under it and the ground shadow
 lands where a shadow should. The take writes `take.mov` and a
 `timeline.json` of when each beat happened (and when its picture was
@@ -202,17 +207,21 @@ stays portrait with the landscape picture inside it; a one-shot UI test,
 `RotateDeviceUITests`, turns the device), crops each beat to 16:9 (the
 toolbar in frame for the build, closer on the pair for the opening and the
 ending, the whole screen on a blurred copy for the tall report sheet),
-cuts each beat to its narration and lays a caption pill over it. There are
-no cards: the film opens on the hook footage under the title and closes on
-it under the numbers and the credits, so nothing in it is a still. It
-narrates (Gemini TTS through Vertex AI when `gcloud auth` is current, else
+cuts each beat to its narration and lays a caption pill over it. Given
+`--report` and `--overlays`, a report beat follows the sheet: the HTML
+report itself scrolling from its title to the overlays (headless Chrome at
+a 1.5× device scale, so the text is crisp at 1920), a sheet of the three
+orthographic overlays with their overlap, and the front view panned top to
+bottom at full width, so the blue (scan only) and orange (model only)
+margins read. There are no cards: the film opens on the hook footage under
+the title and closes on it under the numbers and the credits. It narrates (Gemini TTS through Vertex AI when `gcloud auth` is current, else
 the edge-tts voice), adds a music bed (Lyria through Vertex AI, else a
 generated one; looped to the film's length first, because an endless
 `-stream_loop` input into `amix` never ends and the mux hangs) and writes
 `<name>.mp4` plus a contact sheet.
 
-    venv/bin/python demo_video.py take --scan …/scan_cropped.glb --analysis …/analysis --out …/demo --port 8947
-    venv/bin/python demo_video.py compose --out …/demo --name fire-hydrant-demo [--tts gemini --music lyria]
+    venv/bin/python demo_video.py take --scan …/scan_cropped.glb --analysis …/analysis --out …/demo --port 8947 --hook-background 0.13 0.14 0.16
+    venv/bin/python demo_video.py compose --out …/demo --name fire-hydrant-demo --report …/report.html --overlays …/run/overlays [--tts gemini --music lyria]
 
 ### `report.py` and `make_video.py`
 

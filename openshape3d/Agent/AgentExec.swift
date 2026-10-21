@@ -148,6 +148,12 @@ nonisolated enum AgentExecOp: Sendable, Equatable {
     /// `/v1/state` lists no sketch ids, and a finished model usually wants
     /// all its profiles out of the way.
     case setHidden(ids: [UUID], allSketches: Bool, hidden: Bool)
+    /// The selection, set outright: these bodies and no others, or nothing
+    /// (an empty list). An import or a feature leaves its result selected —
+    /// drawn with the accent tint — and an assistant taking a picture, or
+    /// filming, wants the model in its own colours. A display state, no
+    /// undo step.
+    case select(ids: [UUID])
     /// Section View (spec §16.1): cut by the plane through `origin` with
     /// `normal` (the kept side), or turn the section off. A display state,
     /// not an edit — no undo step.
@@ -206,7 +212,7 @@ nonisolated enum AgentExec {
         "feature.sweep", "feature.loft", "feature.pushPull",
         "feature.moveFace", "feature.scaleFace", "feature.rotateFace",
         "feature.deleteFace", "feature.replaceFace", "feature.draftFace", "feature.imprint",
-        "body.setMaterial", "item.setHidden", "view.section", "view.visualize",
+        "body.setMaterial", "item.setHidden", "item.select", "view.section", "view.visualize",
     ]
 
     static let booleanKinds = ["union", "subtract", "intersect"]
@@ -248,6 +254,7 @@ nonisolated enum AgentExec {
         case "feature.imprint":    return parseImprint(args)
         case "body.setMaterial":   return parseSetMaterial(args)
         case "item.setHidden":     return parseSetHidden(args)
+        case "item.select":        return parseSelect(args)
         case "view.section":       return parseSection(args)
         case "view.visualize":     return parseVisualize(args)
         case "view.accuracyReport": return parseAccuracyReport(args)
@@ -1093,6 +1100,22 @@ nonisolated enum AgentExec {
             ids.append(u)
         }
         return .success(.setHidden(ids: ids, allSketches: allSketches, hidden: a["hidden"] as? Bool ?? true))
+    }
+
+    private static func parseSelect(_ a: [String: Any]) -> Result<AgentExecOp, AgentExecError> {
+        guard let raw = a["ids"] as? [String] else {
+            return .failure(.init(code: "missing_ids",
+                                  message: "args.ids must list the body ids to select — an empty list clears the selection."))
+        }
+        var ids: [UUID] = []
+        for s in raw {
+            guard let u = UUID(uuidString: s) else {
+                return .failure(.init(code: "bad_uuid",
+                                      message: "args.ids entry '\(s)' is not a UUID. Ids come from /v1/state or a previous exec reply."))
+            }
+            ids.append(u)
+        }
+        return .success(.select(ids: ids))
     }
 
     private static func uuid(_ a: [String: Any], _ key: String) throws -> UUID {
