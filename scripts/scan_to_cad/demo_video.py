@@ -517,7 +517,15 @@ def gemini_tts(text, path, voice, project, region, model="gemini-3.8-flash-tts")
 def edge_tts(text, path, voice="en-US-AndrewMultilingualNeural", rate="-2%"):
     import edge_tts as et
     mp3 = path + ".mp3"
-    asyncio.run(et.Communicate(text, voice, rate=rate).save(mp3))
+    for attempt in range(3):
+        try:
+            asyncio.run(et.Communicate(text, voice, rate=rate).save(mp3))
+            break
+        except Exception as problem:  # noqa: BLE001 — the service drops a line now and then ("No audio was received")
+            if attempt == 2:
+                raise
+            print("edge-tts failed (%s); trying again" % str(problem)[:80], flush=True)
+            time.sleep(3.0)
     subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", mp3, "-c:a", "aac", "-b:a", "128k", path], check=True)
     os.remove(mp3)
 
@@ -1103,7 +1111,11 @@ def compose(args):
     for i, png in enumerate(caption_inputs):
         # Each looped picture is bounded to the film's length: an endless
         # input left ffmpeg running after the last frame was written.
-        inputs += ["-loop", "1", "-framerate", str(FPS), "-t", "%.2f" % (total + 1.0), "-i", png]
+        # One frame, not a looped stream: `overlay` holds a picture's last
+        # frame for the rest of the film (its default eof_action), and a
+        # dozen endlessly looping picture inputs are what deadlocked
+        # ffmpeg 9's scheduler — twice in ten films, -nostdin or not.
+        inputs += ["-i", png]
         sid, a, b = overlays[i]
         # Top-left over the viewport; bottom-left while the report sheet is
         # up, so the pill never sits on the sheet's title.

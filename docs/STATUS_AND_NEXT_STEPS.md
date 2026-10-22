@@ -19,6 +19,23 @@ design), `FREECAD_PLAYBOOK.md` (the FreeCAD-derived hardening ledger),
 `TOPO_NAMING_HISTORY_DESIGN.md` (element-naming design, now complete), and
 `AGENT_CONTROL.md` (the `/v1/exec` scripting surface).
 
+## Open work — 2026-10-21, five UI tests fail before today's changes too
+
+The full UI suite (2026-10-21 evening, 216 passed) leaves five failing, and
+they fail the same way on `40505fad`, the commit before the day's merges —
+pre-existing, not regressions: `MaterialUITests
+testSteelPresetAppliesAndUndoRestoresDefault` and `ParityWalkthroughUITests
+testWalkthrough07MarqueeAndMaterial` (the Material sheet opens at its
+medium detent and the presets grid, added 2026-10-16, pushes the sliders
+below the fold — `MaterialMetallicValue` is not in the tree; the sheet
+could open `.large` or the test scroll), `RectangleWorkflowUITests
+testGalleryReopenedDesignCanUndoNewRectangle` (the reopened design's
+"Untitled" card is not hittable), `SelectionExtensionUITests
+testClickAddsToTheSelection` (a tap at 0.2, 0.2 no longer lands on empty
+space), `SettingsUITests testSingleKeyActionPreferencePersistsAcrossLaunch`.
+`ClipboardUITests testTutorialModeEchoesShortcuts` failed under load and
+passes alone.
+
 ## Open work — 2026-10-21, CAD import
 
 - **The web engine lacks this mission's three bridge methods.** The
@@ -328,7 +345,10 @@ the zip in Downloads, on the real scan (`docs/SCAN_TO_CAD.md`).
   scanned on its head. Tooling: ffmpeg 9's mux deadlocked once (watchdog +
   retry), Gemini TTS has a daily quota (lines are cached by text; a film
   never mixes voices), a narration line is held back rather than overlapped.
-  The scans and films live in `marketing/scan-to-cad/corpus/` (gitignored).
+  A reel of the whole corpus (`reel.py`: every pair and preview over the
+  bridge alone, cut 16:9 with a content-aware crop and 9:16 with caption
+  bands; script, SRT captions, credits and post text beside it). The scans
+  and films live in `marketing/scan-to-cad/corpus/` (gitignored).
 
 ## Open work — 2026-09-17
 

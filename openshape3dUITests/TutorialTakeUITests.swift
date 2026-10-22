@@ -27,7 +27,10 @@ final class TutorialTakeUITests: XCTestCase {
             control = URL(string: "http://127.0.0.1:\(port)")!
         }
         continueAfterFailure = false
-        XCUIDevice.shared.orientation = .landscapeLeft
+        // Landscape unless the take asks for portrait (`OS3D_TAKE_ORIENTATION`,
+        // the corpus reel's 9:16 cut); the device stays turned while this
+        // test runs.
+        XCUIDevice.shared.orientation = env["OS3D_TAKE_ORIENTATION"] == "portrait" ? .portrait : .landscapeLeft
 
         let app = XCUIApplication()
         app.launchEnvironment["OS3D_RESET_STORE"] = "1"
