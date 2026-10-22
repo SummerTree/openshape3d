@@ -865,10 +865,13 @@ def compose(args):
     os.makedirs(work, exist_ok=True)
     # The simulator records a frame only when the screen changes, so a still
     # moment has no frames at all and a cut through it comes out empty.
-    # Resample to a constant 30 fps once, then cut from that.
+    # Resample to a constant 30 fps once, then cut from that. A retake leaves
+    # the old copy behind, so rebuild it whenever the take is the newer file
+    # (the truck wheel was once cut from a copy of the take before its retake).
     take = os.path.join(work, "take-cfr.mp4")
-    if not os.path.exists(take):
-        subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", os.path.join(args.out, "take.mov"),
+    source = os.path.join(args.out, "take.mov")
+    if not os.path.exists(take) or os.path.getmtime(take) < os.path.getmtime(source):
+        subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", source,
                         "-vf", "fps=%d" % FPS, "-fps_mode", "cfr", "-an", "-c:v", "libx264", "-preset", "veryfast",
                         "-crf", "16", "-pix_fmt", "yuv420p", take], check=True)
 
