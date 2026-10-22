@@ -206,6 +206,35 @@ def free_port(start, tries=50):
     raise RuntimeError("no free control port in %d..%d" % (start, start + tries))
 
 
+def rotate_device(udid, derived_data, orientation, log_path):
+    """Put the simulator in `orientation` before a pass.
+
+    An iPad simulator boots in portrait, and `XCUIDevice.shared.orientation`
+    turns it to landscape from there — but it will not turn it back: with the
+    device in landscape, the take test and the one-shot `RotateDeviceUITests`
+    both log "Setting device orientation to Portrait" and the home screen,
+    the app and every recording stay landscape (a portrait pass once filmed
+    ten clips on their side, twice). So portrait is a shutdown and a boot;
+    landscape is the rotate test (the orientation outlives it)."""
+    print("== turning the device to %s" % orientation, flush=True)
+    if orientation == "portrait":
+        subprocess.run(["xcrun", "simctl", "shutdown", udid], capture_output=True)
+        subprocess.run(["xcrun", "simctl", "boot", udid], capture_output=True, check=True)
+        subprocess.run(["xcrun", "simctl", "bootstatus", udid, "-b"], capture_output=True, timeout=300)
+        time.sleep(5.0)
+        with open(log_path, "w") as log:
+            log.write("portrait: the simulator was shut down and booted (it boots in portrait)\n")
+        return
+    env = dict(os.environ, TEST_RUNNER_OS3D_ORIENTATION=orientation)
+    cmd = ["xcodebuild", "test", "-project", os.path.join(ROOT, "openshape3d.xcodeproj"), "-scheme", "openshape3d",
+           "-destination", "platform=iOS Simulator,id=" + udid, "-derivedDataPath", derived_data,
+           "-parallel-testing-enabled", "NO", "-only-testing:openshape3dUITests/RotateDeviceUITests"]
+    with open(log_path, "w") as log:
+        done = subprocess.run(cmd, stdout=log, stderr=subprocess.STDOUT, env=env, timeout=900)
+    if done.returncode != 0:
+        raise RuntimeError("RotateDeviceUITests exit %d — see %s" % (done.returncode, log_path))
+
+
 def take(args, corpus, order, results, specs, out):
     udid = udid_for(args.simulator)
     # The YouTube series' remote-controlled UI test launches the app with
@@ -218,6 +247,7 @@ def take(args, corpus, order, results, specs, out):
     for orientation in args.orientations:
         odir = os.path.join(out, orientation)
         os.makedirs(odir, exist_ok=True)
+        rotate_device(udid, args.derived_data, orientation, os.path.join(odir, "rotate.log"))
         takes_path = os.path.join(odir, "takes.json")
         takes = json.load(open(takes_path)) if os.path.exists(takes_path) else {}
         yt.ORIENTATION = orientation
@@ -280,6 +310,9 @@ def take(args, corpus, order, results, specs, out):
                 control.server.shutdown()
                 control.server.server_close()
         print("%s: %d of %d parts filmed" % (orientation, sum(1 for s in order if takes.get(s, {}).get("ok")), len(order)), flush=True)
+    if args.orientations[-1] != "landscape":
+        # Leave the simulator the way the part films expect it.
+        rotate_device(udid, args.derived_data, "landscape", os.path.join(out, "rotate-back.log"))
 
 
 # ----------------------------------------------------------------------------- compose

@@ -359,15 +359,27 @@ old models.
 
 One film of the whole corpus, cut two ways: `reel-16x9.mp4` for a page or
 a channel and `reel-9x16.mp4` for a phone. `reel.py corpus/ --port 8947
---derived-data …` runs the app inside the film's take UI test, one fresh
-session per part (the test turns the device — `OS3D_TAKE_ORIENTATION` —
-and keeps it turned for as long as it runs; an app launched on its own
-after a rotation test falls back to the simulator's own orientation, and
-the first portrait pass came out on its side; clearing the design over
-the bridge between parts left the previous model standing beside the
-next scan, so every part starts the app again). Each session opens a new
+--derived-data …` first puts the simulator in the pass's orientation
+(`rotate_device`, `rotate.log` in the orientation's folder) and then runs
+the app inside the film's take UI test, one fresh session per part. An
+iPad simulator boots in portrait, and `XCUIDevice.shared.orientation`
+turns it to landscape from there — but not back: with the device in
+landscape, the take test (`OS3D_TAKE_ORIENTATION`) and the one-shot
+`RotateDeviceUITests` both log "Setting device orientation to Portrait"
+and the home screen, the app and every recording stay landscape (a
+portrait pass on a landscape simulator filmed ten clips on their side —
+the landscape picture inside the portrait framebuffer, exactly what the
+landscape pass records — twice). So portrait is a `simctl shutdown` and
+`boot`, landscape is the rotate test, and the run ends by turning the
+device back to landscape for the part films. Clearing the design over the bridge
+between parts left the previous model standing beside the next scan, so
+every part starts the app again; the session's control server closes its
+socket when the part is done (`shutdown` alone leaves it bound, and a
+later session died on "Address already in use") and takes the first
+free port. Each session opens a new
 design, imports the scan with its base on the floor, rebuilds the model
-from the part's analysis with the film's recipe, films the Deviation
+from the part's analysis with the build's own half-section
+(`build_hydrant.body_section`), films the Deviation
 Preview turning over the dark studio backdrop and then the pair — the
 untinted scan beside the model — turning: two short clips per part, over
 the bridge; a part that fails is tried once more in a session of its own.
