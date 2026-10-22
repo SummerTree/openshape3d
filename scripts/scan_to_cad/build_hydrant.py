@@ -2,7 +2,8 @@
 """Turn a 3D scan of a turned part into a CAD model in OpenShape 3D, through
 the MCP server, and have the app grade the result.
 
-    python3 build_hydrant.py --scan scan.glb --analysis analysis/ --out run/ --port 8947
+    python3 build_hydrant.py --scan scan.glb --analysis analysis/ --out run/ --port 8947 \
+        [--name bollard --label "Bollard" --color 0.75 0.75 0.72]
 
 Every step is an `os3d` tool call to `scripts/mcp_openshape3d.py` — the
 same server Claude Desktop and Claude Code use — so this is a full test of
@@ -153,7 +154,7 @@ def build(args):
 
         s.step("Revolve the profile")
         plane = {"origin": world(axis_origin, axis, u, v, 0, 0), "xAxis": [float(x) for x in u],
-                 "yAxis": [float(x) for x in axis], "name": "Hydrant profile"}
+                 "yAxis": [float(x) for x in axis], "name": args.label + " profile"}
         sketch = mcp.os3d("sketch.create", plane, note="a vertical sketch on the scan's own axis")["sketchID"]
         loop = [[0.0, 0.0]] + [[max(r, 0.0), h] for r, h in profile] + [[0.0, height]]
         # Drop near-duplicate heights that would make a zero-length line.
@@ -186,8 +187,8 @@ def build(args):
             cad["volumeMM3"], pappus, (cad["volumeMM3"] / pappus - 1) * 100 if pappus else 0))
         s.summary["revolve"] = {"id": cad_id, "volumeMM3": cad["volumeMM3"], "pappusMM3": pappus,
                                 "profilePoints": len(cleaned)}
-        mcp.os3d("body.setMaterial", {"bodyIDs": [cad_id], "color": [0.86, 0.17, 0.12], "roughness": 0.45},
-                 note="hydrant red")
+        mcp.os3d("body.setMaterial", {"bodyIDs": [cad_id], "color": list(args.color), "roughness": 0.45},
+                 note="the model's colour")
         mcp.os3d("item.setHidden", {"allSketches": True}, note="hide the construction sketch")
         s.shot("02-revolve-iso", "isometric")
         s.stage("stage-1-revolve", cad_id)
@@ -344,7 +345,10 @@ def main():
     ap.add_argument("--analysis", required=True, help="folder with profile.json from analyze_scan.py")
     ap.add_argument("--out", default="run")
     ap.add_argument("--port", type=int, default=8787)
-    ap.add_argument("--name", default="hydrant")
+    ap.add_argument("--name", default="hydrant", help="file names: <name>-cad.step and friends")
+    ap.add_argument("--label", default="Hydrant", help="what the part is, for the sketch names")
+    ap.add_argument("--color", type=float, nargs=3, default=[0.86, 0.17, 0.12], metavar=("R", "G", "B"),
+                    help="the model's colour (default hydrant red)")
     ap.add_argument("--tolerance", type=float, default=2.0, help="mm; what counts as within tolerance")
     args = ap.parse_args()
     os.makedirs(args.out, exist_ok=True)

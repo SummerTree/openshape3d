@@ -172,7 +172,16 @@ another with `feature.transform`; export them one file each with `body`.
 selected: `item.select` `[]` before any picture), and build ON its axis and
 base so `accuracy` compares in place. Measure before modelling: a part of
 revolution is its radius-by-height profile plus the lumps that stand proud
-of it (nozzles, lugs, pegs). Read the body radius at each height from the
+of it (nozzles, lugs, pegs). Find the axis by roundness, not by extent:
+try each principal direction and keep the one whose thin slices are the
+roundest (a bucket's handle pulls the long direction over, a wheel's axis
+is its thinnest direction). Check the scale first (glTF is metres, but
+scans arrive at any size) and which end is the base (the wider end,
+unless a hose or a head makes the top wider). The body ends where the
+rings do: where a slice's points leave a third of the circle empty, that
+is a handle, a lever or a hose, not a cross-section — stop the revolve
+under it and leave it out (a handle is not a turned shape); the deviation
+preview will show it in blue, which is right. Read the body radius at each height from the
 sectors that AGREE — the densest cluster of per-sector radii — never from
 the median or a percentile across all sectors: a nozzle, its flared root,
 the chain from its cap and a scanner hole all pull those, and a profile
