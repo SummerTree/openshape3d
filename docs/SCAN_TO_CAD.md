@@ -68,11 +68,119 @@ venv/bin/python build_hydrant.py --scan /tmp/hydrant/analysis/scan_cropped.glb -
 
 # 4. the report and the video
 venv/bin/python report.py /tmp/hydrant/run --title "Fire hydrant"
+
+# 5. the second opinion: does it actually look like the scan? (no app needed)
+venv/bin/python inspect_fit.py --reference /tmp/hydrant/run/scan.stl --model /tmp/hydrant/run/hydrant-cad.stl \
+  --out /tmp/hydrant/qa --tolerance 3 --title "Fire hydrant"
+open /tmp/hydrant/qa/review.png
 ```
 
 `document.import` by path is a development-build op (it reads the host's
 file system), so step 3 needs a DEBUG build; everything else the script
 calls ships in the store app.
+
+## Catching errors — `inspect_fit.py` and the review sheet
+
+The first corpus reel looked fine by its numbers and wrong to the eye: the
+pail was a solid drum with a lid, the bollard's dome a stack of flat steps,
+the beer mug a lantern of three frustums, the barrel a closed drum with
+ribs in the wrong places. The app's grade had let all of that through
+(93 % front overlap on the drum, "100 %" on the bollard) because a
+silhouette says nothing about what is inside it and the scan-to-model
+distance says nothing about model surfaces no scan point is near. So the
+process is now, after every build:
+
+1. **Numbers both ways.** `inspect_fit.py --reference scan.stl --model
+   part-cad.stl --out qa/` samples both surfaces and measures each to the
+   other. The model-to-reference direction finds the lid: a drum modelled
+   over an open bucket has 44 % of its area more than 6 mm from any scan
+   surface. The volume ratio catches the same thing when the scan is
+   closed (the barrel: 2456 %).
+2. **Depth, not just outline.** For front, right, top and an isometric
+   view it splats both meshes into depth maps on one grid and compares
+   them where both are present: the lid sits 260 mm nearer than the
+   bucket's floor, so the top view is 63 % orange. Each view also reports
+   its worst of twenty horizontal strips, so a wrong top does not hide in
+   a long body that fits (the bollard's dome: 6 % of the top view, 100 %
+   of its top strip).
+3. **A sheet to look at.** `qa/review.png` — reference and model shaded
+   the same way, their silhouettes overlaid (blue where the model lacks
+   material, orange where it has too much) and the depth difference, per
+   view, with every check's verdict in the margin. Read it at full size;
+   a contact-sheet thumbnail hides a 10 mm step. Numbers decide, the
+   picture says where.
+4. **A verdict that gates the rest.** `checks.json` holds every check with
+   its value, limit and PASS / WARN / FAIL (limits scale with
+   `--tolerance`, default 1 % of the longest extent, at least 0.5 mm).
+   `run_corpus.py` runs the inspection after each build and writes the
+   verdict into `results.json`; `film_corpus.py` and `reel.py` skip a
+   FAIL unless `--allow-fail`.
+
+The checks: `size` (bounding box, model − reference, per axis), `volume`
+(when both meshes are closed), `ref_to_model_mean` and `ref_far_share`
+(missing features), `model_to_ref_mean` and `model_excess_area` (material
+the scan does not have), `terraces` (sign changes of the mean signed error
+along the up axis — ridges where the scan is smooth), and per view
+`silhouette_<view>` (IoU and its worst strip) and `depth_<view>` (share of
+the shared silhouette more than three tolerances deeper or nearer, and the
+worst strip). The depth maps are point splats, not a rasteriser: four
+samples per pixel-area of surface, 1.2–8 million per mesh, and the nearest
+depth over each pixel's 3 × 3 neighbourhood — with two samples per pixel
+a tenth of the pixels held only a back-wall sample and the bollard read
+its own thickness out over a quarter of its body.
+
+Calibrated against the ten corpus builds as first made: eight FAIL, the
+bollard and the spray can WARN (their flaw is one small region, which the
+worst-strip rule now scores), and the eye agrees with all ten sheets.
+Offline tests: `test_scan_to_cad.py` (a drum for a bucket fails on excess
+and the top view, a terraced dome fails its top strip, an identical part
+passes; the arc fitter on a rounded rectangle, a stadium, a dome).
+
+## Recipes — `fit_primitives.py` and `build_recipe.py`
+
+A part that is not one revolution needs more than `build_hydrant.py`'s
+recipe, and the practice piece for that was a CAD model rather than a
+scan: devkrsm's
+[Mechanical CAD Model Showcase](https://sketchfab.com/3d-models/mechanical-cad-model-showcase-344f5b216ee04b378c07b7f8863d737f)
+(CC-BY, 11.2k triangles), a C-clamp assembly — a C-frame with a 10 mm
+plate, a 30 mm rib along its inner edge, a round screw boss and lettering
+pockets, plus a screw, a swivel pad, a tommy bar and two balls, six solids
+in one glTF with a 0.01 scene scale. The pieces:
+
+- `fit_primitives.py` reads geometry: `fit_sphere`, `fit_axis` (principal
+  direction refined through slice centres), `radial_profile` (max radius
+  per band for a CAD mesh — sample the surface, not the vertices, or a
+  cylinder's middle has no bands at all), `section_loops` (a planar cut as
+  2D loops), and `segments_from_loop` / `arcs_in_polyline`, which turn a
+  traced loop or an open profile into `line` and `arc` segments:
+  consecutive vertices turning the same way are one run, a circle is
+  fitted through the run's own vertices (a tessellated arc's tangent points
+  are vertices turning by half a step, so they belong to the run), and the
+  arc is kept when every point sits within the tolerance; a run that does
+  not fit is split at its longest edge (two corners with a line between
+  them turn the same way). Collinear mid-chord vertices and 0.25 mm stubs,
+  both common in CAD tessellations, are merged first. `sketch_entities`
+  writes the app's entities, arcs counter-clockwise with the line ends
+  snapped onto the arcs so the loop closes exactly.
+- `build_recipe.py` executes a JSON recipe over MCP: `extrude` parts with
+  a sketch plane (origin, xAxis, yAxis in world mm; the extrude goes along
+  xAxis × yAxis), an outline of segments or a circle, a distance and an
+  optional boolean into an earlier part; `revolve` parts with an axis and a
+  radial profile or a sphere's arc. It finds the extrude's seed point by
+  walking in from the outline, checks every body and exports each one and
+  all of them together for `inspect_fit.py`.
+
+The clamp recipe (rib outline from a section at z = 12, plate from z = −4.5,
+bore circle from a section through the boss, profiles of the turned parts
+at 0.5 mm bands, spheres at the bar's ends) built in 58 MCP calls and
+first inspected WARN: the top view showed blue on the screw boss. The
+boss is round — an r 15 cylinder about the screw's axis on the arm's
+block, a D in the x = −85 section — and the rib outline had squared it.
+With the block clipped at the axis and the cylinder unioned in before the
+bore is cut, the inspection passes at 0.5 mm: silhouettes 99.5–99.8 %,
+mean distance 0.05 mm one way and 0.08 mm the other, volume 102 % (the
+raised lettering, 0.2 mm tall, is the difference). The sheet, the recipe
+and the run live in `marketing/scan-to-cad/practice/clamp/` (gitignored).
 
 ## How each piece works
 
@@ -189,10 +297,14 @@ when one mesh had to be picked out of a multi-mesh file, `analysis/` from
 `color`, title and narration lines, the `credit` line. `run_corpus.py
 corpus/ --port 8947 --python venv/bin/python` relaunches the app in an
 empty design before each part, runs `build_hydrant.py` (`--label`,
-`--color` from the spec) and `report.py`, and writes `results.json` — the
-app's own numbers per part, or the error that stopped it. `film_corpus.py`
-then films each built part the way the hydrant was filmed (`demo_video.py
-take --ui --spec` and `compose --spec`, one music bed for the series).
+`--color` from the spec) and `report.py`, then `inspect_fit.py` into
+`<part>/qa/` (its verdict lands in the row as `qa`), and writes
+`results.json` — the app's own numbers per part, or the error that
+stopped it. `--analyze` re-runs `analyze_scan.py` first (`--epsilon 2.5`
+plus the part's flags). `film_corpus.py` then films each built part the
+way the hydrant was filmed (`demo_video.py take --ui --spec` and `compose
+--spec`, one music bed for the series), skipping a part whose inspection
+FAILED unless `--allow-fail`; `reel.py` leaves such a part out the same way.
 
 The ten, built on 2026-10-21 (every one a valid solid; overlap is the mean
 silhouette IoU over the three views, the deviations are mean surface
@@ -219,6 +331,29 @@ valve with a handwheel has two axes and the recipe takes one (43 %, the
 honest failure of the set). Two more downloads were dropped before a
 build: a candelabra (not one revolution) and a gas valve (a box with a
 wheel).
+
+Rebuilt on 2026-10-22 with arcs, hollow sections and the inspection in
+the loop (`run_corpus.py --analyze`). The app's overlap barely moves —
+it never saw the flaws — while the sheets and the model-to-scan distance
+do; the verdicts are strict, and what still fails is what a single
+revolve cannot say (an arrow marks a number that changed):
+
+| Scan (Sketchfab, CC-BY) | Overlap | Model→scan | Scan→model | Inspection | What the sheet shows |
+|---|---:|---:|---:|---|---|
+| Fire Extinguisher Old Rusty 3D Scan | 92 % | 8.0 mm | 4.9 mm | FAIL | the carry handle and the valve lever are missing (size, top view) |
+| Fire Extinguisher | 70 % | 4.5 mm | 57.2 mm | FAIL | hose and valve missing; the lever had been read as a ring |
+| Scan Fire Hydrant 02-Freepoly.org | 96 % | 4.6 → 4.1 mm | 6.1 mm | FAIL | nozzle caps and the bonnet's casting sit a few mm off; a trimmed ground |
+| Concrete Bollard Scan 01 | 100 % | 3.8 → 2.0 mm | 0.6 mm | WARN | dome now an arc to its apex (was a stepped cap); the shoulder step is sharper than the scan's |
+| Pail Bucket Plastic 3D Scan | 76 % | 7.9 → 5.4 mm | 12.9 → 14.7 mm | FAIL | now a 3 mm shell with its lip (was a solid drum); the handle is missing and the scan is oval |
+| Old tin barrel | 97 % | 9.5 mm | 5.2 → 4.2 mm | FAIL | now an open 2.4 mm shell with ribs (was a solid drum, volume 2456 %); the scan leans off the fitted axis |
+| WD40 Scan LOWPOLY | 98 % | 0.8 mm | 1.2 mm | WARN | a cone for the rounded shoulder and cap |
+| Bavarian Beer Mug | 92 % | 1.7 mm | 6.5 mm | FAIL | belly now an arc (was three frustums); the handle is missing; the lid reads closed |
+| Truck wheel with rusty rim | 85 % | 9.7 → 9.3 mm | 23.1 → 23.5 mm | FAIL | tyre and hub as one profile; the rim's dish and bracket are not |
+| Pipe Wheel 3D scan | 43 % | 11.4 → 9.7 mm | 13.9 mm | FAIL | two axes, the recipe takes one |
+
+A FAIL here is not filmed and not in the reel without `--allow-fail`;
+the films and reels made on 2026-10-21 predate the rebuild and show the
+old models.
 
 ### The reel — `reel.py`
 
@@ -451,3 +586,63 @@ still uses Blender, to make the stand-in scan.)
 - The scripts' stdout is block-buffered into `take.log` / `compose.log`:
   a child killed on a timeout leaves an empty log. The error row in
   `films.json` / `results.json` says what stopped it.
+- The app's accuracy numbers are not a verdict. A pail modelled as a solid
+  drum overlapped 93 % from the front and 95 % from the right; only the
+  model-to-scan direction and the depth map from above said "lid". Run
+  `inspect_fit.py` and look at its sheet (see "Catching errors").
+- `straighten()` ran before any curve could be seen, so a mug's belly
+  (radii 67 → 98 → 58 mm over 200 mm) became a cylinder and two cones —
+  the terraces the preview painted. Arcs are now looked for on the
+  simplifier's polyline through the raw bands and spliced into the
+  straightened profile; a candidate arc wider than the part is tall is a
+  slight taper and stays lines (the hydrant's barrel read as an r 1085 mm
+  arc otherwise).
+- Open-container detection by rays from outside each end: a scan trimmed
+  at the ground has a hole there too, and every corpus part read "open at
+  the bottom" until a ray's hit was classed by its face — crossing a hole
+  and hitting the inside of the part's own top is a back face (a solid
+  with a hole), the floor seen from the rim is a front face (a container).
+  A pail scanned on a table has no floor at all, so a lost ray counts as
+  open and the wider open end is the rim. The mug reads closed: it has a
+  lid. The container is then ONE revolve of a hollow half-section
+  (`fit_primitives.hollow_section`: the outer profile, the rim, the inner
+  profile a wall in — concentric arcs for a dome or a belly — and a floor
+  at the closed end). The kernel's `feature.shell` through the open face
+  worked on the pail but refused the ribbed barrel at 13.7, 6, 3 and
+  1.5 mm ("the wall thickness is out of range for this shape"); the
+  hollow sketch has no kernel offset to fail. Its own offset has rules of
+  its own: each line moves along its inward normal (moving everything
+  radially put a lip's inner face ON its underside — a zero-thick wall
+  the kernel drew as a detached ring), neighbours are mitred, arcs are
+  concentric; the wall is capped at six tenths of the profile's smallest
+  run or arc (the barrel's "13.7 mm", read off its rolled rim, against
+  4 mm steps); and when the offset still crosses itself
+  (`loop_self_intersects`, the barrel's stepped cap and rolled rim) the
+  outer polyline is simplified with a growing tolerance until the offset
+  holds, and failing that the inner profile is the outer radius ERODED
+  by the wall — the least radius within a wall above and below, less the
+  wall, a function of height that can cross neither the outer profile
+  nor itself — with the floor where the body first reaches its radius
+  from the closed end (the barrel's narrow cap stays a solid plug under
+  it). A self-crossing loop is not refused by the kernel — the profile
+  detector quietly takes the one small region it can close (the barrel
+  came back as an 8-face disc, then as a solid drum with a hole).
+- A scan's holes are not the model's excess. The pail has no floor; the
+  model's floor is then far from every scan surface, and the first sheet
+  painted it orange. A model sample whose nearest scan point lies on an
+  open edge of the scan is facing a hole and is left out of the judged
+  area (the bucket: 20 % of the model); in the depth maps a model-only
+  pixel far deeper than the scan around it is painted slate, not orange.
+  A drum's lid sits at the rim's own depth and still counts.
+- `trimesh`'s `contains` (a ray test) was killed for memory on the
+  shelled bucket's 18k faces with 40k query points; the sign of a
+  distance now comes from the face normal at the closest point. And
+  `outline()` on a scan with thousands of pinholes ran for ten minutes —
+  the open edges come straight from the edge table (`group_rows`,
+  `require_count=1`).
+- A merged reference built by concatenating every STL in a folder picked
+  up its own previous output (the clamp's reference held every part
+  twice). Exclude the output, or write it elsewhere.
+- Point splats for depth maps need the nearest sample over a 3 × 3
+  neighbourhood, not the pixel alone, and a sample count that follows the
+  pixel size (see "Catching errors").

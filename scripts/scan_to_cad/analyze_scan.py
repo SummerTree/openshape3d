@@ -49,6 +49,9 @@ try:
 except ImportError:
     sys.exit("pip install trimesh numpy pillow  (or run with the scan_to_cad venv)")
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from fit_primitives import arcs_in_polyline  # noqa: E402
+
 
 def load_mesh(path, unit_scale=None):
     scene = trimesh.load(path, force="scene")
@@ -337,6 +340,84 @@ def straighten(points, tol=3.0, min_run=4, step_ratio=3.0):
         if abs(pt[0] - cleaned[-1][0]) > 1e-6 or abs(pt[1] - cleaned[-1][1]) > 1e-6:
             cleaned.append(pt)
     return cleaned
+
+
+def detect_open_top(mesh, origin, axis, u, v, height, radii_ends, bands, radius, h, grid=12):
+    """Is the part a container open at one end? Rays along the axis from
+    just outside each end, over a disc of 0.7 × that end's radius.
+
+    What a ray meets says what the end is. On a closed end it hits the
+    skin at once, FRONT face toward it. Into a bucket it falls to the
+    floor's inside — a front face, deep in — or out through the floor
+    when the scanner never saw one (a pail scanned on a table has no
+    floor at all), so a lost ray counts as open too. But a scan trimmed
+    at the ground has a hole there as well, and rays from that side cross
+    the hole and hit the inside of the part's own top: a BACK face, deep
+    in — that is a solid with a hole, not a container, and the end is
+    not open. An end is open when 60 % of its rays are deep-front or
+    lost and few hit shallow; with both ends open the wider one is the
+    rim and the other gets the floor. `radii_ends` is (radius at h = 0,
+    radius at the top). Returns None, or
+    {end: "top"|"bottom", depthMM, share, wallMM, innerRadiusMM}."""
+    if height < 30:
+        return None
+    lift = 20.0
+    offsets = np.linspace(-0.7, 0.7, grid)
+    found = []
+    for end, r_end in (("top", radii_ends[1]), ("bottom", radii_ends[0])):
+        if r_end < 10:
+            continue
+        start_h = height + lift if end == "top" else -lift
+        direction = -axis if end == "top" else axis
+        origins, dirs = [], []
+        for x in offsets:
+            for y in offsets:
+                if x * x + y * y <= 0.49:
+                    origins.append(origin + axis * start_h + (u * x + v * y) * r_end)
+                    dirs.append(direction)
+        origins, dirs = np.array(origins), np.array(dirs)
+        try:
+            locations, index_ray, index_tri = mesh.ray.intersects_location(origins, dirs, multiple_hits=False)
+        except Exception:  # noqa: BLE001 — no ray support for this mesh
+            return None
+        deep_limit = lift + max(0.15 * height, 25.0)
+        lost = len(origins) - len(index_ray)
+        if len(index_ray):
+            locations = np.asarray(locations, dtype=float).reshape(-1, 3)
+            travelled = (locations - origins[index_ray]) @ direction
+            front = (mesh.face_normals[index_tri] @ direction) < 0
+            deep_front = int(((travelled > deep_limit) & front).sum())
+            shallow_front = int(((travelled <= deep_limit) & front).sum())
+        else:
+            travelled = np.zeros(0)
+            deep_front = shallow_front = 0
+        share = (lost + deep_front) / float(len(origins))
+        if share >= 0.6 and shallow_front < 0.2 * len(origins):
+            deep_vals = travelled[travelled > deep_limit]
+            depth = float(np.median(deep_vals) - lift) if len(deep_vals) else height
+            found.append((end, r_end, share, depth))
+    if not found:
+        return None
+    end, r_end, share, depth = max(found, key=lambda f: f[1])      # the wider open end is the rim
+    # Wall thickness: a little in from the rim (the rim itself may carry a
+    # lip or the handle's lugs), the inner surface is the second population
+    # of radii in a band — a wall thickness inside the body radius. No
+    # inner population (the scanner never saw inside) means a guess.
+    band_mm = bands[-1]["h"] - bands[-2]["h"] if len(bands) > 1 else 4.0
+    rim_h = bands[-1]["h"] if end == "top" else bands[0]["h"]
+    inward = -1 if end == "top" else 1
+    lo, hi = sorted((rim_h + inward * 2 * band_mm, rim_h + inward * 7 * band_mm))
+    window = [b["median"] for b in bands if lo <= b["h"] <= hi]
+    body = float(np.median(window)) if window else r_end
+    sel = (h > lo) & (h < hi)
+    inner = radius[sel & (radius < body - 1.0) & (radius > 0.5 * body)]
+    if sel.sum() >= 30 and len(inner) >= 0.1 * sel.sum():
+        wall = body - float(np.median(inner))
+    else:
+        wall = 3.0
+    wall = float(min(max(wall, 1.5), 15.0))
+    return {"end": end, "depthMM": round(depth, 1), "share": round(share, 3),
+            "wallMM": round(wall, 2), "innerRadiusMM": round(r_end - wall, 2)}
 
 
 def douglas_peucker(points, epsilon):
@@ -775,10 +856,83 @@ def analyze(mesh, band_mm=4.0, lump_margin_mm=6.0, out_dir=None, name="scan", ep
     profile = [(float(r), b["h"]) for r, b in zip(smoothed, bands)]
     # Cylinders as single segments, flanges as level steps, the rest to the
     # simplifier: the revolve is the part's design, not the scanner's noise.
+    dense = [(float(r), float(b["h"])) for r, b in zip(smoothed, bands)]
     profile = straighten(profile, tol=max(2.5, epsilon * 1.5))
     if profile:
         profile = [(profile[0][0], 0.0)] + profile + [(profile[-1][0], height)]
     simplified = douglas_peucker(profile, epsilon=epsilon)
+    # A dome, a barrel's belly, a can's shoulder: an arc in the revolve
+    # sketch, not a staircase of chords. The arcs are looked for on the
+    # simplifier's own polyline through the raw bands (`straighten` has
+    # already cut a belly into a cylinder and two cones by then — the
+    # terraces the deviation preview painted on the beer mug): runs that
+    # turn one way are tried as circles and kept when every band between
+    # their ends lies within the scanner's noise of the circle. Each arc
+    # then replaces the straightened points inside its height range.
+    raw = [(dense[0][0], 0.0)] + dense + [(dense[-1][0], height)] if dense else []
+    raw_simplified = douglas_peucker(raw, epsilon=epsilon) if raw else []
+    # An arc wider than the part is tall is a slight taper, not a curve.
+    arcs = [s for s in arcs_in_polyline(raw_simplified, dense, tol=max(epsilon, 1.5) * 1.6, max_radius=height)
+            if s["kind"] == "arc"]
+    arcs.sort(key=lambda s: min(s["a"][1], s["b"][1]))
+    spliced = []
+    rest = list(simplified)
+    for arc in arcs:
+        h0, h1 = sorted((arc["a"][1], arc["b"][1]))
+        spliced += [p for p in rest if p[1] < h0 - 1e-6]
+        spliced.append(("arc", arc))
+        rest = [p for p in rest if p[1] > h1 + 1e-6]
+    spliced += rest
+    segments = []
+    prev = None
+    for item in spliced:
+        if isinstance(item, tuple) and item[0] == "arc":
+            arc = item[1]
+            lo, hi = (arc["a"], arc["b"]) if arc["a"][1] <= arc["b"][1] else (arc["b"], arc["a"])
+            if prev is not None and (abs(prev[0] - lo[0]) > 1e-6 or abs(prev[1] - lo[1]) > 1e-6):
+                segments.append({"kind": "line", "a": [float(prev[0]), float(prev[1])], "b": [float(lo[0]), float(lo[1])]})
+            if arc["a"][1] > arc["b"][1]:      # keep the arc running upward like the rest of the profile
+                arc = dict(arc, a=arc["b"], b=arc["a"], start=arc["end"], end=arc["start"], ccw=not arc["ccw"])
+            segments.append(arc)
+            prev = hi
+        else:
+            if prev is not None:
+                segments.append({"kind": "line", "a": [float(prev[0]), float(prev[1])], "b": [float(item[0]), float(item[1])]})
+            prev = item
+    if arcs:
+        simplified = [p for p in spliced if not (isinstance(p, tuple) and p and p[0] == "arc")]
+    # A dome's apex: an arc that ends near the top and whose circle meets
+    # the axis within a few bands of it is carried to the axis. The top
+    # band's median radius is read a couple of millimetres under the apex,
+    # so a closed-off arc left a flat button there (the bollard's).
+    last_arc = max((i for i, s in enumerate(segments) if s["kind"] == "arc"), default=None)
+    if last_arc is not None:
+        last = segments[last_arc]
+        tail = segments[last_arc + 1:]
+        tail_span = (tail[-1]["b"][1] - last["b"][1]) if tail else 0.0
+        cr, ch, R = last["center"][0], last["center"][1], last["radius"]
+        if abs(cr) < R and last["b"][0] < 0.5 * R and tail_span <= 4 * band_mm:
+            apex_h = ch + math.sqrt(R * R - cr * cr)
+            if abs(apex_h - height) < 3 * band_mm:
+                del segments[last_arc + 1:]
+                last["b"] = [0.0, apex_h]
+                last["end"] = math.atan2(apex_h - ch, -cr)
+                if simplified:
+                    simplified = [p for p in simplified if p[1] <= last["a"][1] + 1e-6] + [(0.0, apex_h)]
+                height = apex_h
+                print("profile: the top arc is carried to the axis at h %.1f (its apex)" % apex_h)
+    if arcs:
+        print("profile: %d arcs (%s)" % (len(arcs), ", ".join("r %.0f over h %.0f–%.0f" % (
+            s["radius"], min(s["a"][1], s["b"][1]), max(s["a"][1], s["b"][1])) for s in arcs)))
+    # Open top? A bucket, a barrel without its lid, a mug: rays down the
+    # axis from above hit the inside bottom, not a top. Then the revolve is
+    # shelled, at the rim's wall thickness.
+    ends = (float(simplified[0][0]), float(simplified[-1][0])) if simplified else (float(body_r[0]), float(body_r[-1]))
+    open_top = detect_open_top(cropped if cropped is not None else mesh, origin, axis, u, v, height, ends,
+                               bands, radius, h)
+    if open_top:
+        print("open %s: rays from outside fall %.0f mm in (or through) on %.0f%% of that end; wall %.1f mm — the revolve will be shelled" % (
+            open_top["end"], open_top["depthMM"], open_top["share"] * 100, open_top["wallMM"]))
 
     analysis = {
         "name": name,
@@ -791,6 +945,8 @@ def analyze(mesh, band_mm=4.0, lump_margin_mm=6.0, out_dir=None, name="scan", ep
         "bodyRadiusMM": round(float(np.median([b["median"] for b in bands])), 2),
         "bands": bands,
         "profile": [[round(r, 2), round(hh, 2)] for r, hh in simplified],
+        "profileSegments": segments,
+        "openTop": open_top,
         "bosses": bosses,
         "boundsMM": {"min": [float(x) for x in mesh.bounds[0]], "max": [float(x) for x in mesh.bounds[1]]},
     }

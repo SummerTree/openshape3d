@@ -51,6 +51,8 @@ def main():
     ap.add_argument("--skip-take", action="store_true")
     ap.add_argument("--skip-compose", action="store_true")
     ap.add_argument("--hook-background", nargs=3, default=["0.13", "0.14", "0.16"])
+    ap.add_argument("--allow-fail", action="store_true",
+                    help="film parts whose inspection (results.json → qa.verdict) FAILED; by default they are skipped")
     args = ap.parse_args()
     corpus = os.path.abspath(args.corpus)
     order = json.load(open(os.path.join(corpus, "order.json")))
@@ -63,6 +65,16 @@ def main():
         if not results.get(slug, {}).get("ok"):
             print("== %s: not built, skipped" % slug, flush=True)
             continue
+        # A model the inspection failed is not filmed: the film would show
+        # the flaw at full size (a bucket with a lid, a dome cut into steps)
+        # with a cheerful number under it. Fix the build, or --allow-fail.
+        qa = results[slug].get("qa", {})
+        if qa.get("verdict") == "FAIL" and not args.allow_fail:
+            print("== %s: inspection FAILED (%s) — not filmed; see %s or pass --allow-fail" % (
+                slug, ", ".join(qa.get("failed", [])) or "see checks.json", qa.get("sheet", "qa/review.png")), flush=True)
+            continue
+        if qa.get("verdict"):
+            print("== %s: inspection %s" % (slug, qa["verdict"]), flush=True)
         part = os.path.join(corpus, slug)
         spec = os.path.join(part, "spec.json")
         analysis = os.path.join(part, "analysis")

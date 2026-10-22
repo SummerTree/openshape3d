@@ -600,6 +600,8 @@ def main():
     ap.add_argument("--region", default="us-central1")
     ap.add_argument("--music", default="default", help="a file, none, or default (the hydrant's bed)")
     ap.add_argument("--music-gain", type=float, default=0.22)
+    ap.add_argument("--allow-fail", action="store_true",
+                    help="include parts whose inspection (results.json → qa.verdict) FAILED; by default they are left out")
     args = ap.parse_args()
     args.orientations = ["landscape", "portrait"] if args.orientation == "both" else [args.orientation]
     corpus = os.path.abspath(args.corpus)
@@ -609,6 +611,16 @@ def main():
     results = json.load(open(os.path.join(corpus, "results.json")))
     manifest = json.load(open(os.path.join(corpus, "manifest.json")))
     order = [s for s in order if results.get(s, {}).get("ok")]
+    # The reel shows only what the inspection passed or merely warned on;
+    # a FAIL is a flaw at full size with a number under it.
+    failed = [s for s in order if results[s].get("qa", {}).get("verdict") == "FAIL"]
+    if failed and not args.allow_fail:
+        print("left out, inspection FAILED: %s (pass --allow-fail to keep them)" % ", ".join(failed), flush=True)
+        order = [s for s in order if s not in failed]
+    for s in order:
+        v = results[s].get("qa", {}).get("verdict")
+        if v:
+            print("%s: inspection %s" % (s, v), flush=True)
     if args.only:
         order = [s for s in order if s in args.only.split(",")]
     specs = {s: json.load(open(os.path.join(corpus, s, "spec.json"))) for s in order}

@@ -57,6 +57,8 @@ def main():
     ap.add_argument("--simulator", default="os3d-hydrant")
     ap.add_argument("--only", default=None, help="comma-separated part folders")
     ap.add_argument("--python", default=sys.executable, help="the interpreter with trimesh (the venv's)")
+    ap.add_argument("--analyze", action="store_true",
+                    help="re-run analyze_scan.py first (--epsilon 2.5 plus the part's flags in corpus/analysis-flags.json)")
     args = ap.parse_args()
     corpus = os.path.abspath(args.corpus)
     with open(os.path.join(corpus, "order.json")) as f:
@@ -66,10 +68,25 @@ def main():
     udid = udid_for(args.simulator)
     results_path = os.path.join(corpus, "results.json")
     results = json.load(open(results_path)) if os.path.exists(results_path) else {}
+    flags_path = os.path.join(corpus, "analysis-flags.json")
+    flags = json.load(open(flags_path)) if os.path.exists(flags_path) else {}
     for slug in order:
         part = os.path.join(corpus, slug)
         spec = json.load(open(os.path.join(part, "spec.json")))
         analysis = os.path.join(part, "analysis")
+        if args.analyze:
+            source = os.path.join(part, "prep", "scan.glb")
+            if not os.path.exists(source):
+                source = os.path.join(part, "download", "scan.glb")
+            cmd = [args.python, "-I", os.path.join(HERE, "analyze_scan.py"), source, "--out", analysis,
+                   "--epsilon", "2.5"] + list(flags.get(slug, []))
+            with open(os.path.join(part, "analysis.log"), "w") as log:
+                done = subprocess.run(cmd, stdout=log, stderr=subprocess.STDOUT)
+            if done.returncode != 0:
+                tail = open(os.path.join(part, "analysis.log")).read().splitlines()[-4:]
+                print("=== %s: analyze_scan.py exit %d: %s" % (slug, done.returncode, " | ".join(tail)), flush=True)
+                results[slug] = {"label": spec["label"], "ok": False, "error": "analyze_scan.py exit %d" % done.returncode}
+                continue
         profile = json.load(open(os.path.join(analysis, "profile.json")))
         scan = profile.get("croppedScan") or os.path.join(analysis, "scan_cropped.glb")
         tolerance = 2.0 if profile["heightMM"] < 300 else 3.0
@@ -101,6 +118,28 @@ def main():
             row["report"] = os.path.join(part, slug + "-accuracy-report.html") if report.returncode == 0 else report.stderr[-300:]
             print("    ok: overlap %.1f%%, model→scan mean %.1f mm, valid %s, %d calls" % (
                 acc["overallIoU"] * 100, acc["modelToReference"]["meanMM"], row["valid"], row["calls"]), flush=True)
+            # The second opinion: both-way distances, depth maps and a sheet
+            # to look at (`inspect_fit.py`). The app's overlap number alone
+            # passed a bucket modelled as a solid drum.
+            qa_dir = os.path.join(part, "qa")
+            qa = subprocess.run([args.python, "-I", os.path.join(HERE, "inspect_fit.py"),
+                                 "--reference", os.path.join(run_dir, "scan.stl"),
+                                 "--model", os.path.join(run_dir, slug + "-cad.stl"),
+                                 "--out", qa_dir, "--title", spec["label"], "--tolerance", str(tolerance),
+                                 "--model-color"] + [str(c) for c in spec["color"]],
+                                capture_output=True, text=True, timeout=900)
+            if qa.returncode == 0:
+                checks = json.load(open(os.path.join(qa_dir, "checks.json")))
+                row["qa"] = {"verdict": checks["overall"], "sheet": os.path.join(qa_dir, "review.png"),
+                             "failed": [c["check"] for c in checks["checks"] if c["verdict"] == "FAIL"],
+                             "warned": [c["check"] for c in checks["checks"] if c["verdict"] == "WARN"]}
+                print("    qa: %s%s — look at %s" % (checks["overall"],
+                                                     (" (" + ", ".join(row["qa"]["failed"]) + ")") if row["qa"]["failed"] else "",
+                                                     row["qa"]["sheet"]), flush=True)
+            else:
+                row["qa"] = {"verdict": "ERROR", "error": "exit %d: %s" % (qa.returncode, qa.stderr[-300:])}
+                print("    qa: inspect_fit.py exit %d (a negative code is a signal — memory?): %s" % (
+                    qa.returncode, qa.stderr[-200:]), flush=True)
         except Exception as error:  # noqa: BLE001 — the row says what stopped it
             row.update({"ok": False, "error": str(error)[:600]})
             print("    FAILED:", str(error)[:300], flush=True)
