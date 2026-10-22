@@ -78,10 +78,20 @@ calls ships in the store app.
 
 ### `analyze_scan.py` — what the scan is
 
-1. **Axis.** The scan's frame is the phone's. The largest principal
-   component of the vertices gives a first axis for a part taller than it is
-   wide; it is refined by fitting a line through the centres of forty thin
-   slices along it. Each slice centre is a RANSAC circle fit (three random
+1. **Axis.** The scan's frame is the phone's. Each of the three principal
+   directions of the vertices is tried as the axis and refined by fitting a
+   line through the centres of forty thin slices along it; the one whose
+   slices are the roundest wins (`axis_quality`: the share of all vertices
+   that sit on their slice's fitted circle — a hydrant about its own axis
+   scores ~0.6–0.8, sliced across ~0.3). The largest direction alone was
+   wrong for a bucket, whose handle's arch pulls PCA 20° over (every band
+   then read a sine wave around the axis), and for a wheel, whose axis is
+   its thinnest direction. `--axis largest|middle|smallest|X,Y,Z` forces
+   it when the three tie (a pipe valve with a handwheel: the pipe's axis
+   and the stem's score the same). `--units <mm per file unit>` overrides
+   the format's units: Sketchfab glTF scans come at any scale (a bollard
+   12 m tall, a spray can 1.3 m), and `scan_cropped.glb` is always written
+   at the corrected size, so the app imports it right. Each slice centre is a RANSAC circle fit (three random
    points, count the points within 2.5 mm of that circle, keep the best,
    then an algebraic fit on the inliers) — a nozzle's points never lie on
    the barrel's circle, so they are ignored rather than pulling the centre
@@ -94,8 +104,22 @@ calls ships in the store app.
    centres that are off by a bolt ring or a cap, and a line through all
    forty again sat 12 mm beside the barrel, so that every sector read a
    different radius (93 to 121 mm around one 107 mm band) and no profile
-   taken from them could be clean.
-2. **Up.** The wider end is the base. The scanner's ground — bottom bands
+   taken from them could be clean. A ring must also have been seen most
+   of the way round — no empty arc wider than 120° about its centre: a
+   slice through a pail's handle is two short arcs, a circle through both
+   passes the share test with a perfect score, and those slices had the
+   pail's axis bouncing between 4° and 17° off from one round of the fit
+   to the next (the model came out visibly tilted in the front view).
+2. **Up.** The wider end is the base — `--flip` says otherwise (an
+   extinguisher scanned with its hose up is wider at the top). The body
+   ends where the rings do: a band whose points leave more than a third
+   of the circle empty (a bucket's handle arching above the rim, a lever
+   across a valve) is not the part's cross-section, and the revolve stops
+   under the run of such bands at the top (`topNotARingMM` in the JSON);
+   the handle's "radius" shrinking toward its apex had read as a dome over
+   the bucket. A coarse mesh's dome has a dozen points per band spread
+   all the way round and stays. The comparison still sees the whole scan,
+   so the handle shows as missing — which it is. The scanner's ground — bottom bands
    whose radii spread over a wide range, where a band of the part is a thin
    ring — is trimmed, and the scan is written out again without it
    (`scan_cropped.glb`, metres, texture inside) so the comparison is hydrant
@@ -145,12 +169,56 @@ calls ships in the store app.
    wider than twice its neck (a thin spike on a wide base — a chain link, a
    flange's edge), and one that sits within 40 mm under a flange and
    reaches less than 30 mm past its rim (bolts, the eyelets the chains hang
-   from, the chains). The pumper nozzle really is ~200 mm wide. `--debug`
+   from, the chains), and one that runs on into the non-ring top (the
+   handle's root). The pumper nozzle really is ~200 mm wide. `--debug`
    says why every candidate lump was dropped, and prints each kept one's
    slices.
 
 `profile.png` (radius by height, with the polyline) and `azimuth.png` (the
 band × azimuth map: nozzles are blobs) are written for the report.
+
+### A corpus of scans — `run_corpus.py`
+
+Ten more Sketchfab scans (CC-BY; `marketing/scan-to-cad/corpus/`, gitignored:
+two extinguishers, a second hydrant, a bollard, a pail, a tin barrel, a
+spray can, a beer mug, a truck wheel, a pipe valve) exercise the same
+recipe. One folder per part: `download/scan.glb` as it came, `prep/scan.glb`
+when one mesh had to be picked out of a multi-mesh file, `analysis/` from
+`analyze_scan.py` (`analysis-flags.json` lists each part's flags), and
+`spec.json` — what the part is for the build and the film: `label`,
+`color`, title and narration lines, the `credit` line. `run_corpus.py
+corpus/ --port 8947 --python venv/bin/python` relaunches the app in an
+empty design before each part, runs `build_hydrant.py` (`--label`,
+`--color` from the spec) and `report.py`, and writes `results.json` — the
+app's own numbers per part, or the error that stopped it. `film_corpus.py`
+then films each built part the way the hydrant was filmed (`demo_video.py
+take --ui --spec` and `compose --spec`, one music bed for the series).
+
+The ten, built on 2026-10-21 (every one a valid solid; overlap is the mean
+silhouette IoU over the three views, the deviations are mean surface
+distances, calls are all the MCP calls of the build including its checks
+and the report):
+
+| Scan (Sketchfab, CC-BY) | Calls | Overlap | Model→scan | Scan→model | Note |
+|---|---:|---:|---:|---:|---|
+| Fire Extinguisher Old Rusty 3D Scan — grafi | 62 | 92 % | 8.0 mm | 4.9 mm | the valve outlet as a boss; the carry handle stays out |
+| Fire Extinguisher — 3dhdscan | 54 | 70 % | 4.5 mm | 57.2 mm | scanned on its head (`--flip`); hose and valve stay out |
+| Scan Fire Hydrant 02-Freepoly.org — Freepoly.org | 78 | 96 % | 4.6 mm | 6.1 mm | three nozzles as bosses |
+| Concrete Bollard Scan 01 · Retopologized — Kai Moisch | 54 | 100 % | 3.8 mm | 0.6 mm | file in cm (`--units 100`) |
+| Pail Bucket Plastic 3D Scan — grafi | 54 | 76 % | 7.9 mm | 12.9 mm | the handle stays out (not a ring); the ring rule fixed a 7° tilt |
+| Old tin barrel — 3dhdscan | 54 | 97 % | 9.7 mm | 5.2 mm | one mesh picked out of three (`prep/`) |
+| WD40 Scan LOWPOLY — sixonetwo | 54 | 98 % | 0.8 mm | 1.2 mm | 1.5k triangles (`--band 6`); odd file units (`--units 160`) |
+| Bavarian Beer Mug - #KitchenScanChallenge — Antoine Dresen | 54 | 91 % | 1.8 mm | 6.3 mm | the handle stays out; the liquid's discs dropped (`prep/`) |
+| Truck wheel with rusty rim — Оrрндп ЯТG | 54 | 85 % | 9.7 mm | 23.1 mm | tyre and hub as one profile; the rim's bracket is not a boss |
+| Pipe Wheel 3D scan — grafi | 54 | 43 % | 11.4 mm | 13.8 mm | a valve with a handwheel: two axes, the recipe takes one |
+
+Findings: a handle (bucket, mug) and a hose are not turned shapes and stay
+out of the model — the Deviation Preview shows them in blue, which is the
+point; a low-poly scan (1.5k triangles) needs wider bands (`--band 6`); a
+valve with a handwheel has two axes and the recipe takes one (43 %, the
+honest failure of the set). Two more downloads were dropped before a
+build: a candelabra (not one revolution) and a gas valve (a box with a
+wheel).
 
 ### `mcp_client.py` and `build_hydrant.py` — building it over MCP
 
@@ -214,7 +282,13 @@ MCP tests pin the behaviour with boxes of known overlap.
 
 ### `demo_video.py` — the film, shot in the app
 
-`demo_video.py take` records the iPad simulator (`simctl io recordVideo`)
+`--spec part.json` (both `take` and `compose`) makes the one script film
+any part: the label names the sketch, the colour paints the model, the
+captions and narration lines replace the hydrant's (`{calls}`, `{mean}`,
+`{iou}`, `{label}` are filled in), and the credit line names the scan's
+author. The hook's step-aside scales with the part (a little under half
+its size), so a 60 mm can and a metre of bollard both share the frame
+with their scan. `demo_video.py take` records the iPad simulator (`simctl io recordVideo`)
 while the recipe runs over MCP at a camera's pace — the textured scan
 appearing and turning, the revolve, each nozzle with the view still
 turning, a slow turn in Visualize with the panel kept closed
@@ -249,7 +323,10 @@ stays portrait with the landscape picture inside it; a one-shot UI test,
 `RotateDeviceUITests`, turns the device), crops each beat to 16:9 (the
 toolbar in frame for the build, closer on the pair for the opening and the
 ending, the whole screen on a blurred copy for the tall report sheet),
-cuts each beat to its narration and lays a caption pill over it. Given
+cuts each beat to its narration and lays a caption pill over it. A line
+that would still be running when the next beat's line is due holds that
+line back by the overlap and a breath, so a longer line costs a slightly
+later cue, never two voices at once. Given
 `--report` and `--overlays`, a report beat follows the sheet: the HTML
 report itself scrolling from its title to the overlays (headless Chrome at
 a 1.5× device scale, so the text is crisp at 1920), a sheet of the three
@@ -305,4 +382,26 @@ still uses Blender, to make the stand-in scan.)
 - Blender 5.x removed `Action.fcurves`; keyframe interpolation goes through
   the layered action's channel bag (`action_fcurves` in `blender_video.py`).
 - Sketchfab's viewer files (`model_file.binz`) are obfuscated; the only
-  route to a model is a signed-in download.
+  route to a model is a signed-in download. The site's own download call
+  (`/i/models/<uid>/download`) authorises a download and counts against
+  the account's daily limit even when nothing is fetched — do not call it
+  to look.
+- A Sketchfab glTF may hold several meshes (a shadow plane, a second copy
+  of the part lying down, the liquid in a mug): pick the part's mesh out
+  first (`prep/scan.glb`), the analyzer concatenates everything it is given.
+- ffmpeg 9's threaded pipeline deadlocked once in eight films on the final
+  mux (a dozen looping caption pictures over the take): every thread
+  waiting in `sch_wait` / `tq_receive` at 0 % CPU, the mp4 left without
+  its index. `demo_video.py` runs ffmpeg under a watchdog (`ffmpeg_watched`,
+  `-nostdin`, one retry) and `film_corpus.py` kills a part's whole process
+  group on a timeout — a plain `subprocess.run(timeout=)` orphaned the
+  ffmpeg, and it sat there for an hour.
+- Gemini 3.8 TTS on the Developer API has a daily quota as well as a
+  per-minute one: about ninety lines (the hydrant plus eight corpus films)
+  spent it, and `narrate` then raises rather than mix a second voice into
+  a film. Lines are cached per part under `demo/tts` by the hash of their
+  text, so a recompose with unchanged lines costs no calls; a part whose
+  numbers line is new waits for midnight Pacific.
+- The scripts' stdout is block-buffered into `take.log` / `compose.log`:
+  a child killed on a timeout leaves an empty log. The error row in
+  `films.json` / `results.json` says what stopped it.

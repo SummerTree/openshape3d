@@ -14,15 +14,17 @@ are read from the file (glTF is metres).
 
 Method, in the order it runs:
 
-1. Orientation. A scan's world frame is the phone's, not the part's. The
-   part's axis is found as the direction with the least spread of the
-   vertices' positions — PCA's smallest principal component is wrong for a
-   tall part, so the LARGEST component is taken for a part taller than it
-   is wide, then refined: the axis is re-fitted through the centroids of
-   thin slices along it, which a nozzle on one side barely moves.
+1. Orientation. A scan's world frame is the phone's, not the part's. Each
+   of the three principal directions of the vertices is tried as the axis
+   and refined (re-fitted through the centres of thin slices along it,
+   which a nozzle on one side barely moves); the one whose slices are the
+   roundest wins — the tall direction for a hydrant or a bottle, the thin
+   one for a wheel, and for a bucket the direction its handle's arch
+   pulled PCA away from. `--axis largest|middle|smallest|X,Y,Z` forces it.
 2. Up or down. The wider end of a hydrant (the base flange) is the bottom;
-   the scan's ground, if the scanner caught any of it, is a thin, wide
-   disc of vertices at one end and is trimmed off first.
+   `--flip` says otherwise (an extinguisher's hose makes its top the wide
+   end). The scan's ground, if the scanner caught any of it, is a thin,
+   wide disc of vertices at one end and is trimmed off first.
 3. Profile. Vertices are binned by height; for each band the radius is the
    MEDIAN distance from the axis, which ignores the nozzles — a nozzle
    occupies a sixth of the circumference at most. The band's maximum and
@@ -124,21 +126,46 @@ def fit_circle(pu, pv, iterations=4, ransac=120, inlier_mm=2.5, seed=7):
     return cu, cv, r, float(keep.sum()) / max(n, 1)
 
 
-def fit_axis(points, up_guess, iterations=4, bands=40):
+def widest_gap_deg(angles_deg, sector=10.0):
+    """The widest empty arc around a slice, in degrees: 0 for a ring seen
+    all round, ~160 for the two short arcs a handle leaves in a slice."""
+    n = int(round(360.0 / sector))
+    occupied = np.zeros(n, dtype=bool)
+    occupied[(np.floor((np.asarray(angles_deg) + 180.0) / sector).astype(int)) % n] = True
+    if occupied.all():
+        return 0.0
+    if not occupied.any():
+        return 360.0
+    # Rotate so the run starts on an occupied sector, then the longest run of empties.
+    first = int(np.argmax(occupied))
+    rolled = np.roll(occupied, -first)
+    longest = run = 0
+    for o in rolled:
+        run = 0 if o else run + 1
+        longest = max(longest, run)
+    return longest * sector
+
+
+def fit_axis(points, up_guess, iterations=10, bands=40):
     """Refine the axis as the line through the centres of slices along it;
     returns (point on axis, unit direction). Only the slices that are a
     clean ring vote — a barrel band, with most of its points on one circle
-    of about the typical radius. A flange, the nozzle band and the dome
-    give centres that are off by a nozzle or a bolt ring, and a line fit
-    through all of them sat 12 mm beside the hydrant's barrel: every
-    sector then read a different radius and no profile could be clean."""
+    of about the typical radius, seen most of the way round. A flange, the
+    nozzle band and the dome give centres that are off by a nozzle or a
+    bolt ring, and a line fit through all of them sat 12 mm beside the
+    hydrant's barrel: every sector then read a different radius and no
+    profile could be clean. A slice through a pail's handle is two short
+    arcs, and a circle through both passes the share test with a perfect
+    score — its centre is nowhere near the axis, and those slices had the
+    fit bouncing between 4° and 17° off; a ring must have no empty arc
+    wider than 120° to vote (the same rule the body's top uses)."""
     axis = up_guess / np.linalg.norm(up_guess)
     origin = points.mean(axis=0)
     for _ in range(iterations):
         h = (points - origin) @ axis
         lo, hi = np.percentile(h, 3), np.percentile(h, 97)
         edges = np.linspace(lo, hi, bands + 1)
-        centroids, radii, shares = [], [], []
+        centroids, radii, shares, gaps = [], [], [], []
         for i in range(bands):
             sel = (h >= edges[i]) & (h < edges[i + 1])
             if sel.sum() < 30:
@@ -156,10 +183,11 @@ def fit_axis(points, up_guess, iterations=4, bands=40):
             centroids.append(origin + cu * u + cv * v + axis * ((edges[i] + edges[i + 1]) / 2))
             radii.append(rr)
             shares.append(share)
-        centroids, radii, shares = np.array(centroids), np.array(radii), np.array(shares)
+            gaps.append(widest_gap_deg(np.degrees(np.arctan2(pv - cv, pu - cu))))
+        centroids, radii, shares, gaps = np.array(centroids), np.array(radii), np.array(shares), np.array(gaps)
         if len(centroids) < 3:
             break
-        clean = shares > 0.5
+        clean = (shares > 0.5) & (gaps <= 120.0)
         typical = float(np.median(radii[clean])) if clean.sum() >= 3 else float(np.median(radii))
         good = clean & (np.abs(radii - typical) < 0.15 * typical)
         if good.sum() < 3:
@@ -182,6 +210,50 @@ def fit_axis(points, up_guess, iterations=4, bands=40):
         axis = direction
         origin = centre
     return origin, axis
+
+
+def axis_quality(points, origin, axis, bands=40):
+    """How much of the part is round about this axis: the share of all the
+    vertices that sit on their slice's fitted circle, over the slices that
+    hold enough of them. A hydrant about its own axis scores ~0.8; the
+    same hydrant sliced across scores ~0.2."""
+    h = (points - origin) @ axis
+    lo, hi = np.percentile(h, 3), np.percentile(h, 97)
+    edges = np.linspace(lo, hi, bands + 1)
+    u = np.cross(axis, [1, 0, 0] if abs(axis[0]) < 0.9 else [0, 1, 0]); u /= np.linalg.norm(u)
+    v = np.cross(axis, u)
+    on_circle, counted = 0.0, 0
+    for i in range(bands):
+        sel = (h >= edges[i]) & (h < edges[i + 1])
+        if sel.sum() < 30:
+            continue
+        local = points[sel] - origin
+        perp = local - np.outer(local @ axis, axis)
+        _, _, _, share = fit_circle(perp @ u, perp @ v)
+        on_circle += share * sel.sum()
+        counted += int(sel.sum())
+    return on_circle / counted if counted else 0.0
+
+
+def choose_axis(points, choice="auto"):
+    """The part's axis: every principal direction refined by `fit_axis`,
+    the roundest kept (see `axis_quality`); or the one `choice` names.
+    Returns (origin, axis, {candidate: quality})."""
+    _, vectors, values = principal_axis(points)
+    order = np.argsort(values)[::-1]
+    candidates = {"largest": vectors[:, order[0]], "middle": vectors[:, order[1]], "smallest": vectors[:, order[2]]}
+    if choice not in ("auto", "largest", "middle", "smallest"):
+        guess = np.array([float(x) for x in choice.split(",")])
+        origin, axis = fit_axis(points, guess / np.linalg.norm(guess))
+        return origin, axis, {choice: axis_quality(points, origin, axis)}
+    tried = {}
+    for name, guess in candidates.items():
+        if choice != "auto" and name != choice:
+            continue
+        origin, axis = fit_axis(points, guess)
+        tried[name] = (axis_quality(points, origin, axis), origin, axis)
+    best = max(tried, key=lambda k: tried[k][0])
+    return tried[best][1], tried[best][2], {k: round(q, 3) for k, (q, _, _) in tried.items()}
 
 
 def agreed_radius(values, window=3.0, previous=None, min_share=0.06, continuity_mm=6.0):
@@ -286,10 +358,12 @@ def douglas_peucker(points, epsilon):
     return [points[0], points[-1]]
 
 
-def analyze(mesh, band_mm=4.0, lump_margin_mm=6.0, out_dir=None, name="scan", epsilon=1.5, debug=False):
+def analyze(mesh, band_mm=4.0, lump_margin_mm=6.0, out_dir=None, name="scan", epsilon=1.5, debug=False,
+            axis_choice="auto", flip=False):
     points = np.asarray(mesh.vertices, dtype=float)
-    direction, _, values = principal_axis(points)
-    origin, axis = fit_axis(points, direction)
+    origin, axis, qualities = choose_axis(points, axis_choice)
+    print("axis candidates (share of vertices on their slice's circle):",
+          ", ".join("%s %.2f" % kv for kv in sorted(qualities.items(), key=lambda kv: -kv[1])))
 
     h = (points - origin) @ axis
     perp = (points - origin) - np.outer(h, axis)
@@ -300,7 +374,7 @@ def analyze(mesh, band_mm=4.0, lump_margin_mm=6.0, out_dir=None, name="scan", ep
     span = hi - lo
     low_r = np.median(radius[h < lo + span * 0.08])
     high_r = np.median(radius[h > hi - span * 0.08])
-    if low_r < high_r:
+    if (low_r < high_r) != bool(flip):
         axis = -axis
         h = -h
         perp = (points - origin) - np.outer(h, axis)
@@ -359,6 +433,16 @@ def analyze(mesh, band_mm=4.0, lump_margin_mm=6.0, out_dir=None, name="scan", ep
             continue
         r = radius[sel]
         sec = sector_of[sel]
+        # How much of the circle the band's points leave empty: a ring,
+        # however coarse, has points all the way round; a handle's arch
+        # or a lever across the top has them in one or two clusters with
+        # a long empty arc between.
+        present = np.unique(sec)
+        if len(present) >= sectors:
+            gap_deg = 0.0
+        else:
+            runs = np.diff(np.concatenate([present, [present[0] + sectors]])) - 1
+            gap_deg = float(runs.max()) * 360.0 / sectors
         smax = np.full(sectors, np.nan)
         smed = np.full(sectors, np.nan)
         for j in range(sectors):
@@ -380,9 +464,27 @@ def analyze(mesh, band_mm=4.0, lump_margin_mm=6.0, out_dir=None, name="scan", ep
         k = int(np.argmax(r))
         bands.append({"h": float((edges[i] + edges[i + 1]) / 2), "median": body,
                       "p20": float(np.percentile(r, 20)), "p80": float(np.percentile(r, 80)),
-                      "max": float(r[k]), "maxAzimuth": float(azimuth[k]), "count": int(sel.sum())})
+                      "max": float(r[k]), "maxAzimuth": float(azimuth[k]), "count": int(sel.sum()),
+                      "sectors": int(len(agreed)), "gapDeg": round(gap_deg, 1)})
         grid_max.append(smax)
         grid_med.append(smed)
+    # The part ends where the rings do: a bucket's handle arches on above
+    # the rim, a few sectors wide, and its "radius" shrinking toward the
+    # apex read as a dome over the bucket. Bands with points in fewer than
+    # a quarter of the sectors, from the top down, are not the body; the
+    # revolve stops under them (the comparison still sees the whole scan,
+    # so the handle shows as missing, which it is).
+    # A band is "not a ring" when a third of the circle around it is empty
+    # (a coarse mesh's dome has a dozen points in its top bands, spread all
+    # the way round; a handful of points is given the benefit of the doubt).
+    full = [i for i, b in enumerate(bands) if b["count"] < 8 or b["gapDeg"] <= 120.0]
+    trimmed_top = 0.0
+    if full and full[-1] < len(bands) - 2:
+        trimmed_top = height - (bands[full[-1]]["h"] + band_mm / 2)
+        bands = bands[: full[-1] + 1]
+        grid_max, grid_med = grid_max[: len(bands)], grid_med[: len(bands)]
+        height = bands[-1]["h"] + band_mm / 2
+        print("top %.0f mm is not a ring (a handle?): the body ends at %.0f mm" % (trimmed_top, height))
     grid_max = np.array(grid_max) if grid_max else np.zeros((0, sectors))
     # A spike of one or two bands between bands that agree is a cap's face
     # filling the sectors for 8 mm, not an 8 mm flange; the part continues.
@@ -599,6 +701,10 @@ def analyze(mesh, band_mm=4.0, lump_margin_mm=6.0, out_dir=None, name="scan", ep
             why = "only %.0f mm wide" % b["widthMM"]
         elif not (10 <= b["centerHeightMM"] <= height - 10):
             why = "centred at %.0f mm, off the part" % b["centerHeightMM"]
+        elif trimmed_top and b["centerHeightMM"] + b["heightSpanMM"] / 2 >= height - 2 * band_mm:
+            # The lump runs on into the part above the last ring — it is
+            # the root of the handle the body stops under, not a boss.
+            why = "runs into the non-ring top — the handle's root, not a boss"
         elif b["profile"] and b["profile"][0][0] > b["bodyRadiusMM"] * 1.15:
             why = "starts %.0f mm wide at a %.0f mm body — a flange, not a boss" % (b["profile"][0][0] * 2, b["bodyRadiusMM"] * 2)
         elif b["reachMM"] < shadow_radius(b) + 30.0:
@@ -640,12 +746,14 @@ def analyze(mesh, band_mm=4.0, lump_margin_mm=6.0, out_dir=None, name="scan", ep
     # would put the model's base where the scanner saw almost nothing.
     counts = np.array([b["count"] for b in bands])
     typical = float(np.median(counts[: max(8, len(counts) // 4)]))
+    # Only a run of sparse bands from the very bottom: a low-poly scan's
+    # bands are sparse at random all the way up, and one at 140 mm must
+    # not take everything under it with it.
     first = 0
     for i, b in enumerate(bands):
-        if b["h"] > 150:
+        if b["h"] > 150 or counts[i] >= 0.3 * typical:
             break
-        if counts[i] < 0.3 * typical:
-            first = i + 1
+        first = i + 1
     if first:
         bands = bands[first:]
         drop_h = bands[0]["h"] - band_mm / 2
@@ -678,6 +786,7 @@ def analyze(mesh, band_mm=4.0, lump_margin_mm=6.0, out_dir=None, name="scan", ep
         "axisOrigin": [float(x) for x in origin], "axisDirection": [float(x) for x in axis],
         "azimuthZero": [float(x) for x in u], "azimuthNinety": [float(x) for x in v],
         "heightMM": round(height, 2),
+        "axisQuality": qualities, "flipped": bool(flip), "topNotARingMM": round(trimmed_top, 1),
         "maxRadiusMM": round(float(radius.max()), 2),
         "bodyRadiusMM": round(float(np.median([b["median"] for b in bands])), 2),
         "bands": bands,
@@ -687,6 +796,11 @@ def analyze(mesh, band_mm=4.0, lump_margin_mm=6.0, out_dir=None, name="scan", ep
     }
     if out_dir:
         os.makedirs(out_dir, exist_ok=True)
+        if cropped is None:
+            # Nothing to trim, but the copy is still the one the app imports:
+            # a scan whose file units were overridden (`--units`) is only
+            # the right size here.
+            cropped = mesh
         if cropped is not None:
             # glTF is metres by definition, so every consumer (the app, Blender,
             # trimesh) reads it the same way; the photo texture travels inside.
@@ -776,10 +890,14 @@ def main():
     ap.add_argument("--band", type=float, default=4.0, help="height band, mm")
     ap.add_argument("--epsilon", type=float, default=1.5, help="polyline simplification, mm (2–3 for a noisy scan)")
     ap.add_argument("--debug", action="store_true", help="say why each candidate lump was dropped")
+    ap.add_argument("--axis", default="auto",
+                    help="auto (the roundest of the three principal directions), largest, middle, smallest, or X,Y,Z")
+    ap.add_argument("--flip", action="store_true", help="the narrow end is the base (an extinguisher with its hose up)")
     args = ap.parse_args()
     mesh, scale = load_mesh(args.scan, args.units)
     name = os.path.splitext(os.path.basename(args.scan))[0]
-    a = analyze(mesh, band_mm=args.band, out_dir=args.out, name=name, epsilon=args.epsilon, debug=args.debug)
+    a = analyze(mesh, band_mm=args.band, out_dir=args.out, name=name, epsilon=args.epsilon, debug=args.debug,
+                axis_choice=args.axis, flip=args.flip)
     print("scan: %d triangles, %.0f mm tall, body radius %.1f mm (file units x%g)" % (
         a["triangles"], a["heightMM"], a["bodyRadiusMM"], scale))
     print("axis origin", np.round(a["axisOrigin"], 1), "direction", np.round(a["axisDirection"], 3))

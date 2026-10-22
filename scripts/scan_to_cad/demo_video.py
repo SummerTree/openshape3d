@@ -1,8 +1,15 @@
 #!/usr/bin/env python3
 """A demo film of the scan-to-CAD run, shot in the app itself.
 
-    python3 demo_video.py take    --scan analysis/scan_cropped.glb --analysis analysis/ --out demo/ --port 8947
-    python3 demo_video.py compose --out demo/ [--tts gemini|edge] [--music lyria|generated|path.m4a]
+    python3 demo_video.py take    --scan analysis/scan_cropped.glb --analysis analysis/ --out demo/ --port 8947 [--spec part.json]
+    python3 demo_video.py compose --out demo/ [--spec part.json] [--tts gemini|edge] [--music lyria|generated|path.m4a]
+
+`--spec` is a JSON file that says what the part is, so one script films any
+turned part: {"label": "Fire extinguisher", "color": [r, g, b], "title":
+"…|…", "subtitle", "titleSay", "name", "credit": "Scan: CC-BY grafi on
+Sketchfab", "captions": {"import", "revolve", "boss" (with {n}), "lug",
+"check"}, "say": {beat: line, with {iou} {calls} {mean} {label}}}. Every
+key is optional; without the file the words are the fire hydrant's.
 
 `take` records the iPad simulator (`simctl io recordVideo`) while the model
 is built over MCP — the scan appearing, the revolve, each nozzle, a slow
@@ -109,11 +116,19 @@ def take(args):
     with open(os.path.join(args.analysis, "profile.json")) as f:
         analysis = json.load(f)
     from build_hydrant import unit, world, lines_for
+    spec = args.spec or {}
+    label = spec.get("label", "Hydrant")
+    color = list(spec.get("color", [0.86, 0.17, 0.12]))
+    captions = {"import": "Import the iPhone scan", "revolve": "One sketch on the scan's own axis, one revolve",
+                "boss": "Nozzle {n} · its own profile, revolved and unioned in", "lug": "A lug on the bonnet · the same way",
+                "check": "A valid solid, every step in the history"}
+    captions.update(spec.get("captions", {}))
     axis_origin = np.array(analysis["axisOrigin"])
     axis = unit(analysis["axisDirection"])
     # The film's copy of the scan stands with its fitted base at the origin,
     # so the studio floor (y = 0) is under it and the ground shadow lands
     # where a shadow should; the build shifts with it.
+    os.makedirs(args.out, exist_ok=True)
     args.scan = scan_on_floor(args.scan, axis_origin, os.path.join(args.out, "scan-on-floor.glb"))
     axis_origin = np.zeros(3)
     u = unit(analysis["azimuthZero"])
@@ -172,7 +187,7 @@ def take(args):
                 time.sleep(step)
 
         try:
-            beat("import", "Import the iPhone scan")
+            beat("import", captions["import"])
             reply = mcp.os3d("document.import", {"path": os.path.abspath(args.scan), "fileName": os.path.basename(args.scan)})
             scan_id = reply["bodyIDs"][0]
             # An import lands selected, and a selected body is drawn with the
@@ -188,9 +203,9 @@ def take(args):
             mcp.os3d("body.setMaterial", {"bodyIDs": [scan_id], "color": [0.55, 0.62, 0.72, 0.42], "roughness": 0.9})
             turn(0.8)
 
-            beat("revolve", "One sketch on the scan's own axis, one revolve")
+            beat("revolve", captions["revolve"])
             plane = {"origin": world(axis_origin, axis, u, v, 0, 0), "xAxis": [float(x) for x in u],
-                     "yAxis": [float(x) for x in axis], "name": "Hydrant profile"}
+                     "yAxis": [float(x) for x in axis], "name": label + " profile"}
             sketch = mcp.os3d("sketch.create", plane)["sketchID"]
             loop = [[0.0, 0.0]] + [[max(r, 0.0), h] for r, h in profile] + [[0.0, height]]
             cleaned = [loop[0]]
@@ -202,7 +217,7 @@ def take(args):
             reply = mcp.os3d("feature.revolve", {"sketchID": sketch, "seedPoint": [body_r * 0.5, height * 0.5],
                                                  "axisPoint": [0, 0], "axisDirection": [0, 1], "angleDegrees": 360})
             cad_id = reply["producedBodyIDs"][0]
-            mcp.os3d("body.setMaterial", {"bodyIDs": [cad_id], "color": [0.86, 0.17, 0.12], "roughness": 0.45})
+            mcp.os3d("body.setMaterial", {"bodyIDs": [cad_id], "color": color, "roughness": 0.45})
             mcp.os3d("item.setHidden", {"allSketches": True})
             turn(3.6)
 
@@ -210,9 +225,9 @@ def take(args):
             for n, boss in enumerate(bosses, 1):
                 if id(boss) in nozzles:
                     nozzle_no += 1
-                    beat("boss%d" % n, "Nozzle %d · its own profile, revolved and unioned in" % nozzle_no)
+                    beat("boss%d" % n, captions["boss"].format(n=nozzle_no))
                 else:
-                    beat("boss%d" % n, "A lug on the bonnet · the same way")
+                    beat("boss%d" % n, captions["lug"])
                 az = boss["azimuthDeg"]
                 d = unit(math.cos(math.radians(az)) * u + math.sin(math.radians(az)) * v)
                 t = unit(np.cross(axis, d))
@@ -234,7 +249,7 @@ def take(args):
                 mcp.os3d("item.setHidden", {"allSketches": True})
                 turn(1.6)
 
-            beat("check", "A valid solid, every step in the history")
+            beat("check", captions["check"])
             check = mcp.os3d("check", {"body": cad_id})
             valid = check["bodies"][0]["health"]["valid"]
             mcp.os3d("item.setHidden", {"ids": [scan_id]})
@@ -329,7 +344,11 @@ def take(args):
             mcp.os3d("item.setHidden", {"ids": [scan_id]})
             # The model steps aside (a feature body moves; an imported mesh
             # cannot), and a fresh, untinted copy of the scan takes its place.
-            mcp.os3d("feature.transform", {"bodyID": cad_id, "translation": [400, 0, -400]})
+            # Aside by a little under half the part's size (400 mm for the
+            # 940 mm hydrant), so a 60 mm can and a metre of bollard both
+            # share the frame with their scan.
+            aside = round(max(height, 2 * analysis.get("maxRadiusMM", body_r)) * 0.43)
+            mcp.os3d("feature.transform", {"bodyID": cad_id, "translation": [aside, 0, -aside]})
             reply = mcp.os3d("document.import", {"path": os.path.abspath(args.scan), "fileName": os.path.basename(args.scan)})
             scan2 = reply["bodyIDs"][0]
             mcp.os3d("item.select", {"ids": []})
@@ -366,11 +385,14 @@ def take(args):
 
 # ----------------------------------------------------------------------------- narration
 
-def script_for(timeline, title_say, scan_name):
+def script_for(timeline, title_say, scan_name, spec=None):
     a = timeline["accuracy"]
     r2m = a["referenceToModel"]
     views = a["views"]
-    return {
+    spec = spec or {}
+    numbers = {"iou": a["overallIoU"] * 100, "calls": a["calls"], "mean": a["modelToReference"]["meanMM"],
+               "label": spec.get("label", "hydrant").lower()}
+    lines = {
         "title": title_say,
         "import": "The scan comes straight into OpenShape 3D as a mesh, texture and all.",
         "revolve": "One sketch on the scan's own axis, one revolve — the barrel, the flanges, the bonnet.",
@@ -390,6 +412,9 @@ def script_for(timeline, title_say, scan_name):
             a["calls"], a["modelToReference"]["meanMM"]),
         "outro": "OpenShape 3D is open source.",
     }
+    for key, line in spec.get("say", {}).items():
+        lines[key] = line.format(**numbers) if line else ""
+    return lines
 
 
 def gcloud_token():
@@ -805,6 +830,24 @@ def overlay_pan_clip(overlays, view, work, seconds):
     return still_clip(png, os.path.join(work, "report-%s.mp4" % view), seconds, "crop=%d:%d:0:'%s'" % (W, H, y))
 
 
+def ffmpeg_watched(cmd, timeout, tries=2):
+    """Run an ffmpeg command under a watchdog, and once more if it stalls.
+
+    ffmpeg 9's threaded pipeline can deadlock on the final mux — a graph of
+    a dozen looping picture inputs (the caption cards) over the take: every
+    thread then waits in sch_wait / tq_receive at 0 % CPU and the mp4 never
+    gets its index. One film in eight hit it; the second try has not.
+    """
+    for attempt in range(1, tries + 1):
+        try:
+            subprocess.run(cmd, check=True, timeout=timeout)
+            return
+        except subprocess.TimeoutExpired:
+            print("ffmpeg stalled for %.0f s writing %s (attempt %d of %d)%s" % (
+                timeout, os.path.basename(cmd[-1]), attempt, tries, "; trying again" if attempt < tries else ""), flush=True)
+    raise RuntimeError("ffmpeg stalled %d times writing %s" % (tries, os.path.basename(cmd[-1])))
+
+
 def compose(args):
     with open(os.path.join(args.out, "timeline.json")) as f:
         tl = json.load(f)
@@ -822,7 +865,8 @@ def compose(args):
                         "-crf", "16", "-pix_fmt", "yuv420p", take], check=True)
 
     # 1. Narration first: it sets how long each beat may hold.
-    lines = script_for(tl, args.title_say, "")
+    lines = script_for(tl, args.title_say, "", args.spec)
+    credit = (args.spec or {}).get("credit", "Scan: CC-BY laanlabs on Sketchfab")
     clips, backend = narrate(lines, os.path.join(args.out, "tts"), args.tts, args.gemini_voice, args.project, args.region,
                              args.gemini_model)
     print("narration:", backend, args.gemini_model if backend == "gemini" else "")
@@ -974,7 +1018,7 @@ def compose(args):
         ("Model surface to scan", "mean %.1f mm · 95%% within %.1f mm" % (m2r["meanMM"], m2r["p95MM"])),
         ("Scan surface to model", "mean %.1f mm · 95%% within %.1f mm" % (r2m["meanMM"], r2m["p95MM"])),
         ("Built by an assistant over MCP", "%d calls, one parametric model" % acc["calls"]),
-    ], "Scan: CC-BY laanlabs on Sketchfab")
+    ], credit)
     card(os.path.join(work, "outro.png"), ["OpenShape 3D", "is open source"], [
         ("", "app.openshape3d.com"), ("", "github.com/laanlabs/openshape3d")], "Built with Claude over MCP")
 
@@ -1034,7 +1078,7 @@ def compose(args):
         caption_inputs.append(png_n)
         overlays.append(("ender", ender_start, ender_start + numbers_len))
         png_o = os.path.join(work, "cap-outro.png")
-        title_overlay(png_o, ["OpenShape 3D is open source"], "app.openshape3d.com  ·  github.com/laanlabs/openshape3d  ·  scan CC-BY laanlabs on Sketchfab", size=64)
+        title_overlay(png_o, ["OpenShape 3D is open source"], "app.openshape3d.com  ·  github.com/laanlabs/openshape3d  ·  " + credit[0].lower() + credit[1:], size=64)
         caption_inputs.append(png_o)
         overlays.append(("outro-overlay", ender_start + numbers_len, ender_start + ender_len))
         # Narration for the ending rides on the ender segment.
@@ -1069,14 +1113,23 @@ def compose(args):
     video_out = vin
 
     # Narration at each segment's start; the report's line starts with the
-    # menu that opens it, when the take has that beat.
+    # menu that opens it, when the take has that beat. A line that would
+    # still be running when the next one is due holds the next back by the
+    # overlap and a breath: a long spec line costs a slightly later cue,
+    # never two voices at once.
     if "accuracy-open" in starts:
         starts["accuracy"] = starts["accuracy-open"]
-    spoken = sorted((starts[sid] + 0.25, starts[sid] + 0.25 + clip["seconds"], sid) for sid, clip in clips.items() if sid in starts)
+    cue, last_end, previous = {}, 0.0, None
+    for sid in sorted((s for s in clips if s in starts), key=lambda s: starts[s]):
+        due = starts[sid] + 0.25
+        cue[sid] = max(due, last_end + 0.3) if previous else due
+        if cue[sid] > due:
+            print("the %s line waits %.1f s for the %s line to end" % (sid, cue[sid] - due, previous))
+        last_end, previous = cue[sid] + clips[sid]["seconds"], sid
+    spoken = sorted((cue[sid], cue[sid] + clips[sid]["seconds"], sid) for sid in cue)
     print("narration:", [(sid, round(a, 1), round(b, 1)) for a, b, sid in spoken])
-    for (a, b, sid), (a2, _, sid2) in zip(spoken, spoken[1:]):
-        if b > a2:
-            print("WARNING: the %s line (ends %.1f s) runs into the %s line (starts %.1f s)" % (sid, b, sid2, a2))
+    if spoken and spoken[-1][1] > total:
+        print("WARNING: the %s line runs %.1f s past the end of the film" % (spoken[-1][2], spoken[-1][1] - total))
     n_caps = len(caption_inputs)
     aud_idx = n_caps + 1
     mix = []
@@ -1084,7 +1137,7 @@ def compose(args):
         if sid not in starts:
             continue
         inputs += ["-i", clip["path"]]
-        delay = int((starts[sid] + 0.25) * 1000)
+        delay = int(cue[sid] * 1000)
         filters.append("[%d:a]adelay=%d|%d[n%d]" % (aud_idx, delay, delay, aud_idx))
         mix.append("[n%d]" % aud_idx)
         aud_idx += 1
@@ -1117,14 +1170,14 @@ def compose(args):
     filters.append("".join(mix) + "amix=inputs=%d:normalize=0,alimiter=limit=0.95[aout]" % len(mix))
 
     out = os.path.join(args.out, args.name + ".mp4")
-    subprocess.run(["ffmpeg", "-y", "-loglevel", "error", *inputs, "-filter_complex", ";".join(filters),
+    ffmpeg_watched(["ffmpeg", "-y", "-nostdin", "-loglevel", "error", *inputs, "-filter_complex", ";".join(filters),
                     "-map", video_out, "-map", "[aout]", "-c:v", "libx264", "-preset", "medium", "-crf", "19",
                     "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "192k", "-t", "%.2f" % total,
-                    "-movflags", "+faststart", out], check=True)
+                    "-movflags", "+faststart", out], timeout=max(600.0, total * 8))
     sheet = os.path.join(args.out, "contact.png")
     rows = max(1, -(-int(total / 2 + 1) // 6))
-    subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", out, "-vf", "fps=1/2,scale=320:-1,tile=6x%d" % rows,
-                    "-frames:v", "1", sheet], check=True)
+    ffmpeg_watched(["ffmpeg", "-y", "-nostdin", "-loglevel", "error", "-i", out, "-vf", "fps=1/2,scale=320:-1,tile=6x%d" % rows,
+                    "-frames:v", "1", sheet], timeout=300.0)
     print("wrote %s (%.1f s); narration %s; music %s; contact sheet %s" % (
         out, total, backend, "none" if not music else os.path.basename(music), sheet))
 
@@ -1145,12 +1198,14 @@ def main():
                    help="launch the app through TutorialTakeUITests and open the Accuracy Report by touch")
     t.add_argument("--control-port", type=int, default=8930, help="the UI test's control server (with --ui)")
     t.add_argument("--derived-data", default=None, help="xcodebuild -derivedDataPath for the UI test (with --ui)")
+    t.add_argument("--spec", default=None, help="JSON: what the part is (label, colour, captions); see the top of this file")
     c = sub.add_parser("compose")
     c.add_argument("--out", default="demo")
-    c.add_argument("--name", default="hydrant-demo")
-    c.add_argument("--title", default="From an iPhone scan|to a CAD model")
-    c.add_argument("--subtitle", default="Built in OpenShape 3D by an assistant, over MCP")
-    c.add_argument("--title-say", default="A fire hydrant, scanned with an iPhone — turned into a CAD model inside OpenShape 3D by an assistant, over MCP.")
+    c.add_argument("--spec", default=None, help="JSON: title, narration lines and credit for this part")
+    c.add_argument("--name", default=None, help="the film's file name (default hydrant-demo, or the spec's)")
+    c.add_argument("--title", default=None, help="title card lines, | between them")
+    c.add_argument("--subtitle", default=None)
+    c.add_argument("--title-say", default=None)
     c.add_argument("--tts", choices=["gemini", "edge"], default="gemini")
     c.add_argument("--gemini-voice", default="Charon")
     c.add_argument("--gemini-model", default="gemini-3.8-flash-tts",
@@ -1167,9 +1222,18 @@ def main():
     c.add_argument("--landscape", action=argparse.BooleanOptionalAction, default=True,
                    help="the take was filmed on a landscape device (the recording needs a quarter turn)")
     args = ap.parse_args()
+    if args.spec:
+        with open(args.spec) as f:
+            args.spec = json.load(f)
     if args.cmd == "take":
         take(args)
     else:
+        spec = args.spec or {}
+        args.name = args.name or spec.get("name", "hydrant-demo")
+        args.title = args.title or spec.get("title", "From an iPhone scan|to a CAD model")
+        args.subtitle = args.subtitle or spec.get("subtitle", "Built in OpenShape 3D by an assistant, over MCP")
+        args.title_say = args.title_say or spec.get("titleSay",
+            "A fire hydrant, scanned with an iPhone — turned into a CAD model inside OpenShape 3D by an assistant, over MCP.")
         compose(args)
 
 

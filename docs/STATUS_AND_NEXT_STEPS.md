@@ -2,7 +2,7 @@
 
 > **Current unfinished-work register:** [Sketch parity open status](SKETCH_PARITY_OPEN_STATUS.md). Maintained at every meaningful checkpoint; older mission logs below are historical.
 
-Last updated: 2026-10-21 (CAD import over MCP: STEP and IGES sew loose faces into solids and sheet bodies, exact bounds, DXF units and ellipses, an open-mesh notice, and agents import STEP / IGES / DXF / FCStd; an OCCT oracle, a live MCP runner and offline XCTests behind it; test pack 36 / 36, FreeCAD IDF + NIST corpus 32 / 32, IGES twins 4 / 4 — newest mission log. Also today: Deviation Preview — the Accuracy Report's colours on the part; the scan's profile straightened; `item.select`) — **Accuracy Report** (one body measured against
+Last updated: 2026-10-21 (a corpus of ten Sketchfab scans built over MCP, graded and filmed — the newest mission log bullet under 2026-10-20; CAD import over MCP: STEP and IGES sew loose faces into solids and sheet bodies, exact bounds, DXF units and ellipses, an open-mesh notice, and agents import STEP / IGES / DXF / FCStd; an OCCT oracle, a live MCP runner and offline XCTests behind it; test pack 36 / 36, FreeCAD IDF + NIST corpus 32 / 32, IGES twins 4 / 4 — newest mission log. Also today: Deviation Preview — the Accuracy Report's colours on the part; the scan's profile straightened; `item.select`) — **Accuracy Report** (one body measured against
 another: orthographic silhouette overlays per view, outline and surface
 deviation both ways; `Kernel/AccuracyKit.swift`, Views ▸ Accuracy Report…,
 `/v1/accuracy` + `/v1/accuracy/image`, MCP ops `accuracy` /
@@ -20,6 +20,15 @@ design), `FREECAD_PLAYBOOK.md` (the FreeCAD-derived hardening ledger),
 `AGENT_CONTROL.md` (the `/v1/exec` scripting surface).
 
 ## Open work — 2026-10-21, CAD import
+
+- **The web engine lacks this mission's three bridge methods.** The
+  browser's OCCT is a separate C++ port (`openshape-cloud/occt/bridge/
+  occt_bridge.cpp`, built with Emscripten); `boundsOfShape:min:max:`,
+  `solidCountOfShape:` and the `…stats:` readers are Swift stand-ins there
+  (`Web/OCCTBridgeWasm.swift`): bounds from the render mesh, every
+  imported shape a declared solid, nothing sewn or dropped. Porting the
+  collector and rebuilding the engine (`occt/build_bridge.sh`) is the
+  open item; `openshape-cloud/docs/IOS_PARITY.md` tracks it.
 
 - **A declared solid that fails validation after ShapeFix is still dropped**
   (counted in the `step` ledger and the notice). A sheet that fails is now
@@ -302,6 +311,24 @@ the zip in Downloads, on the real scan (`docs/SCAN_TO_CAD.md`).
   (`openshape-cloud/docs/IOS_PARITY.md`).
 - **Not yet in the web app**: the kernel compiles there unchanged, but the
   sheet is not ported (openshape-cloud `docs/IOS_PARITY.md` lists it).
+
+- **A corpus of ten Sketchfab scans** (2026-10-21, the user: "find 10 cad
+  type models on sketchfab … do tests … make videos"): two extinguishers,
+  a second hydrant, a bollard, a pail, a tin barrel, a spray can, a beer
+  mug, a truck wheel and a pipe valve, each built fresh through the MCP
+  server and graded by the app (`scripts/scan_to_cad/run_corpus.py`,
+  results table in `docs/SCAN_TO_CAD.md`; 92 / 70 / 96 / 100 / 76 / 97 /
+  98 / 91 / 85 / 43 % overlap) and filmed (`film_corpus.py`, per-part
+  `spec.json` for label, colour, captions, narration and credit). What the
+  corpus taught the analyzer: the axis is the roundest of the three
+  principal directions, a slice votes for it only when it is a ring seen
+  most of the way round (a pail's handle had the fit bouncing 4–17°), the
+  body ends where the rings do (a handle, a hose), a scan's units are
+  checked before anything else (a 12 m bollard), `--flip` for a part
+  scanned on its head. Tooling: ffmpeg 9's mux deadlocked once (watchdog +
+  retry), Gemini TTS has a daily quota (lines are cached by text; a film
+  never mixes voices), a narration line is held back rather than overlapped.
+  The scans and films live in `marketing/scan-to-cad/corpus/` (gitignored).
 
 ## Open work — 2026-09-17
 
