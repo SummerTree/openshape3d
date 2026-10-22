@@ -344,11 +344,34 @@ def band_overlay(path, orientation, top, bottom):
     def font(size, bold=True):
         return ImageFont.truetype("/System/Library/Fonts/HelveticaNeue.ttc", size, index=1 if bold else 0)
 
+    max_w = W - 2 * 48   # the frame less a gutter; 1080 px holds about 40 characters at 44 px
+
+    def wrap(text, f):
+        """`text` as lines that fit the width in font `f`, broken at ' · '
+        (the title's subtitle and the outro's links ran off both edges)."""
+        lines, cur = [], ""
+        for piece in text.split(" · "):
+            cand = piece if not cur else cur + " · " + piece
+            if not cur or d.textlength(cand, font=f) <= max_w:
+                cur = cand
+            else:
+                lines.append(cur)
+                cur = piece
+        return lines + [cur]
+
     def block(lines, y_center, sizes, colours):
-        heights = [int(s * 1.25) for s in sizes]
+        rows = []
+        for text, size, colour in zip(lines, sizes, colours):
+            bold = size >= 44
+            for line in wrap(text, font(size, bold)):
+                s, f = size, font(size, bold)
+                while d.textlength(line, font=f) > max_w and s > 24:   # a piece with no ' · ' to break at
+                    s -= 2
+                    f = font(s, bold)
+                rows.append((line, f, s, colour))
+        heights = [int(s * 1.25) for _, _, s, _ in rows]
         y = y_center - sum(heights) // 2
-        for text, size, colour, lh in zip(lines, sizes, colours, heights):
-            f = font(size, bold=size >= 44)
+        for (text, f, s, colour), lh in zip(rows, heights):
             tw = d.textlength(text, font=f)
             d.text(((W - tw) / 2, y), text, font=f, fill=colour)
             y += lh
@@ -366,7 +389,9 @@ def segment_clip(src, seconds, orientation, overlays, path, seek=0.0):
     """One segment: the clip framed for the cut, the overlays on it."""
     W, H = FRAMES[orientation]
     inputs = ["-ss", "%.2f" % seek, "-i", src]
-    chain = ["[0:v]%s[v0]" % frame_filter(src, orientation)]
+    # tpad holds the last frame when the source runs out before `seconds`
+    # (the title starts past the import notice, which leaves its pair short).
+    chain = ["[0:v]%s,tpad=stop_mode=clone:stop_duration=%.2f[v0]" % (frame_filter(src, orientation), seconds)]
     last = "v0"
     for i, (png, x, y) in enumerate(overlays, 1):
         inputs += ["-i", png]   # one frame; overlay holds it (a looped input can deadlock ffmpeg 9)
@@ -437,8 +462,9 @@ def compose(args, corpus, order, results, specs, manifest, out):
         else:
             ov = [(painted(title_overlay, os.path.join(work, "title.png"), ["From 3D scans", "to CAD models"],
                            "Ten Sketchfab scans · built by an assistant over MCP in OpenShape 3D"), 56, "H-h-48")]
+        # Past the import notice, like the parts; the clip's last frame holds if the title outlasts it.
         segs.append(segment_clip(takes[first]["clips"]["pair"], title_s, orientation, ov, os.path.join(work, "seg-title.mp4"),
-                                 seek=max(0.0, HOOK_SECONDS - title_s - 0.2)))
+                                 seek=max(PAIR_SKIP, HOOK_SECONDS - title_s - 0.2)))
         cue["title"] = t + 0.25
         t += title_s
 
