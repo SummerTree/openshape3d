@@ -435,6 +435,13 @@ still uses Blender, to make the stand-in scan.)
   a film. Lines are cached per part under `demo/tts` by the hash of their
   text, so a recompose with unchanged lines costs no calls; a part whose
   numbers line is new waits for midnight Pacific.
+- `compose` cuts from a constant-frame-rate copy of the take
+  (`work/take-cfr.mp4`) and used to keep it for as long as it existed. A
+  retake then went unnoticed: the truck wheel's film was cut from the take
+  before its retake, with the hook showing the Accuracy Report sheet
+  instead of the pair, and the tin barrel's quietly from its old take too.
+  The copy is rebuilt whenever `take.mov` is the newer file; check
+  `contact.png` after any retake all the same.
 - The scripts' stdout is block-buffered into `take.log` / `compose.log`:
   a child killed on a timeout leaves an empty log. The error row in
   `films.json` / `results.json` says what stopped it.
