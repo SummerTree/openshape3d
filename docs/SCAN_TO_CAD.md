@@ -220,6 +220,37 @@ honest failure of the set). Two more downloads were dropped before a
 build: a candelabra (not one revolution) and a gas valve (a box with a
 wheel).
 
+### The reel — `reel.py`
+
+One film of the whole corpus, cut two ways: `reel-16x9.mp4` for a page or
+a channel and `reel-9x16.mp4` for a phone. `reel.py corpus/ --port 8947
+--derived-data …` runs the app inside the film's take UI test, one fresh
+session per part (the test turns the device — `OS3D_TAKE_ORIENTATION` —
+and keeps it turned for as long as it runs; an app launched on its own
+after a rotation test falls back to the simulator's own orientation, and
+the first portrait pass came out on its side; clearing the design over
+the bridge between parts left the previous model standing beside the
+next scan, so every part starts the app again). Each session opens a new
+design, imports the scan with its base on the floor, rebuilds the model
+from the part's analysis with the film's recipe, films the Deviation
+Preview turning over the dark studio backdrop and then the pair — the
+untinted scan beside the model — turning: two short clips per part, over
+the bridge; a part that fails is tried once more in a session of its own.
+`compose` (or `--skip-take`) lays a title over the first pair, one segment
+per part (the pair, then the preview) sized to the part's narration line,
+and an outro over the last pair. The 16:9 cut crops the iPad's screen in on
+the parts — a 16:9 window around where they are, found from a frame (the
+backdrop is one flat colour, the app's chrome masked), with a tenth of
+headroom — and lays the caption pills over it; the 9:16 cut keeps the
+whole portrait screen at the phone's width and writes the captions in the
+bands above and below it. The narration goes through `demo_video.narrate`
+(Gemini 3.8, each line cached by its text; `--tts edge` for a stand-in
+voice), the per-part line is the spec's `reelSay` with `{label}`, `{iou}`
+and `{mean}` filled from `results.json`; one music bed under it all. Next
+to the films: `script.txt` (the lines with their cues), `captions-16x9.srt`
+and `captions-9x16.srt`, `credits.txt` (every scan's author, licence and
+link) and `post.txt` (a paragraph for the post, credits appended).
+
 ### `mcp_client.py` and `build_hydrant.py` — building it over MCP
 
 `MCPClient` speaks JSON-RPC 2.0 over the stdio of `scripts/mcp_openshape3d.py`
@@ -389,13 +420,15 @@ still uses Blender, to make the stand-in scan.)
 - A Sketchfab glTF may hold several meshes (a shadow plane, a second copy
   of the part lying down, the liquid in a mug): pick the part's mesh out
   first (`prep/scan.glb`), the analyzer concatenates everything it is given.
-- ffmpeg 9's threaded pipeline deadlocked once in eight films on the final
-  mux (a dozen looping caption pictures over the take): every thread
-  waiting in `sch_wait` / `tq_receive` at 0 % CPU, the mp4 left without
-  its index. `demo_video.py` runs ffmpeg under a watchdog (`ffmpeg_watched`,
-  `-nostdin`, one retry) and `film_corpus.py` kills a part's whole process
-  group on a timeout — a plain `subprocess.run(timeout=)` orphaned the
-  ffmpeg, and it sat there for an hour.
+- ffmpeg 9's threaded pipeline deadlocked twice in ten films on the final
+  mux: every thread waiting in `sch_wait` / `tq_receive` at 0 % CPU, the
+  mp4 left without its index. The cause was a dozen caption pictures fed
+  as endlessly looping inputs (`-loop 1 … -t`); each is now one frame, and
+  `overlay` holds a picture's last frame for the rest of the film (its
+  default `eof_action`). `ffmpeg_watched` still runs every mux under a
+  watchdog with one retry, and `film_corpus.py` kills a part's whole
+  process group on a timeout — a plain `subprocess.run(timeout=)` orphaned
+  the ffmpeg, and it sat there for an hour.
 - Gemini 3.8 TTS on the Developer API has a daily quota as well as a
   per-minute one: about ninety lines (the hydrant plus eight corpus films)
   spent it, and `narrate` then raises rather than mix a second voice into
