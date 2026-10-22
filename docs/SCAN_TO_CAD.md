@@ -406,7 +406,7 @@ The recipe, in `os3d` calls:
 |---|---|
 | Handshake and state | `health`, `state` |
 | Import the scan | `document.import {path}` → a mesh body placed as the file places it; `body.setMaterial` (see-through grey-blue) |
-| The turned body | `sketch.create` on the fitted axis (`origin` = axis origin, `xAxis` = azimuth 0, `yAxis` = the axis), `sketch.addEntities` (the profile as a closed loop of lines, axis at u = 0), `feature.revolve` 360° about `[0,0]`,`[0,1]` |
+| The turned body | `sketch.create` on the fitted axis (`origin` = axis origin, `xAxis` = azimuth 0, `yAxis` = the axis), `sketch.addEntities` with `body_section(analysis)` — the half-section as a closed loop with the axis at u = 0: lines, lines and arcs when the analysis found a dome or a belly, or a hollow half-section for an open container — then `feature.revolve` 360° about `[0,0]`,`[0,1]`. `demo_video.py take` and `reel.py` call the same `body_section` and `boss_section`, so a film shows the model the inspection graded |
 | Each boss | `sketch.create` through the boss's own axis, 12 mm inside the body (`xAxis` = axis × direction, `yAxis` = the direction); `sketch.addEntities` with its radius-along profile closed back along the axis; `feature.revolve` 360° with `"boolean":"union"` — a body of revolution about its own axis, unioned into the barrel |
 | Verify | `check` (valid solid), `state` (volume; the revolve's volume is held to Pappus from the profile's own area and centroid) |
 | Pictures | `command.run view.*` + `view.fit`, `screenshot`; `item.setHidden`; `view.visualize` for a studio render |
@@ -461,7 +461,11 @@ captions and narration lines replace the hydrant's (`{calls}`, `{mean}`,
 author. The hook's step-aside scales with the part (a little under half
 its size), so a 60 mm can and a metre of bollard both share the frame
 with their scan. `demo_video.py take` records the iPad simulator (`simctl io recordVideo`)
-while the recipe runs over MCP at a camera's pace — the textured scan
+while the recipe runs over MCP at a camera's pace (the body's half-section
+and each boss's profile come from `build_hydrant.body_section` and
+`boss_section`, the build's own; the take and the reel used to trace their
+own loop from the straight profile, which after the arcs and hollow
+revolves would have filmed the old solids) — the textured scan
 appearing and turning, the revolve, each nozzle with the view still
 turning, a slow turn in Visualize with the panel kept closed
 (`view.visualize` with `panel: false`), the Accuracy Report on screen, and

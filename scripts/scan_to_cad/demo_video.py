@@ -115,7 +115,7 @@ def modelling_calls(calls):
 def take(args):
     with open(os.path.join(args.analysis, "profile.json")) as f:
         analysis = json.load(f)
-    from build_hydrant import unit, world, lines_for
+    from build_hydrant import body_section, boss_section, unit, world
     spec = args.spec or {}
     label = spec.get("label", "Hydrant")
     color = list(spec.get("color", [0.86, 0.17, 0.12]))
@@ -133,7 +133,6 @@ def take(args):
     axis_origin = np.zeros(3)
     u = unit(analysis["azimuthZero"])
     v = unit(analysis["azimuthNinety"])
-    profile = analysis["profile"]
     height = analysis["heightMM"]
     body_r = analysis["bodyRadiusMM"]
     bosses = [b for b in analysis["bosses"] if b["reachMM"] - b["bodyRadiusMM"] > 15 and b.get("profile")]
@@ -207,14 +206,13 @@ def take(args):
             plane = {"origin": world(axis_origin, axis, u, v, 0, 0), "xAxis": [float(x) for x in u],
                      "yAxis": [float(x) for x in axis], "name": label + " profile"}
             sketch = mcp.os3d("sketch.create", plane)["sketchID"]
-            loop = [[0.0, 0.0]] + [[max(r, 0.0), h] for r, h in profile] + [[0.0, height]]
-            cleaned = [loop[0]]
-            for p in loop[1:]:
-                if abs(p[0] - cleaned[-1][0]) > 1e-6 or abs(p[1] - cleaned[-1][1]) > 1e-6:
-                    cleaned.append(p)
-            mcp.os3d("sketch.addEntities", {"sketchID": sketch, "entities": lines_for(cleaned)})
+            # The half-section the build revolved — arcs for a dome, a hollow
+            # section for a container — so the film shows the model the
+            # inspection graded, not a solid traced from the straight profile.
+            section = body_section(analysis)
+            mcp.os3d("sketch.addEntities", {"sketchID": sketch, "entities": section["entities"]})
             turn(1.2)
-            reply = mcp.os3d("feature.revolve", {"sketchID": sketch, "seedPoint": [body_r * 0.5, height * 0.5],
+            reply = mcp.os3d("feature.revolve", {"sketchID": sketch, "seedPoint": section["seed"],
                                                  "axisPoint": [0, 0], "axisDirection": [0, 1], "angleDegrees": 360})
             cad_id = reply["producedBodyIDs"][0]
             mcp.os3d("body.setMaterial", {"bodyIDs": [cad_id], "color": color, "roughness": 0.45})
@@ -232,18 +230,13 @@ def take(args):
                 d = unit(math.cos(math.radians(az)) * u + math.sin(math.radians(az)) * v)
                 t = unit(np.cross(axis, d))
                 inner = boss.get("innerStartMM", boss["bodyRadiusMM"] - 12.0)
-                prof = [[max(r, 1.0), s] for r, s in boss["profile"]]
-                bl = [[0.0, 0.0], [prof[0][0], 0.0]] + prof + [[0.0, prof[-1][1]]]
-                bc = [bl[0]]
-                for p in bl[1:]:
-                    if abs(p[0] - bc[-1][0]) > 1e-6 or abs(p[1] - bc[-1][1]) > 1e-6:
-                        bc.append(p)
+                entities, seed = boss_section(boss)
                 origin = world(axis_origin, axis, u, v, inner, boss["centerHeightMM"], az)
                 sk = mcp.os3d("sketch.create", {"origin": origin, "xAxis": [float(x) for x in t],
                                                 "yAxis": [float(x) for x in d], "name": "Boss %d" % n})["sketchID"]
-                mcp.os3d("sketch.addEntities", {"sketchID": sk, "entities": lines_for(bc)})
+                mcp.os3d("sketch.addEntities", {"sketchID": sk, "entities": entities})
                 turn(0.6)
-                mcp.os3d("feature.revolve", {"sketchID": sk, "seedPoint": [max(prof[0][0] * 0.4, 2.0), prof[-1][1] * 0.3],
+                mcp.os3d("feature.revolve", {"sketchID": sk, "seedPoint": seed,
                                              "axisPoint": [0, 0], "axisDirection": [0, 1], "angleDegrees": 360,
                                              "boolean": "union", "booleanTargets": [cad_id]})
                 mcp.os3d("item.setHidden", {"allSketches": True})
