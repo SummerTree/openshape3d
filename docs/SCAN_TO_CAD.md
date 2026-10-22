@@ -359,15 +359,27 @@ old models.
 
 One film of the whole corpus, cut two ways: `reel-16x9.mp4` for a page or
 a channel and `reel-9x16.mp4` for a phone. `reel.py corpus/ --port 8947
---derived-data …` runs the app inside the film's take UI test, one fresh
-session per part (the test turns the device — `OS3D_TAKE_ORIENTATION` —
-and keeps it turned for as long as it runs; an app launched on its own
-after a rotation test falls back to the simulator's own orientation, and
-the first portrait pass came out on its side; clearing the design over
-the bridge between parts left the previous model standing beside the
-next scan, so every part starts the app again). Each session opens a new
+--derived-data …` first puts the simulator in the pass's orientation
+(`rotate_device`, `rotate.log` in the orientation's folder) and then runs
+the app inside the film's take UI test, one fresh session per part. An
+iPad simulator boots in portrait, and `XCUIDevice.shared.orientation`
+turns it to landscape from there — but not back: with the device in
+landscape, the take test (`OS3D_TAKE_ORIENTATION`) and the one-shot
+`RotateDeviceUITests` both log "Setting device orientation to Portrait"
+and the home screen, the app and every recording stay landscape (a
+portrait pass on a landscape simulator filmed ten clips on their side —
+the landscape picture inside the portrait framebuffer, exactly what the
+landscape pass records — twice). So portrait is a `simctl shutdown` and
+`boot`, landscape is the rotate test, and the run ends by turning the
+device back to landscape for the part films. Clearing the design over the bridge
+between parts left the previous model standing beside the next scan, so
+every part starts the app again; the session's control server closes its
+socket when the part is done (`shutdown` alone leaves it bound, and a
+later session died on "Address already in use") and takes the first
+free port. Each session opens a new
 design, imports the scan with its base on the floor, rebuilds the model
-from the part's analysis with the film's recipe, films the Deviation
+from the part's analysis with the build's own half-section
+(`build_hydrant.body_section`), films the Deviation
 Preview turning over the dark studio backdrop and then the pair — the
 untinted scan beside the model — turning: two short clips per part, over
 the bridge; a part that fails is tried once more in a session of its own.
@@ -406,7 +418,7 @@ The recipe, in `os3d` calls:
 |---|---|
 | Handshake and state | `health`, `state` |
 | Import the scan | `document.import {path}` → a mesh body placed as the file places it; `body.setMaterial` (see-through grey-blue) |
-| The turned body | `sketch.create` on the fitted axis (`origin` = axis origin, `xAxis` = azimuth 0, `yAxis` = the axis), `sketch.addEntities` (the profile as a closed loop of lines, axis at u = 0), `feature.revolve` 360° about `[0,0]`,`[0,1]` |
+| The turned body | `sketch.create` on the fitted axis (`origin` = axis origin, `xAxis` = azimuth 0, `yAxis` = the axis), `sketch.addEntities` with `body_section(analysis)` — the half-section as a closed loop with the axis at u = 0: lines, lines and arcs when the analysis found a dome or a belly, or a hollow half-section for an open container — then `feature.revolve` 360° about `[0,0]`,`[0,1]`. `demo_video.py take` and `reel.py` call the same `body_section` and `boss_section`, so a film shows the model the inspection graded |
 | Each boss | `sketch.create` through the boss's own axis, 12 mm inside the body (`xAxis` = axis × direction, `yAxis` = the direction); `sketch.addEntities` with its radius-along profile closed back along the axis; `feature.revolve` 360° with `"boolean":"union"` — a body of revolution about its own axis, unioned into the barrel |
 | Verify | `check` (valid solid), `state` (volume; the revolve's volume is held to Pappus from the profile's own area and centroid) |
 | Pictures | `command.run view.*` + `view.fit`, `screenshot`; `item.setHidden`; `view.visualize` for a studio render |
@@ -461,7 +473,11 @@ captions and narration lines replace the hydrant's (`{calls}`, `{mean}`,
 author. The hook's step-aside scales with the part (a little under half
 its size), so a 60 mm can and a metre of bollard both share the frame
 with their scan. `demo_video.py take` records the iPad simulator (`simctl io recordVideo`)
-while the recipe runs over MCP at a camera's pace — the textured scan
+while the recipe runs over MCP at a camera's pace (the body's half-section
+and each boss's profile come from `build_hydrant.body_section` and
+`boss_section`, the build's own; the take and the reel used to trace their
+own loop from the straight profile, which after the arcs and hollow
+revolves would have filmed the old solids) — the textured scan
 appearing and turning, the revolve, each nozzle with the view still
 turning, a slow turn in Visualize with the panel kept closed
 (`view.visualize` with `panel: false`), the Accuracy Report on screen, and

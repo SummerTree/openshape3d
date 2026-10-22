@@ -36,6 +36,7 @@ import argparse
 import json
 import math
 import os
+import socket
 import subprocess
 import sys
 import time
@@ -45,7 +46,7 @@ import numpy as np
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))
 sys.path.insert(0, HERE)
-from build_hydrant import lines_for, unit, world  # noqa: E402
+from build_hydrant import body_section, boss_section, unit, world  # noqa: E402
 from demo_video import Recorder, caption, ffmpeg_watched, narrate, scan_on_floor, title_overlay  # noqa: E402
 from mcp_client import MCPClient  # noqa: E402
 from run_corpus import BUNDLE, udid_for  # noqa: E402
@@ -89,27 +90,20 @@ def wait_empty_design(port, seconds=40):
     raise RuntimeError("no empty design on the bridge after %d s" % seconds)
 
 
-def dedupe(points):
-    out = [points[0]]
-    for p in points[1:]:
-        if abs(p[0] - out[-1][0]) > 1e-6 or abs(p[1] - out[-1][1]) > 1e-6:
-            out.append(p)
-    return out
-
-
 def build_model(mcp, analysis, label, color):
     """The film's recipe, on a scan whose base sits at the origin: one
     profile revolved about the fitted axis, each boss revolved about its
     own and unioned in. Returns the body id."""
     origin = np.zeros(3)
     axis, u, v = unit(analysis["axisDirection"]), unit(analysis["azimuthZero"]), unit(analysis["azimuthNinety"])
-    height, body_r = analysis["heightMM"], analysis["bodyRadiusMM"]
     plane = {"origin": world(origin, axis, u, v, 0, 0), "xAxis": [float(x) for x in u],
              "yAxis": [float(x) for x in axis], "name": label + " profile"}
     sketch = mcp.os3d("sketch.create", plane)["sketchID"]
-    loop = dedupe([[0.0, 0.0]] + [[max(r, 0.0), h] for r, h in analysis["profile"]] + [[0.0, height]])
-    mcp.os3d("sketch.addEntities", {"sketchID": sketch, "entities": lines_for(loop)})
-    cad = mcp.os3d("feature.revolve", {"sketchID": sketch, "seedPoint": [body_r * 0.5, height * 0.5],
+    # The half-section the build revolved (arcs, a hollow section for a
+    # container): the reel shows the model the inspection graded.
+    section = body_section(analysis)
+    mcp.os3d("sketch.addEntities", {"sketchID": sketch, "entities": section["entities"]})
+    cad = mcp.os3d("feature.revolve", {"sketchID": sketch, "seedPoint": section["seed"],
                                        "axisPoint": [0, 0], "axisDirection": [0, 1], "angleDegrees": 360})["producedBodyIDs"][0]
     bosses = [b for b in analysis.get("bosses", []) if b["reachMM"] - b["bodyRadiusMM"] > 15 and b.get("profile")]
     for n, boss in enumerate(bosses, 1):
@@ -117,13 +111,12 @@ def build_model(mcp, analysis, label, color):
         d = unit(math.cos(math.radians(az)) * u + math.sin(math.radians(az)) * v)
         t = unit(np.cross(axis, d))
         inner = boss.get("innerStartMM", boss["bodyRadiusMM"] - 12.0)
-        prof = [[max(r, 1.0), s] for r, s in boss["profile"]]
-        bl = dedupe([[0.0, 0.0], [prof[0][0], 0.0]] + prof + [[0.0, prof[-1][1]]])
+        entities, seed = boss_section(boss)
         sk = mcp.os3d("sketch.create", {"origin": world(origin, axis, u, v, inner, boss["centerHeightMM"], az),
                                         "xAxis": [float(x) for x in t], "yAxis": [float(x) for x in d],
                                         "name": "Boss %d" % n})["sketchID"]
-        mcp.os3d("sketch.addEntities", {"sketchID": sk, "entities": lines_for(bl)})
-        mcp.os3d("feature.revolve", {"sketchID": sk, "seedPoint": [max(prof[0][0] * 0.4, 2.0), prof[-1][1] * 0.3],
+        mcp.os3d("sketch.addEntities", {"sketchID": sk, "entities": entities})
+        mcp.os3d("feature.revolve", {"sketchID": sk, "seedPoint": seed,
                                      "axisPoint": [0, 0], "axisDirection": [0, 1], "angleDegrees": 360,
                                      "boolean": "union", "booleanTargets": [cad]})
     mcp.os3d("body.setMaterial", {"bodyIDs": [cad], "color": list(color), "roughness": 0.45})
@@ -201,6 +194,47 @@ def take_part(slug, part, spec, analysis, tolerance, udid, port, out):
     return clips
 
 
+def free_port(start, tries=50):
+    """The first port from `start` that nothing on this Mac is listening on."""
+    for port in range(start, start + tries):
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            try:
+                s.bind(("127.0.0.1", port))
+                return port
+            except OSError:
+                continue
+    raise RuntimeError("no free control port in %d..%d" % (start, start + tries))
+
+
+def rotate_device(udid, derived_data, orientation, log_path):
+    """Put the simulator in `orientation` before a pass.
+
+    An iPad simulator boots in portrait, and `XCUIDevice.shared.orientation`
+    turns it to landscape from there — but it will not turn it back: with the
+    device in landscape, the take test and the one-shot `RotateDeviceUITests`
+    both log "Setting device orientation to Portrait" and the home screen,
+    the app and every recording stay landscape (a portrait pass once filmed
+    ten clips on their side, twice). So portrait is a shutdown and a boot;
+    landscape is the rotate test (the orientation outlives it)."""
+    print("== turning the device to %s" % orientation, flush=True)
+    if orientation == "portrait":
+        subprocess.run(["xcrun", "simctl", "shutdown", udid], capture_output=True)
+        subprocess.run(["xcrun", "simctl", "boot", udid], capture_output=True, check=True)
+        subprocess.run(["xcrun", "simctl", "bootstatus", udid, "-b"], capture_output=True, timeout=300)
+        time.sleep(5.0)
+        with open(log_path, "w") as log:
+            log.write("portrait: the simulator was shut down and booted (it boots in portrait)\n")
+        return
+    env = dict(os.environ, TEST_RUNNER_OS3D_ORIENTATION=orientation)
+    cmd = ["xcodebuild", "test", "-project", os.path.join(ROOT, "openshape3d.xcodeproj"), "-scheme", "openshape3d",
+           "-destination", "platform=iOS Simulator,id=" + udid, "-derivedDataPath", derived_data,
+           "-parallel-testing-enabled", "NO", "-only-testing:openshape3dUITests/RotateDeviceUITests"]
+    with open(log_path, "w") as log:
+        done = subprocess.run(cmd, stdout=log, stderr=subprocess.STDOUT, env=env, timeout=900)
+    if done.returncode != 0:
+        raise RuntimeError("RotateDeviceUITests exit %d — see %s" % (done.returncode, log_path))
+
+
 def take(args, corpus, order, results, specs, out):
     udid = udid_for(args.simulator)
     # The YouTube series' remote-controlled UI test launches the app with
@@ -213,6 +247,7 @@ def take(args, corpus, order, results, specs, out):
     for orientation in args.orientations:
         odir = os.path.join(out, orientation)
         os.makedirs(odir, exist_ok=True)
+        rotate_device(udid, args.derived_data, orientation, os.path.join(odir, "rotate.log"))
         takes_path = os.path.join(odir, "takes.json")
         takes = json.load(open(takes_path)) if os.path.exists(takes_path) else {}
         yt.ORIENTATION = orientation
@@ -226,7 +261,12 @@ def take(args, corpus, order, results, specs, out):
             # measurement that outlasted the server's timeout once took the
             # bridge down with it); a failed part is tried once more.
             session += 1
-            yt.CONTROL_PORT = args.control_port + session - 1
+            # A free port for the session's control server. The last
+            # session's listening socket is closed below (`server_close`;
+            # `shutdown` alone leaves it bound until the cycle collector
+            # finds it — the portrait pass once died on "Address already
+            # in use" at its sixth part), and a probe guards the rest.
+            yt.CONTROL_PORT = free_port(args.control_port)
             print("== %s: launching the app in the take test (session %d)" % (orientation, session), flush=True)
             subprocess.run(["xcrun", "simctl", "terminate", udid, BUNDLE], capture_output=True)
             control = yt.Control(port=yt.CONTROL_PORT)
@@ -268,7 +308,11 @@ def take(args, corpus, order, results, specs, out):
                 except subprocess.TimeoutExpired:
                     test.kill()
                 control.server.shutdown()
+                control.server.server_close()
         print("%s: %d of %d parts filmed" % (orientation, sum(1 for s in order if takes.get(s, {}).get("ok")), len(order)), flush=True)
+    if args.orientations[-1] != "landscape":
+        # Leave the simulator the way the part films expect it.
+        rotate_device(udid, args.derived_data, "landscape", os.path.join(out, "rotate-back.log"))
 
 
 # ----------------------------------------------------------------------------- compose

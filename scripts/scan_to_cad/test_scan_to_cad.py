@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Offline tests for the scan-to-CAD helpers that need no app: the line-and-
-arc fitter, the open-polyline arc fitter, and the fit inspector's verdicts
+arc fitter, the open-polyline arc fitter, the shared half-section the build,
+film and reel revolve, and the fit inspector's verdicts
 on synthetic pairs (a drum that should have been a bucket, a dome cut into
 steps, an identical part).
 
@@ -145,6 +146,78 @@ class FitPrimitivesTests(unittest.TestCase):
         simplified = [(100.0, 0.0), (100.0, 100.0), (120.0, 100.0), (120.0, 140.0), (100.0, 140.0), (100.0, 300.0)]
         segs = F.arcs_in_polyline(simplified, simplified, tol=2.5)
         self.assertTrue(all(s["kind"] == "line" for s in segs), segs)
+
+
+@unittest.skipUnless(HAVE_DEPS, "needs the pipeline venv")
+class BodySectionTests(unittest.TestCase):
+    """`build_hydrant.body_section` / `boss_section`: the one half-section the
+    build, the film and the reel all revolve."""
+
+    def setUp(self):
+        import build_hydrant as B
+        self.B = B
+
+    def closed(self, entities):
+        """Each entity shares an endpoint with the next (an arc entity carries
+        centre, radius and angles, so its ends are computed)."""
+        def ends(e):
+            if e["kind"] == "line":
+                return [np.array(e["a"]), np.array(e["b"])]
+            c, r = np.array(e["center"]), e["radius"]
+            return [c + r * np.array([math.cos(a), math.sin(a)]) for a in (e["startAngle"], e["endAngle"])]
+        for s, t in zip(entities, entities[1:] + entities[:1]):
+            gap = min(np.linalg.norm(p - q) for p in ends(s) for q in ends(t))
+            self.assertLess(gap, 1e-3, (s, t))                        # angles are written to 6 places
+
+    def test_plain_profile_is_the_straight_loop(self):
+        analysis = {"profile": [[100.0, 0.0], [100.0, 0.0], [100.0, 200.0]], "heightMM": 200.0, "bodyRadiusMM": 100.0}
+        sec = self.B.body_section(analysis)
+        self.assertEqual(sec["outline"], [[0.0, 0.0], [100.0, 0.0], [100.0, 200.0], [0.0, 200.0]])   # the repeat dropped
+        self.assertEqual([e["kind"] for e in sec["entities"]], ["line"] * 4)
+        self.assertEqual(sec["seed"], [50.0, 100.0])
+        self.assertIsNone(sec["hollow"])
+        self.closed(sec["entities"])
+
+    def test_dome_segments_become_lines_and_an_arc_closed_on_the_axis(self):
+        segments = [{"kind": "line", "a": [60.0, 0.0], "b": [60.0, 100.0]},
+                    {"kind": "arc", "center": [0.0, 100.0], "radius": 60.0, "start": 0.0, "end": math.pi / 2,
+                     "ccw": True, "a": [60.0, 100.0], "b": [0.0, 160.0]}]
+        analysis = {"profile": [[60.0, 0.0], [60.0, 100.0], [0.0, 160.0]], "heightMM": 160.0, "bodyRadiusMM": 60.0,
+                    "profileSegments": segments}
+        sec = self.B.body_section(analysis)
+        kinds = [e["kind"] for e in sec["entities"]]
+        self.assertEqual(kinds.count("arc"), 1, kinds)
+        self.assertEqual(sec["entities"][0]["a"], [0.0, 0.0])
+        self.assertEqual(sec["entities"][-1]["b"], [0.0, 0.0])
+        self.assertIsNone(sec["hollow"])
+        self.closed(sec["entities"])
+
+    def test_open_container_is_a_hollow_section_seeded_in_the_floor(self):
+        segments = [{"kind": "line", "a": [146.5, 0.0], "b": [166.4, 248.0]},
+                    {"kind": "line", "a": [166.4, 248.0], "b": [189.4, 248.0]},
+                    {"kind": "line", "a": [189.4, 248.0], "b": [186.5, 264.0]}]
+        analysis = {"profile": [[146.5, 0.0], [166.4, 248.0], [189.4, 248.0], [186.5, 264.0]], "heightMM": 264.0,
+                    "bodyRadiusMM": 160.0, "profileSegments": segments,
+                    "openTop": {"end": "top", "wallMM": 3.0, "depthMM": 240.0}}
+        sec = self.B.body_section(analysis)
+        self.assertEqual(sec["hollow"], {"wallMM": 3.0, "measuredWallMM": 3.0, "openEnd": "top"})
+        self.assertAlmostEqual(sec["seed"][1], 1.5)                       # inside the floor, not the void
+        self.assertLess(sec["seed"][0], 146.5)
+        self.assertGreater(len(sec["entities"]), 2 * len(segments))       # outer, rim, inner, floor
+        self.assertIn("hollow", sec["note"])
+        self.closed(sec["entities"])
+        # A measured wall wider than the part can hold is capped under half the smallest radius.
+        analysis["openTop"]["wallMM"] = 100.0
+        self.assertAlmostEqual(self.B.body_section(analysis)["hollow"]["wallMM"], 0.45 * 146.5)
+
+    def test_boss_section_closes_along_its_axis(self):
+        entities, seed = self.B.boss_section({"profile": [[10.0, 0.0], [10.0, 30.0], [10.0, 30.0], [14.0, 30.0], [14.0, 40.0]]})
+        self.assertEqual(entities[0]["a"], [0.0, 0.0])
+        self.assertEqual(entities[-1]["b"], [0.0, 0.0])
+        self.assertEqual(entities[-1]["a"], [0.0, 40.0])
+        self.assertEqual(len(entities), 6)                                 # the repeated point makes no line
+        self.assertEqual(seed, [4.0, 12.0])
+        self.closed(entities)
 
 
 def run_inspect(reference, model, out, tolerance, up="y"):
