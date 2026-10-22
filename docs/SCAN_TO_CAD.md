@@ -243,7 +243,13 @@ the parts — a 16:9 window around where they are, found from a frame (the
 backdrop is one flat colour, the app's chrome masked), with a tenth of
 headroom — and lays the caption pills over it; the 9:16 cut keeps the
 whole portrait screen at the phone's width and writes the captions in the
-bands above and below it. The narration goes through `demo_video.narrate`
+bands above and below it (a line wider than the frame breaks at its ` · `
+separators — the subtitle and the outro's links once ran off both edges;
+the contact sheet's tiles are too small to show that, so check a frame of
+the 9:16 cut at full size). Every pair segment, the title's included,
+starts 3 s into its clip, past the app's "Imported 1 part" notice; the
+title line outlasts what is left of its 10 s pair, so a segment holds its
+last frame (`tpad`) when the source runs out. The narration goes through `demo_video.narrate`
 (Gemini 3.8, each line cached by its text; `--tts edge` for a stand-in
 voice), the per-part line is the spec's `reelSay` with `{label}`, `{iou}`
 and `{mean}` filled from `results.json`; one music bed under it all. Next
