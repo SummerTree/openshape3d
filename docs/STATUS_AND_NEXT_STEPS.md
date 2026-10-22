@@ -2,7 +2,7 @@
 
 > **Current unfinished-work register:** [Sketch parity open status](SKETCH_PARITY_OPEN_STATUS.md). Maintained at every meaningful checkpoint; older mission logs below are historical.
 
-Last updated: 2026-10-22 (scan-to-CAD builds are now inspected both ways with depth maps and a review sheet — `inspect_fit.py`, gating the films and the reel; arcs and hollow revolves in the scan pipeline; a C-clamp rebuilt from recipes to 0.05 mm — the newest mission log bullet under 2026-10-20; a corpus of ten Sketchfab scans built over MCP, graded and filmed; CAD import over MCP: STEP and IGES sew loose faces into solids and sheet bodies, exact bounds, DXF units and ellipses, an open-mesh notice, and agents import STEP / IGES / DXF / FCStd; an OCCT oracle, a live MCP runner and offline XCTests behind it; test pack 36 / 36, FreeCAD IDF + NIST corpus 32 / 32, IGES twins 4 / 4 — newest mission log. Also today: Deviation Preview — the Accuracy Report's colours on the part; the scan's profile straightened; `item.select`) — **Accuracy Report** (one body measured against
+Last updated: 2026-10-22 (the film and the reel revolve the build's own half-section — all ten corpus films and both reels re-taken on the rebuilt models; scan-to-CAD builds are now inspected both ways with depth maps and a review sheet — `inspect_fit.py`, gating the films and the reel; arcs and hollow revolves in the scan pipeline; a C-clamp rebuilt from recipes to 0.05 mm — the newest mission log bullet under 2026-10-20; a corpus of ten Sketchfab scans built over MCP, graded and filmed; CAD import over MCP: STEP and IGES sew loose faces into solids and sheet bodies, exact bounds, DXF units and ellipses, an open-mesh notice, and agents import STEP / IGES / DXF / FCStd; an OCCT oracle, a live MCP runner and offline XCTests behind it; test pack 36 / 36, FreeCAD IDF + NIST corpus 32 / 32, IGES twins 4 / 4 — newest mission log. Also today: Deviation Preview — the Accuracy Report's colours on the part; the scan's profile straightened; `item.select`) — **Accuracy Report** (one body measured against
 another: orthographic silhouette overlays per view, outline and surface
 deviation both ways; `Kernel/AccuracyKit.swift`, Views ▸ Accuracy Report…,
 `/v1/accuracy` + `/v1/accuracy/image`, MCP ops `accuracy` /
@@ -380,7 +380,16 @@ the zip in Downloads, on the real scan (`docs/SCAN_TO_CAD.md`).
   bollard WARN (its shoulder), the bucket hollow; the FAILs that remain
   are handles, hoses, a wheel's bracket and the valve's second axis —
   the honest ones. Written up in `docs/SCAN_TO_CAD.md` ("Catching errors",
-  "Recipes"); the skill's scan paragraph carries the rules.
+  "Recipes"); the skill's scan paragraph carries the rules. Re-filming
+  them (user: "reproduce all those clips again so we can compare") found
+  that `demo_video.py take` and `reel.py` traced their own revolve loop
+  from the straight profile — every re-take would have shown the old
+  solids — so `build_hydrant.body_section` / `boss_section` are now the one
+  half-section for the build, the film and the reel (checked identical to
+  the recorded calls of all ten builds; four more tests, 14 pass). All ten
+  films and both reels were re-taken on the rebuilt models; the reel's
+  control server now closes its socket between sessions and probes for a
+  free port (the portrait pass had died on "Address already in use").
 
 ## Open work — 2026-09-17
 

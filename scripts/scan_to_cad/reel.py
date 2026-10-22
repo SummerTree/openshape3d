@@ -36,6 +36,7 @@ import argparse
 import json
 import math
 import os
+import socket
 import subprocess
 import sys
 import time
@@ -193,6 +194,18 @@ def take_part(slug, part, spec, analysis, tolerance, udid, port, out):
     return clips
 
 
+def free_port(start, tries=50):
+    """The first port from `start` that nothing on this Mac is listening on."""
+    for port in range(start, start + tries):
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            try:
+                s.bind(("127.0.0.1", port))
+                return port
+            except OSError:
+                continue
+    raise RuntimeError("no free control port in %d..%d" % (start, start + tries))
+
+
 def take(args, corpus, order, results, specs, out):
     udid = udid_for(args.simulator)
     # The YouTube series' remote-controlled UI test launches the app with
@@ -218,7 +231,12 @@ def take(args, corpus, order, results, specs, out):
             # measurement that outlasted the server's timeout once took the
             # bridge down with it); a failed part is tried once more.
             session += 1
-            yt.CONTROL_PORT = args.control_port + session - 1
+            # A free port for the session's control server. The last
+            # session's listening socket is closed below (`server_close`;
+            # `shutdown` alone leaves it bound until the cycle collector
+            # finds it — the portrait pass once died on "Address already
+            # in use" at its sixth part), and a probe guards the rest.
+            yt.CONTROL_PORT = free_port(args.control_port)
             print("== %s: launching the app in the take test (session %d)" % (orientation, session), flush=True)
             subprocess.run(["xcrun", "simctl", "terminate", udid, BUNDLE], capture_output=True)
             control = yt.Control(port=yt.CONTROL_PORT)
@@ -260,6 +278,7 @@ def take(args, corpus, order, results, specs, out):
                 except subprocess.TimeoutExpired:
                     test.kill()
                 control.server.shutdown()
+                control.server.server_close()
         print("%s: %d of %d parts filmed" % (orientation, sum(1 for s in order if takes.get(s, {}).get("ok")), len(order)), flush=True)
 
 
