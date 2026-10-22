@@ -2,7 +2,7 @@
 
 > **Current unfinished-work register:** [Sketch parity open status](SKETCH_PARITY_OPEN_STATUS.md). Maintained at every meaningful checkpoint; older mission logs below are historical.
 
-Last updated: 2026-10-21 (a corpus of ten Sketchfab scans built over MCP, graded and filmed — the newest mission log bullet under 2026-10-20; CAD import over MCP: STEP and IGES sew loose faces into solids and sheet bodies, exact bounds, DXF units and ellipses, an open-mesh notice, and agents import STEP / IGES / DXF / FCStd; an OCCT oracle, a live MCP runner and offline XCTests behind it; test pack 36 / 36, FreeCAD IDF + NIST corpus 32 / 32, IGES twins 4 / 4 — newest mission log. Also today: Deviation Preview — the Accuracy Report's colours on the part; the scan's profile straightened; `item.select`) — **Accuracy Report** (one body measured against
+Last updated: 2026-10-22 (scan-to-CAD builds are now inspected both ways with depth maps and a review sheet — `inspect_fit.py`, gating the films and the reel; arcs and hollow revolves in the scan pipeline; a C-clamp rebuilt from recipes to 0.05 mm — the newest mission log bullet under 2026-10-20; a corpus of ten Sketchfab scans built over MCP, graded and filmed; CAD import over MCP: STEP and IGES sew loose faces into solids and sheet bodies, exact bounds, DXF units and ellipses, an open-mesh notice, and agents import STEP / IGES / DXF / FCStd; an OCCT oracle, a live MCP runner and offline XCTests behind it; test pack 36 / 36, FreeCAD IDF + NIST corpus 32 / 32, IGES twins 4 / 4 — newest mission log. Also today: Deviation Preview — the Accuracy Report's colours on the part; the scan's profile straightened; `item.select`) — **Accuracy Report** (one body measured against
 another: orthographic silhouette overlays per view, outline and surface
 deviation both ways; `Kernel/AccuracyKit.swift`, Views ▸ Accuracy Report…,
 `/v1/accuracy` + `/v1/accuracy/image`, MCP ops `accuracy` /
@@ -349,6 +349,38 @@ the zip in Downloads, on the real scan (`docs/SCAN_TO_CAD.md`).
   bridge alone, cut 16:9 with a content-aware crop and 9:16 with caption
   bands; script, SRT captions, credits and post text beside it). The scans
   and films live in `marketing/scan-to-cad/corpus/` (gitignored).
+
+- **The reel looked wrong, so a process that catches it** (2026-10-22, the
+  user: "the cad from scan has serious flaws … develop a process that
+  catches errors — do screenshots and look at it", pointing at CNC
+  Kitchen's ScanRuler and a Sketchfab C-clamp to "practice on until you
+  get it correct"). Frames from the reel at full size showed what the
+  app's overlap number had passed: the pail a solid drum with a lid
+  (93 % front overlap), the bollard's dome cut into steps, the mug three
+  frustums, the barrel a closed drum. `scripts/scan_to_cad/inspect_fit.py`
+  now grades every build the way ScanRuler's skill says to — numbers
+  decide, pictures show where, both ways, at a stated tolerance: surface
+  distance in both directions (the model-to-scan direction finds the lid),
+  depth maps per view with a worst-strip rule (a wrong top cannot hide in
+  a long body), a terrace count, and `qa/review.png` to look at; model
+  surface facing a hole in the scan (nearest scan point on an open edge)
+  is left out and painted slate. `run_corpus.py` writes the verdict into
+  `results.json`; `film_corpus.py` and `reel.py` skip a FAIL unless
+  `--allow-fail`. The practice piece, a six-solid C-clamp, got
+  `fit_primitives.py` (sections to lines and arcs, axis and sphere fits)
+  and `build_recipe.py` (extrude and revolve recipes over MCP) and passes
+  at 0.5 mm — 0.05 mm mean, 99.5–99.8 % silhouettes — once the screw boss
+  was found to be round. The scan pipeline learnt two things: a dome or a
+  belly is an arc (found on the raw bands before `straighten`, carried to
+  the axis at its apex), and a container is one revolve of a hollow
+  half-section (open end by rays from outside, their hits classed front
+  or back so a trimmed ground reads as a hole, not an opening; the
+  kernel's `feature.shell` refused the ribbed barrel at every wall). Nine
+  offline tests in `test_scan_to_cad.py`. Rebuilt and re-inspected: the
+  bollard WARN (its shoulder), the bucket hollow; the FAILs that remain
+  are handles, hoses, a wheel's bracket and the valve's second axis —
+  the honest ones. Written up in `docs/SCAN_TO_CAD.md` ("Catching errors",
+  "Recipes"); the skill's scan paragraph carries the rules.
 
 ## Open work — 2026-09-17
 

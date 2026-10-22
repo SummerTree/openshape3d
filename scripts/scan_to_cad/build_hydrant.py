@@ -46,6 +46,7 @@ import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from mcp_client import MCPClient, MCPError  # noqa: E402
+from fit_primitives import hollow_section, sketch_entities  # noqa: E402
 
 
 def unit(v):
@@ -162,10 +163,51 @@ def build(args):
         for p in loop[1:]:
             if abs(p[0] - cleaned[-1][0]) > 1e-6 or abs(p[1] - cleaned[-1][1]) > 1e-6:
                 cleaned.append(p)
-        entities = lines_for(cleaned)
-        mcp.os3d("sketch.addEntities", {"sketchID": sketch, "entities": entities},
-                 note="{} lines: half the cross-section, axis at u = 0".format(len(entities)))
+        segments = analysis.get("profileSegments")
+        open_top = analysis.get("openTop")
         seed = [body_r * 0.5, height * 0.5]
+        if open_top and segments:
+            # A container: one revolve of a hollow half-section — the outer
+            # profile, the rim at the open end, the inner profile a wall in,
+            # and a floor at the closed end. (The kernel's shell offset
+            # refused the ribbed barrel at every thickness.)
+            end = open_top.get("end", "top")
+            min_r = min(min(s["a"][0], s["b"][0]) for s in segments)
+            # A wall thicker than the profile's smallest feature folds the
+            # inner offset over itself (the barrel's 13.7 mm "wall" — read
+            # off its rolled rim — against 4–8 mm steps and r 25 ribs): cap
+            # it at six tenths of the smallest step or arc, and under half
+            # the smallest radius.
+            sizes = [s["radius"] for s in segments if s["kind"] == "arc"]
+            sizes += [abs(s["b"][1] - s["a"][1]) for s in segments[1:-1]
+                      if s["kind"] == "line" and abs(s["b"][1] - s["a"][1]) >= 2.0]      # the runs between steps
+            feature = min(sizes) if sizes else open_top["wallMM"]
+            wall = float(max(1.5, min(open_top["wallMM"], 0.45 * min_r, 0.6 * feature)))
+            loop = hollow_section(segments, height, wall, end)
+            entities = sketch_entities(loop)
+            foot_r = segments[0]["a"][0] if end == "top" else segments[-1]["b"][0]
+            seed = [max(foot_r * 0.5, 1.0), wall * 0.5 if end == "top" else height - wall * 0.5]     # in the floor
+            arcs = sum(e["kind"] == "arc" for e in entities)
+            note = "{} entities ({} arcs): a hollow half-section, {} mm wall, open at the {}".format(
+                len(entities), arcs, round(wall, 1), end)
+            s.summary["hollow"] = {"wallMM": wall, "measuredWallMM": open_top["wallMM"], "openEnd": end}
+            print("   open at the %s (rays fall %.0f mm in): hollow section, wall %.1f mm" % (end, open_top["depthMM"], wall))
+        elif segments and any(s["kind"] == "arc" for s in segments):
+            # Lines and arcs from the analysis (a dome is an arc), closed
+            # along the axis: (0,0) → the profile's foot … its top → (0, height).
+            foot, top = segments[0]["a"], segments[-1]["b"]
+            entities = ([{"kind": "line", "a": [0.0, 0.0], "b": [round(max(foot[0], 0.0), 4), round(foot[1], 4)]}]
+                        + sketch_entities(segments)
+                        + [{"kind": "line", "a": [round(max(top[0], 0.0), 4), round(top[1], 4)], "b": [0.0, round(float(height), 4)]},
+                           {"kind": "line", "a": [0.0, round(float(height), 4)], "b": [0.0, 0.0]}])
+            entities = [e for e in entities if e["kind"] != "line" or
+                        abs(e["a"][0] - e["b"][0]) > 1e-6 or abs(e["a"][1] - e["b"][1]) > 1e-6]
+            arcs = sum(e["kind"] == "arc" for e in entities)
+            note = "{} entities ({} arcs): half the cross-section, axis at u = 0".format(len(entities), arcs)
+        else:
+            entities = lines_for(cleaned)
+            note = "{} lines: half the cross-section, axis at u = 0".format(len(entities))
+        mcp.os3d("sketch.addEntities", {"sketchID": sketch, "entities": entities}, note=note)
         reply = mcp.os3d("feature.revolve", {"sketchID": sketch, "seedPoint": seed, "axisPoint": [0, 0],
                                              "axisDirection": [0, 1], "angleDegrees": 360},
                          note="360° about the axis")
