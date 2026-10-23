@@ -116,6 +116,8 @@ def take(args):
     with open(os.path.join(args.analysis, "profile.json")) as f:
         analysis = json.load(f)
     from build_hydrant import body_section, boss_section, unit, world
+    from build_features import build_feature, feature_caption
+    from mcp_client import MCPError
     spec = args.spec or {}
     label = spec.get("label", "Hydrant")
     color = list(spec.get("color", [0.86, 0.17, 0.12]))
@@ -215,6 +217,13 @@ def take(args):
             reply = mcp.os3d("feature.revolve", {"sketchID": sketch, "seedPoint": section["seed"],
                                                  "axisPoint": [0, 0], "axisDirection": [0, 1], "angleDegrees": 360})
             cad_id = reply["producedBodyIDs"][0]
+            if section.get("inner"):
+                # A container: the cavity revolved and subtracted, as the build did.
+                sk_in = mcp.os3d("sketch.create", dict(plane, name=label + " cavity"))["sketchID"]
+                mcp.os3d("sketch.addEntities", {"sketchID": sk_in, "entities": section["inner"]["entities"]})
+                mcp.os3d("feature.revolve", {"sketchID": sk_in, "seedPoint": section["inner"]["seed"],
+                                             "axisPoint": [0, 0], "axisDirection": [0, 1], "angleDegrees": 360,
+                                             "boolean": "subtract", "booleanTargets": [cad_id]})
             mcp.os3d("body.setMaterial", {"bodyIDs": [cad_id], "color": color, "roughness": 0.45})
             mcp.os3d("item.setHidden", {"allSketches": True})
             turn(3.6)
@@ -239,6 +248,32 @@ def take(args):
                 mcp.os3d("feature.revolve", {"sketchID": sk, "seedPoint": seed,
                                              "axisPoint": [0, 0], "axisDirection": [0, 1], "angleDegrees": 360,
                                              "boolean": "union", "booleanTargets": [cad_id]})
+                mcp.os3d("item.setHidden", {"allSketches": True})
+                turn(1.6)
+
+            # What the revolve missed — a handle, a hose, a lever — fitted
+            # by fit_features.py and built by build_features.py: the film
+            # builds the same, feature by feature, under its own caption.
+            features_path = args.features or os.path.join(os.path.dirname(os.path.abspath(args.analysis)),
+                                                          "features", "features.json")
+            built = []
+            if os.path.exists(features_path):
+                with open(features_path) as f:
+                    found = json.load(f).get("features", [])
+                summary_path = os.path.join(os.path.dirname(features_path), "..", "run", "summary.json")
+                if os.path.exists(summary_path):
+                    with open(summary_path) as f:
+                        ok_names = {b["name"] for b in json.load(f).get("features", []) if b.get("ok")}
+                    found = [ft for ft in found if ft.get("name") in ok_names]
+                built = found
+            for n, feature in enumerate(built, 1):
+                beat("feature%d" % n, captions.get("feature") or feature_caption(feature))
+                try:
+                    reply = build_feature(mcp, feature, cad_id, feature.get("name", "feature %d" % n), note=False)
+                    if reply.get("failed"):
+                        mcp.os3d("command.run", {"id": "edit.undo"})
+                except MCPError:
+                    pass
                 mcp.os3d("item.setHidden", {"allSketches": True})
                 turn(1.6)
 
@@ -1207,6 +1242,7 @@ def main():
     t.add_argument("--control-port", type=int, default=8930, help="the UI test's control server (with --ui)")
     t.add_argument("--derived-data", default=None, help="xcodebuild -derivedDataPath for the UI test (with --ui)")
     t.add_argument("--spec", default=None, help="JSON: what the part is (label, colour, captions); see the top of this file")
+    t.add_argument("--features", default=None, help="features.json (default: <part>/features/features.json beside the analysis)")
     c = sub.add_parser("compose")
     c.add_argument("--out", default="demo")
     c.add_argument("--spec", default=None, help="JSON: title, narration lines and credit for this part")

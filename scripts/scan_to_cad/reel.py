@@ -47,8 +47,9 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))
 sys.path.insert(0, HERE)
 from build_hydrant import body_section, boss_section, unit, world  # noqa: E402
+from build_features import build_feature  # noqa: E402
 from demo_video import Recorder, caption, ffmpeg_watched, narrate, scan_on_floor, title_overlay  # noqa: E402
-from mcp_client import MCPClient  # noqa: E402
+from mcp_client import MCPClient, MCPError  # noqa: E402
 from run_corpus import BUNDLE, udid_for  # noqa: E402
 
 BACKDROP = (0.13, 0.14, 0.16)
@@ -90,7 +91,7 @@ def wait_empty_design(port, seconds=40):
     raise RuntimeError("no empty design on the bridge after %d s" % seconds)
 
 
-def build_model(mcp, analysis, label, color):
+def build_model(mcp, analysis, label, color, features=None):
     """The film's recipe, on a scan whose base sits at the origin: one
     profile revolved about the fitted axis, each boss revolved about its
     own and unioned in. Returns the body id."""
@@ -105,6 +106,13 @@ def build_model(mcp, analysis, label, color):
     mcp.os3d("sketch.addEntities", {"sketchID": sketch, "entities": section["entities"]})
     cad = mcp.os3d("feature.revolve", {"sketchID": sketch, "seedPoint": section["seed"],
                                        "axisPoint": [0, 0], "axisDirection": [0, 1], "angleDegrees": 360})["producedBodyIDs"][0]
+    if section.get("inner"):
+        # A container: the cavity revolved and subtracted, as the build did.
+        sk_in = mcp.os3d("sketch.create", dict(plane, name=label + " cavity"))["sketchID"]
+        mcp.os3d("sketch.addEntities", {"sketchID": sk_in, "entities": section["inner"]["entities"]})
+        mcp.os3d("feature.revolve", {"sketchID": sk_in, "seedPoint": section["inner"]["seed"],
+                                     "axisPoint": [0, 0], "axisDirection": [0, 1], "angleDegrees": 360,
+                                     "boolean": "subtract", "booleanTargets": [cad]})
     bosses = [b for b in analysis.get("bosses", []) if b["reachMM"] - b["bodyRadiusMM"] > 15 and b.get("profile")]
     for n, boss in enumerate(bosses, 1):
         az = boss["azimuthDeg"]
@@ -119,9 +127,33 @@ def build_model(mcp, analysis, label, color):
         mcp.os3d("feature.revolve", {"sketchID": sk, "seedPoint": seed,
                                      "axisPoint": [0, 0], "axisDirection": [0, 1], "angleDegrees": 360,
                                      "boolean": "union", "booleanTargets": [cad]})
+    # The fitted features the build built (features.json, the ones its
+    # summary says were ok), so the reel shows the model the inspection graded.
+    for n, feature in enumerate(features or [], 1):
+        try:
+            reply = build_feature(mcp, feature, cad, feature.get("name", "feature %d" % n), note=False)
+            if reply.get("failed"):
+                mcp.os3d("command.run", {"id": "edit.undo"})
+        except MCPError:
+            pass
     mcp.os3d("body.setMaterial", {"bodyIDs": [cad], "color": list(color), "roughness": 0.45})
     mcp.os3d("item.setHidden", {"allSketches": True})
     return cad
+
+
+def built_features(part):
+    """The features build_features.py built for a part, or []."""
+    path = os.path.join(part, "features", "features.json")
+    summary = os.path.join(part, "run", "summary.json")
+    if not os.path.exists(path):
+        return []
+    with open(path) as f:
+        found = json.load(f).get("features", [])
+    if os.path.exists(summary):
+        with open(summary) as f:
+            ok = {b["name"] for b in json.load(f).get("features", []) if b.get("ok")}
+        found = [ft for ft in found if ft.get("name") in ok]
+    return found
 
 
 def take_part(slug, part, spec, analysis, tolerance, udid, port, out):
@@ -147,7 +179,8 @@ def take_part(slug, part, spec, analysis, tolerance, udid, port, out):
 
         scan_id = mcp.os3d("document.import", {"path": os.path.abspath(floor), "fileName": os.path.basename(floor)})["bodyIDs"][0]
         mcp.os3d("item.select", {"ids": []})
-        cad = build_model(mcp, analysis, spec.get("label", slug), spec.get("color", [0.86, 0.17, 0.12]))
+        cad = build_model(mcp, analysis, spec.get("label", slug), spec.get("color", [0.86, 0.17, 0.12]),
+                          features=built_features(part))
 
         # The preview: the scan wears the colours, the model is ghosted.
         studio()

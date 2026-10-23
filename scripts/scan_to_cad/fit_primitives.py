@@ -288,7 +288,8 @@ def segments_from_loop(xy, tol=0.05, min_arc_points=4, max_radius=None):
     return out
 
 
-def arcs_in_polyline(simplified, dense, tol, min_arc_points=4, max_radius=None):
+def arcs_in_polyline(simplified, dense, tol, min_arc_points=4, max_radius=None, min_span=0.0, row_heights=None,
+                     tol_per_radius=0.0, min_sagitta=0.0):
     """Lines and arcs for an OPEN polyline — a revolve's radial profile.
 
     `simplified` is the design polyline (after straightening and the
@@ -297,8 +298,12 @@ def arcs_in_polyline(simplified, dense, tol, min_arc_points=4, max_radius=None):
     same-sign turns on the simplified polyline are fitted with a circle
     through their own vertices; the arc is kept when every dense point
     between the run's ends sits within `tol` of it — the scanner's noise
-    is what `tol` is. Returns segments in order, `line` or `arc`, like
-    `segments_from_loop`."""
+    is what `tol` is. `min_span` is the shortest chord worth an arc (a
+    rolled seam a few millimetres tall is lines); `row_heights`, the
+    heights of a mesh's vertex rows, lets a low-poly mesh's chords off:
+    its rows lie on the true curve but the facets between them cut the
+    corner by chord²/8r, and that much is allowed on top of `tol`.
+    Returns segments in order, `line` or `arc`, like `segments_from_loop`."""
     pts = np.asarray(simplified, dtype=float)
     dense = np.asarray(dense, dtype=float)
     n = len(pts)
@@ -337,11 +342,25 @@ def arcs_in_polyline(simplified, dense, tol, min_arc_points=4, max_radius=None):
             # Validate on the dense points between the run's ends, by the
             # profile's own parameter (height).
             lo, hi = sorted((pts[run[0]][1], pts[run[-1]][1]))
+            chord = float(np.linalg.norm(pts[run[-1]] - pts[run[0]]))
+            if chord < min_span:
+                continue
+            # A barely bent run is a line with a bulge the simplifier would
+            # have dropped: an arc has to bow by at least `min_sagitta`.
+            if min_sagitta > 0 and chord * chord / (8.0 * r) < min_sagitta:
+                continue
             between = dense[(dense[:, 1] >= lo) & (dense[:, 1] <= hi)]
             if len(between) < 3:
                 continue
+            allowance = 0.0
+            if row_heights is not None and len(row_heights):
+                rows = np.concatenate([[lo], row_heights[(row_heights > lo) & (row_heights < hi)], [hi]])
+                # A facet's chord, never more than the tolerance and a half:
+                # a drum's smooth middle is one 230 mm quad, and that gap
+                # would excuse any circle at all.
+                allowance = min(float(np.diff(rows).max()) ** 2 / (8.0 * r), 1.5 * tol)
             resid = float(np.abs(np.linalg.norm(between - c, axis=1) - r).max())
-            if resid <= tol:
+            if resid <= max(tol, tol_per_radius * r) + allowance:
                 arcs[run[0]] = (run, c, r, sign > 0)
                 break
         i = j + 1
@@ -483,6 +502,55 @@ def hollow_section(segments, height, wall, open_end="top"):
     top = work[-1]["b"]
     eroded = _eroded_inner(work, wall, floor_h, top[1])
     return back(_hollow_once(work, height, wall, inner_source=eroded, floor_h=floor_h, offset=False))
+
+
+def cavity_section(segments, height, wall, open_end="top", overshoot=5.0, floor_from_rim=None):
+    """A container's cavity as its own closed loop, to revolve and SUBTRACT
+    from the solid revolve of the outer profile: the inner profile is the
+    outer one eroded a wall in (`_eroded_inner`, a function of height, so
+    it can never fold), from the floor to `overshoot` past the open rim,
+    closed along the axis. Two simple loops and one boolean, where one
+    hollow loop offset round a ribbed profile folded over itself.
+    Returns (segments, seed point) in the profile's own frame."""
+    flipped = open_end == "bottom"
+    work = _reverse(_reflect_h(segments, height)) if flipped else [dict(s) for s in segments]
+    pts = [tuple(work[0]["a"])] + [tuple(s["b"]) for s in work]
+    top_h = work[-1]["b"][1]
+    # The floor: where the profile, scanning up from the closed end, first
+    # reaches nine tenths of the widest it gets in the bottom quarter — a
+    # bucket's foot ring is already there (floor one wall up), a drum's
+    # chime climbs to it over 50 mm (the floor at the chime's top).
+    lower = [q for q in pts if q[1] <= 0.25 * top_h] or pts[:2]
+    arrive = 0.9 * max(q[0] for q in lower)
+    floor_h = wall
+    for q in sorted(pts, key=lambda q: q[1]):
+        if q[0] >= arrive:
+            floor_h = max(wall, q[1] + wall)
+            break
+    # The rays `detect_open_top` sent down the open end measured the floor
+    # itself: when they stopped short of the far end, that is where the
+    # floor is (a drum's is 16 mm up its chime, not at the chime's top).
+    if floor_from_rim is not None and floor_from_rim < top_h - 1.0:
+        floor_h = max(wall, top_h - floor_from_rim)
+    inner = _eroded_inner(work, wall, floor_h, top_h)
+    if not inner:
+        return [], None
+    first, last = inner[0]["a"], inner[-1]["b"]
+    lid = top_h + overshoot
+    loop = ([{"kind": "line", "a": [0.0, floor_h], "b": list(first)}] + inner
+            + [{"kind": "line", "a": list(last), "b": [last[0], lid]},
+               {"kind": "line", "a": [last[0], lid], "b": [0.0, lid]},
+               {"kind": "line", "a": [0.0, lid], "b": [0.0, floor_h]}])
+    for s, t in zip(loop, loop[1:]):
+        t["a"] = list(s["b"])
+    loop = [s for s in loop if abs(s["a"][0] - s["b"][0]) > 1e-6 or abs(s["a"][1] - s["b"][1]) > 1e-6]
+    mid_h = (floor_h + top_h) / 2
+    r_mid = float(np.interp(mid_h, [q["a"][1] for q in inner] + [last[1]], [q["a"][0] for q in inner] + [last[0]]))
+    seed = [max(0.5 * r_mid, 1.0), mid_h]
+    if flipped:
+        loop = _reverse(_reflect_h(loop, height))
+        seed = [seed[0], height - seed[1]]
+    return loop, seed
 
 
 def _eroded_inner(outer, wall, floor_h, top_h, step=1.0):
@@ -639,7 +707,12 @@ def _hollow_once(segments, height, wall, inner_source=None, floor_h=None, offset
 def sketch_entities(segments, snap=1e-3):
     """The app's entity list for a segment list: `line` {a, b} and `arc`
     {center, radius, startAngle, endAngle} (radians, counter-clockwise
-    from start to end — a clockwise arc is written with its ends swapped)."""
+    from start to end — a clockwise arc is written with its ends swapped).
+    An arc's ends as the app will compute them (from the rounded centre,
+    radius and angles) can sit a hundredth off the segment's own `a`/`b`;
+    the lines on either side are moved onto those computed ends, since the
+    profile detector bridges no gap at all ("revolve profile unresolved"
+    on a 0.007 mm one)."""
     ents = []
     for s in segments:
         if s["kind"] == "line":
@@ -652,7 +725,35 @@ def sketch_entities(segments, snap=1e-3):
                 sb += 2 * math.pi
             ents.append({"kind": "arc", "center": [round(v, 4) for v in s["center"]], "radius": round(s["radius"], 4),
                          "startAngle": round(sa, 6), "endAngle": round(sb, 6)})
-    return ents
+    # Two arcs in a row meet only to the rounding: a short line between
+    # their computed ends closes the loop (the detector bridges nothing).
+    def arc_ends(e):
+        c, r = e["center"], e["radius"]
+        return ([c[0] + r * math.cos(e["startAngle"]), c[1] + r * math.sin(e["startAngle"])],
+                [c[0] + r * math.cos(e["endAngle"]), c[1] + r * math.sin(e["endAngle"])])
+    arc_end_points = [end for e in ents if e["kind"] == "arc" for end in arc_ends(e)]
+    for f in ents:
+        if f["kind"] != "line" or not arc_end_points:
+            continue
+        # Each line end goes to its NEAREST arc end only: a 0.3 mm line
+        # between two arcs had both its ends pulled onto one arc and vanished.
+        for key in ("a", "b"):
+            end = min(arc_end_points, key=lambda q: math.hypot(f[key][0] - q[0], f[key][1] - q[1]))
+            if math.hypot(f[key][0] - end[0], f[key][1] - end[1]) <= 0.5:
+                f[key] = [round(end[0], 6), round(end[1], 6)]
+    joined = []
+    for e, f in zip(ents, ents[1:] + ents[:1]):
+        joined.append(e)
+        if e["kind"] == "arc" and f["kind"] == "arc":
+            # A clockwise arc is written with its angles swapped, so the
+            # junction may be either end of either arc: the nearest pair.
+            pairs = [(p, q) for p in arc_ends(e) for q in arc_ends(f)]
+            p, q = min(pairs, key=lambda pq: math.hypot(pq[0][0] - pq[1][0], pq[0][1] - pq[1][1]))
+            gap = math.hypot(p[0] - q[0], p[1] - q[1])
+            if 1e-5 < gap <= 0.5:
+                joined.append({"kind": "line", "a": [round(p[0], 6), round(p[1], 6)],
+                               "b": [round(q[0], 6), round(q[1], 6)]})
+    return joined
 
 
 def segments_png(path, loops_segments, points_loops=None, size=1200, margin=40):
