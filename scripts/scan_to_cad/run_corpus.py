@@ -57,8 +57,10 @@ def main():
     ap.add_argument("--simulator", default="os3d-hydrant")
     ap.add_argument("--only", default=None, help="comma-separated part folders")
     ap.add_argument("--python", default=sys.executable, help="the interpreter with trimesh (the venv's)")
+    ap.add_argument("--no-features", action="store_true",
+                    help="stop after the revolve: skip fit_features.py / build_features.py")
     ap.add_argument("--analyze", action="store_true",
-                    help="re-run analyze_scan.py first (--epsilon 2.5 plus the part's flags in corpus/analysis-flags.json)")
+                    help="re-run analyze_scan.py first (auto band/epsilon plus the part's flags in corpus/analysis-flags.json)")
     args = ap.parse_args()
     corpus = os.path.abspath(args.corpus)
     with open(os.path.join(corpus, "order.json")) as f:
@@ -78,8 +80,7 @@ def main():
             source = os.path.join(part, "prep", "scan.glb")
             if not os.path.exists(source):
                 source = os.path.join(part, "download", "scan.glb")
-            cmd = [args.python, "-I", os.path.join(HERE, "analyze_scan.py"), source, "--out", analysis,
-                   "--epsilon", "2.5"] + list(flags.get(slug, []))
+            cmd = [args.python, "-I", os.path.join(HERE, "analyze_scan.py"), source, "--out", analysis] + list(flags.get(slug, []))
             with open(os.path.join(part, "analysis.log"), "w") as log:
                 done = subprocess.run(cmd, stdout=log, stderr=subprocess.STDOUT)
             if done.returncode != 0:
@@ -106,6 +107,49 @@ def main():
             if build.returncode != 0:
                 tail = open(os.path.join(part, "build.log")).read().splitlines()[-6:]
                 raise RuntimeError("build_hydrant.py exit %d: %s" % (build.returncode, " | ".join(tail)))
+            # What the revolve missed — a handle, a hose, a lever — fitted
+            # on the exported pair and built into the body in the same
+            # session (`fit_features.py`, `build_features.py`).
+            if not args.no_features:
+                feat_dir = os.path.join(part, "features")
+                fit = subprocess.run([args.python, "-I", os.path.join(HERE, "fit_features.py"),
+                                      "--scan", os.path.join(run_dir, "scan.stl"),
+                                      "--model", os.path.join(run_dir, slug + "-cad.stl"),
+                                      "--tolerance", str(tolerance), "--out", feat_dir],
+                                     capture_output=True, text=True, timeout=1200,
+                                     env=dict(os.environ, FIT_DEBUG="1"))
+                with open(os.path.join(part, "features.log"), "w") as log:
+                    log.write(fit.stdout + fit.stderr)
+                if fit.returncode != 0:
+                    print("    fit_features.py exit %d: %s" % (fit.returncode, fit.stderr[-300:]), flush=True)
+                    row["features"] = {"error": "fit_features.py exit %d" % fit.returncode}
+                else:
+                    found = json.load(open(os.path.join(feat_dir, "features.json")))
+                    row["features"] = {"found": len(found["features"]), "unexplained": len(found["unexplained"]),
+                                       "farShare": found["farShare"],
+                                       "kinds": [f["kind"] for f in found["features"]]}
+                    print("    features: %d found (%s), %d pieces unexplained, %.0f%% of the scan was far" % (
+                        len(found["features"]), ", ".join(f["kind"] for f in found["features"]) or "none",
+                        len(found["unexplained"]), found["farShare"] * 100), flush=True)
+                    if found["features"]:
+                        with open(os.path.join(part, "features.log"), "a") as log:
+                            done = subprocess.run([args.python, "-I", os.path.join(HERE, "build_features.py"),
+                                                   "--features", os.path.join(feat_dir, "features.json"),
+                                                   "--run", run_dir, "--port", str(args.port),
+                                                   "--tolerance", str(tolerance)],
+                                                  stdout=log, stderr=subprocess.STDOUT, timeout=1500)
+                        if done.returncode != 0:
+                            tail = open(os.path.join(part, "features.log")).read().splitlines()[-4:]
+                            print("    build_features.py exit %d: %s" % (done.returncode, " | ".join(tail)), flush=True)
+                            row["features"]["error"] = "build_features.py exit %d" % done.returncode
+                        else:
+                            built = json.load(open(os.path.join(run_dir, "summary.json"))).get("features", [])
+                            row["features"]["built"] = sum(1 for b in built if b.get("ok"))
+                            row["features"]["refused"] = [b["name"] for b in built if not b.get("ok")]
+                            print("    features built: %d of %d%s" % (
+                                row["features"]["built"], len(built),
+                                (" (refused: " + ", ".join(row["features"]["refused"]) + ")") if row["features"]["refused"] else ""),
+                                flush=True)
             summary = json.load(open(os.path.join(run_dir, "summary.json")))
             acc = summary["accuracy"]
             row.update({"ok": True, "valid": summary["check"]["valid"], "calls": summary["calls"],

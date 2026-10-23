@@ -46,7 +46,7 @@ import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from mcp_client import MCPClient, MCPError  # noqa: E402
-from fit_primitives import hollow_section, sketch_entities  # noqa: E402
+from fit_primitives import cavity_section, hollow_section, sketch_entities  # noqa: E402
 
 
 def unit(v):
@@ -83,6 +83,56 @@ def dedupe(points):
     return out
 
 
+def section_seed(loop):
+    """A point inside a closed (r, h) polygon: the midpoint of the longest
+    horizontal span between two crossings of a scan line through the
+    polygon's middle — never on an edge, never in a dish."""
+    pts = np.asarray(loop, dtype=float)
+    hs = sorted(set(np.round(pts[:, 1], 3)))
+    best = None
+    for frac in (0.5, 0.4, 0.6, 0.3, 0.7, 0.2, 0.8):
+        y = float(pts[:, 1].min() + frac * (pts[:, 1].max() - pts[:, 1].min()))
+        if any(abs(y - v) < 1e-6 for v in hs):
+            y += 0.37
+        xs = []
+        n = len(pts)
+        for i in range(n):
+            a, b = pts[i], pts[(i + 1) % n]
+            if (a[1] > y) != (b[1] > y):
+                xs.append(a[0] + (y - a[1]) * (b[0] - a[0]) / (b[1] - a[1]))
+        xs.sort()
+        for x0, x1 in zip(xs[0::2], xs[1::2]):
+            if best is None or x1 - x0 > best[0]:
+                best = (x1 - x0, (x0 + x1) / 2, y)
+        if best and best[0] > 2.0:
+            break
+    if best is None:
+        return [float(pts[:, 0].mean()), float(pts[:, 1].mean())]
+    return [float(best[1]), float(best[2])]
+
+
+def keep_off_axis(entities, margin=0.05):
+    """An arc carried to the axis ends a hair past it once its centre and
+    radius are rounded (u = −8e-5 on the bollard's dome), and a profile
+    that crosses the axis revolves to nothing (`emptyGeometry`). Pull any
+    arc end that lands under `margin` from the axis back onto u = margin,
+    by moving that end's angle along its own circle."""
+    for e in entities:
+        if e["kind"] != "arc":
+            continue
+        c, r = e["center"], e["radius"]
+        for key in ("startAngle", "endAngle"):
+            theta = e[key]
+            if c[0] + r * math.cos(theta) < margin and r > margin:
+                cos_t = (margin - c[0]) / r
+                if abs(cos_t) <= 1.0:
+                    candidate = math.acos(cos_t)
+                    # the branch (upper or lower half) nearest the old angle
+                    options = [candidate, -candidate, candidate + 2 * math.pi, -candidate + 2 * math.pi]
+                    e[key] = min(options, key=lambda t: abs(t - theta))
+    return entities
+
+
 def body_section(analysis):
     """The body's half-section to revolve — one answer for the build, the
     film (`demo_video.py take`) and the reel, so a film shows the model the
@@ -90,55 +140,67 @@ def body_section(analysis):
     at u = 0. Returns {"entities", "seed" (a point inside the loop), "note"
     (for the transcript), "hollow" ({wallMM, measuredWallMM, openEnd} for a
     container, else None), "outline" (the straightened profile closed along
-    the axis — the Pappus check's polygon)}."""
+    the axis — the Pappus check's polygon), "inner" (for a container: the
+    cavity's {entities, seed, note} to revolve and subtract after the
+    outer revolve, else None)}."""
     profile, height, body_r = analysis["profile"], analysis["heightMM"], analysis["bodyRadiusMM"]
     cleaned = dedupe([[0.0, 0.0]] + [[max(r, 0.0), h] for r, h in profile] + [[0.0, height]])
     segments = analysis.get("profileSegments")
     open_top = analysis.get("openTop")
     seed = [body_r * 0.5, height * 0.5]
     hollow = None
+    inner = None
+    loop = analysis.get("sectionLoop")
+    if loop and len(loop) >= 4:
+        # A dished part: the traced half-section is the sketch loop itself
+        # (a dish, a bore, two tyres on one hub all come with it).
+        pts = [[max(float(r), 0.0), float(hh)] for r, hh in loop]
+        entities = lines_for(dedupe(pts))
+        seed = section_seed(pts)
+        note = "{} lines: the traced half-section (a dished part), axis at u = 0".format(len(entities))
+        return {"entities": entities, "seed": seed, "note": note, "hollow": None, "outline": pts, "inner": None}
     if open_top and segments:
-        # A container: one revolve of a hollow half-section — the outer
-        # profile, the rim at the open end, the inner profile a wall in,
-        # and a floor at the closed end. (The kernel's shell offset
-        # refused the ribbed barrel at every thickness.)
+        # A container: the solid revolve of the outer profile, then the
+        # cavity — the outer profile eroded a wall in, from the floor to
+        # past the open rim — revolved and SUBTRACTED. (One hollow loop
+        # offset round a ribbed profile folded over itself; the kernel's
+        # shell refused the barrel at every thickness.)
         end = open_top.get("end", "top")
         min_r = min(min(s["a"][0], s["b"][0]) for s in segments)
-        # A wall thicker than the profile's smallest feature folds the
-        # inner offset over itself (the barrel's 13.7 mm "wall" — read
-        # off its rolled rim — against 4–8 mm steps and r 25 ribs): cap
-        # it at six tenths of the smallest step or arc, and under half
-        # the smallest radius.
-        sizes = [s["radius"] for s in segments if s["kind"] == "arc"]
-        sizes += [abs(s["b"][1] - s["a"][1]) for s in segments[1:-1]
-                  if s["kind"] == "line" and abs(s["b"][1] - s["a"][1]) >= 2.0]      # the runs between steps
-        wall = min(open_top["wallMM"], 0.45 * min_r)
-        if sizes:
-            wall = min(wall, 0.6 * min(sizes))
-        wall = float(max(1.5, wall))
-        entities = sketch_entities(hollow_section(segments, height, wall, end))
-        foot_r = segments[0]["a"][0] if end == "top" else segments[-1]["b"][0]
-        seed = [max(foot_r * 0.5, 1.0), wall * 0.5 if end == "top" else height - wall * 0.5]     # in the floor
-        arcs = sum(e["kind"] == "arc" for e in entities)
-        note = "{} entities ({} arcs): a hollow half-section, {} mm wall, open at the {}".format(
-            len(entities), arcs, round(wall, 1), end)
-        hollow = {"wallMM": wall, "measuredWallMM": open_top["wallMM"], "openEnd": end}
-    elif segments and any(s["kind"] == "arc" for s in segments):
+        wall = float(max(1.5, min(open_top["wallMM"], 0.45 * min_r)))
+        cavity, cavity_seed = cavity_section(segments, height, wall, end, floor_from_rim=open_top.get("depthMM"))
+        if cavity:
+            inner = {"entities": sketch_entities(cavity), "seed": cavity_seed,
+                     "note": "%d entities: the cavity, a %.1f mm wall in, open at the %s — revolved and subtracted" % (
+                         len(cavity), wall, end)}
+            hollow = {"wallMM": wall, "measuredWallMM": open_top["wallMM"], "openEnd": end}
+    if segments and any(s["kind"] == "arc" for s in segments):
         # Lines and arcs from the analysis (a dome is an arc), closed
         # along the axis: (0,0) → the profile's foot … its top → (0, height).
-        foot, top = segments[0]["a"], segments[-1]["b"]
+        foot = segments[0]["a"]
+        drawn = keep_off_axis(sketch_entities(segments))
+        # The profile's top, read off the last entity as drawn (an arc's end
+        # moves when it is kept off the axis); it closes to the axis at its
+        # own height, then down the axis.
+        last = drawn[-1]
+        if last["kind"] == "arc":
+            top = [last["center"][0] + last["radius"] * math.cos(last["endAngle"]),
+                   last["center"][1] + last["radius"] * math.sin(last["endAngle"])]
+        else:
+            top = last["b"]
+        top_axis = [0.0, round(float(top[1]), 4)]
         entities = ([{"kind": "line", "a": [0.0, 0.0], "b": [round(max(foot[0], 0.0), 4), round(foot[1], 4)]}]
-                    + sketch_entities(segments)
-                    + [{"kind": "line", "a": [round(max(top[0], 0.0), 4), round(top[1], 4)], "b": [0.0, round(float(height), 4)]},
-                       {"kind": "line", "a": [0.0, round(float(height), 4)], "b": [0.0, 0.0]}])
+                    + drawn
+                    + [{"kind": "line", "a": [round(max(top[0], 0.0), 4), round(top[1], 4)], "b": top_axis},
+                       {"kind": "line", "a": top_axis, "b": [0.0, 0.0]}])
         entities = [e for e in entities if e["kind"] != "line" or
-                    abs(e["a"][0] - e["b"][0]) > 1e-6 or abs(e["a"][1] - e["b"][1]) > 1e-6]
+                    math.hypot(e["a"][0] - e["b"][0], e["a"][1] - e["b"][1]) > 0.02]
         arcs = sum(e["kind"] == "arc" for e in entities)
         note = "{} entities ({} arcs): half the cross-section, axis at u = 0".format(len(entities), arcs)
     else:
         entities = lines_for(cleaned)
         note = "{} lines: half the cross-section, axis at u = 0".format(len(entities))
-    return {"entities": entities, "seed": seed, "note": note, "hollow": hollow, "outline": cleaned}
+    return {"entities": entities, "seed": seed, "note": note, "hollow": hollow, "outline": cleaned, "inner": inner}
 
 
 def boss_section(boss):
@@ -248,6 +310,20 @@ def build(args):
                          note="360° about the axis")
         cad_id = reply["producedBodyIDs"][0]
         cad = next(b for b in reply["bodies"] if b["id"] == cad_id)
+        if section["inner"]:
+            sk_in = mcp.os3d("sketch.create", dict(plane, name=args.label + " cavity"),
+                             note="the cavity's sketch, on the same axis plane")["sketchID"]
+            mcp.os3d("sketch.addEntities", {"sketchID": sk_in, "entities": section["inner"]["entities"]},
+                     note=section["inner"]["note"])
+            reply_in = mcp.os3d("feature.revolve", {"sketchID": sk_in, "seedPoint": section["inner"]["seed"],
+                                                    "axisPoint": [0, 0], "axisDirection": [0, 1], "angleDegrees": 360,
+                                                    "boolean": "subtract", "booleanTargets": [cad_id]},
+                                note="the cavity revolved 360° and subtracted: the container is hollow")
+            if reply_in.get("failed"):
+                print("   cavity cut did not build:", reply_in.get("message"))
+            else:
+                cad = next(b for b in reply_in["bodies"] if b["id"] == cad_id)
+                print("   cavity subtracted: volume %.0f → %.0f mm³" % (reply["bodies"][0]["volumeMM3"] if reply.get("bodies") else 0, cad["volumeMM3"]))
         # Pappus check: the revolve's volume from the profile's own area.
         area = 0.0
         cx = 0.0

@@ -552,6 +552,140 @@ and `blender_video.py`; `demo_video.py`, shot in the app itself, replaced
 them on 2026-10-20 and they were removed on 2026-10-21. `synthetic_hydrant.py`
 still uses Blender, to make the stand-in scan.)
 
+### The fine trace — how the profile got its detail (2026-10-22)
+
+"Almost none of the CAD models are good matches": the spray can had come
+out as four points — a cone for a shoulder, no crimp, no valve cup, no
+foot — because the trace read vertex *bands* 4–6 mm tall and simplified at
+2–2.5 mm. `analyze_scan.py` now traces the **surface**:
+
+- 200 000 points are sampled over the faces (seed 7) and added to the
+  vertices, so a low-poly can with one vertex row every 10 mm is read
+  between its rows too. Faces that look along the axis within 10° (ends,
+  shelves) are left out — a band through a flat top would read the disc's
+  spread of radii as the wall's — and only points facing **away** from the
+  axis (normal·radial > 0.2) define a band's radius: a bucket or a drum is
+  scanned inside as well as out, and the band used to land on whichever
+  wall had more points. The wall thickness is median(outward r) −
+  median(inward r) (`detect_open_top`).
+- `estimate_noise` reads the scanner's point noise off the cylinder bands
+  (half the 16–84 % spread inside a band × sector cell) and sets the band
+  at 3× that (1–4 mm). The profile's own noise is the 80th percentile of
+  the band medians' distance from a 12 mm running median, and sets the
+  simplifier at 2.5× that (0.4–2.5 mm; a noisy profile never finer than a
+  thousandth of the height, a clean one — a bollard's collar — keeps its
+  1 mm steps). `--band` and `--epsilon` default to `auto`;
+  `corpus/analysis-flags.json` holds per-part overrides.
+- An out-of-round body (a squashed pail, a dented drum: ±6–7 mm) is read
+  as its mean circle — the densest ±3 mm cluster of a sinusoid sits at an
+  extreme, so the band's radius is refined with a reach of 3 × 1.48 × MAD
+  of the sector medians. A lobed flange (a hydrant bonnet's bolt lugs,
+  8–14 mm between lobe and hollow on a 110 mm ring) keeps the radius the
+  band below settled on (`agreed_radius` continuity = max(6 mm, 8 %)), and
+  the running median smooths flips under a seventh of the radius.
+- Arcs (`arcs_in_polyline`): three vertices suffice on a fine trace; a
+  chord under 10 mm or a bow under max(2ε, 1 mm) is lines; a clean scan's
+  tolerance is max(4 × noise, 0.2, 0.6 % of the radius) plus a facet
+  allowance of gap²/8r for a low-poly mesh's chords, capped at 1.5
+  tolerances (a drum's 230 mm quad once excused a 21 mm residual). A dome's
+  arc is carried to the axis (tail ≤ max(4 bands, 12 mm, 0.2 R)); a
+  polyline that stops under the apex is carried to it.
+
+`body_section` (build_hydrant.py — the build, the film and the reel all
+revolve it): `keep_off_axis` pulls an arc end that rounding put at
+u = −8e-5 back to u = 0.05 (a profile across the axis revolves to
+`emptyGeometry`); `sketch_entities` snaps lines onto the arcs' *computed*
+ends and bridges arc-to-arc gaps (a 0.007 mm gap is "revolve profile
+unresolved" — the detector bridges nothing). A **container** is a solid
+revolve plus the cavity — the outer profile eroded a wall in
+(`fit_primitives.cavity_section`), from the floor (where the profile first
+reaches 0.9 × the widest it gets in the bottom quarter, one wall up) to
+5 mm past the open rim — revolved with `boolean: subtract`. The one hollow
+loop offset round a ribbed profile folded over itself; the kernel's shell
+refused the barrel at every wall.
+
+### Dished parts — the half-section tracer
+
+A truck's dual wheel (two tyres, a dished rim, a hub, an axle) has two
+rings in one band 400 mm apart with nothing between: one radius per
+height cannot say it. `surface_grid` collapses every point to (r, h)
+cells (cell = max(band, 2 mm)); a cell is surface when ≥ 35 % of the 24
+azimuth sectors reach it (a bracket or a handle fills a few and is left
+out). `is_dished` asks, on a stricter 60 % grid, for rows holding two ring
+runs more than 40 mm apart, on a part with no open end (a bucket's floor
+sits a wall in from its skin and is no dish). Then `trace_section` decides
+inside/outside from the 8 nearest surface cells' mean outward normals
+(a flood from the outside leaked through every hole in the scan; ray
+parity was fooled wherever the outline ran along the ray), fills holes,
+keeps the largest component, chains the cell edges into the outline,
+simplifies it at 0.9 cell and `refine_section` moves the axis-aligned runs
+onto the points' medians. `analysis["sectionLoop"]` is then the sketch
+loop itself (`body_section` seeds it with `section_seed`), and the lumps
+the boss detector found are left to the residual fit.
+
+### What the revolve cannot make — `fit_features.py` and `build_features.py`
+
+    python3 fit_features.py --scan run/scan.stl --model run/part-cad.stl --tolerance 2 --out features/
+    python3 build_features.py --features features/features.json --run run/ --port 8947
+
+`run_corpus.py` runs both after the revolve (`--no-features` skips;
+`FIT_DEBUG=1` is set so `<part>/features.log` says why each fit won or
+lost). The scan's triangles farther than max(4 mm, 2.5 tolerances) from
+the model are split by adjacency into pieces; a piece that is a *sheet*
+(95 % of it within max(2 far, 12 mm) of the model, or area > 25 × that
+distance²) is the body's own surface — an out-of-round wall — and is
+reported, not fitted. Each other piece is tried three ways and the best
+coverage wins (+0.08 for a sweep, +0.05 for a revolve; a sweep is kept
+from 25 % since each of its runs is proved on its own points, a revolve
+or a block from 50 %), and what it leaves uncovered is split and tried
+again to depth 3:
+
+- **sweep** — a handle, a hose, a strap. Rays from the points inward give
+  the chord, so the radius r₀; the points standing clear of the body
+  (> max(3 far, 2 r₀) — the lugs a wire hooks into and the rim they sit
+  on would tangle the path) are binned by geodesic distance from one end
+  on a kNN graph, a tube's width per bin with a score of points each, so
+  each bin's mean sits on the centreline and the order cannot double
+  back. Runs of one radius (±35 %) are each proved on their own points
+  (≥ 60 % within tolerance of the tube); a run whose radius grows
+  steadily is a **cone** and becomes a revolve about its own line (a CO₂
+  horn); runs of a steady radius within 1.6× of each other merge into
+  one sweep (a stein's handle, thick above, thin below); ends march in
+  1 mm steps into the body (`reach_body`) so the union fuses. The
+  section is a circle, or an oval written as the draughtsman's four
+  tangent arcs (`oval_entities`) — a true ellipse section sweeps to an
+  invalid shell ("boolean: the tool solid is invalid").
+- **revolve** — `fit_axis` on the piece, roundness per band (circle
+  residual ≤ max(2 tol, 12 %), centre within max(2 tol, 10 %)) on ≥ 60 %
+  of the bands, then the 75th-percentile radius per band (a thin horn
+  shows two skins), simplified; the end that meets the body runs 4 mm
+  past `far` into it.
+- **extrude** — PCA gives the plane and the thickness (3rd–97th
+  percentile along the thin axis); the outline is an alpha shape of the
+  projected points (alpha = max(3 × spacing, 1.5 mm, 0.6 t)), simplified,
+  turned into lines and arcs by `segments_from_loop`, extruded
+  symmetrically; a face that meets the body is grown into it. Covered
+  means within tolerance of the slab's *surface* — a face or the edge —
+  not merely inside it (a wire arch sits inside an 8 mm slab shaped like
+  itself without touching its faces).
+
+`build_features.py` builds the list into the revolved body over MCP with
+`boolean: union` (one sketch + one op each; a refused feature is undone
+with `edit.undo` and recorded), then re-runs check, the app's accuracy
+report and the exports; `summary.json` gains `features`. `demo_video.py
+take` and `reel.py` build the same list (the features the summary says
+were ok) through `build_features.build_feature`, each under its own
+caption, so a film shows the model the inspection graded.
+
+What this gave, 2026-10-22: the can PASS at 0.3 mm with every ring; the
+bollard PASS with its dome and collar; the mug its lid, handle and lever;
+the pail its wire handle and lugs; the CO₂ extinguisher its hose, horn
+and valve; the rusty one its carry handle; the dual wheel its tyres, dish
+and hub; the valve its stem, hand-wheel, side port and branch. The pail
+and the drum stay FAIL on depth: the scans are out of round by ±6–7 mm
+and a revolve cannot follow a squashed bucket — say so rather than chase
+it. The wheel's stand and the valve's threaded nipple are still rough.
+
 ## Gotchas
 
 - Import names the format from the file name's extension: pass

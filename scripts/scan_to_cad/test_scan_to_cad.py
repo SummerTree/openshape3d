@@ -192,7 +192,7 @@ class BodySectionTests(unittest.TestCase):
         self.assertIsNone(sec["hollow"])
         self.closed(sec["entities"])
 
-    def test_open_container_is_a_hollow_section_seeded_in_the_floor(self):
+    def test_open_container_is_a_solid_with_a_cavity_to_subtract(self):
         segments = [{"kind": "line", "a": [146.5, 0.0], "b": [166.4, 248.0]},
                     {"kind": "line", "a": [166.4, 248.0], "b": [189.4, 248.0]},
                     {"kind": "line", "a": [189.4, 248.0], "b": [186.5, 264.0]}]
@@ -201,14 +201,42 @@ class BodySectionTests(unittest.TestCase):
                     "openTop": {"end": "top", "wallMM": 3.0, "depthMM": 240.0}}
         sec = self.B.body_section(analysis)
         self.assertEqual(sec["hollow"], {"wallMM": 3.0, "measuredWallMM": 3.0, "openEnd": "top"})
-        self.assertAlmostEqual(sec["seed"][1], 1.5)                       # inside the floor, not the void
-        self.assertLess(sec["seed"][0], 146.5)
-        self.assertGreater(len(sec["entities"]), 2 * len(segments))       # outer, rim, inner, floor
-        self.assertIn("hollow", sec["note"])
+        # The outer loop is the solid revolve; the cavity is its own loop,
+        # a wall in, from the floor to past the rim, with its seed inside.
+        self.assertEqual([e["kind"] for e in sec["entities"]], ["line"] * 6)   # axis, foot, wall, rim top, lip, back
         self.closed(sec["entities"])
+        inner = sec["inner"]
+        self.assertIn("cavity", inner["note"])
+        self.closed(inner["entities"])
+        us = [e["a"][0] for e in inner["entities"]] + [e["b"][0] for e in inner["entities"]]
+        vs = [e["a"][1] for e in inner["entities"]] + [e["b"][1] for e in inner["entities"]]
+        self.assertLessEqual(max(us), 189.4 - 3.0 + 1e-6)
+        self.assertAlmostEqual(min(vs), 3.0)                               # the floor, one wall up
+        self.assertGreater(max(vs), 264.0)                                 # out through the open rim
+        self.assertLess(3.0, inner["seed"][1])
+        self.assertLess(inner["seed"][1], 264.0)
+        self.assertLess(inner["seed"][0], 146.5 - 3.0)
         # A measured wall wider than the part can hold is capped under half the smallest radius.
         analysis["openTop"]["wallMM"] = 100.0
         self.assertAlmostEqual(self.B.body_section(analysis)["hollow"]["wallMM"], 0.45 * 146.5)
+
+    def test_an_arc_ending_past_the_axis_is_kept_off_it(self):
+        # A dome arc whose rounded end lands at u = -8e-5 revolved to nothing.
+        arc = {"kind": "arc", "center": [8.8467, 1049.6848], "radius": 156.5869, "startAngle": 0.146325, "endAngle": 1.627324}
+        self.B.keep_off_axis([arc])
+        u = arc["center"][0] + arc["radius"] * math.cos(arc["endAngle"])
+        self.assertAlmostEqual(u, 0.05, places=4)
+        self.assertAlmostEqual(arc["startAngle"], 0.146325)                # the other end untouched
+
+    def test_section_loop_is_revolved_as_it_is(self):
+        loop = [[0.0, 0.0], [100.0, 0.0], [100.0, 40.0], [60.0, 40.0], [60.0, 20.0], [0.0, 20.0]]   # a dished disc
+        sec = self.B.body_section({"profile": [[100.0, 0.0], [100.0, 40.0]], "heightMM": 40.0, "bodyRadiusMM": 100.0,
+                                   "sectionLoop": loop})
+        self.assertEqual(len(sec["entities"]), 6)
+        self.assertIn("dished", sec["note"])
+        self.closed(sec["entities"])
+        u, v = sec["seed"]
+        self.assertTrue(0 < u < 100 and 0 < v < 40 and not (u < 60 and v > 20), sec["seed"])   # inside, not in the dish
 
     def test_boss_section_closes_along_its_axis(self):
         entities, seed = self.B.boss_section({"profile": [[10.0, 0.0], [10.0, 30.0], [10.0, 30.0], [14.0, 30.0], [14.0, 40.0]]})
@@ -218,6 +246,75 @@ class BodySectionTests(unittest.TestCase):
         self.assertEqual(len(entities), 6)                                 # the repeated point makes no line
         self.assertEqual(seed, [4.0, 12.0])
         self.closed(entities)
+
+
+@unittest.skipUnless(HAVE_DEPS, "needs the scan_to_cad venv (trimesh, numpy, scipy, rtree, pillow)")
+class TracerHelperTests(unittest.TestCase):
+    """analyze_scan's surface-grid helpers and the noise estimate."""
+
+    def test_is_dished_sees_a_wide_gap_but_not_a_wall(self):
+        import analyze_scan as A
+        wall = np.zeros((20, 60), dtype=bool)
+        wall[:, 50] = True
+        wall[:, 47] = True                                                   # two skins 3 cells apart
+        self.assertFalse(A.is_dished(wall, cell=2.0, min_gap_mm=40.0))
+        dish = wall.copy()
+        dish[5:15, 10] = True                                                # a hub ring far inside the tyre
+        self.assertTrue(A.is_dished(dish, cell=2.0, min_gap_mm=40.0))
+
+    def test_noise_of_a_clean_cylinder_is_small(self):
+        import analyze_scan as A
+        rng = np.random.default_rng(1)
+        n = 40000
+        h = rng.uniform(0, 100, n)
+        az = rng.uniform(-180, 180, n)
+        r = 50.0 + rng.normal(0, 0.05, n)
+        self.assertLess(A.estimate_noise(h, r, az), 0.15)
+        r2 = 50.0 + rng.normal(0, 1.5, n)
+        self.assertGreater(A.estimate_noise(h, r2, az), 0.8)
+
+    def test_cavity_of_a_drum_open_at_the_bottom_reaches_past_its_rim(self):
+        segs = [{"kind": "line", "a": [290.0, 0.0], "b": [290.0, 900.0]},
+                {"kind": "line", "a": [290.0, 900.0], "b": [100.0, 920.0]},
+                {"kind": "line", "a": [100.0, 920.0], "b": [100.0, 929.0]}]
+        loop, seed = F.cavity_section(segs, 929.0, 5.0, "bottom")
+        vs = [e["a"][1] for e in loop] + [e["b"][1] for e in loop]
+        us = [e["a"][0] for e in loop] + [e["b"][0] for e in loop]
+        self.assertLess(min(vs), 0.0)                                       # out through the open bottom
+        self.assertLess(max(vs), 929.0 - 5.0 + 1e-6)                        # the floor a wall in from the chime's top
+        self.assertLessEqual(max(us), 285.0 + 1e-6)
+        self.assertTrue(0 < seed[1] < 900 and 0 < seed[0] < 285)
+
+
+@unittest.skipUnless(HAVE_DEPS, "needs the scan_to_cad venv (trimesh, numpy, scipy, rtree, pillow)")
+class FeatureBuilderTests(unittest.TestCase):
+    def test_oval_is_four_tangent_arcs_spanning_the_axes(self):
+        import build_features as BF
+        ents = BF.oval_entities(16.0, 11.0)
+        self.assertEqual([e["kind"] for e in ents], ["arc"] * 4)
+        pts = []
+        for e in ents:
+            c, r = e["center"], e["radius"]
+            pts.append([(c[0] + r * math.cos(a), c[1] + r * math.sin(a)) for a in (e["startAngle"], e["endAngle"])])
+        for (_, b), (a2, _) in zip(pts, pts[1:] + pts[:1]):
+            self.assertLess(math.hypot(b[0] - a2[0], b[1] - a2[1]), 1e-3)   # tangent joins, closed
+        xs = [ents[0]["center"][0] + ents[0]["radius"], ents[2]["center"][0] - ents[2]["radius"]]
+        ys = [ents[1]["center"][1] + ents[1]["radius"], ents[3]["center"][1] - ents[3]["radius"]]
+        self.assertAlmostEqual(xs[0], 16.0, places=3)
+        self.assertAlmostEqual(xs[1], -16.0, places=3)
+        self.assertAlmostEqual(ys[0], 11.0, places=3)
+        self.assertAlmostEqual(ys[1], -11.0, places=3)
+        self.assertEqual(BF.oval_entities(10.0, 9.8)[0]["kind"], "circle")   # nearly round: a circle
+
+    def test_alpha_outline_of_a_plate_is_its_rectangle(self):
+        import fit_features as FF
+        rng = np.random.default_rng(2)
+        xy = np.column_stack([rng.uniform(0, 40, 3000), rng.uniform(0, 20, 3000)])
+        loop = FF.alpha_outline(xy, alpha=3.0)
+        self.assertIsNotNone(loop)
+        self.assertAlmostEqual(float(loop[:, 0].min()), 0.0, delta=1.0)
+        self.assertAlmostEqual(float(loop[:, 0].max()), 40.0, delta=1.0)
+        self.assertAlmostEqual(float(loop[:, 1].max()), 20.0, delta=1.0)
 
 
 def run_inspect(reference, model, out, tolerance, up="y"):

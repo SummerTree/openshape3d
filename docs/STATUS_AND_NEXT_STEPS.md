@@ -2,7 +2,7 @@
 
 > **Current unfinished-work register:** [Sketch parity open status](SKETCH_PARITY_OPEN_STATUS.md). Maintained at every meaningful checkpoint; older mission logs below are historical.
 
-Last updated: 2026-10-22 (the film and the reel revolve the build's own half-section — all ten corpus films and both reels re-taken on the rebuilt models; scan-to-CAD builds are now inspected both ways with depth maps and a review sheet — `inspect_fit.py`, gating the films and the reel; arcs and hollow revolves in the scan pipeline; a C-clamp rebuilt from recipes to 0.05 mm — the newest mission log bullet under 2026-10-20; a corpus of ten Sketchfab scans built over MCP, graded and filmed; CAD import over MCP: STEP and IGES sew loose faces into solids and sheet bodies, exact bounds, DXF units and ellipses, an open-mesh notice, and agents import STEP / IGES / DXF / FCStd; an OCCT oracle, a live MCP runner and offline XCTests behind it; test pack 36 / 36, FreeCAD IDF + NIST corpus 32 / 32, IGES twins 4 / 4 — newest mission log. Also today: Deviation Preview — the Accuracy Report's colours on the part; the scan's profile straightened; `item.select`) — **Accuracy Report** (one body measured against
+Last updated: 2026-10-22 (the fidelity pass: the scan trace reads the surface finely, containers get a subtracted cavity, dished parts a traced half-section, and `fit_features.py` / `build_features.py` add the handles, hoses, levers and chains a revolve cannot make — can and bollard PASS, the rest 88–97 % except the out-of-round pail and drum and the two-axis valve; the film and the reel revolve the build's own half-section — all ten corpus films and both reels re-taken on the rebuilt models; scan-to-CAD builds are now inspected both ways with depth maps and a review sheet — `inspect_fit.py`, gating the films and the reel; arcs and hollow revolves in the scan pipeline; a C-clamp rebuilt from recipes to 0.05 mm — the newest mission log bullet under 2026-10-20; a corpus of ten Sketchfab scans built over MCP, graded and filmed; CAD import over MCP: STEP and IGES sew loose faces into solids and sheet bodies, exact bounds, DXF units and ellipses, an open-mesh notice, and agents import STEP / IGES / DXF / FCStd; an OCCT oracle, a live MCP runner and offline XCTests behind it; test pack 36 / 36, FreeCAD IDF + NIST corpus 32 / 32, IGES twins 4 / 4 — newest mission log. Also today: Deviation Preview — the Accuracy Report's colours on the part; the scan's profile straightened; `item.select`) — **Accuracy Report** (one body measured against
 another: orthographic silhouette overlays per view, outline and surface
 deviation both ways; `Kernel/AccuracyKit.swift`, Views ▸ Accuracy Report…,
 `/v1/accuracy` + `/v1/accuracy/image`, MCP ops `accuracy` /
@@ -390,6 +390,28 @@ the zip in Downloads, on the real scan (`docs/SCAN_TO_CAD.md`).
   films and both reels were re-taken on the rebuilt models; the reel's
   control server now closes its socket between sessions and probes for a
   free port (the portrait pass had died on "Address already in use").
+- **"Almost none of the CAD models are good matches" (2026-10-22, the
+  fidelity pass, PR #116):** the trace had read vertex bands 4–6 mm tall
+  at a 2–2.5 mm simplifier, so a low-poly can was a four-point cone and a
+  bucket was traced on whichever wall had more points. `analyze_scan.py`
+  now samples the surface, keeps only outward-facing points, sets the
+  band from the scanner's point noise and the simplifier from the
+  profile's own noise, reads an oval body as its mean circle, holds a
+  lobed flange's radius, finds arcs on fine traces and carries a dome to
+  its apex; a dished part (the dual truck wheel) gets its whole
+  half-section traced from oriented surface cells. Containers are a solid
+  revolve plus a subtracted cavity (`cavity_section`; the floor and wall
+  from the open-end rays), arc ends are kept off the axis and every
+  junction is closed (a 0.007 mm gap was "revolve profile unresolved").
+  New `fit_features.py` / `build_features.py` fit what the revolve
+  missed — sweeps (a wire handle, a hose, a chain; oval sections as four
+  tangent arcs, a growing run as a cone), revolves, extrudes — and union
+  them in over MCP; the film and the reel build them too. Results: can
+  PASS 0.3 mm, bollard PASS, mug WARN 97 %, rusty extinguisher 97.6 %,
+  hydrant 95 %, CO₂ extinguisher 91 %, wheel 88 %, valve 64 %; the pail
+  and the drum stay FAIL on depth because the scans are out of round by
+  ±6–7 mm. 21 tests. `docs/SCAN_TO_CAD.md`: "The fine trace", "Dished
+  parts", "What the revolve cannot make".
 
 ## Open work — 2026-09-17
 
