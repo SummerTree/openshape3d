@@ -47,7 +47,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))
 sys.path.insert(0, HERE)
 from build_hydrant import body_section, boss_section, unit, world  # noqa: E402
-from build_features import build_feature  # noqa: E402
+from build_features import build_feature, shift_feature  # noqa: E402
 from demo_video import Recorder, caption, ffmpeg_watched, narrate, scan_on_floor, title_overlay  # noqa: E402
 from mcp_client import MCPClient, MCPError  # noqa: E402
 from run_corpus import BUNDLE, udid_for  # noqa: E402
@@ -129,7 +129,9 @@ def build_model(mcp, analysis, label, color, features=None):
                                      "boolean": "union", "booleanTargets": [cad]})
     # The fitted features the build built (features.json, the ones its
     # summary says were ok), so the reel shows the model the inspection graded.
+    delta = -np.array(analysis["axisOrigin"], dtype=float)         # the scan stands on the floor, axis origin at 0
     for n, feature in enumerate(features or [], 1):
+        feature = shift_feature(feature, delta)
         try:
             reply = build_feature(mcp, feature, cad, feature.get("name", "feature %d" % n), note=False)
             if reply.get("failed"):

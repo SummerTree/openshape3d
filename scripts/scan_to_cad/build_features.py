@@ -130,6 +130,21 @@ def build_feature(mcp, feature, cad_id, label, note=True):
     raise MCPError("feature", "unknown kind %r" % kind)
 
 
+def shift_feature(feature, delta):
+    """The feature moved by `delta` (mm): the film and the reel stand the
+    scan on the floor with its axis origin at the world origin, so a
+    feature fitted in the build's frame moves by −axisOrigin to match."""
+    delta = np.asarray(delta, dtype=float)
+    f = json.loads(json.dumps(feature))
+    if f["kind"] == "sweep":
+        f["spine"] = [[float(v) for v in (np.asarray(p, dtype=float) + delta)] for p in f["spine"]]
+    elif f["kind"] == "revolve":
+        f["axis"]["origin"] = [float(v) for v in (np.asarray(f["axis"]["origin"], dtype=float) + delta)]
+    elif f["kind"] == "extrude":
+        f["plane"]["origin"] = [float(v) for v in (np.asarray(f["plane"]["origin"], dtype=float) + delta)]
+    return f
+
+
 def feature_caption(feature):
     """What a film's caption says for a feature."""
     kind = feature["kind"]

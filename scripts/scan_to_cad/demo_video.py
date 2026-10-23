@@ -116,7 +116,7 @@ def take(args):
     with open(os.path.join(args.analysis, "profile.json")) as f:
         analysis = json.load(f)
     from build_hydrant import body_section, boss_section, unit, world
-    from build_features import build_feature, feature_caption
+    from build_features import build_feature, feature_caption, shift_feature
     from mcp_client import MCPError
     spec = args.spec or {}
     label = spec.get("label", "Hydrant")
@@ -265,7 +265,9 @@ def take(args):
                     with open(summary_path) as f:
                         ok_names = {b["name"] for b in json.load(f).get("features", []) if b.get("ok")}
                     found = [ft for ft in found if ft.get("name") in ok_names]
-                built = found
+                # The scan stands on the floor with its axis origin at the
+                # world origin; the features were fitted in the build's frame.
+                built = [shift_feature(ft, -np.array(analysis["axisOrigin"], dtype=float)) for ft in found]
             for n, feature in enumerate(built, 1):
                 beat("feature%d" % n, captions.get("feature") or feature_caption(feature))
                 try:
