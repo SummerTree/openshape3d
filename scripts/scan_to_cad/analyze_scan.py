@@ -412,7 +412,9 @@ def detect_open_top(mesh, origin, axis, u, v, height, radii_ends, bands, radius,
         share = (lost + deep_front) / float(len(origins))
         if share >= 0.6 and shallow_front < 0.2 * len(origins):
             deep_vals = travelled[travelled > deep_limit]
-            depth = float(np.median(deep_vals) - lift) if len(deep_vals) else height
+            # The floor is where the deepest tenth of the rays stop: a
+            # drum's bottom is a recessed disc inside a raised chime ring.
+            depth = float(np.percentile(deep_vals, 90) - lift) if len(deep_vals) else height
             found.append((end, r_end, share, depth))
     if not found:
         return None
@@ -426,7 +428,8 @@ def detect_open_top(mesh, origin, axis, u, v, height, radii_ends, bands, radius,
     inward = -1 if end == "top" else 1
     # Well clear of the rim: a drum's rolled lip is 14 mm thick where its
     # wall is 5, so the window starts 30 mm in and runs to 80 mm.
-    lo, hi = sorted((rim_h + inward * max(2 * band_mm, 30.0), rim_h + inward * max(7 * band_mm, 80.0)))
+    span_in = min(0.25 * height, 200.0)
+    lo, hi = sorted((rim_h + inward * max(2 * band_mm, 0.4 * span_in), rim_h + inward * max(7 * band_mm, span_in)))
     window = [b["median"] for b in bands if lo <= b["h"] <= hi]
     body = float(np.median(window)) if window else r_end
     sel = (h > lo) & (h < hi)
