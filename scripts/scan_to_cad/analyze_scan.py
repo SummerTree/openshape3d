@@ -238,10 +238,20 @@ def axis_quality(points, origin, axis, bands=40):
     return on_circle / counted if counted else 0.0
 
 
-def choose_axis(points, choice="auto"):
+def choose_axis(points, choice="auto", extra=None, axis_origin=None):
     """The part's axis: every principal direction refined by `fit_axis`,
     the roundest kept (see `axis_quality`); or the one `choice` names.
+    `extra` are more candidates, as (point, direction) pairs already
+    refined (the axis finder's), tried as they are when no principal
+    direction is clean (quality under 0.75 — a valve, whose principal
+    direction is the diagonal between its body and its pipe). With
+    `axis_origin` and a fixed direction ("x,y,z!") nothing is fitted.
     Returns (origin, axis, {candidate: quality})."""
+    if axis_origin is not None and choice not in ("auto", "largest", "middle", "smallest") and choice.endswith("!"):
+        axis = np.array([float(x) for x in choice.rstrip("!").split(",")])
+        axis /= np.linalg.norm(axis)
+        origin = np.asarray(axis_origin, dtype=float)
+        return origin, axis, {choice: axis_quality(points, origin, axis)}
     _, vectors, values = principal_axis(points)
     order = np.argsort(values)[::-1]
     candidates = {"largest": vectors[:, order[0]], "middle": vectors[:, order[1]], "smallest": vectors[:, order[2]]}
@@ -269,10 +279,17 @@ def choose_axis(points, choice="auto"):
         origin, axis = fit_axis(points, guess)
         tried[name] = (axis_quality(points, origin, axis), origin, axis)
     best = max(tried, key=lambda k: tried[k][0])
+    if choice == "auto" and extra and tried[best][0] < 0.75:
+        for i, (c, d) in enumerate(extra):
+            c, d = np.asarray(c, dtype=float), np.asarray(d, dtype=float)
+            tried["axes%d" % i] = (axis_quality(points, c, d), c, d / np.linalg.norm(d))
+        better = max(tried, key=lambda k: tried[k][0])
+        if tried[better][0] > tried[best][0] + 0.03:
+            best = better
     return tried[best][1], tried[best][2], {k: round(q, 3) for k, (q, _, _) in tried.items()}
 
 
-def agreed_radius(values, window=3.0, previous=None, min_share=0.06, continuity_mm=6.0):
+def agreed_radius(values, window=3.0, previous=None, min_share=0.06, continuity_mm=6.0, sector_medians=None):
     """The centre of the densest cluster of `values`: the value most others
     sit within `window` of, then the median of that cluster. Ties go to the
     smaller value — a body, not a lump on it. With `previous` (the band
@@ -292,6 +309,25 @@ def agreed_radius(values, window=3.0, previous=None, min_share=0.06, continuity_
         count = len(cluster_of(v))
         if count > best_count:
             best, best_count = v, count
+    if previous is not None and sector_medians is not None:
+        # A cluster that runs round most of the circle in one piece is a
+        # ring — a hand-wheel's rim above a thin stem — and the band's
+        # radius, continuity or not. Three nozzle caps fill as many
+        # sectors, but in three pieces with the barrel between them.
+        sm = np.asarray(sector_medians, dtype=float)
+        on = np.abs(sm - best) <= window
+        on[np.isnan(sm)] = False
+        if on.any() and not on.all():
+            runs, run = [], 0
+            doubled = np.concatenate([on, on])
+            for flag in doubled:
+                run = run + 1 if flag else 0
+                runs.append(run)
+            longest = min(max(runs), int(on.sum()))
+        else:
+            longest = int(on.sum())
+        if longest >= 0.5 * len(sm):
+            return float(np.median(cluster_of(best)))
     if previous is not None:
         near = values[np.argmin(np.abs(values - previous))]
         members = cluster_of(near)
@@ -559,6 +595,105 @@ def is_dished(surface, cell, min_gap_mm=20.0):
     return False
 
 
+def find_windows(h, radius, azimuth, cell, n_radial, n_axial, min_share=0.65, sectors=24, min_gap_mm=6.0, max_gap_mm=60.0, min_rows=3,
+                 spoke_sectors=48):
+    """Where one radius per height is a disc but the part is a wheel: rows
+    of the (r, h) grid that hold a run of ring cells near the axis (the
+    hub) and, past a gap of 6–60 mm that fewer than 65 % of the sectors
+    reach (only the spokes), another run (the rim). Consecutive such rows
+    with the same gap are a window — the annulus between hub and rim over
+    those heights — and the spokes are where the points in that annulus
+    are: the runs of sectors holding at least 30 % of the busiest sector's
+    points. What lies between the spokes are the openings, for the build
+    to cut out of the revolve (each a partial revolve of the annulus,
+    half a sector short of the spokes on each side). The hub must face
+    OUT: a bore's wall faces in, and the solid between a bore and the
+    outer skin is no window. A solid flange has no hub run beside it and
+    keeps its disc; a thin wall's two skins are a cell or two apart and
+    do not count; a disc with no spokes to speak of (fewer than two) is
+    left alone. Returns [{h0, h1, rInnerMM, rOuterMM, rows, spokes,
+    openings: [[from°, span°], …]}]."""
+    # The spokes are read on a finer wheel of sectors than the surface
+    # grid's: five spokes leave openings under 60° each.
+    si = ((azimuth + 180) / (360.0 / spoke_sectors)).astype(int) % spoke_sectors
+    surface, normals = surface_grid(h, radius, azimuth, cell, sectors=sectors, min_share=min_share,
+                                    n_radial=n_radial, n_axial=n_axial)
+    rows = []
+    for i, row in enumerate(surface):
+        idx = np.flatnonzero(row)
+        if len(idx) < 2:
+            continue
+        runs, start = [], idx[0]
+        for a, b in zip(idx[:-1], idx[1:]):
+            if b != a + 1:
+                runs.append((start, a))
+                start = b
+        runs.append((start, idx[-1]))
+        if len(runs) < 2:
+            continue
+        (a0, a1), (b0, b1) = runs[0], runs[1]
+        gap = (b0 - a1 - 1) * cell
+        if gap < min_gap_mm or gap > max_gap_mm:
+            continue
+        if normals[i, a1, 0] < 0.3:
+            continue                                       # the inner run faces in: a bore, not a hub
+        rows.append((i, (a1 + 1) * cell, b0 * cell))
+    windows, group = [], []
+
+    def close(group):
+        if len(group) < min_rows:
+            return
+        h0, h1 = group[0][0] * cell, (group[-1][0] + 1) * cell
+        r_in, r_out = float(np.median([g[1] for g in group])), float(np.median([g[2] for g in group]))
+        # The spokes: where the middle half of the annulus has points,
+        # sector by sector (its edges hold the hub's and the rim's skins,
+        # all the way round).
+        quarter = 0.25 * (r_out - r_in)
+        inside = (h >= h0) & (h < h1) & (radius >= r_in + quarter) & (radius < r_out - quarter)
+        counts = np.bincount(si[inside], minlength=spoke_sectors)
+        if counts.max() < 10:
+            return
+        spoke = counts >= 0.3 * counts.max()
+        if spoke.all() or not spoke.any():
+            return
+        # Runs of spoke sectors, wrapping round.
+        start = int(np.argmin(spoke))                  # a sector with no spoke, to start between runs
+        order = [(start + k) % spoke_sectors for k in range(spoke_sectors)]
+        runs, run = [], []
+        for k in order:
+            if spoke[k]:
+                run.append(k)
+            elif run:
+                runs.append(run)
+                run = []
+        if run:
+            runs.append(run)
+        if len(runs) < 2:
+            return
+        width = 360.0 / spoke_sectors
+        edges = []
+        for run in runs:
+            a = (run[0] * width - 180.0) - width / 2          # the run's first sector's start, half a sector of margin
+            b = (run[-1] * width - 180.0 + width) + width / 2   # its last sector's end, plus the margin
+            edges.append((a, b))
+        openings = []
+        for (a, b), (c, d) in zip(edges, edges[1:] + edges[:1]):
+            span = (c - b) % 360.0
+            if span >= 2 * width:
+                openings.append([round(((b + 180.0) % 360.0) - 180.0, 1), round(span, 1)])   # [from°, span°]
+        if not openings:
+            return
+        windows.append({"h0": round(h0, 2), "h1": round(h1, 2), "rInnerMM": round(r_in, 2), "rOuterMM": round(r_out, 2),
+                        "rows": len(group), "spokes": len(runs), "openings": openings})
+    for row in rows:
+        if group and (row[0] - group[-1][0] > 2 or abs(row[1] - group[-1][1]) > 1.5 * cell or abs(row[2] - group[-1][2]) > 1.5 * cell):
+            close(group)
+            group = []
+        group.append(row)
+    close(group)
+    return windows
+
+
 def trace_section(h, radius, azimuth, cell, sectors=24, min_share=0.35, dilate=1, surface=None, normals=None):
     """The body of revolution's full half-section, for a part one radius per
     height cannot describe — a dished wheel, a cup inside a cup. The
@@ -674,22 +809,81 @@ def refine_section(points, h, radius, cell):
 
 
 def analyze(mesh, band_mm=None, lump_margin_mm=6.0, out_dir=None, name="scan", epsilon=None, debug=False,
-            axis_choice="auto", flip=False, samples=200000):
+            axis_choice="auto", flip=False, samples=200000, multi=True, secondary=False, axis_origin=None):
+    """The scan as a body of revolution: its axis, the profile along it,
+    the bosses off it. With `multi`, the axis finder (`fit_axes`) looks for
+    more bodies of revolution first — a valve's pipe, branches and side
+    port on their own axes — and each is traced on its own (this function
+    again, `secondary=True`: no ground trim, no bosses, no flip, the given
+    axis kept) and listed under `bodies`; the main trace then sees only
+    the faces that are the main body's or nobody's."""
     points = np.asarray(mesh.vertices, dtype=float)
-    origin, axis, qualities = choose_axis(points, axis_choice)
+    selection, pool, face_labels, trace_faces = None, None, None, None
+    extra = None
+    if multi and not secondary:
+        import fit_axes
+        pool = fit_axes.propose_axes(mesh)
+        extra = [(c, d) for (c, d, _sel, _dist, _close) in pool["candidates"][:4]]
+    origin, axis, qualities = choose_axis(points, axis_choice, extra=extra, axis_origin=axis_origin)
     print("axis candidates (share of vertices on their slice's circle):",
           ", ".join("%s %.2f" % kv for kv in sorted(qualities.items(), key=lambda kv: -kv[1])))
+    if pool is not None:
+        # The main axis: the tracer's own choice when a principal direction
+        # is clean (quality 0.75: a mug, a can), else the finder's strongest
+        # body of revolution, if it holds a good share of the surface — the
+        # roundness score cannot tell a valve's body from the diagonal
+        # between its body and its pipe (0.64 against 0.65), the finder's
+        # rings can (31 % of the surface against 4 %).
+        free = fit_axes.select_axes(pool)
+        best_q = max(qualities.values()) if qualities else 0.0
+        if axis_choice == "auto" and best_q < 0.75 and free["axes"] and free["axes"][0]["share"] >= 0.15:
+            strongest = free["axes"][0]
+            d0 = np.asarray(strongest["direction"])
+            if abs(d0 @ axis) < math.cos(math.radians(5.0)):
+                print("main axis: the finder's strongest body (%.0f%% of the surface, direction %s) over the principal direction (quality %.2f)" % (
+                    100 * strongest["share"], np.round(d0, 3), best_q))
+            origin = np.asarray(strongest["origin"], dtype=float)
+            axis = d0 if d0 @ axis >= 0 else -d0
+            selection = free
+        else:
+            selection = fit_axes.select_axes(pool, main=(origin, axis))
+        found = selection["axes"]
+        if found:
+            # The finder's own origin for the main axis (its normal lines'
+            # least squares; the ring-centre mean sits beside a valve's body).
+            main = found[0]
+            d_main = np.asarray(main["direction"])
+            origin = np.asarray(main["origin"], dtype=float)
+            axis = d_main if d_main @ axis >= 0 else -d_main
+        if len(found) >= 2:
+            face_labels = fit_axes.label_faces(mesh, selection)
+            trace_faces = np.where(face_labels <= 0)[0]
+            for k, ax in enumerate(found):
+                print("body %d: %4.1f%% of the surface, direction %s, %.0f mm long, radius ~%.1f mm%s" % (
+                    k, 100 * ax["share"], np.round(ax["direction"], 3), ax["lengthMM"], ax["radiusMM"],
+                    "" if ax["parent"] is None else ", into body %d (%s)" % (ax["parent"], ax["junction"])))
 
     h = (points - origin) @ axis
     perp = (points - origin) - np.outer(h, axis)
     radius = np.linalg.norm(perp, axis=1)
 
-    # Which way is up: the end with the larger radius is the base.
+    # Which way is up: the scan's own +Y when the axis is near it (glTF
+    # and the app agree on Y up; a valve's hand-wheel is wider than its
+    # base), else the end with the larger radius is the base. `flip`
+    # inverts either. A secondary body keeps the direction it was given.
     lo, hi = np.percentile(h, 1), np.percentile(h, 99)
     span = hi - lo
     low_r = np.median(radius[h < lo + span * 0.08])
     high_r = np.median(radius[h > hi - span * 0.08])
-    if (low_r < high_r) != bool(flip):
+    if abs(axis[1]) > math.cos(math.radians(30.0)):
+        base_at_low = axis[1] > 0
+    else:
+        base_at_low = not (low_r < high_r)
+    if flip:
+        base_at_low = not base_at_low
+    if secondary:
+        base_at_low = True
+    if not base_at_low:
         axis = -axis
         h = -h
         perp = (points - origin) - np.outer(h, axis)
@@ -701,14 +895,24 @@ def analyze(mesh, band_mm=None, lump_margin_mm=6.0, out_dir=None, name="scan", e
     bottom = np.percentile(h, 0.5)
     edges = np.arange(bottom, h.max() + trim_band, trim_band)
     spread = []
+    # Judged on the main body's own points when the finder labelled the
+    # faces: a pipe's hex nut 100 mm out from a valve's axis read as a
+    # sidewalk and took the base block with it.
+    if face_labels is not None:
+        own_v = np.zeros(len(points), dtype=bool)
+        own_v[np.unique(np.asarray(mesh.faces)[face_labels == 0])] = True
+    else:
+        own_v = np.ones(len(points), dtype=bool)
     for i in range(len(edges) - 1):
-        sel = (h >= edges[i]) & (h < edges[i + 1])
+        sel = (h >= edges[i]) & (h < edges[i + 1]) & own_v
         spread.append(np.percentile(radius[sel], 80) - np.percentile(radius[sel], 20) if sel.sum() >= 20 else np.nan)
     spread = np.array(spread)
     base_index = 0
     for i in range(min(12, len(spread))):
         if not np.isnan(spread[i]) and spread[i] > 60:
             base_index = i + 1
+    if secondary:
+        base_index = 0
     base_h = edges[base_index]
     # The scan without its ground: every triangle whose corners all sit
     # above the trim. The comparison and the film use this copy, so the
@@ -720,10 +924,27 @@ def analyze(mesh, band_mm=None, lump_margin_mm=6.0, out_dir=None, name="scan", e
         cropped = mesh.copy()
         cropped.update_faces(keep_v[faces].all(axis=1))
         cropped.remove_unreferenced_vertices()
+    # The trace's own mesh: with other bodies of revolution found, only
+    # the faces that are the main body's or nobody's (a pipe's rings in
+    # the body's bands made a drum of the body).
+    trace = mesh if trace_faces is None else mesh.submesh([np.asarray(trace_faces)], append=True)
+    if trace_faces is not None:
+        points = np.asarray(trace.vertices, dtype=float)
+        h = (points - origin) @ axis
+        perp = (points - origin) - np.outer(h, axis)
+        radius = np.linalg.norm(perp, axis=1)
     keep = h >= base_h
-    normals = np.asarray(mesh.vertex_normals, dtype=float)[keep]
+    normals = np.asarray(trace.vertex_normals, dtype=float)[keep]
     points, h, perp, radius = points[keep], h[keep] - base_h, perp[keep], radius[keep]
     origin = origin + axis * base_h
+    trace_cropped = trace
+    if base_index > 0 and trace_faces is not None:
+        tv = (np.asarray(trace.vertices, dtype=float) - (origin - axis * base_h)) @ axis >= base_h
+        trace_cropped = trace.copy()
+        trace_cropped.update_faces(tv[np.asarray(trace.faces)].all(axis=1))
+        trace_cropped.remove_unreferenced_vertices()
+    elif base_index > 0:
+        trace_cropped = cropped
     # The mesh's vertex rows (heights where a low-poly mesh actually has
     # vertices): the arc finder allows the facets between them their chord.
     row_heights = np.unique(np.round(h, 0))
@@ -735,7 +956,7 @@ def analyze(mesh, band_mm=None, lump_margin_mm=6.0, out_dir=None, name="scan", e
     # flange's shelf, the floor of a mug — are left out, since a band
     # through a flat end would read the disc's spread of radii as the
     # wall's, and the shelves come out as the radius steps anyway.
-    source = cropped if cropped is not None else mesh
+    source = trace_cropped
     apex_h = float(h.max())        # the scan's true top, before any face is left out
     if samples and len(source.faces):
         sampled, face_index = trimesh.sample.sample_surface(source, int(samples), seed=7)
@@ -818,7 +1039,7 @@ def analyze(mesh, band_mm=None, lump_margin_mm=6.0, out_dir=None, name="scan", e
         # still agree with each other to a millimetre, and the cluster
         # finds them however many sectors the lumps take.
         agreed = smed[~np.isnan(smed)]
-        body = agreed_radius(agreed, previous=previous_body) if len(agreed) >= 4 else float(np.median(r))
+        body = agreed_radius(agreed, previous=previous_body, sector_medians=smed) if len(agreed) >= 4 else float(np.median(r))
         # An out-of-round body (a dented barrel, a squashed pail) spreads
         # its sectors over more than the cluster's ±3 mm, and the densest
         # cluster of a sinusoid sits at an extreme; widen to the scan's own
@@ -838,6 +1059,19 @@ def analyze(mesh, band_mm=None, lump_margin_mm=6.0, out_dir=None, name="scan", e
                       "sectors": int(len(agreed)), "gapDeg": round(gap_deg, 1)})
         grid_max.append(smax)
         grid_med.append(smed)
+    # A gap in the bands (the stem under a hand-wheel, hidden from the
+    # scanner; a bore no ray reached) is not a cone from the band below to
+    # the band above: the lower band's radius is carried up to the gap's
+    # end, where the profile steps.
+    filled = []
+    for i, b in enumerate(bands):
+        if filled and b["h"] - filled[-1]["h"] > 3.0 * band_mm:
+            below = filled[-1]
+            filled.append(dict(below, h=float(b["h"] - band_mm), count=0, gapDeg=0.0, filler=True))
+            grid_max.insert(len(filled) - 1, grid_max[len(filled) - 2])
+            grid_med.insert(len(filled) - 1, grid_med[len(filled) - 2])
+        filled.append(b)
+    bands = filled
     # The part ends where the rings do: a bucket's handle arches on above
     # the rim, a few sectors wide, and its "radius" shrinking toward the
     # apex read as a dome over the bucket. Bands with points in fewer than
@@ -1116,6 +1350,27 @@ def analyze(mesh, band_mm=None, lump_margin_mm=6.0, out_dir=None, name="scan", e
         else:
             merged.append(b)
     bosses = merged
+    if secondary:
+        bosses = []
+    if selection is not None and len(selection["axes"]) >= 2 and bosses:
+        # A lump that is a traced body (the pipe off a valve) is no boss.
+        kept = []
+        for b in bosses:
+            d_b = math.cos(math.radians(b["azimuthDeg"])) * u + math.sin(math.radians(b["azimuthDeg"])) * v
+            explained = False
+            for k, ax in enumerate(selection["axes"][1:], 1):
+                d_k = np.asarray(ax["direction"])
+                if abs(d_k @ d_b) < math.cos(math.radians(35.0)):
+                    continue
+                c_k = np.asarray(ax["origin"]) + d_k * (ax["junctionH"] if ax.get("junctionH") is not None else 0.0)
+                h_k = float((c_k - origin) @ axis)
+                if abs(h_k - b["centerHeightMM"]) <= max(30.0, 1.5 * ax["radiusMM"]):
+                    explained = True
+                    print("boss az %.0f h %.0f is body %d, traced on its own axis" % (b["azimuthDeg"], b["centerHeightMM"], k))
+                    break
+            if not explained:
+                kept.append(b)
+        bosses = kept
 
     # The revolve starts where the scan has solid coverage: the bottom of a
     # standing scan thins out into the ground, and a few sparse bands there
@@ -1127,7 +1382,7 @@ def analyze(mesh, band_mm=None, lump_margin_mm=6.0, out_dir=None, name="scan", e
     # not take everything under it with it.
     first = 0
     for i, b in enumerate(bands):
-        if b["h"] > 150 or counts[i] >= 0.3 * typical:
+        if secondary or b["h"] > 150 or counts[i] >= 0.3 * typical:
             break
         first = i + 1
     if first:
@@ -1212,6 +1467,23 @@ def analyze(mesh, band_mm=None, lump_margin_mm=6.0, out_dir=None, name="scan", e
                                         row_heights=row_heights, tol_per_radius=0.0 if noise > 0.25 else 0.006,
                                         min_sagitta=max(2 * epsilon, 1.0))
             if s["kind"] == "arc"]
+    # A curve is taller than it is wide, or near enough: an "arc" from a
+    # 6 mm stem out to a 34 mm rim that rises 2 mm is a step with a band
+    # caught between, and one from a rim's top edge in to its hub over
+    # 5 mm is the flat top with the hub's foot — three points on a step
+    # fit a circle as well as a quarter-round does. A dome rises about
+    # its own radius; a shoulder rises more than a third of what it
+    # narrows by.
+    def tall_enough(arc):
+        dr = abs(arc["a"][0] - arc["b"][0])
+        dh = abs(arc["a"][1] - arc["b"][1])
+        return dh >= max(3.0 * band_mm, 0.4 * dr)
+    for arc in arcs:
+        if not tall_enough(arc):
+            print("profile: an arc r %.0f over h %.0f–%.0f is a step (rises %.1f mm over %.1f mm of radius), kept as lines" % (
+                arc["radius"], min(arc["a"][1], arc["b"][1]), max(arc["a"][1], arc["b"][1]),
+                abs(arc["a"][1] - arc["b"][1]), abs(arc["a"][0] - arc["b"][0])))
+    arcs = [arc for arc in arcs if tall_enough(arc)]
     arcs.sort(key=lambda s: min(s["a"][1], s["b"][1]))
     spliced = []
     rest = list(simplified)
@@ -1262,13 +1534,20 @@ def analyze(mesh, band_mm=None, lump_margin_mm=6.0, out_dir=None, name="scan", e
                     simplified = [p for p in simplified if p[1] <= last["a"][1] + 1e-6] + [(0.0, apex_h)]
                 height = apex_h
                 print("profile: the top arc is carried to the axis at h %.1f (its apex)" % apex_h)
-    if segments and segments[-1]["kind"] == "line" and apex_h - height > 0.5:
+    if segments and segments[-1]["kind"] == "line" and apex_h - height > 0.5 and not secondary:
         top_r = segments[-1]["b"][0]
-        if 0 < top_r < 0.5 * float(body_r.max()):
+        gap = apex_h - height
+        # Only a cap's worth: the last band under a dome's crown is a few
+        # millimetres under the apex. A valve's lever 76 mm above the last
+        # ring, an extinguisher's handle 97 mm above it, came out as spikes
+        # to the apex; they are the residual fit's.
+        if 0 < top_r < 0.5 * float(body_r.max()) and gap <= max(2.0 * band_mm, 0.6 * top_r):
             segments.append({"kind": "line", "a": [float(top_r), float(height)], "b": [0.0, float(apex_h)]})
             simplified = list(simplified) + [(0.0, float(apex_h))]
             print("profile: the top is carried from r %.0f at h %.1f to the apex at h %.1f" % (top_r, height, apex_h))
             height = float(apex_h)
+        elif 0 < top_r < 0.5 * float(body_r.max()):
+            print("profile: the top %.0f mm above the last ring (r %.0f) is not a cap; left to the feature fit" % (gap, top_r))
     if arcs:
         print("profile: %d arcs (%s)" % (len(arcs), ", ".join("r %.0f over h %.0f–%.0f" % (
             s["radius"], min(s["a"][1], s["b"][1]), max(s["a"][1], s["b"][1])) for s in arcs)))
@@ -1276,8 +1555,8 @@ def analyze(mesh, band_mm=None, lump_margin_mm=6.0, out_dir=None, name="scan", e
     # axis from above hit the inside bottom, not a top. Then the revolve is
     # shelled, at the rim's wall thickness.
     ends = (float(simplified[0][0]), float(simplified[-1][0])) if simplified else (float(body_r[0]), float(body_r[-1]))
-    open_top = detect_open_top(cropped if cropped is not None else mesh, origin, axis, u, v, height, ends,
-                               bands, radius, h, facing=facing)
+    open_top = None if secondary else detect_open_top(cropped if cropped is not None else mesh, origin, axis, u, v,
+                                                      height, ends, bands, radius, h, facing=facing)
     if open_top:
         print("open %s: rays from outside fall %.0f mm in (or through) on %.0f%% of that end; wall %.1f mm — the revolve will be shelled" % (
             open_top["end"], open_top["depthMM"], open_top["share"] * 100, open_top["wallMM"]))
@@ -1295,8 +1574,14 @@ def analyze(mesh, band_mm=None, lump_margin_mm=6.0, out_dir=None, name="scan", e
     # An open container's floor sits a wall's thickness in from its skin
     # and is no dish: the test wants a gap of 40 mm, on a part with no
     # open end (a bucket and a drum keep their band trace and cavity cut).
-    dished = (not open_top) and is_dished(surface_grid(h, radius, azimuth, cell, min_share=0.6), cell, min_gap_mm=40.0)
+    dished = (not open_top) and (not secondary) and is_dished(surface_grid(h, radius, azimuth, cell, min_share=0.6), cell, min_gap_mm=40.0)
     section_loop = None
+    # A ring on a hub (a hand-wheel) within a part that is otherwise one
+    # radius per height: the annulus between them is a window to cut.
+    windows = [] if (open_top or secondary or dished) else find_windows(h, radius, azimuth, cell, n_radial, n_axial)
+    for w in windows:
+        print("window: a wheel over h %.0f–%.0f — %d spokes between hub r %.0f and rim r %.0f, %d openings cut out" % (
+            w["h0"], w["h1"], w["spokes"], w["rInnerMM"], w["rOuterMM"], len(w["openings"])))
     if dished:
         pts_loop, solid_mask, surface_mask = trace_section(h, radius, azimuth, cell, surface=surface_mask,
                                                            normals=cell_normals)
@@ -1328,10 +1613,17 @@ def analyze(mesh, band_mm=None, lump_margin_mm=6.0, out_dir=None, name="scan", e
         "profile": [[round(r, 2), round(hh, 2)] for r, hh in simplified],
         "profileSegments": segments,
         "sectionLoop": section_loop,
+        "windows": windows,
         "openTop": open_top,
         "bosses": bosses,
         "boundsMM": {"min": [float(x) for x in mesh.bounds[0]], "max": [float(x) for x in mesh.bounds[1]]},
+        "bodies": [],
     }
+    if selection is not None and len(selection["axes"]) >= 2:
+        analysis["axes"] = [{k: ax[k] for k in ("origin", "direction", "share", "lengthMM", "radiusMM", "parent", "junction")}
+                            for ax in selection["axes"]]
+        analysis["bodies"] = secondary_bodies(mesh, selection, face_labels, name, samples, lump_margin_mm,
+                                              band_mm=band_mm, epsilon=epsilon)
     if out_dir:
         os.makedirs(out_dir, exist_ok=True)
         if cropped is None:
@@ -1362,6 +1654,154 @@ def analyze(mesh, band_mm=None, lump_margin_mm=6.0, out_dir=None, name="scan", e
         except ImportError:
             pass
     return analysis
+
+
+def extend_profile(a, start_mm=0.0, end_mm=0.0):
+    """Lengthen a traced body along its axis — `start_mm` below its foot,
+    `end_mm` past its top — at the end's own radius, so the revolve runs
+    into the body it joins (a union wants overlap). The origin moves down
+    with the foot; heights, profile and segments shift with it."""
+    axis = np.asarray(a["axisDirection"], dtype=float)
+    if start_mm > 0:
+        a["axisOrigin"] = [float(x) for x in np.asarray(a["axisOrigin"], dtype=float) - axis * start_mm]
+        a["profile"] = [[r, hh + start_mm] for r, hh in a["profile"]]
+        for seg in a["profileSegments"]:
+            seg["a"] = [seg["a"][0], seg["a"][1] + start_mm]
+            seg["b"] = [seg["b"][0], seg["b"][1] + start_mm]
+            if "center" in seg:
+                seg["center"] = [seg["center"][0], seg["center"][1] + start_mm]
+        # The new line meets the first segment exactly where it starts (the
+        # profile's rounded radius sat 0.02 mm off it: "revolve profile
+        # unresolved").
+        first = a["profileSegments"][0]["a"] if a["profileSegments"] else a["profile"][0]
+        r0, h0 = float(first[0]), float(first[1])
+        a["profile"] = [[r0, 0.0]] + a["profile"]
+        a["profileSegments"] = [{"kind": "line", "a": [r0, 0.0], "b": [r0, h0]}] + a["profileSegments"]
+        a["heightMM"] = round(float(a["heightMM"]) + start_mm, 2)
+    if end_mm > 0:
+        top = float(a["heightMM"])
+        last = a["profileSegments"][-1]
+        if last["kind"] == "arc":
+            end_pt = [last["center"][0] + last["radius"] * math.cos(last["end"]),
+                      last["center"][1] + last["radius"] * math.sin(last["end"])]
+        else:
+            end_pt = last["b"]
+        r1, h1 = float(end_pt[0]), float(end_pt[1])
+        a["profile"] = a["profile"] + [[r1, top + end_mm]]
+        a["profileSegments"] = a["profileSegments"] + [{"kind": "line", "a": [r1, h1], "b": [r1, top + float(end_mm)]}]
+        a["heightMM"] = round(top + end_mm, 2)
+    a["extendedMM"] = [round(float(start_mm), 2), round(float(end_mm), 2)]
+    return a
+
+
+def trim_profile(a, start_mm=0.0, end_mm=0.0):
+    """Cut `start_mm` off the foot of a traced body and `end_mm` off its
+    top: the profile and its segments are clipped at the new ends (an arc
+    that straddles the cut becomes a line from the cut to its far end),
+    heights re-based so the foot is at 0, the origin moved up with it."""
+    axis = np.asarray(a["axisDirection"], dtype=float)
+    top = float(a["heightMM"])
+    lo, hi = float(start_mm), top - float(end_mm)
+    if hi - lo < 3.0:
+        return a
+
+    def clip_point(pt):
+        return [float(pt[0]), float(min(max(pt[1], lo), hi))]
+
+    profile = [[r, hh] for r, hh in a["profile"] if lo <= hh <= hi]
+    first = np.interp(lo, [hh for _, hh in a["profile"]], [r for r, _ in a["profile"]])
+    last = np.interp(hi, [hh for _, hh in a["profile"]], [r for r, _ in a["profile"]])
+    profile = [[float(first), lo]] + [p for p in profile if lo < p[1] < hi] + [[float(last), hi]]
+    segments = []
+    for seg in a["profileSegments"]:
+        a0, b0 = seg["a"], seg["b"]
+        s_lo, s_hi = min(a0[1], b0[1]), max(a0[1], b0[1])
+        if s_hi <= lo or s_lo >= hi:
+            continue
+        if seg["kind"] == "arc" and s_lo >= lo and s_hi <= hi:
+            segments.append(seg)
+        elif seg["kind"] == "arc":
+            segments.append({"kind": "line", "a": clip_point(a0), "b": clip_point(b0)})
+        else:
+            segments.append({"kind": "line", "a": clip_point(a0), "b": clip_point(b0)})
+    segments = [sg for sg in segments if sg["kind"] == "arc" or abs(sg["a"][1] - sg["b"][1]) > 1e-6 or abs(sg["a"][0] - sg["b"][0]) > 1e-6]
+    if lo > 0:
+        a["axisOrigin"] = [float(x) for x in np.asarray(a["axisOrigin"], dtype=float) + axis * lo]
+        profile = [[r, hh - lo] for r, hh in profile]
+        for seg in segments:
+            seg["a"] = [seg["a"][0], seg["a"][1] - lo]
+            seg["b"] = [seg["b"][0], seg["b"][1] - lo]
+            if "center" in seg:
+                seg["center"] = [seg["center"][0], seg["center"][1] - lo]
+    a["profile"] = [[round(float(r), 2), round(float(hh), 2)] for r, hh in profile]
+    a["profileSegments"] = segments
+    a["heightMM"] = round(hi - lo, 2)
+    a["trimmedMM"] = [round(float(start_mm), 2), round(float(end_mm), 2)]
+    return a
+
+
+def secondary_bodies(mesh, selection, face_labels, name, samples, lump_margin_mm, band_mm=None, epsilon=None):
+    """Every body of revolution the axis finder found beyond the main one,
+    traced on its own axis — the faces labelled its own, `analyze` again
+    with that axis fixed — and lengthened into the body it runs into.
+    Returns the list for `analysis["bodies"]` (profile, segments, frame,
+    parent, junction), in the finder's order."""
+    bodies = []
+    keys = ("name", "axisOrigin", "axisDirection", "azimuthZero", "azimuthNinety", "heightMM", "profile",
+            "profileSegments", "bodyRadiusMM", "maxRadiusMM", "bandMM", "epsilonMM", "noiseMM", "topNotARingMM",
+            "extendedMM", "trimmedMM")
+    for k, ax in enumerate(selection["axes"][1:], 1):
+        faces_k = np.where(face_labels == k)[0]
+        if len(faces_k) < 50:
+            continue
+        sub = mesh.submesh([faces_k], append=True)
+        d = np.asarray(ax["direction"], dtype=float)
+        choice = "%.6f,%.6f,%.6f!" % tuple(d)
+        print("== body %d: %d faces on its own axis" % (k, len(faces_k)))
+        try:
+            # The scanner's noise is the scan's, not the body's: the main
+            # trace's band and simplifier serve every body.
+            a = analyze(sub, out_dir=None, name="%s-body%d" % (name, k), axis_choice=choice,
+                        axis_origin=np.asarray(ax["origin"], dtype=float), flip=False,
+                        samples=max(40000, int(samples) // 3), multi=False, secondary=True,
+                        lump_margin_mm=lump_margin_mm, band_mm=band_mm, epsilon=epsilon)
+        except Exception as error:  # noqa: BLE001 — a body too thin to trace is left to the residual fit
+            print("   body %d not traced: %s" % (k, error))
+            continue
+        if len(a["profile"]) < 3 or a["heightMM"] < 5:
+            print("   body %d too short to keep (%d profile points over %.1f mm)" % (k, len(a["profile"]), a["heightMM"]))
+            continue
+        # Into its parent: the finder's junction end is the foot ("start",
+        # the low end of its direction) or the top ("end"); a body that
+        # passes through its parent needs no lengthening. The root — where
+        # the body's rings are cut by the parent's skin, over 2 r_parent /
+        # tan θ along a branch leaving at θ — is no part of the profile:
+        # it is cut off and the body runs straight into its parent at the
+        # first clean radius.
+        r_parent = float(ax.get("junctionParentRadiusMM") or 0.0)
+        start_mm = end_mm = 0.0
+        if ax["junction"] in ("start", "end") and ax["parent"] is not None:
+            d_parent = np.asarray(selection["axes"][ax["parent"]]["direction"], dtype=float)
+            cos_t = abs(float(d @ d_parent))
+            tan_t = math.sqrt(max(1.0 - cos_t * cos_t, 1e-6)) / max(cos_t, 1e-6)
+            root = 2.0 * r_parent / max(tan_t, 0.5) + 0.2 * float(a["bodyRadiusMM"])
+            root = float(min(root, 0.4 * a["heightMM"]))
+            trim_profile(a, root if ax["junction"] == "start" else 0.0, root if ax["junction"] == "end" else 0.0)
+            r_end = float(a["profile"][0][0] if ax["junction"] == "start" else a["profile"][-1][0])
+            delta = max(4.0, min(r_parent if r_parent > 0 else 1e9, 0.6 * r_end + 2.0 * float(ax["tolMM"])))
+            if ax["junction"] == "start":
+                start_mm = delta + root
+            else:
+                end_mm = delta + root
+            extend_profile(a, start_mm, end_mm)
+        body = {key: a[key] for key in keys if key in a}
+        body.update({"index": k, "parent": ax["parent"], "junction": ax["junction"], "shareOfSurface": ax["share"],
+                     "finderRadiusMM": ax["radiusMM"], "finderLengthMM": ax["lengthMM"]})
+        bodies.append(body)
+        print("   body %d: %d profile points over %.0f mm, radius ~%.1f mm%s" % (
+            k, len(a["profile"]), a["heightMM"], a["bodyRadiusMM"],
+            "" if not (start_mm or end_mm) else ", lengthened %.0f mm into body %s" % (start_mm or end_mm, ax["parent"])))
+    return bodies
 
 
 def chart(analysis, bands, h, radius, azimuth, out_dir):
@@ -1449,18 +1889,22 @@ def main():
     ap.add_argument("--debug", action="store_true", help="say why each candidate lump was dropped")
     ap.add_argument("--axis", default="auto",
                     help="auto (the roundest of the three principal directions), largest, middle, smallest, or X,Y,Z")
-    ap.add_argument("--flip", action="store_true", help="the narrow end is the base (an extinguisher with its hose up)")
+    ap.add_argument("--flip", action="store_true", help="invert which end is the base (the scan's +Y end when the axis is near vertical, else the wider end)")
+    ap.add_argument("--single", action="store_true", help="one axis only: skip the axis finder's search for more bodies of revolution")
     args = ap.parse_args()
     mesh, scale = load_mesh(args.scan, args.units)
     name = os.path.splitext(os.path.basename(args.scan))[0]
     band = None if args.band == "auto" else float(args.band)
     epsilon = None if args.epsilon == "auto" else float(args.epsilon)
     a = analyze(mesh, band_mm=band, out_dir=args.out, name=name, epsilon=epsilon, debug=args.debug,
-                axis_choice=args.axis, flip=args.flip, samples=args.samples)
+                axis_choice=args.axis, flip=args.flip, samples=args.samples, multi=not args.single)
     print("scan: %d triangles, %.0f mm tall, body radius %.1f mm (file units x%g)" % (
         a["triangles"], a["heightMM"], a["bodyRadiusMM"], scale))
     print("axis origin", np.round(a["axisOrigin"], 1), "direction", np.round(a["axisDirection"], 3))
     print("profile points:", len(a["profile"]))
+    for b in a.get("bodies", []):
+        print("body %d: %d profile points over %.0f mm, radius ~%.1f mm, into body %s (%s)" % (
+            b["index"], len(b["profile"]), b["heightMM"], b["bodyRadiusMM"], b["parent"], b["junction"]))
     for b in a["bosses"]:
         print("boss at %6.1f° height %5.1f reach %5.1f width %5.1f neck %5.1f profile %s" % (
             b["azimuthDeg"], b["centerHeightMM"], b["reachMM"], b["widthMM"], b["neckWidthMM"],

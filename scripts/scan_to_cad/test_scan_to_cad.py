@@ -211,7 +211,7 @@ class BodySectionTests(unittest.TestCase):
         us = [e["a"][0] for e in inner["entities"]] + [e["b"][0] for e in inner["entities"]]
         vs = [e["a"][1] for e in inner["entities"]] + [e["b"][1] for e in inner["entities"]]
         self.assertLessEqual(max(us), 189.4 - 3.0 + 1e-6)
-        self.assertAlmostEqual(min(vs), 3.0)                               # the floor, one wall up
+        self.assertAlmostEqual(min(vs), 24.0)                              # the floor: 240 mm down from the 264 mm rim (the rays' depth)
         self.assertGreater(max(vs), 264.0)                                 # out through the open rim
         self.assertLess(3.0, inner["seed"][1])
         self.assertLess(inner["seed"][1], 264.0)
@@ -491,6 +491,87 @@ class PreviewModelTests(unittest.TestCase):
         shifted = model.copy()
         shifted.apply_translation([0, 0, 6.0])
         self.assertLess(P.app_metrics(model, shifted, 1.0)["overallIoU"], 0.95)
+
+
+
+class AxisFinderTests(unittest.TestCase):
+    """fit_axes on a synthetic T: a vertical body with a horizontal pipe
+    running into it, and the secondary-body helpers of analyze_scan."""
+
+    @classmethod
+    def setUpClass(cls):
+        import trimesh
+        sys.path.insert(0, HERE)
+        import fit_axes
+        import analyze_scan
+        cls.F, cls.A, cls.tm = fit_axes, analyze_scan, trimesh
+        body = trimesh.creation.cylinder(radius=30.0, height=240.0, sections=96)
+        body.apply_transform(trimesh.transformations.rotation_matrix(math.pi / 2, [1, 0, 0]))   # axis along y
+        body.apply_translation([50.0, 120.0, 0.0])
+        pipe = trimesh.creation.cylinder(radius=15.0, height=160.0, sections=64)
+        pipe.apply_transform(trimesh.transformations.rotation_matrix(math.pi / 2, [0, 1, 0]))   # axis along x
+        pipe.apply_translation([-50.0, 60.0, 0.0])                                             # x from -130 to 30: into the body
+        cls.mesh = trimesh.util.concatenate([body, pipe])
+        cls.result = fit_axes.find_axes(cls.mesh, samples=40000)
+
+    def test_two_bodies_with_the_pipe_running_into_the_body(self):
+        axes = self.result["axes"]
+        self.assertEqual(len(axes), 2, [a["direction"] for a in axes])
+        body, pipe = axes
+        self.assertGreater(abs(body["direction"][1]), 0.995)
+        self.assertGreater(abs(pipe["direction"][0]), 0.995)
+        self.assertAlmostEqual(body["radiusMM"], 30.0, delta=1.0)
+        self.assertAlmostEqual(pipe["radiusMM"], 15.0, delta=1.0)
+        self.assertEqual(pipe["parent"], 0)
+        self.assertIn(pipe["junction"], ("start", "end"))
+        self.assertAlmostEqual(pipe["junctionParentRadiusMM"], 30.0, delta=1.5)
+        # The pipe's extent stops at the body's skin, not at its axis.
+        c, d = self.tm.util.np.array(pipe["origin"]), self.tm.util.np.array(pipe["direction"])
+        ends = sorted(float((c + d * h)[0]) for h in (pipe["hMin"], pipe["hMax"]))
+        self.assertAlmostEqual(ends[0], -130.0, delta=6.0)
+        self.assertLess(ends[1], 26.0)
+
+    def test_faces_are_labelled_by_body(self):
+        labels = self.F.label_faces(self.mesh, self.result)
+        centres = self.mesh.triangles_center
+        on_pipe = centres[:, 0] < 10
+        self.assertGreater((labels[on_pipe] == 1).mean(), 0.8)
+        self.assertGreater((labels[~on_pipe] == 0).mean(), 0.8)
+
+    def test_a_single_cylinder_has_one_axis(self):
+        can = self.tm.creation.cylinder(radius=40.0, height=200.0, sections=96)
+        can.apply_transform(self.tm.transformations.rotation_matrix(math.pi / 2, [1, 0, 0]))
+        result = self.F.find_axes(can, samples=30000)
+        self.assertEqual(len(result["axes"]), 1)
+        self.assertAlmostEqual(result["axes"][0]["radiusMM"], 40.0, delta=1.0)
+
+    def test_extend_and_trim_profile(self):
+        a = {"axisOrigin": [0.0, 0.0, 0.0], "axisDirection": [0.0, 1.0, 0.0], "heightMM": 50.0,
+             "profile": [[10.0, 0.0], [10.0, 20.0], [14.0, 20.0], [14.0, 50.0]],
+             "profileSegments": [{"kind": "line", "a": [10.0, 0.0], "b": [10.0, 20.0]},
+                                 {"kind": "line", "a": [10.0, 20.0], "b": [14.0, 20.0]},
+                                 {"kind": "line", "a": [14.0, 20.0], "b": [14.0, 50.0]}]}
+        self.A.trim_profile(a, 5.0, 0.0)
+        self.assertAlmostEqual(a["heightMM"], 45.0)
+        self.assertAlmostEqual(a["axisOrigin"][1], 5.0)
+        self.assertEqual(a["profile"][0], [10.0, 0.0])
+        self.assertEqual(a["profileSegments"][0]["a"], [10.0, 0.0])
+        self.A.extend_profile(a, 12.0, 3.0)
+        self.assertAlmostEqual(a["heightMM"], 60.0)
+        self.assertAlmostEqual(a["axisOrigin"][1], -7.0)                   # the foot moved down by the extension
+        self.assertEqual(a["profileSegments"][0], {"kind": "line", "a": [10.0, 0.0], "b": [10.0, 12.0]})
+        self.assertEqual(a["profileSegments"][-1]["b"], [14.0, 60.0])
+        self.assertEqual(a["extendedMM"], [12.0, 3.0])
+
+    def test_a_full_ring_beats_continuity(self):
+        # A hand-wheel's rim (36 mm, most sectors) above a 6 mm stem: the
+        # band is the rim's, not the stem's.
+        sectors = [36.0] * 30 + [7.0] * 6
+        self.assertAlmostEqual(self.A.agreed_radius(sectors, previous=6.0, sector_medians=sectors), 36.0)
+        # Three caps (a third of the sectors each, in three pieces) round a
+        # barrel keep the barrel's radius.
+        meds = ([150.0] * 5 + [80.0] * 7) * 3
+        self.assertAlmostEqual(self.A.agreed_radius(meds, previous=80.0, sector_medians=meds), 80.0)
 
 
 if __name__ == "__main__":

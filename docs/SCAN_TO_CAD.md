@@ -195,8 +195,12 @@ and the run live in `marketing/scan-to-cad/practice/clamp/` (gitignored).
    wrong for a bucket, whose handle's arch pulls PCA 20° over (every band
    then read a sine wave around the axis), and for a wheel, whose axis is
    its thinnest direction. `--axis largest|middle|smallest|X,Y,Z` forces
-   it when the three tie (a pipe valve with a handwheel: the pipe's axis
-   and the stem's score the same). `--units <mm per file unit>` overrides
+   it. When no principal direction is clean (quality under 0.75 — a pipe
+   valve, whose principal direction is the diagonal between its body and
+   its pipe and scores 0.65 against 0.64 for the body itself), the axis
+   finder's strongest body of revolution is the main axis instead (see
+   *More than one axis* below: the body holds 31 % of the surface in
+   rings, the diagonal 4 %). `--units <mm per file unit>` overrides
    the format's units: Sketchfab glTF scans come at any scale (a bollard
    12 m tall, a spray can 1.3 m), and `scan_cropped.glb` is always written
    at the corrected size, so the app imports it right. Each slice centre is a RANSAC circle fit (three random
@@ -218,8 +222,10 @@ and the run live in `marketing/scan-to-cad/practice/clamp/` (gitignored).
    passes the share test with a perfect score, and those slices had the
    pail's axis bouncing between 4° and 17° off from one round of the fit
    to the next (the model came out visibly tilted in the front view).
-2. **Up.** The wider end is the base — `--flip` says otherwise (an
-   extinguisher scanned with its hose up is wider at the top). The body
+2. **Up.** When the axis is within 30° of the scan's +Y, +Y is up (glTF
+   and the app agree on Y up; a valve's hand-wheel is wider than its
+   base); otherwise the wider end is the base. `--flip` inverts either.
+   The body
    ends where the rings do: a band whose points leave more than a third
    of the circle empty (a bucket's handle arching above the rim, a lever
    across a valve) is not the part's cross-section, and the revolve stops
@@ -589,7 +595,18 @@ foot — because the trace read vertex *bands* 4–6 mm tall and simplified at
   allowance of gap²/8r for a low-poly mesh's chords, capped at 1.5
   tolerances (a drum's 230 mm quad once excused a 21 mm residual). A dome's
   arc is carried to the axis (tail ≤ max(4 bands, 12 mm, 0.2 R)); a
-  polyline that stops under the apex is carried to it.
+  polyline that stops under the apex is carried to it — but only a cap's
+  worth, a gap of at most max(2 bands, 0.6 × the last radius): a valve's
+  lever 76 mm above the last ring and an extinguisher's handle 97 mm
+  above it had come out as spikes to the apex; they are the residual
+  fit's. An "arc" that rises less than max(3 bands, 0.4 × what it
+  narrows by) is a step with a band caught between (a 6 mm stem out to a
+  34 mm rim over 2 mm; a rim's flat top in to its hub over 5 mm) and
+  stays lines — three points on a step fit a circle as well as a
+  quarter-round does. A gap in the bands (the stem under a hand-wheel,
+  hidden from the scanner) carries the lower radius up to the gap's end
+  and steps there, instead of a cone from the band below to the band
+  above.
 
 `body_section` (build_hydrant.py — the build, the film and the reel all
 revolve it): `keep_off_axis` pulls an arc end that rounding put at
@@ -685,6 +702,102 @@ and hub; the valve its stem, hand-wheel, side port and branch. The pail
 and the drum stay FAIL on depth: the scans are out of round by ±6–7 mm
 and a revolve cannot follow a squashed bucket — say so rather than chase
 it. The wheel's stand and the valve's threaded nipple are still rough.
+
+### More than one axis — `fit_axes.py` and the secondary bodies (2026-10-24)
+
+A valve is a vertical body with a horizontal pipe into it, two branches
+and a side port: four bodies of revolution on four axes. One axis and one
+profile cannot describe it — revolved about the pipe's axis the body was a
+43 mm drum, the pipe's nipple end a cone to the apex, the branches lumps —
+and it scored 65 %. `analyze_scan.py` now asks `fit_axes.py` for every
+axis first.
+
+- **Directions** come from the normals: on a cylinder every normal is
+  perpendicular to the axis, so the cross product of two nearby normals
+  points along it. Pairs within 8 % of the diagonal vote on a 2° sphere
+  grid (smoothed over 1.5 cells, since the main axis sits on the equator
+  and would split four ways); the principal directions join the list so
+  a barrel-shaped mug, which has no cylinder to vote with, gets its axis
+  too. Distinct directions only (a noisy scan's main axis peaks again
+  7–10° off).
+- **Positions**: for a direction, every normal line crosses the axis, so
+  projected along the direction the normal lines meet at the axis's
+  point — a vote along each line (both ways; a scan's normals are not all
+  outward) in a plane grid. Each candidate is refined on its inliers (the
+  points whose normal line passes within a tolerance — 1.2 % of the
+  diagonal, 1.5–12 mm — of the axis): least squares on the normal lines
+  for the point, the ring-centre fit for the direction.
+- **A body is rings.** A normal line through the axis is a loose test: a
+  flat face whose plane holds the axis direction (a nut's side, a block's
+  wall) and the skin of another body the axis happens to cross both pass
+  it in stripes. So the inliers are sliced along the axis and a bin is a
+  ring only when the medians of at least ten of 24 sectors agree within
+  max(12 %, min(2 tolerances, 30 %)) of the radius — a flat lever 8 mm
+  thick is no 14 mm bar — and only the points on that ring are the
+  body's. Its extent runs from the first ring bin to the last (a body
+  keeps its rings across the band where a pipe joins it), plus two bins
+  of inliers at each end for a rim with its hub.
+- **Selection is best-first, outside what is already taken.** The main
+  axis comes first (the tracer's choice, or the strongest candidate).
+  Every later candidate is judged on the points *outside* the accepted
+  bodies' envelopes, skin included: a branch's axis runs on into the pipe
+  it leaves, where the pipe's skin, cut obliquely, passes for rings; the
+  twin side nozzles of a hydrant share one axis through the barrel, whose
+  crossing band is no ring at all. It must show rings of its own there
+  (roundness ≥ 0.7, 60 % unclaimed, ≥ 0.8 % of the surface, at least 12 mm
+  and 0.6 radii long), and it must **run into** an accepted body — its
+  axis, followed up to 0.8 radii past an end, enters one (a pipe runs
+  into the body it feeds; a hose alongside a tank never enters it), or
+  passes through one with rings on both sides (the twin nozzles; not a bar
+  laid across a valve's top). A free end must be free: scan surface
+  straight on past it (within 1.2 radii, up to half a radius beyond) means
+  a bend — a mug handle's straight arm — not a body of revolution. At each
+  step every remaining candidate is judged afresh and the one with most
+  fresh ring points taken: a line parallel to the barrel through a cap's
+  chain explains more normals than the nozzle's own axis, but fewer rings.
+- **Faces are labelled** by the same rule (`label_faces`): a face goes to
+  the axis its normal line crosses most closely, among those whose
+  envelope reaches it; a later body takes a face from an earlier one only
+  when it explains the normal clearly better (a quarter tolerance — on the
+  barrel's own skin the side nozzles' axis passes as close as the
+  barrel's). A face no normal line claims (a hex nut's flats) goes to the
+  body whose ring radius it sits just under; the rest — spokes, a lever, a
+  chain — stays with the main trace, as before.
+
+Then the main trace runs on the faces that are the main body's or
+nobody's (the pipe's rings in the body's bands had made a drum of the
+body; the ground trim is judged on the main body's own points, a hex nut
+100 mm out having read as a sidewalk), and each other body is traced by
+the same function on its own faces with its axis fixed (`secondary=True`:
+no ground trim, no bosses, no flip, no open top, no apex carry; the main
+trace's band and simplifier, since the scanner's noise is the scan's).
+Its **root** — where its rings are cut by the parent's skin, over
+2 r_parent / tan θ along a branch leaving at θ, plus a fifth of its own
+radius — is cut off (`trim_profile`), and the body is lengthened into its
+parent at the first clean radius by min(r_parent, 0.6 r + 2 tolerances)
+plus the root (`extend_profile`; the new line meets the first segment
+exactly — the profile's rounded radius sat 0.02 mm off it: "revolve
+profile unresolved"). A boss candidate that is a traced body (the pipe
+off a valve, a hydrant's nozzle) is dropped. The analysis JSON lists them
+under `bodies` (frame, profile, segments, parent, junction, what was
+trimmed and added); `build_hydrant.secondary_sections` turns each into a
+sketch plane through its axis and the half-section to revolve, and the
+build, the film and the reel revolve them 360° with `boolean: union`
+right after the main revolve (and a container's cavity), in the
+finder's order, so each union meets material already there.
+
+What it finds: the valve's body (29 %), pipe (19 %), both branches, the
+side port — the 54 mm stub at the bonnet's height took the horizontal
+direction until the direction list stopped filling up with the main
+axis's neighbours; the hydrant's twin side nozzles (one body through the
+barrel) and the pumper nozzle; nothing on the can, bollard, barrel, pail,
+mug, both extinguishers and the wheel (the CO2 extinguisher's horn and
+hose run into nothing; the mug handle's arms run on into their bends; the
+handle bars across the CO2 extinguisher's valve are no rings at 30 % of
+their radius). Tests: a synthetic T (a body with a pipe into it — two
+bodies, the pipe's extent stopping at the body's skin, its faces
+labelled), a lone cylinder, `trim_profile` / `extend_profile`, and the
+ring-over-continuity rule.
 
 ## Gotchas
 

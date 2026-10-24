@@ -46,7 +46,7 @@ import numpy as np
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))
 sys.path.insert(0, HERE)
-from build_hydrant import body_section, boss_section, unit, world  # noqa: E402
+from build_hydrant import body_section, boss_section, unit, world, secondary_sections, revolve_secondary, window_sections, cut_window  # noqa: E402
 from build_features import build_feature, shift_feature  # noqa: E402
 from demo_video import Recorder, caption, ffmpeg_watched, narrate, scan_on_floor, title_overlay  # noqa: E402
 from mcp_client import MCPClient, MCPError  # noqa: E402
@@ -113,6 +113,22 @@ def build_model(mcp, analysis, label, color, features=None):
         mcp.os3d("feature.revolve", {"sketchID": sk_in, "seedPoint": section["inner"]["seed"],
                                      "axisPoint": [0, 0], "axisDirection": [0, 1], "angleDegrees": 360,
                                      "boolean": "subtract", "booleanTargets": [cad]})
+    for win in window_sections(analysis, shift=-np.array(analysis["axisOrigin"], dtype=float)):
+        try:
+            if cut_window(mcp, win, cad, label, note=False).get("failed"):
+                mcp.os3d("command.run", {"id": "edit.undo"})
+        except MCPError:
+            pass
+    # The other bodies of revolution on their own axes (a valve's pipe
+    # and branches, a hydrant's nozzles), as the build revolved them.
+    delta = -np.array(analysis["axisOrigin"], dtype=float)         # the scan stands on the floor, axis origin at 0
+    for sec in secondary_sections(analysis, shift=delta):
+        try:
+            reply = revolve_secondary(mcp, sec, cad, note=False)
+            if reply.get("failed"):
+                mcp.os3d("command.run", {"id": "edit.undo"})
+        except MCPError:
+            pass
     bosses = [b for b in analysis.get("bosses", []) if b["reachMM"] - b["bodyRadiusMM"] > 15 and b.get("profile")]
     for n, boss in enumerate(bosses, 1):
         az = boss["azimuthDeg"]
@@ -129,7 +145,6 @@ def build_model(mcp, analysis, label, color, features=None):
                                      "boolean": "union", "booleanTargets": [cad]})
     # The fitted features the build built (features.json, the ones its
     # summary says were ok), so the reel shows the model the inspection graded.
-    delta = -np.array(analysis["axisOrigin"], dtype=float)         # the scan stands on the floor, axis origin at 0
     for n, feature in enumerate(features or [], 1):
         feature = shift_feature(feature, delta)
         try:
