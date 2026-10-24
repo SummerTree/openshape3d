@@ -809,7 +809,8 @@ def refine_section(points, h, radius, cell):
 
 
 def analyze(mesh, band_mm=None, lump_margin_mm=6.0, out_dir=None, name="scan", epsilon=None, debug=False,
-            axis_choice="auto", flip=False, samples=200000, multi=True, secondary=False, axis_origin=None):
+            axis_choice="auto", flip=False, samples=200000, multi=True, secondary=False, axis_origin=None,
+            up_rule="y", _reflipped=False):
     """The scan as a body of revolution: its axis, the profile along it,
     the bosses off it. With `multi`, the axis finder (`fit_axes`) looks for
     more bodies of revolution first — a valve's pipe, branches and side
@@ -875,7 +876,7 @@ def analyze(mesh, band_mm=None, lump_margin_mm=6.0, out_dir=None, name="scan", e
     span = hi - lo
     low_r = np.median(radius[h < lo + span * 0.08])
     high_r = np.median(radius[h > hi - span * 0.08])
-    if abs(axis[1]) > math.cos(math.radians(30.0)):
+    if up_rule == "y" and abs(axis[1]) > math.cos(math.radians(30.0)):
         base_at_low = axis[1] > 0
     else:
         base_at_low = not (low_r < high_r)
@@ -1560,6 +1561,15 @@ def analyze(mesh, band_mm=None, lump_margin_mm=6.0, out_dir=None, name="scan", e
     if open_top:
         print("open %s: rays from outside fall %.0f mm in (or through) on %.0f%% of that end; wall %.1f mm — the revolve will be shelled" % (
             open_top["end"], open_top["depthMM"], open_top["share"] * 100, open_top["wallMM"]))
+    if open_top and open_top["end"] == "bottom" and not secondary and not _reflipped and up_rule == "y":
+        # An open container stands on its closed end: a drum whose open
+        # rim came out at the bottom under the +Y rule (its file's +Y
+        # points at the floor — or it has no floor at all, and rays fall
+        # through either way) is traced again by the wider-end rule.
+        print("open at the bottom: traced again with the wider end as the base")
+        return analyze(mesh, band_mm=band_mm, lump_margin_mm=lump_margin_mm, out_dir=out_dir, name=name,
+                       epsilon=epsilon, debug=debug, axis_choice=axis_choice, flip=flip, samples=samples,
+                       multi=multi, secondary=secondary, axis_origin=axis_origin, up_rule="wider", _reflipped=True)
     # One radius per height cannot describe a dished wheel: a band there
     # holds two full rings far apart (the tyre and the hub) with nothing
     # between. Such a part gets its whole half-section traced instead.
@@ -1750,26 +1760,48 @@ def secondary_bodies(mesh, selection, face_labels, name, samples, lump_margin_mm
     keys = ("name", "axisOrigin", "axisDirection", "azimuthZero", "azimuthNinety", "heightMM", "profile",
             "profileSegments", "bodyRadiusMM", "maxRadiusMM", "bandMM", "epsilonMM", "noiseMM", "topNotARingMM",
             "extendedMM", "trimmedMM")
+    import fit_axes
+    jobs = []
     for k, ax in enumerate(selection["axes"][1:], 1):
         faces_k = np.where(face_labels == k)[0]
         if len(faces_k) < 50:
             continue
+        if ax["junction"] == "through" and ax["parent"] is not None:
+            # One axis through the parent (a hydrant's twin side nozzles)
+            # is two bodies, one each side of it, each running into it:
+            # the stretch inside the parent is no profile (the barrel's
+            # skin cut obliquely made arcs of 164 mm the app refused).
+            parent = selection["axes"][ax["parent"]]
+            c, d = np.asarray(ax["origin"], dtype=float), np.asarray(ax["direction"], dtype=float)
+            hs = np.arange(ax["hMin"], ax["hMax"], 1.0)
+            inside = fit_axes.inside_body(c + np.outer(hs, d), parent, 0.0)
+            if inside.any():
+                h_in, h_out = float(hs[inside].min()), float(hs[inside].max())
+                centres = (np.asarray(mesh.triangles_center)[faces_k] - c) @ d
+                low, high = faces_k[centres < h_in], faces_k[centres > h_out]
+                for side, faces_s, junction in (("a", low, "end"), ("b", high, "start")):
+                    if len(faces_s) >= 50:
+                        jobs.append((k, "%d%s" % (k, side), faces_s, dict(ax, junction=junction,
+                                                                        junctionParentRadiusMM=float(parent["radiusMM"]))))
+                continue
+        jobs.append((k, str(k), faces_k, ax))
+    for k, tag, faces_k, ax in jobs:
         sub = mesh.submesh([faces_k], append=True)
         d = np.asarray(ax["direction"], dtype=float)
         choice = "%.6f,%.6f,%.6f!" % tuple(d)
-        print("== body %d: %d faces on its own axis" % (k, len(faces_k)))
+        print("== body %s: %d faces on its own axis" % (tag, len(faces_k)))
         try:
             # The scanner's noise is the scan's, not the body's: the main
             # trace's band and simplifier serve every body.
-            a = analyze(sub, out_dir=None, name="%s-body%d" % (name, k), axis_choice=choice,
+            a = analyze(sub, out_dir=None, name="%s-body%s" % (name, tag), axis_choice=choice,
                         axis_origin=np.asarray(ax["origin"], dtype=float), flip=False,
                         samples=max(40000, int(samples) // 3), multi=False, secondary=True,
                         lump_margin_mm=lump_margin_mm, band_mm=band_mm, epsilon=epsilon)
         except Exception as error:  # noqa: BLE001 — a body too thin to trace is left to the residual fit
-            print("   body %d not traced: %s" % (k, error))
+            print("   body %s not traced: %s" % (tag, error))
             continue
         if len(a["profile"]) < 3 or a["heightMM"] < 5:
-            print("   body %d too short to keep (%d profile points over %.1f mm)" % (k, len(a["profile"]), a["heightMM"]))
+            print("   body %s too short to keep (%d profile points over %.1f mm)" % (tag, len(a["profile"]), a["heightMM"]))
             continue
         # Into its parent: the finder's junction end is the foot ("start",
         # the low end of its direction) or the top ("end"); a body that
@@ -1795,11 +1827,11 @@ def secondary_bodies(mesh, selection, face_labels, name, samples, lump_margin_mm
                 end_mm = delta + root
             extend_profile(a, start_mm, end_mm)
         body = {key: a[key] for key in keys if key in a}
-        body.update({"index": k, "parent": ax["parent"], "junction": ax["junction"], "shareOfSurface": ax["share"],
-                     "finderRadiusMM": ax["radiusMM"], "finderLengthMM": ax["lengthMM"]})
+        body.update({"index": k, "tag": tag, "parent": ax["parent"], "junction": ax["junction"],
+                     "shareOfSurface": ax["share"], "finderRadiusMM": ax["radiusMM"], "finderLengthMM": ax["lengthMM"]})
         bodies.append(body)
-        print("   body %d: %d profile points over %.0f mm, radius ~%.1f mm%s" % (
-            k, len(a["profile"]), a["heightMM"], a["bodyRadiusMM"],
+        print("   body %s: %d profile points over %.0f mm, radius ~%.1f mm%s" % (
+            tag, len(a["profile"]), a["heightMM"], a["bodyRadiusMM"],
             "" if not (start_mm or end_mm) else ", lengthened %.0f mm into body %s" % (start_mm or end_mm, ax["parent"])))
     return bodies
 

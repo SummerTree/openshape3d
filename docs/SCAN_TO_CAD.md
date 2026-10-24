@@ -786,6 +786,22 @@ build, the film and the reel revolve them 360° with `boolean: union`
 right after the main revolve (and a container's cavity), in the
 finder's order, so each union meets material already there.
 
+**A hand-wheel's openings.** One radius per height makes a wheel a disc.
+`find_windows` looks, in the (r, h) grid, for rows that hold a run of
+ring cells near the axis facing out (the hub — a bore's wall faces in and
+is no hub) and, past a gap of 6–60 mm that fewer than 65 % of the sectors
+reach, another run (the rim). Three or more such rows are a window; the
+spokes are where the middle half of that annulus has points, on 48
+sectors (five spokes leave openings under 60°), and what lies between
+them, half a sector short of each spoke, are the openings — each a partial
+revolve of the annulus rectangle about the axis, on a sketch plane turned
+to the opening's first azimuth, revolved by its span and subtracted
+(`window_sections` / `cut_window`; the build, the film and the reel). The
+valve's wheel: five openings of 30° between hub r 14 and rim r 28 over
+h 228–240. A solid flange has no hub run beside it; a thin wall's two
+skins are a cell or two apart; a stem in a cup is a recess and is cut as
+one. Not on open containers, dished parts or secondary bodies.
+
 What it finds: the valve's body (29 %), pipe (19 %), both branches, the
 side port — the 54 mm stub at the bonnet's height took the horizontal
 direction until the direction list stopped filling up with the main

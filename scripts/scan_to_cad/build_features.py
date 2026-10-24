@@ -155,6 +155,8 @@ def feature_caption(feature):
     if kind == "revolve":
         return ("A cone on its own axis · revolved and unioned in" if feature.get("cone")
                 else "Its own axis · a radial profile, revolved and unioned in")
+    if feature.get("bar"):
+        return "A bar · its section extruded along its length, unioned in"
     return "A plate · its outline extruded to the measured thickness, unioned in"
 
 

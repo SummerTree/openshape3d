@@ -449,6 +449,11 @@ def script_for(timeline, title_say, scan_name, spec=None):
         "import": "The scan comes straight into OpenShape 3D as a mesh, texture and all.",
         "revolve": "One sketch on the scan's own axis, one revolve — the barrel, the flanges, the bonnet.",
         "boss1": "Each nozzle is read off the scan as a profile of its own, revolved, and unioned into the body.",
+        "body1": "Every other body of revolution is found on its own axis from the scan's normals — read off the scan "
+                 "on that axis, revolved, and unioned in.",
+        "body2": "",
+        "body3": "",
+        "body4": "",
         "boss2": "",
         "boss3": "",
         "boss4": "",
