@@ -378,5 +378,67 @@ class InspectFitTests(unittest.TestCase):
         self.assertGreaterEqual(by["depth_front"]["worstStripShare"], 0.3, by["depth_front"])
 
 
+@unittest.skipUnless(HAVE_DEPS, "needs the scan_to_cad venv (trimesh, numpy, scipy, rtree, pillow)")
+class PreviewModelTests(unittest.TestCase):
+    """`preview_model.py`: the offline solids have the volumes the app's ops
+    would give, and the app-style measure reads an identical pair as perfect."""
+
+    def test_oval_entities_chain_into_one_loop(self):
+        import preview_model as P
+        from build_features import oval_entities
+        loops = P.loops_of_entities(oval_entities(8.0, 4.0))
+        self.assertEqual(len(loops), 1)
+        area = abs(P.signed_area(loops[0]))
+        self.assertAlmostEqual(area, math.pi * 8 * 4, delta=0.06 * math.pi * 8 * 4)   # a four-centre oval, not an ellipse
+
+    def test_revolve_extrude_and_sweep_volumes(self):
+        import preview_model as P
+        origin, x, y = [10.0, -5.0, 3.0], [0.0, 0.0, 1.0], [0.0, 1.0, 0.0]
+        rev = P.revolve_loop(np.array([[0, 0], [12, 0], [12, 30], [0, 30]], float), origin, x, y, sections=128)
+        self.assertTrue(rev.is_watertight)
+        self.assertAlmostEqual(rev.volume, math.pi * 144 * 30, delta=0.01 * math.pi * 144 * 30)
+        # revolved about the sketch's y axis, placed at the origin
+        self.assertAlmostEqual(float(rev.bounds[0][1]), -5.0, places=5)
+        self.assertAlmostEqual(float(rev.bounds[1][1]), 25.0, places=5)
+        square = np.array([[-5, -5], [5, -5], [5, 5], [-5, 5]], float)
+        tilted = [0.6, 0.8, 0.0]
+        ext = P.extrude_loop(square, [1.0, 2.0, 3.0], tilted, [0.0, 0.0, 1.0], 7.0, symmetric=True)
+        self.assertTrue(ext.is_watertight)
+        self.assertAlmostEqual(ext.volume, 100 * 14, delta=1e-6)
+        circle = np.column_stack([6 * np.cos(np.linspace(0, 2 * math.pi, 64, endpoint=False)),
+                                  6 * np.sin(np.linspace(0, 2 * math.pi, 64, endpoint=False))])
+        spine = [[0, 0, 0], [40, 0, 0], [40, 30, 0]]          # an L: a mitred corner keeps area × length
+        swp = P.sweep_section(circle, spine, [0.0, 0.0, 1.0], [0.0, 1.0, 0.0])
+        self.assertTrue(swp.is_watertight)
+        area = abs(P.signed_area(circle))
+        self.assertAlmostEqual(swp.volume, area * 70, delta=0.01 * area * 70)
+
+    def test_build_preview_matches_pappus_and_measures_itself_perfect(self):
+        import preview_model as P
+        analysis = {"axisOrigin": [100.0, 20.0, -30.0], "axisDirection": [0.0, 1.0, 0.0],
+                    "azimuthZero": [0.0, 0.0, 1.0], "azimuthNinety": [-1.0, 0.0, 0.0],
+                    "heightMM": 100.0, "bodyRadiusMM": 20.0, "profile": [[20.0, 0.0], [20.0, 100.0]],
+                    "profileSegments": None, "openTop": None, "sectionLoop": None,
+                    "bosses": [{"azimuthDeg": 0.0, "centerHeightMM": 50.0, "reachMM": 60.0, "bodyRadiusMM": 20.0,
+                                "innerStartMM": 8.0, "widthMM": 20.0, "neckWidthMM": 20.0, "heightSpanMM": 20.0,
+                                "profile": [[10.0, 0.0], [10.0, 52.0]]}]}
+        model, notes, parts = P.build_preview(analysis, sections=128)
+        self.assertEqual(notes, [], notes)
+        self.assertTrue(model.is_watertight)
+        body = math.pi * 400 * 100
+        boss_outside = math.pi * 100 * 40                     # the nozzle past the barrel's skin, near enough
+        self.assertAlmostEqual(model.volume, body + boss_outside, delta=0.03 * (body + boss_outside))
+        self.assertEqual([p["what"] for p in parts], ["revolve", "boss"])
+        # the boss points along azimuth 0 = azimuthZero (+z) from the axis at x = 100
+        self.assertAlmostEqual(float(model.bounds[1][2]), -30.0 + 60.0, places=3)
+        metrics = P.app_metrics(model, model.copy(), 1.0)
+        self.assertEqual(metrics["overallIoU"], 1.0)
+        self.assertLess(metrics["modelToReference"]["maxMM"], 1e-6)
+        self.assertLess(metrics["areaWeighted"]["referenceToModel"]["maxMM"], 1e-6)
+        shifted = model.copy()
+        shifted.apply_translation([0, 0, 6.0])
+        self.assertLess(P.app_metrics(model, shifted, 1.0)["overallIoU"], 0.95)
+
+
 if __name__ == "__main__":
     unittest.main()
