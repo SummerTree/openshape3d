@@ -492,6 +492,38 @@ class PreviewModelTests(unittest.TestCase):
         shifted.apply_translation([0, 0, 6.0])
         self.assertLess(P.app_metrics(model, shifted, 1.0)["overallIoU"], 0.95)
 
+    def test_build_preview_revolves_bodies_on_their_own_axes(self):
+        """A body traced on its own axis (analysis["bodies"]) is revolved
+        in its own sketch frame and unioned in, after the main revolve."""
+        import preview_model as P
+        pipe = {"index": 1, "parent": 0, "junction": "start", "extendedMM": [5.0, 0.0],
+                "axisOrigin": [100.0, 50.0, -15.0], "axisDirection": [0.0, 0.0, 1.0],
+                "azimuthZero": [1.0, 0.0, 0.0], "azimuthNinety": [0.0, 1.0, 0.0],
+                "heightMM": 60.0, "bodyRadiusMM": 8.0, "profile": [[8.0, 0.0], [8.0, 60.0]],
+                "profileSegments": None, "openTop": None, "sectionLoop": None}
+        analysis = {"axisOrigin": [100.0, 20.0, -30.0], "axisDirection": [0.0, 1.0, 0.0],
+                    "azimuthZero": [0.0, 0.0, 1.0], "azimuthNinety": [-1.0, 0.0, 0.0],
+                    "heightMM": 100.0, "bodyRadiusMM": 20.0, "profile": [[20.0, 0.0], [20.0, 100.0]],
+                    "profileSegments": None, "openTop": None, "sectionLoop": None, "bosses": [], "bodies": [pipe]}
+        model, notes, parts = P.build_preview(analysis, sections=128)
+        self.assertEqual(notes, [], notes)
+        self.assertTrue(model.is_watertight)
+        self.assertEqual([p["what"] for p in parts], ["revolve", "body"])
+        self.assertEqual(parts[1]["extendedMM"], [5.0, 0.0])
+        body = math.pi * 400 * 100
+        # The pipe's foot (z = −15) sits inside the barrel (skin at z = −10);
+        # 55 mm of it stand out, to z = 45.
+        pipe_outside = math.pi * 64 * 55
+        self.assertAlmostEqual(model.volume, body + pipe_outside, delta=0.03 * (body + pipe_outside))
+        self.assertAlmostEqual(float(model.bounds[1][2]), 45.0, places=3)
+        # The placement check leaves out what sits inside the model built
+        # before the body and reads a body on its own surface as on it.
+        fit = P.surface_to_scan(parts[1]["_mesh"], model, inside_of=parts[1]["_before"])
+        self.assertLess(fit["meanMM"], 0.2)
+        self.assertGreater(fit["points"], 50)
+        self.assertLess(fit["points"], 3000)                       # the foot inside the barrel left out
+        self.assertEqual(P.surface_to_scan(parts[1]["_mesh"], model)["points"], 3000)
+
 
 
 class AxisFinderTests(unittest.TestCase):
