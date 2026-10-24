@@ -2,7 +2,7 @@
 
 > **Current unfinished-work register:** [Sketch parity open status](SKETCH_PARITY_OPEN_STATUS.md). Maintained at every meaningful checkpoint; older mission logs below are historical.
 
-Last updated: 2026-10-22 (the fidelity pass: the scan trace reads the surface finely, containers get a subtracted cavity, dished parts a traced half-section, and `fit_features.py` / `build_features.py` add the handles, hoses, levers and chains a revolve cannot make — can and bollard PASS, the rest 88–97 % except the out-of-round pail and drum and the two-axis valve; the film and the reel revolve the build's own half-section — all ten corpus films and both reels re-taken on the rebuilt models; scan-to-CAD builds are now inspected both ways with depth maps and a review sheet — `inspect_fit.py`, gating the films and the reel; arcs and hollow revolves in the scan pipeline; a C-clamp rebuilt from recipes to 0.05 mm — the newest mission log bullet under 2026-10-20; a corpus of ten Sketchfab scans built over MCP, graded and filmed; CAD import over MCP: STEP and IGES sew loose faces into solids and sheet bodies, exact bounds, DXF units and ellipses, an open-mesh notice, and agents import STEP / IGES / DXF / FCStd; an OCCT oracle, a live MCP runner and offline XCTests behind it; test pack 36 / 36, FreeCAD IDF + NIST corpus 32 / 32, IGES twins 4 / 4 — newest mission log. Also today: Deviation Preview — the Accuracy Report's colours on the part; the scan's profile straightened; `item.select`) — **Accuracy Report** (one body measured against
+Last updated: 2026-10-24 (every axis of revolution: `fit_axes.py` finds a scan's axes from its normals and the tracer builds each body on its own axis — the valve goes from 65 % to 95 %, the hydrant's nozzles to 1 mm, the wheel's stand as bars, no more spikes to the apex, a hand-wheel's openings cut; `preview_model.py` rebuilds the model offline; all ten films and both reels re-taken — newest mission log bullet under 2026-10-20. Before that, 2026-10-22, the fidelity pass: the scan trace reads the surface finely, containers get a subtracted cavity, dished parts a traced half-section, and `fit_features.py` / `build_features.py` add the handles, hoses, levers and chains a revolve cannot make — can and bollard PASS, the rest 88–97 % except the out-of-round pail and drum and the two-axis valve; the film and the reel revolve the build's own half-section — all ten corpus films and both reels re-taken on the rebuilt models; scan-to-CAD builds are now inspected both ways with depth maps and a review sheet — `inspect_fit.py`, gating the films and the reel; arcs and hollow revolves in the scan pipeline; a C-clamp rebuilt from recipes to 0.05 mm — the newest mission log bullet under 2026-10-20; a corpus of ten Sketchfab scans built over MCP, graded and filmed; CAD import over MCP: STEP and IGES sew loose faces into solids and sheet bodies, exact bounds, DXF units and ellipses, an open-mesh notice, and agents import STEP / IGES / DXF / FCStd; an OCCT oracle, a live MCP runner and offline XCTests behind it; test pack 36 / 36, FreeCAD IDF + NIST corpus 32 / 32, IGES twins 4 / 4 — newest mission log. Also today: Deviation Preview — the Accuracy Report's colours on the part; the scan's profile straightened; `item.select`) — **Accuracy Report** (one body measured against
 another: orthographic silhouette overlays per view, outline and surface
 deviation both ways; `Kernel/AccuracyKit.swift`, Views ▸ Accuracy Report…,
 `/v1/accuracy` + `/v1/accuracy/image`, MCP ops `accuracy` /
@@ -74,6 +74,47 @@ passes alone.
   every B-rep body's bounds with `BRepBndLib::AddOptimal` on exact geometry
   on every call, which a dense STEP import could make slow — cache on the
   body's mesh revision if an agent loop ever feels it.
+
+## Mission log — 2026-10-24, scan-to-CAD: every axis of revolution
+
+"Its much better but still see lots of errors like in [the valve]." The
+valve was one axis and one profile — its body a 43 mm drum, its nipple a
+cone to the apex, its branches lumps — at 65 %.
+
+- **`fit_axes.py`** finds every revolve axis of a scan: nearby normal
+  pairs vote for directions (plus the principal directions), normal lines
+  vote for each direction's position, each candidate is refined on its
+  inliers and judged on *rings* outside the bodies already accepted,
+  best-first, and must run into (or through, with rings both sides) an
+  accepted body with nothing straight on past a free end. Faces are
+  labelled by body. The valve: body, pipe, two branches, side port; the
+  hydrant: barrel, twin side nozzles (one axis through the barrel, split
+  at it), pumper; nothing on the single-axis parts (a mug handle's arms
+  run on into their bends; a hose runs into nothing).
+- **`analyze_scan.py`** traces each other body on its own axis
+  (`secondary=True`), trims its root where the parent's skin cuts its
+  rings and lengthens it into the parent; the main trace sees only its
+  own and nobody's faces; the main axis is the finder's strongest body
+  when no principal direction is clean. A non-cap top is left to the
+  feature fit instead of a spike (valve lever, extinguisher handle); an
+  arc that rises less than 0.4 × what it narrows by is a step; a gap in
+  the bands carries the lower radius up; +Y is up when the axis is near
+  it, falling back to the wider end when that puts an open end at the
+  bottom; a ground band must reach beyond the body (a drum's floor is
+  no sidewalk); a hand-wheel's openings between its spokes are found
+  (`find_windows`) and cut as partial revolves.
+- **Build, film, reel** revolve the bodies and cut the openings
+  (`secondary_sections`, `revolve_secondary`, `window_sections`,
+  `cut_window`); `sketch_entities` welds sub-0.1 mm stubs, meets arcs
+  exactly and snaps only a short line's nearer end (the app's solver
+  merged a 0.04 mm line into nothing: "revolve profile unresolved").
+- **`preview_model.py`** (new): the model rebuilt offline with manifold
+  booleans, within 0.5 IoU points of the app; `fit_features.bar_fit`:
+  the wheel stand's post and beam as C-channel bars.
+- Results: valve 65 → 95 % (0.7 mm), hydrant 95 → 98 % (6.3 → 1.1 mm),
+  wheel 89 → 95 % (17.9 → 4.9 mm scan→model), both extinguishers up;
+  the rest unchanged. 32 tests pass. Docs: `docs/SCAN_TO_CAD.md` ("More
+  than one axis").
 
 ## Mission log — 2026-10-21, importing other people's CAD over MCP: an oracle, a live runner, and five reader defects
 

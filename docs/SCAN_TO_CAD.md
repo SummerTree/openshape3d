@@ -361,6 +361,28 @@ A FAIL here is not filmed and not in the reel without `--allow-fail`;
 the films and reels made on 2026-10-21 predate the rebuild and show the
 old models.
 
+Rebuilt on 2026-10-24 with every axis of revolution found (`fit_axes.py`,
+*More than one axis* below), the residual fit's bars, no spikes to the
+apex and a hand-wheel's openings cut (`run_corpus.py --analyze`; every
+one a valid solid):
+
+| Scan (Sketchfab, CC-BY) | Overlap | Model→scan | Scan→model | Inspection | What changed |
+|---|---:|---:|---:|---|---|
+| Fire Extinguisher Old Rusty 3D Scan | 98 % | 0.8 mm | 0.9 mm | WARN | strap handle, knob and outlet as features |
+| Fire Extinguisher | 92 % | 3.7 mm | 2.5 mm | FAIL (depth) | no spike to the apex; hose, horn, grip and levers as features |
+| Scan Fire Hydrant 02-Freepoly.org | 98 % | 1.1 mm | 1.8 mm | WARN | the three nozzles are bodies on their own axes (the twin side nozzles one axis through the barrel, split at it); was 6.3 mm |
+| Concrete Bollard Scan 01 | 100 % | 1.4 mm | 0.6 mm | PASS | unchanged |
+| Pail Bucket Plastic 3D Scan | 77 % | 1.8 mm | 2.3 mm | FAIL (oval scan) | unchanged |
+| Old tin barrel | 97 % | 5.0 mm | 7.1 mm | FAIL (dented scan) | the floor disc is no longer trimmed as a sidewalk |
+| WD40 Scan LOWPOLY | 99 % | 0.2 mm | 0.3 mm | PASS | unchanged |
+| Bavarian Beer Mug | 97 % | 1.1 mm | 0.7 mm | WARN | unchanged (its handle's arms are no bodies: the scan runs on past them) |
+| Truck wheel with rusty rim | 95 % | 9.3 mm | 4.9 mm | FAIL (depth) | the stand's post and beam as bars; was 89 % / 17.9 mm |
+| Pipe Wheel 3D scan | 95 % | 0.7 mm | 2.0 mm | FAIL (depth) | body, pipe, two branches and side port on five axes, hand-wheel openings; was 65 % / 8.2 mm |
+
+The depth checks (2–3 mm) still fail where a scan is oval or dented, on a
+tyre's tread, and on cast detail a revolve smooths over; the silhouettes
+pass everywhere but the oval pail's top view.
+
 ### The reel — `reel.py`
 
 One film of the whole corpus, cut two ways: `reel-16x9.mp4` for a page or
