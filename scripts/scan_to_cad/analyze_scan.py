@@ -904,13 +904,21 @@ def analyze(mesh, band_mm=None, lump_margin_mm=6.0, out_dir=None, name="scan", e
         own_v[np.unique(np.asarray(mesh.faces)[face_labels == 0])] = True
     else:
         own_v = np.ones(len(points), dtype=bool)
+    # A sidewalk reaches far beyond the part; a drum's floor disc spreads
+    # its radii just as widely but stays inside the body's radius, and
+    # is the floor (trimmed, the drum read as open at the bottom).
+    mid = (h > lo + 0.3 * span) & (h < hi - 0.3 * span) & own_v
+    body_guess = float(np.median(radius[mid])) if mid.sum() >= 50 else float(np.median(radius[own_v])) if own_v.any() else 0.0
+    reach = []
     for i in range(len(edges) - 1):
         sel = (h >= edges[i]) & (h < edges[i + 1]) & own_v
         spread.append(np.percentile(radius[sel], 80) - np.percentile(radius[sel], 20) if sel.sum() >= 20 else np.nan)
+        reach.append(np.percentile(radius[sel], 80) if sel.sum() >= 20 else np.nan)
     spread = np.array(spread)
+    reach = np.array(reach)
     base_index = 0
     for i in range(min(12, len(spread))):
-        if not np.isnan(spread[i]) and spread[i] > 60:
+        if not np.isnan(spread[i]) and spread[i] > 60 and reach[i] > 1.25 * body_guess:
             base_index = i + 1
     if secondary:
         base_index = 0
