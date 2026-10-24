@@ -8,7 +8,7 @@ A turned body explains a can or a bollard outright; a pail has a handle, a
 mug a handle and a lid lever, an extinguisher a hose, a horn and a grip. This
 reads the scan against the model already built, keeps every scan triangle
 that lies farther than a few tolerances from it, splits those into connected
-pieces, and tries the three things a CAD feature can be on each piece:
+pieces, and tries the four things a CAD feature can be on each piece:
 
     sweep     a tube — a wire handle, a hose, a strap: the piece's geodesic
               spine is traced, the centreline found by mean-shift inside it,
@@ -20,6 +20,11 @@ pieces, and tries the three things a CAD feature can be on each piece:
               direction by PCA, the outline in the plane as lines and arcs
               (an alpha shape of the projected points), extruded to the
               measured thickness
+    bar       a straight bar, or a frame of them — a post, a beam, an angle
+              or channel, a stand welded from two: the directions along
+              which the piece is long, each bar's section read as the cells
+              of the plane across it that its points run the length of,
+              extruded that length (`bar_fit`; built as an extrude)
 
 Each candidate is scored by the share of the piece's points it covers within
 tolerance; the best one wins, what it leaves uncovered is split again and
@@ -163,6 +168,13 @@ def far_components(scan, model_tree, far, min_area):
 # ---- sweep ------------------------------------------------------------------
 
 DEBUG = bool(os.environ.get("FIT_DEBUG"))
+
+# A bar has to explain this much scan (mm²) to be worth a feature: `main`
+# sets it from the scan's area (a quarter of a percent, 400 mm² at least).
+# A chain's links and a rod's mounting bracket each read as a handful of
+# little prisms, every one "100 % on it" — and spent the hydrant's budget
+# ahead of its lugs.
+BAR_MIN_AREA = 400.0
 
 
 def say(*parts):
@@ -391,6 +403,15 @@ def tube_fit(comp, tol, far, model_tree):
                              "profile": [[round(float(q), 2), round(float(hh), 2)] for q, hh in prof],
                              "lengthMM": round(span, 1), "radiusMM": round(r, 2), "cone": True})
             say("tube: run of %d is a cone (r %.1f → %.1f over %.0f mm): a revolve" % (len(run), rr[0], rr[-1], span))
+            continue
+        # A steady run three times fatter than the chords measured is not
+        # the tube they measured: a stand's post and beam, walked through
+        # by the geodesic, gave a 42 mm "tube" on a piece whose chords
+        # said 7 (the app refused the sweep; the bars are the story). Only
+        # when the chords measured something — a thin shell's chords are
+        # a millimetre whatever the tube.
+        if r0 >= 2.0 * tol and r > 3.0 * r0:
+            say("tube: run of %d dropped (r %.1f): three times the chord radius %.1f" % (len(run), r, r0))
             continue
         # Ends that meet the body run on into it; a free end gets back the
         # half bin the mean took off it.
@@ -655,15 +676,572 @@ def resample_closed(loop, step):
     return np.column_stack([np.interp(targets, s, closed[:, k]) for k in range(2)])
 
 
+# ---- bars -------------------------------------------------------------------
+
+def farthest_seeds(pts, k, rng):
+    """`k` points spread over the cloud: farthest-point sampling from a
+    random start."""
+    idx = [int(rng.integers(len(pts)))]
+    d = np.linalg.norm(pts - pts[idx[0]], axis=1)
+    for _ in range(k - 1):
+        j = int(np.argmax(d))
+        idx.append(j)
+        d = np.minimum(d, np.linalg.norm(pts - pts[j], axis=1))
+    return idx
+
+
+def plane_frame(d):
+    """Two unit vectors across `d` with e1 × e2 = d (a sketch plane whose
+    normal is the bar's direction, so a positive extrude runs along it)."""
+    e1 = unit(np.cross(d, [0, 0, 1.0]) if abs(d[2]) < 0.9 else np.cross(d, [1.0, 0, 0]))
+    e2 = np.cross(d, e1)
+    return e1, e2
+
+
+class PrismGrid:
+    """The piece's points projected along a direction d onto a grid of
+    `cell` mm. A bar along d stacks every point of its length into the
+    cells of its section, so those cells hold points spread the whole
+    length; a plate crossing the view, or another bar, puts its points
+    into a cell at one height only."""
+
+    def __init__(self, pts, d, cell):
+        self.d = d
+        self._pts = pts
+        self.e1, self.e2 = plane_frame(d)
+        self.xy = np.column_stack([pts @ self.e1, pts @ self.e2])
+        self.h = pts @ d
+        self.cell = cell
+        ij = np.floor(self.xy / cell).astype(int)
+        self.cells = {}
+        for k, key in enumerate(map(tuple, ij)):
+            self.cells.setdefault(key, []).append(k)
+        self.spread = {}
+        for key, m in self.cells.items():
+            self.spread[key] = (float(np.percentile(self.h[m], 90) - np.percentile(self.h[m], 10))
+                                if len(m) >= 3 else 0.0)
+
+    def best_seed(self, used=None, min_spread=0.0):
+        """The cell whose points not yet used run farthest along d: the
+        wall of the longest bar still unexplained. (A cell under a bar
+        already taken, with its used points at one height and a stray at
+        another, read as the longest column of all.)"""
+        best, best_s = None, min_spread
+        for key, m in self.cells.items():
+            if used is not None:
+                m = [k for k in m if not used[k]]
+            if len(m) < 6:
+                continue
+            hh = self.h[m]
+            lo, hi = float(np.percentile(hh, 10)), float(np.percentile(hh, 90))
+            s = hi - lo
+            if s <= best_s:
+                continue
+            # A wall's column holds points all along it; a cap's few
+            # points at one end and a stray at the other do not.
+            bins = np.floor((hh - lo) / max(s / 16.0, 1e-9)).astype(int)
+            if len(np.unique(bins[(bins >= 0) & (bins < 16)])) < 8:
+                continue
+            best, best_s = key, s
+        return best, best_s
+
+    def footprint(self, seed_key, used=None, bins=16, min_occupancy=0.2):
+        """The section's points, flood-filled from the seed cell over
+        8-neighbours that hold at least two unused points, have a fair
+        share of them (15 %) in the middle 40 % of the length — clear of
+        the joints at either end: a foot bracket, the bar this one meets —
+        and occupy at least `min_occupancy` of `bins` height bins.
+        Returns (point indices, length) or (None, spread)."""
+        s0 = self.spread.get(seed_key, 0.0)
+        if s0 < 3 * self.cell:
+            return None, s0
+        block = [k for di in (-1, 0, 1) for dj in (-1, 0, 1)
+                 for k in self.cells.get((seed_key[0] + di, seed_key[1] + dj), [])]
+        hb = self.h[block]
+        h_lo, h_hi = float(np.percentile(hb, 5)), float(np.percentile(hb, 95))
+        if h_hi - h_lo < 3 * self.cell:
+            return None, s0
+        width = (h_hi - h_lo) / bins
+        mid_lo, mid_hi = h_lo + 0.3 * (h_hi - h_lo), h_hi - 0.3 * (h_hi - h_lo)
+
+        def occupancy(members):
+            if len(members) < 2:
+                return 0.0
+            b = np.floor((self.h[members] - h_lo) / width).astype(int)
+            b = b[(b >= 0) & (b < bins)]
+            return len(np.unique(b)) / float(bins)
+
+        def in_middle(members):
+            hh = self.h[members]
+            return int(((hh >= mid_lo) & (hh <= mid_hi)).sum())
+        seen = {seed_key}
+        stack = [seed_key]
+        members = []
+        while stack:
+            c = stack.pop()
+            members.extend(self.cells.get(c, []))
+            for di in (-1, 0, 1):
+                for dj in (-1, 0, 1):
+                    nb = (c[0] + di, c[1] + dj)
+                    if nb in seen:
+                        continue
+                    mm = self.cells.get(nb, [])
+                    if used is not None:
+                        mm = [k for k in mm if not used[k]]
+                    if len(mm) >= 2 and in_middle(mm) >= max(2, 0.15 * len(mm)) and occupancy(mm) >= min_occupancy:
+                        seen.add(nb)
+                        stack.append(nb)
+        members = np.array(sorted(set(members)), dtype=int)
+        if used is not None:
+            members = members[~used[members]]
+        # Only the points within the bar's own length (a joint's strays in
+        # a shared cell sit beyond it).
+        margin = 2 * self.cell
+        members = members[(self.h[members] >= h_lo - margin) & (self.h[members] <= h_hi + margin)]
+        return members, h_hi - h_lo
+
+
+def sharpen_direction(P, d, cell, steps=(4.0, 2.0, 1.0, 0.5), budget=120):
+    """The direction along which a bar's points project sharpest: a hill
+    climb from `d`, tilting by `steps` degrees across it, on the number
+    of grid cells (of `cell` mm) the projection fills with three or more
+    points — a bar seen along its own axis stacks every point onto its
+    section's walls; a few degrees off, the walls smear to twice the
+    cells. (The PCA of the points tilted toward a bracket at one end.)"""
+    P = np.asarray(P, dtype=float)
+
+    def cost(dd):
+        e1, e2 = plane_frame(dd)
+        ij = np.floor(np.column_stack([P @ e1, P @ e2]) / cell).astype(int)
+        _, counts = np.unique(ij, axis=0, return_counts=True)
+        return int((counts >= 3).sum())
+    best, best_cost = unit(d), cost(d)
+    evaluations = 1
+    for step in steps:
+        tilt = math.tan(math.radians(step))
+        improved = True
+        while improved and evaluations < budget:
+            improved = False
+            e1, e2 = plane_frame(best)
+            for du, dv in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+                cand = unit(best + tilt * (du * e1 + dv * e2))
+                c = cost(cand)
+                evaluations += 1
+                if c < best_cost:
+                    best, best_cost = cand, c
+                    improved = True
+                    break
+    return best
+
+
+def raster_outline(xy, cell, min_count=None):
+    """The outline of a section from its projected points, by occupancy
+    rather than by an alpha shape (a thick, noisy, double-walled channel
+    gave the alpha shape loops through its own walls): cells of `cell` mm
+    that hold enough points — a wall stacks the whole length's points, a
+    joint's stragglers do not — one-cell gaps closed, the largest blob
+    kept, its cell-edge boundary chained into a loop. Returns (loop (n,2),
+    area mm², seed (a point well inside the material)) or None."""
+    from scipy import ndimage
+    xy = np.asarray(xy, dtype=float)
+    if len(xy) < 4:
+        return None
+    lo = xy.min(axis=0) - 2 * cell
+    ij = np.floor((xy - lo) / cell).astype(int)
+    shape = (int(ij[:, 0].max()) + 3, int(ij[:, 1].max()) + 3)
+    counts = np.zeros(shape, dtype=int)
+    np.add.at(counts, (ij[:, 0], ij[:, 1]), 1)
+    occupied = counts[counts > 0]
+    if min_count is None:
+        min_count = max(2.0, 0.15 * float(np.percentile(occupied, 75)))
+    mask = counts >= min_count
+    if mask.sum() < 4:
+        return None
+    mask = ndimage.binary_closing(mask, structure=np.ones((3, 3), dtype=bool))
+    labels, n = ndimage.label(mask)
+    if n == 0:
+        return None
+    sizes = ndimage.sum(mask, labels, index=np.arange(1, n + 1))
+    blob = labels == (int(np.argmax(sizes)) + 1)
+    edges = {}
+
+    def add(a, b):
+        edges.setdefault(a, []).append(b)
+        edges.setdefault(b, []).append(a)
+    padded = np.zeros((blob.shape[0] + 2, blob.shape[1] + 2), dtype=bool)
+    padded[1:-1, 1:-1] = blob
+    for i in range(1, padded.shape[0] - 1):
+        for j in range(1, padded.shape[1] - 1):
+            if not padded[i, j]:
+                continue
+            if not padded[i - 1, j]:
+                add((i, j), (i, j + 1))
+            if not padded[i + 1, j]:
+                add((i + 1, j), (i + 1, j + 1))
+            if not padded[i, j - 1]:
+                add((i, j), (i + 1, j))
+            if not padded[i, j + 1]:
+                add((i, j + 1), (i + 1, j + 1))
+    best = []
+    seen_edges = set()
+    for start in list(edges):
+        for first in edges[start]:
+            if (start, first) in seen_edges:
+                continue
+            loop = [start]
+            prev, cur = start, first
+            seen_edges.add((start, first))
+            seen_edges.add((first, start))
+            while cur != start:
+                loop.append(cur)
+                options = [q for q in edges[cur] if q != prev and (cur, q) not in seen_edges]
+                if not options:
+                    break
+                nxt = options[0]
+                seen_edges.add((cur, nxt))
+                seen_edges.add((nxt, cur))
+                prev, cur = cur, nxt
+            if len(loop) > len(best):
+                best = loop
+    if len(best) < 4:
+        return None
+    pts = np.array([[(i - 1) * cell + lo[0], (j - 1) * cell + lo[1]] for i, j in best], dtype=float)
+    # The cell corners stand up to a cell outside the points: each corner
+    # is pulled onto the outermost point within a cell of it (outermost
+    # along the corner's own outward normal, so a square's corner stays
+    # a corner), and the outline hugs the cloud — a staircase a cell too
+    # big all round read as a section 6 mm wider than the channel.
+    signed = float(np.dot(pts[:, 0], np.roll(pts[:, 1], -1)) - np.dot(pts[:, 1], np.roll(pts[:, 0], -1)))
+    prev_e = pts - np.roll(pts, 1, axis=0)
+    next_e = np.roll(pts, -1, axis=0) - pts
+    turn = 1.0 if signed > 0 else -1.0          # counter-clockwise: outward is the right-hand side
+    normals = np.column_stack([prev_e[:, 1] + next_e[:, 1], -(prev_e[:, 0] + next_e[:, 0])]) * turn
+    lengths = np.linalg.norm(normals, axis=1)
+    normals = normals / np.where(lengths > 1e-9, lengths, 1.0)[:, None]
+    tree = cKDTree(xy)
+    snapped = pts.copy()
+    for k, (v, nv) in enumerate(zip(pts, normals)):
+        near = tree.query_ball_point(v, cell)
+        if not near:
+            continue
+        cand = xy[near]
+        snapped[k] = cand[int(np.argmax((cand - v) @ nv))]
+    if not _loop_crosses_itself(snapped):
+        pts = snapped
+    area = float(blob.sum()) * cell * cell
+    dist = ndimage.distance_transform_edt(blob)
+    si, sj = np.unravel_index(int(np.argmax(dist)), dist.shape)
+    seed = [float((si + 0.5) * cell + lo[0]), float((sj + 0.5) * cell + lo[1])]
+    return pts, area, seed
+
+
+def segments_polyline(segments, step=1.0):
+    """The closed polyline of a list of lines and arcs (an arc sampled
+    every `step` mm along it, the way it is drawn)."""
+    out = []
+    for s in segments:
+        a = np.asarray(s["a"], dtype=float)
+        if s["kind"] == "line":
+            out.append(a)
+            continue
+        c, r = np.asarray(s["center"], dtype=float), float(s["radius"])
+        b = np.asarray(s["b"], dtype=float)
+        a0, a1 = math.atan2(a[1] - c[1], a[0] - c[0]), math.atan2(b[1] - c[1], b[0] - c[0])
+        if s.get("ccw", True):
+            while a1 <= a0:
+                a1 += 2 * math.pi
+        else:
+            while a1 >= a0:
+                a1 -= 2 * math.pi
+        n = max(2, int(abs(a1 - a0) * r / step))
+        for t in np.linspace(a0, a1, n, endpoint=False):
+            out.append(np.array([c[0] + r * math.cos(t), c[1] + r * math.sin(t)]))
+    return np.array(out, dtype=float)
+
+
+def interior_seed(loop, step):
+    """A point well inside a polygon: of a grid of `step` mm over its box,
+    the inside point farthest from the edge (the sketch's region pick
+    needs one; a thin section's blob centre can fall outside the outline
+    once its corners are pulled onto the points)."""
+    loop = np.asarray(loop, dtype=float)
+    lo, hi = loop.min(axis=0), loop.max(axis=0)
+    xs = np.arange(lo[0] + step / 2, hi[0], step)
+    ys = np.arange(lo[1] + step / 2, hi[1], step)
+    if len(xs) == 0 or len(ys) == 0:
+        return [float(v) for v in loop.mean(axis=0)]
+    grid = np.array([[x, y] for x in xs for y in ys])
+    inside = np.array([point_in_polygon(q, loop) for q in grid])
+    if not inside.any():
+        return [float(v) for v in loop.mean(axis=0)]
+    tree = cKDTree(np.vstack([loop, resample_closed(loop, max(step / 2, 0.25))]))
+    d_edge, _ = tree.query(grid[inside])
+    best = grid[inside][int(np.argmax(d_edge))]
+    return [float(best[0]), float(best[1])]
+
+
+def _loop_crosses_itself(loop):
+    """Whether any two non-adjacent edges of a closed polyline cross."""
+    P = np.asarray(loop, dtype=float)
+    n = len(P)
+    if n < 4:
+        return False
+    A, B = P, np.roll(P, -1, axis=0)
+
+    def orient(p, q, r):
+        return (q[:, 0] - p[:, 0]) * (r[:, 1] - p[:, 1]) - (q[:, 1] - p[:, 1]) * (r[:, 0] - p[:, 0])
+    for i in range(n):
+        j = np.arange(n)
+        ok = (j != i) & (j != (i - 1) % n) & (j != (i + 1) % n)
+        if not ok.any():
+            continue
+        a, b = np.repeat(A[i][None], n, axis=0), np.repeat(B[i][None], n, axis=0)
+        c, d = A, B
+        o1, o2 = orient(a, b, c), orient(a, b, d)
+        o3, o4 = orient(c, d, a), orient(c, d, b)
+        cross = (o1 * o2 < 0) & (o3 * o4 < 0) & ok
+        if cross.any():
+            return True
+    return False
+
+
+def prism_covered(P, origin, e1, e2, d, loop, half, tol):
+    """Points within `tol` of a prism: inside its length, and inside the
+    section's outline or within `tol` of its edge (the outline hugs the
+    section's own points, so the prism is the material, not a hull)."""
+    rel = P - origin
+    h = rel @ d
+    xy = np.column_stack([rel @ e1, rel @ e2])
+    loop_tree = cKDTree(np.vstack([loop, resample_closed(loop, 1.0)]))
+    d_edge, _ = loop_tree.query(xy)
+    within = np.abs(h) <= half + tol
+    near = within & (d_edge <= 2.5 * tol)
+    inside = np.zeros(len(P), dtype=bool)
+    if near.any():
+        inside[near] = np.array([point_in_polygon(q, loop) for q in xy[near]])
+    return within & (inside | (d_edge <= tol))
+
+
+def bar_fit(comp, tol, far, model_tree):
+    """A piece as straight bars. Directions: the long axis of elongated
+    patches round seeds spread over the piece (a 45 mm channel reads as a
+    line at a 70 mm scale), grouped within 12°. For each direction, from
+    the cell whose points run farthest along it, the section is flood-
+    filled on the grid across it (`PrismGrid.footprint`), its outline
+    rasterised (`raster_outline`), and the bar kept when, bin by bin
+    along its length, the median share of its points on the prism is at
+    least a half (a joint's junk fills one end bin; a bent handle read as
+    straight drifts off in most). Bars are taken greedily by the new
+    vertices each covers, up to four; each is an extrude of its section,
+    symmetric about the bar's middle, run on into the body or into the
+    bar it meets."""
+    pts, _ = component_points(comp)
+    n = len(pts)
+    if n < 80:
+        return None
+    tree = cKDTree(pts)
+    nn, _ = tree.query(pts, k=2)
+    spacing = float(np.median(nn[:, 1]))
+    lo, hi = pts.min(axis=0), pts.max(axis=0)
+    diag = float(np.linalg.norm(hi - lo))
+    R = max(8.0 * tol, 6.0 * spacing, 0.08 * diag)
+    rng = np.random.default_rng(11)
+    seeds = farthest_seeds(pts, max(4, min(24, n // 10)), rng)
+    cands = []
+    for s in seeds:
+        # Three scales: a patch a section wide reads round, one a few
+        # sections long reads as a line; at a joint the smallest scale
+        # keeps to one bar. The most elongated wins.
+        best = None
+        for scale in (1.0, 2.0, 3.0):
+            near = tree.query_ball_point(pts[s], scale * R)
+            if len(near) < 12:
+                continue
+            P = pts[near]
+            c = P.mean(axis=0)
+            _, S, _vt = np.linalg.svd(P - c, full_matrices=False)
+            if S[1] < 1e-9:
+                continue
+            if best is None or S[0] / S[1] > best[0]:
+                best = (S[0] / S[1], unit(_vt[0]), s, near)
+        if best is not None and best[0] >= 1.5:
+            # The patch's own sharpest projection: its PCA axis leans a
+            # few degrees toward whatever else the ball caught.
+            elong, d0, s, near = best
+            cands.append((elong, sharpen_direction(pts[near], d0, max(tol, 1.5 * spacing, 1.0)), s))
+    cands.sort(key=lambda c: -c[0])
+    groups = []
+    for elong, d, s in cands:
+        for g in groups:
+            if abs(g["d"] @ d) > math.cos(math.radians(12)):
+                g["seeds"].append(s)
+                g["dirs"].append(d if d @ g["d"] > 0 else -d)
+                g["d"] = unit(np.mean(g["dirs"], axis=0))
+                break
+        else:
+            groups.append({"d": d, "seeds": [s], "dirs": [d], "elong": elong})
+    groups.sort(key=lambda g: (-len(g["seeds"]), -g["elong"]))
+    say("bar: %d seeds, %d elongated patches, %d directions (R %.0f mm, spacing %.1f)" % (
+        len(seeds), len(cands), len(groups), R, spacing))
+    if not groups:
+        return None
+    cell = max(tol, 1.5 * spacing, 1.0)
+    bars = []
+    used = np.zeros(n, dtype=bool)
+    for g in groups[:6]:
+        grid = PrismGrid(pts, g["d"], cell)
+        first = None
+        for _ in range(3):
+            seed_key, _s = grid.best_seed(used=used, min_spread=(0.5 * first if first else 3 * cell))
+            if seed_key is None:
+                say("bar: along %s: no cell runs far enough" % np.round(g["d"], 2).tolist())
+                break
+            members, length = grid.footprint(seed_key, used=used)
+            if members is None or len(members) < 40:
+                say("bar: along %s: the section from cell %s (spread %.0f) holds %d points" % (
+                    np.round(g["d"], 2).tolist(), seed_key, _s, 0 if members is None else len(members)))
+                break
+            if first is None:
+                first = length
+            d = g["d"]
+            # The direction, sharpened on the section's own points (the
+            # PCA of all of them tilted 4° toward a bracket at the foot,
+            # and the section smeared to twice its width); the section is
+            # then read again along it.
+            d_ref = sharpen_direction(pts[members], d, cell)
+            if abs(d_ref @ d) > math.cos(math.radians(15)):
+                d = d_ref if d_ref @ d > 0 else -d_ref
+                grid2 = PrismGrid(pts, d, cell)
+                seed_pt = pts[grid.cells[seed_key][0]]
+                key2 = tuple(np.floor(np.array([seed_pt @ grid2.e1, seed_pt @ grid2.e2]) / cell).astype(int))
+                members2, length2 = grid2.footprint(key2, used=used)
+                if members2 is not None and len(members2) >= 40:
+                    members, length = members2, length2
+            P = pts[members]
+            c = P.mean(axis=0)
+            e1, e2 = plane_frame(d)
+            rel = P - c
+            h = rel @ d
+            xy = np.column_stack([rel @ e1, rel @ e2])
+            # The length: nearly the full spread of the points (a free end's
+            # last points are the end), each free end then run on a
+            # tolerance so the cap reaches them.
+            h_lo, h_hi = float(np.percentile(h, 0.5)), float(np.percentile(h, 99.5))
+            L = h_hi - h_lo
+            mid = (h > h_lo + 0.1 * L) & (h < h_hi - 0.1 * L)
+            sxy = xy[mid] if mid.sum() >= 40 else xy
+            used[members] = True
+            raster = raster_outline(sxy, cell)
+            if raster is None:
+                say("bar: along %s: no outline" % np.round(d, 2).tolist())
+                continue
+            loop, _area, seed2d = raster
+            loop = np.array(douglas_peucker_2d(np.vstack([loop, loop[:1]]), max(0.7 * cell, 0.4))[:-1])
+            if len(loop) < 3:
+                continue
+            if not point_in_polygon(seed2d, loop):
+                seed2d = interior_seed(loop, max(0.5 * cell, 0.5))
+            ext = np.ptp(loop, axis=0)
+            section = float(ext.max())
+            if L < 1.5 * section:
+                say("bar: along %s: length %.0f under 1.5 × its section %.0f" % (np.round(d, 2).tolist(), L, section))
+                continue
+            area = 0.5 * abs(float(np.dot(loop[:, 0], np.roll(loop[:, 1], -1)) - np.dot(loop[:, 1], np.roll(loop[:, 0], -1))))
+            half = L / 2
+            origin = c + d * ((h_lo + h_hi) / 2)
+            own = prism_covered(P, origin, e1, e2, d, loop, half, tol)
+            hb = np.clip(((h - h_lo) / max(L, 1e-9) * 8).astype(int), 0, 7)
+            per_bin = [own[hb == k].mean() for k in range(8) if (hb == k).sum() >= 10]
+            own_median = float(np.median(per_bin)) if per_bin else float(own.mean())
+            say("bar: along %s length %.0f section %.0f × %.0f area %.0f (%d outline points), %d points, on it %.0f%% (median bin %.0f%%)" % (
+                np.round(d, 2).tolist(), L, ext[0], ext[1], area, len(loop), len(P), own.mean() * 100, own_median * 100))
+            if own_median < 0.5:
+                continue
+            bars.append({"d": d, "e1": e1, "e2": e2, "origin": origin, "loop": loop, "half": half, "L": L,
+                         "section": section, "own": own_median, "area": area, "seed": seed2d})
+    if not bars:
+        say("bar: no bar survived")
+        return None
+    # Greedy, on the sampled points (a low-poly piece has too few vertices
+    # to count on): each bar must add a twentieth of the piece, and
+    # explain `BAR_MIN_AREA` of scan on its own.
+    taken = np.zeros(n, dtype=bool)
+    chosen = []
+    remaining = list(bars)
+    area = float(comp.area)
+    while remaining and len(chosen) < 4:
+        scored = []
+        for i, b in enumerate(remaining):
+            cv = prism_covered(pts, b["origin"], b["e1"], b["e2"], b["d"], b["loop"], b["half"], tol)
+            scored.append((int((cv & ~taken).sum()), i, cv))
+        scored.sort(key=lambda t: -t[0])
+        new, i, cv = scored[0]
+        if new < max(30, 0.05 * n):
+            break
+        explained = new / float(n) * area
+        if explained < BAR_MIN_AREA:
+            b = remaining.pop(i)
+            say("bar: along %s dropped: explains %.0f mm², under %.0f" % (np.round(b["d"], 2).tolist(), explained, BAR_MIN_AREA))
+            continue
+        taken |= cv
+        chosen.append(remaining.pop(i))
+    if not chosen:
+        say("bar: no bar covers enough of the piece")
+        return None
+    verts = np.asarray(comp.vertices, dtype=float)
+    covered = np.zeros(len(verts), dtype=bool)
+    for b in chosen:
+        covered |= prism_covered(verts, b["origin"], b["e1"], b["e2"], b["d"], b["loop"], b["half"], tol)
+    features = []
+    for b in chosen:
+        d, e1, e2, origin, loop, half = b["d"], b["e1"], b["e2"], b["origin"], b["loop"], b["half"]
+        grow = [0.0, 0.0]
+        rel_all = pts - origin
+        h_all = rel_all @ d
+        lat = np.column_stack([rel_all @ e1, rel_all @ e2])
+        lateral = np.linalg.norm(lat - loop.mean(axis=0), axis=1)
+        for k, sign in enumerate((-1.0, 1.0)):
+            end = origin + d * sign * half
+            dm, _ = model_tree.query(end)
+            if dm < far + 2.0:
+                grow[k] = far + 3.0          # into the body, so the union fuses
+                continue
+            # The piece goes on past this end within the section's reach:
+            # the bar it is welded to — run on into it. A free end runs
+            # on a tolerance, to the last of its points.
+            past = (sign * h_all > half + tol) & (sign * h_all < half + 0.6 * b["section"]) & (lateral < 0.8 * b["section"])
+            grow[k] = 0.5 * b["section"] if past.sum() >= 20 else tol
+        origin = origin + d * ((grow[1] - grow[0]) / 2)
+        half2 = half + (grow[0] + grow[1]) / 2
+        segs = segments_from_loop(loop, tol=max(tol * 0.5, 0.3), max_radius=float(np.ptp(loop, axis=0).max()))
+        if len(segs) < 3:
+            segs = [{"kind": "line", "a": loop[i].tolist(), "b": loop[(i + 1) % len(loop)].tolist()} for i in range(len(loop))]
+        # The seed must lie inside the outline AS DRAWN (the line-and-arc
+        # fit merges close vertices and can move a thin section's edge
+        # past the blob's centre).
+        drawn = segments_polyline(segs)
+        seed = b["seed"]
+        if len(drawn) >= 3 and not point_in_polygon(seed, drawn):
+            seed = interior_seed(drawn, max(0.5 * cell, 0.5))
+        features.append({"kind": "extrude", "bar": True,
+                         "plane": {"origin": [round(float(v), 2) for v in origin],
+                                   "xAxis": [round(float(v), 5) for v in e1], "yAxis": [round(float(v), 5) for v in e2]},
+                         "segments": segs, "seed": [round(float(v), 3) for v in seed],
+                         "distance": round(half2, 2), "symmetric": True,
+                         "thicknessMM": round(b["L"], 2), "lengthMM": round(b["L"], 1), "sectionMM": round(b["section"], 1),
+                         "areaMM2": round(b["area"], 1), "ownCoverage": round(b["own"], 3)})
+    return {"kind": "bar", "features": features, "covered": covered, "coverage": float(covered.mean())}
+
+
 # ---- choosing ---------------------------------------------------------------
 
 def explain(comp, tol, far, model_tree, depth, out_features, unexplained, budget, label):
-    """Try the three fits on a piece, keep the best, recurse on the rest."""
+    """Try the four fits on a piece, keep the best, recurse on the rest."""
     if budget[0] <= 0:
         unexplained.append(describe(comp, "feature budget spent"))
         return
     candidates = []
-    for name, fn in (("sweep", tube_fit), ("revolve", revolve_fit), ("extrude", extrude_fit)):
+    for name, fn in (("sweep", tube_fit), ("revolve", revolve_fit), ("extrude", extrude_fit), ("bar", bar_fit)):
         try:
             res = fn(comp, tol, far, model_tree)
         except Exception as error:  # noqa: BLE001 — one fit's failure is not the piece's
@@ -677,22 +1255,33 @@ def explain(comp, tol, far, model_tree, depth, out_features, unexplained, budget
         unexplained.append(describe(comp, "no fit"))
         return
     # A sweep that covers as much as a block is the better story (a handle
-    # is a tube, not a slab); a revolve likewise over a block.
+    # is a tube, not a slab); a revolve likewise over a block. Bars come
+    # last: a chain or a lever read as a straight prism covers more of
+    # its points than the tube or the plate it is, so a bar only wins
+    # over a tube that covers 0.38 less, a plate 0.3 less — a stand's
+    # post and beam, where the tube fit has nothing and the slab a fifth.
     def score(c):
-        bonus = {"sweep": 0.08, "revolve": 0.05, "extrude": 0.0}[c["kind"]]
+        bonus = {"sweep": 0.08, "revolve": 0.05, "extrude": 0.0, "bar": -0.3}[c["kind"]]
         return c["coverage"] + bonus
-    best = max(candidates, key=score)
     # A sweep's runs were each proved on their own points, so a hose and
     # its horn count even when the valve beside them is left over; a
-    # revolve or a block is one fit for the whole piece and has to cover it.
-    needed = 0.25 if best["kind"] == "sweep" else 0.5
-    if best["coverage"] < needed:
-        unexplained.append(describe(comp, "best fit (%s) covers only %.0f%%" % (best["kind"], best["coverage"] * 100)))
+    # revolve, a block or a frame of bars is one fit for the whole piece
+    # and has to cover half of it. The best story that covers enough wins
+    # — a slab that covers too little does not stop the bars behind it.
+    needed = {"sweep": 0.25}
+    ranked = sorted(candidates, key=score, reverse=True)
+    best = next((c for c in ranked if c["coverage"] >= needed.get(c["kind"], 0.5)), None)
+    if best is None:
+        top = ranked[0]
+        unexplained.append(describe(comp, "best fit (%s) covers only %.0f%%" % (top["kind"], top["coverage"] * 100)))
         return
     for f in best["features"]:
-        f["name"] = "%s-%s" % (label, f["kind"])
+        f["name"] = "%s-%s" % (label, "bar" if f.get("bar") else f["kind"])
         f["coverage"] = round(best["coverage"], 3)
         f["areaMM2"] = round(float(comp.area), 1)
+        # The scan area this feature explains, the fit's share of the
+        # piece split evenly among its features (the budget ranks by it).
+        f["explainedMM2"] = round(float(comp.area) * best["coverage"] / len(best["features"]), 1)
         out_features.append(f)
         budget[0] -= 1
     # What the fit left: faces whose corners are all uncovered.
@@ -790,14 +1379,22 @@ def main():
     tol = args.tolerance
     far = args.far or max(4.0, 2.5 * tol)
     min_area = args.min_area or max(150.0, 0.004 * float(scan.area))
-    print("scan %d faces, model %d faces; far = %.1f mm, pieces ≥ %.0f mm²" % (len(scan.faces), len(model.faces), far, min_area), flush=True)
+    global BAR_MIN_AREA
+    BAR_MIN_AREA = max(400.0, 0.0025 * float(scan.area))
+    print("scan %d faces, model %d faces; far = %.1f mm, pieces ≥ %.0f mm², a bar explains ≥ %.0f mm²" % (
+        len(scan.faces), len(model.faces), far, min_area, BAR_MIN_AREA), flush=True)
     model_tree = surface_tree(model)
     pieces, d = far_components(scan, model_tree, far, min_area)
     far_share = float((d > far).mean())
     print("%.1f%% of the scan's vertices are farther than %.1f mm from the model: %d piece%s" % (
         far_share * 100, far, len(pieces), "" if len(pieces) == 1 else "s"), flush=True)
     features, unexplained = [], []
-    budget = [args.max_features]
+    # Every piece is explained first; the feature budget is then spent on
+    # the features that explain the most scan (coverage × the piece's
+    # area), not on whichever pieces came first — three small bars on a
+    # chain's links once spent the hydrant's last slots before its cap's
+    # nut and its lugs were reached.
+    budget = [10 ** 6]
     for k, comp in enumerate(pieces):
         label = "piece%d" % (k + 1)
         lo, hi = comp.bounds
@@ -813,6 +1410,17 @@ def main():
                 np.percentile(dv, 5), proud, comp.area), flush=True)
             continue
         explain(comp, tol, far, model_tree, 0, features, unexplained, budget, label)
+    if len(features) > args.max_features:
+        ranked = sorted(range(len(features)), key=lambda i: -features[i]["explainedMM2"])
+        keep = set(ranked[: args.max_features])
+        for i in sorted(set(range(len(features))) - keep):
+            f = features[i]
+            unexplained.append({"why": "over the feature budget of %d: %s explains %.0f mm² of a %.0f mm² piece" % (
+                args.max_features, f["name"], f["explainedMM2"], f["areaMM2"]),
+                "areaMM2": f["areaMM2"], "name": f["name"]})
+        print("feature budget: %d of %d kept, by the scan area each explains (dropped %s)" % (
+            args.max_features, len(features), ", ".join(features[i]["name"] for i in sorted(set(range(len(features))) - keep))), flush=True)
+        features = [f for i, f in enumerate(features) if i in keep]
     result = {"scan": os.path.abspath(args.scan), "model": os.path.abspath(args.model), "toleranceMM": tol, "farMM": far,
               "farShare": round(far_share, 4), "pieces": len(pieces), "features": features, "unexplained": unexplained}
     with open(os.path.join(args.out, "features.json"), "w") as f:

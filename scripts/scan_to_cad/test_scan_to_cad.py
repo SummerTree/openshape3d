@@ -317,6 +317,59 @@ class FeatureBuilderTests(unittest.TestCase):
         self.assertAlmostEqual(float(loop[:, 1].max()), 20.0, delta=1.0)
 
 
+@unittest.skipUnless(HAVE_DEPS, "needs the scan_to_cad venv (trimesh, numpy, scipy, rtree, pillow)")
+class BarFitTests(unittest.TestCase):
+    def test_raster_outline_of_a_ring_is_its_outer_circle(self):
+        import fit_features as FF
+        rng = np.random.default_rng(3)
+        r = rng.uniform(8.0, 10.0, 4000)
+        a = rng.uniform(0, 2 * math.pi, 4000)
+        xy = np.column_stack([r * np.cos(a), r * np.sin(a)])
+        loop, area, seed = FF.raster_outline(xy, cell=1.0)
+        radii = np.linalg.norm(loop, axis=1)
+        self.assertAlmostEqual(float(radii.max()), 10.0, delta=1.5)
+        self.assertGreater(float(radii.min()), 8.0)          # the outer boundary, not the hole's
+        self.assertAlmostEqual(area, math.pi * (100 - 64), delta=0.5 * math.pi * 36)   # the ring's own cells
+        self.assertLess(math.hypot(*seed), 10.5)
+        self.assertFalse(FF._loop_crosses_itself(loop))
+
+    def test_a_welded_frame_is_two_bars(self):
+        """A post and a beam at right angles (an L of 20 mm square bars),
+        standing clear of a plate: two bars, each along its own axis, each
+        about 20 mm square, each about as long as the box it came from."""
+        import fit_features as FF
+        post = trimesh.creation.box(extents=(20, 20, 200))
+        post.apply_translation((0, 0, 100))
+        beam = trimesh.creation.box(extents=(150, 20, 20))
+        beam.apply_translation((75, 0, 190))
+        frame = trimesh.util.concatenate([post, beam])
+        plate = trimesh.creation.box(extents=(300, 300, 10))
+        plate.apply_translation((0, 0, -100))
+        res = FF.bar_fit(frame, 2.0, 5.0, FF.surface_tree(plate))
+        self.assertIsNotNone(res)
+        self.assertEqual(res["kind"], "bar")
+        self.assertEqual(len(res["features"]), 2)
+        self.assertGreater(res["coverage"], 0.7)           # of the boxes' 16 corners (the joint hides a few)
+        by_axis = {}
+        for f in res["features"]:
+            self.assertEqual(f["kind"], "extrude")
+            self.assertTrue(f.get("bar"))
+            self.assertTrue(f.get("symmetric"))
+            normal = np.cross(f["plane"]["xAxis"], f["plane"]["yAxis"])
+            axis = int(np.argmax(np.abs(normal)))
+            self.assertGreater(abs(normal[axis]), 0.98)
+            by_axis[axis] = f
+            self.assertTrue(16.0 <= f["sectionMM"] <= 27.0, f["sectionMM"])
+            # the seed lies inside the outline, as the sketch's region pick needs
+            loop = np.array([s["a"] for s in f["segments"] if s["kind"] == "line"])
+            self.assertTrue(FF.point_in_polygon(f["seed"], loop))
+        self.assertEqual(sorted(by_axis), [0, 2])                          # along x (the beam) and z (the post)
+        self.assertAlmostEqual(by_axis[2]["lengthMM"], 200.0, delta=12.0)
+        self.assertAlmostEqual(by_axis[0]["lengthMM"], 150.0, delta=12.0)
+        # the extrude is symmetric about the bar's middle: the post's origin sits at mid-height
+        self.assertAlmostEqual(by_axis[2]["plane"]["origin"][2], 100.0, delta=12.0)
+
+
 def run_inspect(reference, model, out, tolerance, up="y"):
     subprocess.run([sys.executable, "-I", os.path.join(HERE, "inspect_fit.py"), "--reference", reference,
                     "--model", model, "--out", out, "--tolerance", str(tolerance), "--up", up, "--title", "test"],
