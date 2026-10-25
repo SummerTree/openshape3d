@@ -534,7 +534,17 @@ class PartsLibraryTests(unittest.TestCase):
         self.assertAlmostEqual(f["section"]["widthMM"], 20.0, delta=2.0)
         self.assertAlmostEqual(f["section"]["thicknessMM"], 5.0, delta=0.5)
         self.assertIn(f["section"]["shape"], ("rectangle", "stadium"))
-        self.assertEqual(len(f["spine"]), 3 if f["bendRadiusMM"] == 0 else len(f["spine"]))
+        # The spine: three points for a sharp corner, the arc's points drawn
+        # in otherwise; an arc clears the section's reach toward the bend's
+        # centre (half the width, 10 mm, for a bar bent edgewise) by a
+        # tolerance at least, and no ring of the sweep folds back.
+        self.assertAlmostEqual(f["bendReachMM"], 10.0, delta=1.0)
+        if f["bendRadiusMM"] == 0:
+            self.assertEqual(len(f["spine"]), 3)
+        else:
+            self.assertGreater(len(f["spine"]), 3)
+            self.assertGreaterEqual(f["bendRadiusMM"], f["bendReachMM"] + 1.0)
+        self.assertEqual(FF.sweep_folds(FF.segments_polyline(f["section"]["segments"], 1.0), f["spine"], f["xAxis"]), [])
         self.assertEqual(len(f["corners"]), 1)
         self.assertAlmostEqual(sorted(f["legsMM"])[0], 50.0, delta=5.0)
         self.assertAlmostEqual(sorted(f["legsMM"])[1], 80.0, delta=8.0)
@@ -567,6 +577,50 @@ class PartsLibraryTests(unittest.TestCase):
         self.assertIn("section", tube["features"][0])
         self.assertAlmostEqual(tube["features"][0]["bendsDeg"][0], 90.0, delta=5.0)
         self.assertAlmostEqual(tube["features"][0]["section"]["widthMM"], 20.0, delta=2.0)
+
+    def test_a_bend_never_folds_the_section(self):
+        """An arc of half the width round a bar bent edgewise has no inside
+        — the sweep's rings fold back on themselves, yet the mesh still
+        closes at a plausible volume. `sweep_folds` sees the fold and the
+        preview refuses it; the fit keeps the bend's radius clear of the
+        section's reach (or the corner sharp): a 20 × 5 bar bent 30° and
+        60° edgewise gets arcs of 12 mm (reach 10 + 10 % of the width),
+        not the 10 it once got; a 150° hairpin, whose bins the geodesic
+        cannot order, is no bar at all; and a sweep whose xAxis lies
+        along its first leg gets the build's fallback frame, not a zero
+        one."""
+        import fit_features as FF
+        import preview_model as P
+        from build_features import sweep_sketch
+        sec = np.array([[-10.0, -2.5], [10.0, -2.5], [10.0, 2.5], [-10.0, 2.5]])
+        corner = [np.array([0.0, 0, 0]), np.array([80.0, 0, 0]), np.array([80.0, 50.0, 0])]
+        for R, folds in ((0.0, False), (8.0, True), (10.0, True), (12.0, False), (20.0, False)):
+            poly, _ = FF.fillet_spine(corner, R)
+            legs = FF.sweep_folds(sec, poly, [0.0, 1.0, 0.0])
+            self.assertEqual(bool(legs), folds, (R, legs))
+            if folds:
+                with self.assertRaises(ValueError):
+                    P.sweep_section(sec, poly, [0.0, 1.0, 0.0], None)
+            else:
+                mesh = P.sweep_section(sec, poly, [0.0, 1.0, 0.0], None)
+                self.assertTrue(mesh.is_watertight)
+        for deg in (30.0, 60.0):
+            res = FF.bent_bar_fit(self._flat_bar(bend_deg=deg), 1.0, 4.0, self._far_plate())
+            self.assertIsNotNone(res, deg)
+            f = res["features"][0]
+            self.assertAlmostEqual(f["bendsDeg"][0], deg, delta=5.0)
+            self.assertAlmostEqual(f["bendReachMM"], 10.0, delta=1.0)
+            self.assertTrue(f["bendRadiusMM"] == 0 or f["bendRadiusMM"] >= 12.0 - 0.1, f["bendRadiusMM"])
+            self.assertEqual(FF.sweep_folds(FF.segments_polyline(f["section"]["segments"], 1.0), f["spine"], f["xAxis"]), [])
+            self.assertTrue(P.feature_mesh(f).is_watertight)
+        hairpin = self._flat_bar(bend_deg=150.0)
+        self.assertIsNone(FF.tube_fit(hairpin, 1.0, 4.0, self._far_plate()))
+        self.assertIsNone(FF.bent_bar_fit(hairpin, 1.0, 4.0, self._far_plate()))
+        frames = FF.sweep_frames([[0, 0, 0], [100, 0, 0], [100, 100, 0]], [1.0, 0, 0])
+        plane, _, _ = sweep_sketch({"spine": [[0, 0, 0], [100, 0, 0], [100, 100, 0]], "xAxis": [1.0, 0, 0],
+                                    "profile": {"shape": "circle", "radius": 1.0}})
+        np.testing.assert_allclose(frames[0][3], plane["xAxis"], atol=1e-9)
+        self.assertAlmostEqual(float(np.linalg.norm(frames[1][3])), 1.0, places=9)
 
     def test_a_straight_bar_is_still_a_bar(self):
         """A straight 20 × 5 × 130 bar: the bent-bar fit stands down (its

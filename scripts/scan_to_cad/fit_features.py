@@ -457,9 +457,10 @@ def tube_runs(comp, pts, rows_out, r0, tol, far, model_tree, step):
         # a tube — a squeeze lever, a strap: a bar of a designed section
         # (a rounded rectangle, a stadium) along a spine of one, two or
         # three straight legs (`bar_along`), proved on the run's own
-        # points. A strap along a curve (a hanging chain) has no such
-        # spine and stays the oval tube it was; a skin thinner than one
-        # and a half tolerances is no bar at all.
+        # points. A strap along a wide curve reads as two or three gentle
+        # legs that the bend radius rounds back toward the arc; a
+        # semicircle has no such spine and stays the oval tube it was; a
+        # skin thinner than one and a half tolerances is no bar at all.
         a_run = float(np.median([x["a"] for x in run]))
         b_run = float(np.median([x["b"] for x in run]))
         if a_run >= FLAT_RATIO * b_run and 2.0 * b_run < max(1.5 * tol, 3.0):
@@ -468,15 +469,27 @@ def tube_runs(comp, pts, rows_out, r0, tol, far, model_tree, step):
             # CO₂ extinguisher's horn; a 15 × 1 mm one followed it).
             say("tube: run of %d dropped: a %.0f × %.1f mm oval is a skin, not a tube" % (len(run), 2 * a_run, 2 * b_run))
             continue
+        # The bar is tried only on a piece whose own chords are a bar's
+        # (`r0`, the piece's thickness: the same skin rule `bent_bar_fit`
+        # applies) — a run's bins can read 4–5 mm across a torn 3.5 mm
+        # skin (the extinguisher's piece1.2), and gating on the run alone
+        # made a 73 mm "lever" of it.
         if a_run >= FLAT_RATIO * b_run and 2.0 * r0 >= max(1.5 * tol, 3.0):
             members = np.unique(np.concatenate([x["members"] for x in run]))
             bar = bar_along(pts[members], spine, tol, 2.0 * a_run, step)
             # The section read at the leg's middle has to be the flat one
             # the run measured: a disc there means the run's spread came
-            # from a skin's edge, not a bar (the horn's torn sliver).
+            # from a skin's edge, not a bar (the horn's torn sliver); one
+            # half again as wide as the run's ovals means the legs were
+            # laid through something else (a hairpin's bins, which the
+            # geodesic cannot order, gave a 36 mm "bar" on a 20 mm strap).
             if bar is not None and bar["widthMM"] < 1.4 * bar["thicknessMM"]:
                 say("tube: run of %d measured flat (%.0f × %.0f) but its section reads %s — not a bar" % (
                     len(run), 2 * a_run, 2 * b_run, bar_words(bar)))
+                bar = None
+            if bar is not None and bar["widthMM"] > 1.5 * 2.0 * a_run:
+                say("tube: run of %d measured %.0f wide but the bar's section reads %s — not this run's bar" % (
+                    len(run), 2 * a_run, bar_words(bar)))
                 bar = None
             if bar is not None and bar["coverage"] >= 0.5:
                 say("tube: run of %d is a flat bar (%.0f × %.0f): %s, covers %.0f%% of its own points" % (
@@ -599,6 +612,9 @@ def tube_runs(comp, pts, rows_out, r0, tol, far, model_tree, step):
             f = bar_feature(v["bar"], start, end, attached,
                             joins=[pos > 0, pos < len(chain) - 1],
                             into_horn=pos < len(chain) - 1 and judged[chain[pos + 1]]["kind"] == "cone")
+            if f is None:
+                say("tube: run of %d (%s) folds at a corner once its ends are placed — no feature" % (len(run), bar_words(v["bar"])))
+                continue
             features.append(f)
             say("tube: run of %d is %s" % (len(run), bar_words(v["bar"])))
             continue
@@ -663,7 +679,8 @@ def sweep_covered(f, verts, tol):
 # library measured across its longest leg (`bar_along`), and it is built
 # as ONE sweep of that section along the polyline — the app's
 # `feature.sweep` takes any closed sketch region and a world polyline.
-# `preview_model.sweep_section` mitres the corners the same way.
+# `preview_model.sweep_section` mitres the corners the same way, and
+# refuses a sweep whose rings fold back (`sweep_folds` here).
 
 # A section this many times wider than thick is a bar, not a tube (a
 # stein's handle at 1.6 is still an oval tube; a lever reads 2.3).
@@ -921,8 +938,7 @@ def sweep_frames(spine, x_axis):
     keep[1:] = np.linalg.norm(np.diff(P, axis=0), axis=1) > 1e-6
     P = P[keep]
     T = [unit(P[i + 1] - P[i]) for i in range(len(P) - 1)]
-    X = np.asarray(x_axis, dtype=float)
-    X = unit(X - (X @ T[0]) * T[0])
+    X = first_x(x_axis, T[0])
     frames = []
     for i, t in enumerate(T):
         if i > 0:
@@ -930,6 +946,86 @@ def sweep_frames(spine, x_axis):
             X = unit(X - (X @ t) * t)
         frames.append((P[i], P[i + 1], t, X, np.cross(t, X)))
     return frames
+
+
+def first_x(x_axis, t0):
+    """The section's u axis at the spine's start: `x_axis` made
+    perpendicular to the first leg, or — when it lies along the leg and
+    has no component across it — the same fallback
+    `build_features.sweep_sketch` takes (z, or x when the leg is nearly
+    vertical, made perpendicular), so the fit, the build and the preview
+    agree on the frame."""
+    t0 = unit(t0)
+    X = np.asarray(x_axis, dtype=float)
+    X = X - (X @ t0) * t0
+    if np.linalg.norm(X) < 1e-6:
+        ref = np.array([0, 0, 1.0]) if abs(t0[2]) < 0.9 else np.array([1.0, 0, 0])
+        X = ref - (ref @ t0) * t0
+    return unit(X)
+
+
+def sweep_rings(loop, spine, x_axis):
+    """The section's ring at every point of a polyline spine, drawn as
+    `preview_model.sweep_section` (and the app's pipe, with its mitred
+    corners) draws them: the loop in the frame of the first leg, carried
+    round each corner by the minimal rotation, each corner's ring the
+    previous leg's prism cut by the corner's bisector plane (a square cut
+    at a hairpin). Returns (rings, the legs' unit directions)."""
+    L = np.asarray(loop, dtype=float)
+    P = np.asarray(spine, dtype=float)
+    keep = np.ones(len(P), dtype=bool)
+    keep[1:] = np.linalg.norm(np.diff(P, axis=0), axis=1) > 1e-6
+    P = P[keep]
+    m = len(P)
+    T = [unit(P[i + 1] - P[i]) for i in range(m - 1)]
+    X = first_x(x_axis, T[0])
+    Y = np.cross(T[0], X)
+    rings = [P[0] + np.outer(L[:, 0], X) + np.outer(L[:, 1], Y)]
+    for i in range(1, m):
+        t_prev = T[i - 1]
+        n_bis = t_prev
+        if i < m - 1:
+            s = t_prev + T[i]
+            if np.linalg.norm(s) >= 1e-9 and (t_prev @ unit(s)) >= 0.3:
+                n_bis = unit(s)
+        base = P[i] + np.outer(L[:, 0], X) + np.outer(L[:, 1], Y)
+        t = -((base - P[i]) @ n_bis) / (t_prev @ n_bis)
+        rings.append(base + np.outer(t, t_prev))
+        if i < m - 1:
+            R = rotation_between(t_prev, T[i])
+            X, Y = unit(R @ X), unit(R @ Y)
+    return rings, T
+
+
+def sweep_folds(loop, spine, x_axis):
+    """The legs (indices) of a sweep on which some vertex of the section's
+    ring advances BACKWARDS along the leg from the ring before it — the
+    sweep folds back on itself: a bend tighter than the section's reach
+    toward its centre (an arc of half the width round a bar bent in the
+    plane of its width has an inner radius of nothing, a knife-edge pleat
+    the kernel must sweep through), or a leg shorter than the mitre it
+    ends in. A mesh of such a sweep still closes and holds a plausible
+    volume, so this, not watertightness, is the test. Empty when the
+    sweep is sound."""
+    rings, T = sweep_rings(loop, spine, x_axis)
+    return [i for i, t in enumerate(T) if bool((((rings[i + 1] - rings[i]) @ t) < -1e-6).any())]
+
+
+def section_reach(loop, frames, corner):
+    """How far the section reaches toward the centre of the bend at
+    `corner` (between legs `corner` and `corner + 1` of `frames`): the
+    loop's extent, in the frame the sweep carries to the leg before the
+    corner, along that leg's inward normal (the next leg's direction made
+    perpendicular to it). An arc of radius under this has no inside; the
+    bend's radius must clear it (`bar_along`)."""
+    _, _, d1, e1, e2 = frames[corner]
+    d2 = frames[corner + 1][2]
+    n_in = d2 - (d2 @ d1) * d1
+    if np.linalg.norm(n_in) < 1e-9:
+        return 0.0
+    n_in = unit(n_in)
+    L = np.asarray(loop, dtype=float)
+    return float(np.max(L[:, 0] * float(e1 @ n_in) + L[:, 1] * float(e2 @ n_in)))
 
 
 def rotation_between(a, b):
@@ -1026,18 +1122,37 @@ def bar_along(P, C, tol, width, step):
     loop = best["loop"]
     covered, coverage = best["covered"], best["coverage"]
     # The bends' radius: the arcs that cover the most of the bend's points.
+    # Bounded below by the section's reach toward the bend's centre plus
+    # a tolerance (or 10 % of the width): a bar 51 mm wide bent in the
+    # plane of its width on a 26 mm radius has an inner edge of half a
+    # millimetre — a knife-edge pleat, not a bend — and a radius under
+    # the reach folds the sweep back on itself (`sweep_folds`), which the
+    # preview's mesh would still close around. Short of the bound the
+    # corner stays a sharp mitre.
     rounded, bend_radius, straight = pts3, 0.0, list(range(len(legs)))
+    reach = 0.0
     if bends:
+        if sweep_folds(loop, pts3, X):
+            say("bar: the section folds at a corner even with a sharp mitre (a leg shorter than its mitre) — not a bar")
+            return None
         near_bend = np.zeros(len(P), dtype=bool)
         for c in pts3[1:-1]:
             near_bend |= np.linalg.norm(P - c, axis=1) <= 1.5 * width
         best_R = (0.0, float(covered[near_bend].mean()) if near_bend.any() else 0.0)
-        for R in (0.5 * width, width, 1.5 * width, 2.0 * width, 3.0 * width, 4.0 * width):
+        reach = max(section_reach(loop, frames, i) for i in range(len(bends)))
+        R_min = reach + max(tol, 0.1 * width)
+        candidates = sorted({R_min} | {k * width for k in (0.5, 1.0, 1.5, 2.0, 3.0, 4.0) if k * width > R_min})
+        say("bar: the section reaches %.1f mm toward the bend's centre; arcs of %s mm tried" % (
+            reach, ", ".join("%.0f" % R for R in candidates)))
+        for R in candidates:
             built = fillet_spine(pts3, R)
             if built is None:
                 break
             poly, straight_R = built
             frames_R, X_R = frames_for(poly, straight_R[main])
+            if sweep_folds(loop, poly, X_R):
+                say("bar: arcs of %.0f mm fold the section — skipped" % R)
+                continue
             cov_R = _legs_covered(P, frames_R, loop, tol)
             share = float(cov_R[near_bend].mean()) if near_bend.any() else 0.0
             if share > best_R[1] + 0.01:
@@ -1055,6 +1170,7 @@ def bar_along(P, C, tol, width, step):
     else:
         w, t = shape["lengthMM"], shape["widthMM"]
     return {"points": rounded, "corners": pts3[1:-1], "bendRadiusMM": round(bend_radius, 1),
+            "bendReachMM": round(reach, 1),
             "bendsDeg": [round(b, 1) for b in bends], "legsMM": [round(L, 1) for L in lengths],
             "lengthMM": round(sum(lengths), 1), "residualMM": round(spine["residualMM"], 2),
             "section": {"shape": shape["kind"], "segments": best["segments"], "seed": best["seed"],
@@ -1114,9 +1230,22 @@ def bar_feature(bar, start, end, attached, joins=(False, False), into_horn=False
     to `start` and `end` (into the body, or into the next run). The spine
     is the bar's legs with the bends' arcs drawn in; `corners` are the
     sharp corners the legs meet at, `bendRadiusMM` the arcs' radius (0
-    for a sharp bend)."""
+    for a sharp bend), `bendReachMM` the section's reach toward the
+    bend's centre that the radius clears. Moving an end can turn the
+    first or last leg (`reach_body` goes straight to the skin when the
+    tangent misses it), so the sweep is checked for folds once more: a
+    fold with the arcs in falls back to sharp corners, a fold with sharp
+    corners is no feature (None)."""
     pts3 = [np.asarray(start, dtype=float)] + [np.asarray(p, dtype=float) for p in bar["points"][1:-1]] + [np.asarray(end, dtype=float)]
     s = bar["section"]
+    loop = segments_polyline(s["segments"], step=2.0)
+    if sweep_folds(loop, pts3, bar["xAxis"]):
+        if bar.get("bendRadiusMM"):
+            say("bar: the arcs fold once the ends are placed — sharp corners instead")
+            sharp = dict(bar, points=[bar["points"][0]] + list(bar["corners"]) + [bar["points"][-1]], bendRadiusMM=0.0)
+            return bar_feature(sharp, start, end, attached, joins, into_horn)
+        say("bar: the sweep folds at a corner once the ends are placed — refused")
+        return None
     return {"kind": "sweep", "profile": {"shape": "section", "widthMM": s["widthMM"], "thicknessMM": s["thicknessMM"]},
             "section": {"shape": s["shape"], "widthMM": s["widthMM"], "thicknessMM": s["thicknessMM"],
                         "cornerMM": round(float(s.get("cornerMM") or 0.0), 1),
@@ -1124,7 +1253,7 @@ def bar_feature(bar, start, end, attached, joins=(False, False), into_horn=False
             "xAxis": [round(float(q), 5) for q in bar["xAxis"]],
             "spine": [[round(float(q), 2) for q in p] for p in pts3],
             "corners": [[round(float(q), 2) for q in p] for p in bar.get("corners", [])],
-            "bendRadiusMM": bar.get("bendRadiusMM", 0.0),
+            "bendRadiusMM": bar.get("bendRadiusMM", 0.0), "bendReachMM": bar.get("bendReachMM", 0.0),
             "bent": bool(bar["bendsDeg"]), "bendsDeg": bar["bendsDeg"], "legsMM": bar["legsMM"],
             "lengthMM": bar["lengthMM"], "radiusMM": round(0.5 * s["thicknessMM"], 2),
             "attached": list(attached), "joins": list(joins), "intoHorn": bool(into_horn)}
@@ -1189,6 +1318,8 @@ def bent_bar_fit(comp, tol, far, model_tree):
     start, a0 = bar_end(pts3[0], -unit(pts3[1] - pts3[0]), r, far, model_tree, step, tol)
     end, a1 = bar_end(pts3[-1], unit(pts3[-1] - pts3[-2]), r, far, model_tree, step, tol)
     f = bar_feature(bar, start, end, [a0, a1])
+    if f is None:
+        return None
     verts = np.asarray(comp.vertices, dtype=float)
     covered = bar_sweep_covered(f, verts, tol)
     say("bent bar: %s, covers %.0f%%" % (bar_words(bar), covered.mean() * 100))

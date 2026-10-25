@@ -1179,8 +1179,11 @@ library was a bar that bends. Now there is one.
   RMS distance to it is within max(tol, 15 % of the width); else two
   when they fit, bend ≥ 15° (`MIN_BEND_DEG`), both legs at least a
   section long and the residual under three quarters of one leg's; else
-  three on the same terms against two; else none — a strap along a
-  curve stays the oval sweep it was. Then `refine_legs` refits each leg
+  three on the same terms against two; else none. (A strap along a WIDE
+  curve is not none: a 20 × 5 strap on a 120 mm quarter circle reads as
+  two or three gentle legs that the bend radius then rounds back toward
+  the arc, 82–86 mm; only a semicircle has no spine and stays the oval
+  sweep it was — see the Gotcha.) Then `refine_legs` refits each leg
   on the bar's own surface points as the line through the centres of
   quarter-section slices across it — each centre the middle of the
   slice's lateral extent, not its mean (a scan is denser on the face it
@@ -1208,13 +1211,36 @@ library was a bar that bends. Now there is one.
   point (`fillet_spine`, points every 7.5°, an arc may take no more than
   45 % of either leg). A real bar is bent round a former; a sharp mitre
   stood 8 mm proud of the lever's bend outside and short of it inside.
+  **The radius is bounded below by the section's reach toward the
+  bend's centre** (`section_reach`: the outline's extent, in the frame
+  the sweep carries to the leg before the corner, along that leg's
+  inward normal) plus max(tol, 10 % of the width); `R_min` itself is the
+  first candidate and the fixed radii below it are not tried. A bar bent
+  EDGEWISE — in the plane of its width, as a lever is — reaches half its
+  width toward the centre: the extinguisher's 51 mm lever on the 26 mm
+  arc (half a section) the first version chose had an inner edge of
+  0.5 mm, a knife-edge pleat, not a bend, and its sweep's rings folded
+  back on two legs; it now gets 31 mm (reach 26.2 + 5.1). `sweep_folds`
+  is the test: the section's rings drawn as the preview and the kernel
+  draw them, a leg on which any ring vertex advances backwards is a
+  fold. A sharp spine that folds (a leg shorter than its mitre) is no
+  bar; a filleted one that folds is skipped; `bar_feature` tests once
+  more after the ends are carried into the body (`reach_body` can turn
+  an end leg) and falls back to sharp corners, then to no feature. A
+  folded sweep's mesh still closes at a plausible volume, so
+  watertightness alone would pass it: `preview_model.sweep_section` now
+  refuses a folding spine with a ValueError and the preview notes the
+  feature as not drawn — which is exactly what it says of the corpus's
+  17.8 × 4.2 mm oval on the horn (folds 6.3 mm on leg 6 of 10), the one
+  feature the app's kernel refused.
 - **The feature** is a `sweep` with `"section": {"shape", "widthMM",
   "thicknessMM", "cornerMM", "segments", "seed"}` (the outline as the
   same lines and arcs an extrude's is drawn with, in the sketch frame
   `xAxis`, t₀ × `xAxis` at the spine's start), `"profile": {"shape":
   "section", …}` so nothing that reads a sweep's profile breaks, a
   `spine` of the legs with the arcs drawn in, `corners` (the sharp
-  corners the legs meet at), `bendRadiusMM`, `bendsDeg`, `legsMM`,
+  corners the legs meet at), `bendRadiusMM`, `bendReachMM` (the reach
+  the radius clears, 0 for a straight bar), `bendsDeg`, `legsMM`,
   `lengthMM`, `bent`, and `attached` / `joins` / `intoHorn` as a tube's.
   The app's `feature.sweep` takes any closed sketch region and a world
   polyline, so `build_features.sweep_sketch` draws the section's
@@ -1227,7 +1253,7 @@ library was a bar that bends. Now there is one.
   when it is flat (width ≥ 1.5 × thickness) and hangs from the body or
   the run it joins at one end, a `handle` when it comes back at both, a
   `bar` otherwise; `build_features.bar_words` says "a 51 × 22 mm flat,
-  rounded-edged bar bent 51° on a 26 mm radius, 211 mm long", and the
+  rounded-edged bar bent 51° on a 31 mm radius, 211 mm long", and the
   caption "A lever · …, swept along its legs and unioned in".
 - **`bent_bar_fit`** is the same machinery for a piece on its own, a
   sixth candidate in `explain()` (+0.05, proved at half the piece like a
@@ -1242,46 +1268,61 @@ library was a bar that bends. Now there is one.
 
 What this gave, measured offline with `preview_model.py` against the
 same pre-feature model (`run/stages/stage-1-revolve.stl`) and the same
-scan the corpus run used, the corpus features as the app built them
-against the new fit (`--all-features`):
+scan the corpus run used, every row with `--all-features` (the app's
+build of the corpus features left one out — the 17.8 × 4.2 mm oval on
+the horn, which the kernel refused — so the corpus's own as-built figure
+is the "fold-refusing preview" row: the preview now refuses that oval
+for the same reason the kernel did):
 
-| | before | after |
-|---|---|---|
-| lever | oval tube 52 × 23 mm, 11-point spine | a 51 × 22 mm rounded rectangle bent 51° on a 26 mm radius, 211 mm long, named `lever` |
-| overlap (IoU) | 94.8 % | 94.8 % |
-| model → scan / scan → model (vertex means) | 3.83 / 1.65 mm | 4.08 / 1.54 mm |
-| area-weighted model → scan / scan → model | 1.55 / 1.14 mm | 1.60 / 1.08 mm |
-| largest missing patch (M1) | 6 517 mm², 196 × 106, the lever | 3 638 mm², 92 × 74, the lever's root |
-| M2 | 3 181 mm² | 3 465 mm² |
-| largest excess patch (E1) | 9 564 mm², the valve head's cap | 9 358 mm², the same cap |
-| E2 (the lever) | 5 051 mm² | 7 250 mm² |
-| missing / excess, five largest patches together | 15 275 / 25 712 mm² | 12 129 / 27 176 mm² |
+| extinguisher-3dhd | overlap | model → scan / scan → model | M1 | E1 |
+|---|---|---|---|---|
+| corpus features, the earlier preview (draws the folded oval) | 95.1 % | 3.85 / 1.59 mm | 6 517 mm², the lever | 9 529 mm², the cap |
+| corpus features, fold-refusing preview (= as built, 7 of 8) | 94.8 % | 3.83 / 1.65 mm | 6 517 mm² | 9 564 mm² |
+| the corpus features with only the oval lever swapped for the bent bar (51 × 22 mm, bent 51° on a 31 mm radius, 211 mm long, `lever`) | 94.6 % | 4.06 / 1.70 mm | 6 991 mm², 100 × 72, the lever's root | 9 643 mm², the cap |
+| the whole new fit | 92.9 % | 4.00 / 1.78 mm | 15 603 mm², 107 × 72, the horn | 15 193 mm², 127 × 98, the horn |
 
-Honestly: the lever alone (the corpus features with only the oval
-swapped for the bent bar) scores 94.6 %, two tenths under the oval. The
-lever assembly is not a constant-section bar — two strips, a gap, a
-taper from 49 to 42 mm — and a rounded rectangle that is right at the
-middle is 4 mm too wide at the free end, where the oval, inscribed in the
-same box, happened to lie closer. What the bent bar wins is the half of
-M1 that the oval's rounded faces left off the strips' flat faces and a
-part that reads as what it is; what it loses is the taper. E1, the
-9.4 k mm² cap on the valve head, is the revolve's own profile (the top
-97 mm of the body is "not a ring"), not a feature, and is untouched by
-this track; the horn's missing side (M3, 2 715 mm²) is the cone revolve's
-profile, likewise. The beer mug and the valve are unchanged to the digit
-(the mug's handle, at 1.6, stays an oval tube; the valve's one flat run
-reads as a hexagon at its middle and is refused as a bar). None of this
-has been built in the app yet: the sweep of a rectangle with 10 mm
-corners along a ten-point polyline is the same call as the hose's, but
-whether OCCT's pipe takes the 26 mm arcs with a 51 mm section is for the
-next corpus run to say.
+The lever row is the track's own measure: the same 94.6 % the first
+version's 26 mm lever scored in the same swap (two tenths under the
+oval), with a sound bend instead of a pleat; against the as-built
+corpus it halves nothing and loses nothing of note (M1 6 517 → 6 991,
+the oval's M1 and the bar's are both the lever's root, where the two
+strips part). The whole-fit row is worse, and not because of the lever:
+the horn's bell wall — a 12 200 mm² leftover, a 3.5 mm double skin by
+its chords, which neither the oval nor the bar explains and which
+`bent_bar_fit` and `tube_fit` both refuse as a skin — is handed to the
+solid fits, and on it `extrude_fit` (50.4 %) and `bar_fit` (51 %) are a
+coin toss between two boxes: the first version's run put a 54 × 54 ×
+106 mm "bar" there (60 % that time; its sheet read 94.8 % with M1
+3 638 mm² at the lever's root and E1 the cap at 9 358), this run a
+65.7 mm thick plate, rotated, which is both M1 and E1 above. The toss
+turns on single faces: the same 5 752-point piece gives 2 156 inward
+ray hits one run and 2 167 the next, a 232 mm geodesic over 104 path
+points or 236 over 112, and the bar's seeds land elsewhere. That is the
+horn's problem (the cone revolve is too thin, so its wall is left over)
+and the solid fits' (no skin rule, no measure of what a feature adds
+that the scan has not got), and it is left for its own track; the
+numbers are quoted as they came. The beer mug and the valve are
+unchanged to the digit (97.2 % · 1.69 / 0.77 mm; 94.7 % · 0.64 /
+2.09 mm; the mug's handle, at 1.6, stays an oval tube; the valve's one
+flat run reads as a hexagon at its middle and is refused as a bar).
+None of this has been built in the app yet: the sweep of a rectangle
+with 10 mm corners along a ten-point polyline is the same call as the
+hose's, and the arcs now clear the section by construction, so what the
+next corpus run has to say is only whether the kernel sweeps it.
 
 Tests (`PartsLibraryTests`): an L-shaped flat bar (legs 80 and 50 mm,
 20 × 5 mm, 90°) is one sweep of a 20 × 5 rectangle with its bend within
-5° (90.0° measured), the sketch one closed loop of 100 mm², the preview
-one closed solid of 13 200 mm³, a `lever` when attached at one end, and
-`tube_fit` reads it the same way; a straight 20 × 5 × 130 bar is refused
-by the bent-bar fit and is one `bar` to `bar_fit`; the 6 mm tube along a
+5° (90.0° measured), its reach 10 mm and its radius 0 or at least the
+reach plus a tolerance, no ring folded, the sketch one closed loop of
+100 mm², the preview one closed solid of 13 200 mm³, a `lever` when
+attached at one end, and `tube_fit` reads it the same way; a bend never
+folds the section — arcs of 8 and 10 mm round the edgewise 20 × 5 L are
+folds to `sweep_folds` and a ValueError to the preview, 12 and 20 are
+not, the same L bent 30° and 60° (a sharp mitre in the input) is fitted
+with 12 mm arcs (it once got 10.2 and 10.5), a 150° hairpin is no bar to
+either fit, and a sweep whose `xAxis` lies along its first leg gets the
+build's fallback frame; a straight 20 × 5 × 130 bar is refused by the
+bent-bar fit and is one `bar` to `bar_fit`; the 6 mm tube along a
 quarter circle is still one circle sweep and the bent-bar fit stands
 down; `corner_spine` counts one, two and three legs on noisy samples and
 refuses a semicircle.
@@ -1304,6 +1345,31 @@ refuses a semicircle.
 - A constant section must be read at a leg's middle, not from the hull
   of the leg: a tapered lever's hull is its fat end, and the tightest
   box round a trapezoid is tilted — the rectangle sat 3 mm off the bar.
+- A watertight sweep can still be a folded one (2026-10-26): a bend arc
+  of half the width round a bar bent edgewise has an inner radius of
+  nothing, the rings of the sweep advance backwards along the arc's
+  legs, and the mesh `preview_model.sweep_section` built of it still
+  closed at the right volume — so `is_watertight` + volume is no test of
+  a sweep. Test the rings (`fit_features.sweep_folds`); keep a bend's
+  radius above the section's reach toward the bend's centre
+  (`section_reach`) plus a tolerance; and let the preview refuse a fold
+  rather than draw it (it refuses the corpus's 17.8 × 4.2 oval on the
+  horn, the one feature the kernel refused).
+- A flat run's bar is gated on the PIECE's chords (`r0`), not the run's
+  own bins: the extinguisher's piece1.2 is a 2.7–3.5 mm skin by its
+  chords (`bent_bar_fit` refuses it so) whose oval bins read 4–6 mm
+  across; gated on the bins alone it became a 23 × 4 stadium "lever"
+  73 mm long. And a run's bar must be the run's: a hairpin's bins, which
+  the geodesic cannot order, gave a 36 mm "bar bent 62° and 85°" on a
+  20 mm strap — refused when the section reads half again wider than
+  the run's ovals.
+- The extinguisher's horn cascade is a coin toss (2026-10-26): the
+  horn's bell wall is a 12 200 mm² double skin the solid fits box in,
+  `extrude_fit` at 50.4 % against `bar_fit` at 51 %, and which box wins
+  turns on single faces of the leftover (ray hits 2 156 vs 2 167 on the
+  same points). Judge a change to the lever by swapping the lever alone
+  into the corpus features (94.6 %), not by the whole fit's overlap
+  (94.8 or 92.9 % depending on the toss).
 
 - A dished wheel is tested for BEFORE the open end (2026-10-25): from the
   hub side a rim's dish reads as an open container (rays fall 260 mm into
