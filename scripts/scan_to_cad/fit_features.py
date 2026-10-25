@@ -1967,7 +1967,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--scan", required=True)
     ap.add_argument("--model", required=True)
-    ap.add_argument("--analysis", default=None, help="profile.json (for the body's axis; optional)")
+    ap.add_argument("--analysis", default=None, help="profile.json, or the analysis folder holding it (for the body's axis; optional)")
     ap.add_argument("--tolerance", type=float, default=2.0)
     ap.add_argument("--far", type=float, default=None, help="mm; a scan triangle farther than this is unexplained (default 2.5× the tolerance, ≥ 4)")
     ap.add_argument("--min-area", type=float, default=None, help="mm²; smaller pieces are ignored (default 0.4%% of the scan)")
@@ -1984,7 +1984,10 @@ def main():
     BAR_MIN_AREA = max(400.0, 0.0025 * float(scan.area))
     MIN_PIECE_AREA = min_area
     if args.analysis:
-        with open(args.analysis) as f:
+        # `run_corpus.py` hands over the analysis FOLDER (the same path
+        # build_hydrant.py takes); a file is the profile itself.
+        path = os.path.join(args.analysis, "profile.json") if os.path.isdir(args.analysis) else args.analysis
+        with open(path) as f:
             BODY = body_frame(json.load(f), far)
         if BODY is None:
             print("the analysis has no axis: hoops will not be looked for", flush=True)

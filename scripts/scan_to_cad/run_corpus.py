@@ -131,7 +131,7 @@ def main():
                 fit = subprocess.run([args.python, "-I", os.path.join(HERE, "fit_features.py"),
                                       "--scan", os.path.join(run_dir, "scan.stl"),
                                       "--model", os.path.join(run_dir, slug + "-cad.stl"),
-                                      "--analysis", analysis,
+                                      "--analysis", os.path.join(analysis, "profile.json"),
                                       "--tolerance", str(tolerance), "--out", feat_dir],
                                      capture_output=True, text=True, timeout=1200,
                                      env=dict(os.environ, FIT_DEBUG="1"))
