@@ -59,7 +59,7 @@ import trimesh
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from build_hydrant import body_section, boss_section, secondary_sections, nut_sections, world, unit  # noqa: E402
-from build_features import sweep_sketch  # noqa: E402
+from build_features import sweep_sketch, bore_profile  # noqa: E402
 from build_recipe import revolve_region, radial_frame, seed_inside  # noqa: E402
 from fit_primitives import sketch_entities  # noqa: E402
 
@@ -463,6 +463,24 @@ def feature_mesh(feature, sections=96):
     raise ValueError("unknown feature kind %r" % kind)
 
 
+def feature_cut_mesh(feature, sections=96):
+    """The cut a feature takes out of the model AFTER its own union — a
+    hollow horn's inner cone (`build_features.bore_profile`) revolved on
+    the feature's axis — or None. `build_features.build_feature` subtracts
+    it from the whole body (its booleanTargets is the model, not the horn),
+    so anything else inside the cone goes with it; `build_preview` does the
+    same, after the feature's union."""
+    if feature["kind"] != "revolve":
+        return None
+    bore = bore_profile(feature)
+    if not bore:
+        return None
+    ax = feature["axis"]
+    u, d = radial_frame(ax["direction"])
+    ents_in, seed_in = revolve_region(bore)
+    return revolve_loop(pick_loop(loops_of_entities(ents_in), seed_in), ax["origin"], u, d, sections)
+
+
 def combine(acc, tool, op, label, notes):
     """`acc` ∪ `tool` (or minus it) with manifold; on refusal the plain
     concatenation, noted."""
@@ -548,7 +566,17 @@ def build_preview(analysis, features=(), sections=96, bosses=True, secondaries=T
             notes.append("feature %s could not be drawn: %s" % (label, str(error)[:120]))
             continue
         model = combine(model, tool, "union", label, notes)
-        parts.append({"what": "feature", "name": label, "kind": feature["kind"]})
+        row = {"what": "feature", "name": label, "kind": feature["kind"]}
+        try:
+            cut = feature_cut_mesh(feature, sections)
+        except Exception as error:  # noqa: BLE001 — the horn stays solid, as in the build
+            notes.append("feature %s: its bore could not be drawn: %s" % (label, str(error)[:120]))
+            cut = None
+        if cut is not None:
+            # The bore, subtracted from the WHOLE model as the build does.
+            model = combine(model, cut, "subtract", label + " bore", notes)
+            row["bored"] = True
+        parts.append(row)
     return model, notes, parts
 
 

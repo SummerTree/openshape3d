@@ -118,12 +118,18 @@ def main():
         color = [str(c) for c in model_color(spec, profile)]
         run_dir = os.path.join(part, "run")
         nuts = nut_lines(profile)
-        print("=== %s: %s, %.0f mm tall, %d bosses, tolerance %.0f mm%s" % (
+        # The bores the analysis found at free ends (the main body's and
+        # each secondary body's), so the row says "bored r 14, 50 deep".
+        bores = ["%s: r %.0f mm %s" % ("body %d" % b["index"] if "index" in b else "body",
+                                        bore["rInnerMM"], "through" if bore.get("through") else "%.0f deep" % bore["depthMM"])
+                 for b in [profile] + profile.get("bodies", []) for bore in b.get("bores", [])]
+        print("=== %s: %s, %.0f mm tall, %d bosses, tolerance %.0f mm%s%s" % (
             slug, spec["label"], profile["heightMM"], len(profile["bosses"]), tolerance,
-            ("; " + "; ".join(nuts)) if nuts else ""), flush=True)
+            ("; " + "; ".join(nuts)) if nuts else "",
+            ("; bored — " + ", ".join(bores)) if bores else ""), flush=True)
         t0 = time.time()
         row = {"label": spec["label"], "heightMM": profile["heightMM"], "bosses": len(profile["bosses"]),
-               "profilePoints": len(profile["profile"]), "toleranceMM": tolerance, "nuts": nuts}
+               "profilePoints": len(profile["profile"]), "toleranceMM": tolerance, "nuts": nuts, "bores": bores}
         try:
             relaunch(udid, args.port)
             cmd = [args.python, "-I", os.path.join(HERE, "build_hydrant.py"), "--scan", scan, "--analysis", analysis,

@@ -533,6 +533,255 @@ def straighten(points, tol=3.0, min_run=4, step_ratio=3.0, step_min=8.0):
     return cleaned
 
 
+def open_end_depth(height):
+    """How far past an end plane a ray must fall for `detect_open_top` to
+    call that end open. The bore detector keeps to holes shallower than
+    this (or much narrower than the end), so one hole is never both a
+    container's cavity and a bore."""
+    return max(0.15 * height, 25.0)
+
+
+def detect_bores(h, radius, azimuth, n_radial, height, radii_ends, band_mm, noise_mm=0.5, secondary=False,
+                 sectors=24, debug=False, profile=None, n_axial=None, caps=None):
+    """A hole bored into a free end of a body of revolution — an open pipe
+    end, a coupling's socket, a recessed port — read off the points that
+    face IN (normal toward the axis) just inside the end plane: an inner
+    wall at r_inner, a real wall in from the end's own radius, seen round
+    at least half the circle, running some depth into the body. The depth
+    is how far the inner wall is seen, slab by slab (max(band, 2 mm));
+    where the wall's radius steps (a coupling's socket r 19 for 12 mm, then
+    the pipe's own r 14) the bore keeps a stepped profile; seen most of the
+    way along the body it is a through bore (depth = the body's length —
+    a branch unioned into its parent is filled where the parent is solid,
+    so the pipe stays open to the parent's skin). A scanner sees less of a
+    bore the deeper it goes, so the depth is a lower bound: as far as the
+    inner wall is seen.
+
+    `radii_ends` is (the profile's radius at h = 0, at h = height);
+    `n_radial` the points' normal component along the outward radial, so a
+    point on an inner wall reads < 0; `profile` the traced outer profile
+    [(r, h), …], which the bore must stay a wall inside — the walk stops
+    where the body narrows onto it. A body `secondary=True` (a branch
+    traced on its own axis, where `detect_open_top` never runs) takes a
+    bore on the inner wall alone, down to a 1 mm wall; the main body only
+    where the hole is shallower than `open_end_depth` (what the open-top
+    test would have called a container) or narrower than 0.6 of the end
+    radius — a bucket's cavity is `detect_open_top`'s and never a bore.
+    `n_axial` (the normals' component along the axis) and `caps` (the
+    axial-facing samples the trace leaves out, as (h, radius, azimuth,
+    n_axial) — an end face, a shelf, a floor) let the floor be seen:
+    points inside the hole facing back toward the mouth. A hole with
+    a floor is never through, however far along the body its wall runs —
+    a bucket whose floor is a tenth of its height is a container with a
+    thin floor, not a tube — so the main-body rule above still holds for
+    it. Nothing may stand in the hole over its depth either (a nut's
+    flanks face OUT inside the bore's radius): that is a recess round the
+    nut, left to the residual fit.
+
+    Returns a list, one record per bored end: {"end": "start"|"end",
+    "rInnerMM", "depthMM", "wallMM", "share", "through", "profile":
+    [[r, depth], …] (the bore's radius by depth from the end plane, as
+    steps)}. Two bores that meet in the middle are one through bore."""
+    slab = max(float(band_mm), 2.0)
+    nb = int(height / slab) + 1
+    if nb < 2 or len(h) < 50:
+        return []
+    inward = n_radial < -0.5
+    outer_r = None
+    if profile and len(profile) >= 2:
+        p_r = np.array([float(p[0]) for p in profile])
+        p_h = np.array([float(p[1]) for p in profile])
+        order = np.argsort(p_h, kind="stable")
+
+        def outer_r(hh):
+            """The outer profile's radius at height hh — the SMALLEST it
+            reads there, so a step's two points at one height do not hide
+            the narrower side."""
+            near = np.abs(p_h - hh) <= 0.5 * slab
+            if near.any():
+                return float(p_r[near].min())
+            return float(np.interp(hh, p_h[order], p_r[order]))
+
+    def tol_r(r):
+        return max(1.5, 3.0 * noise_mm, 0.08 * r)
+
+    found = []
+    for end, sign, h_end, r_end in (("start", 1.0, 0.0, float(radii_ends[0])), ("end", -1.0, float(height), float(radii_ends[1]))):
+        if r_end < 4.0:
+            continue
+        wall_min = max(1.0, 2.0 * noise_mm) if secondary else max(1.5, 0.06 * r_end)
+        depth = sign * (h - h_end)
+        cand = inward & (depth >= -slab) & (depth < height) & (radius > 0.2 * r_end) & (radius < r_end - wall_min)
+        if cand.sum() < 30:
+            continue
+        k_of = np.clip(np.floor(np.maximum(depth, 0.0) / slab).astype(int), 0, nb - 1)
+        counts = np.bincount(k_of[cand], minlength=nb)
+        sector = ((azimuth + 180.0) / (360.0 / sectors)).astype(int) % sectors
+        # The mouth: the inner wall over the first three slabs.
+        mouth = cand & (k_of <= 2)
+        if mouth.sum() < 30 or counts[:2].max() < 8:
+            continue
+        r0 = float(np.median(radius[mouth]))
+        members = mouth & (np.abs(radius - r0) <= tol_r(r0))
+        if members.sum() < 20:
+            continue
+        r0 = float(np.median(radius[members]))
+        share = len(np.unique(sector[members])) / float(sectors)
+        if share < 0.5:
+            if debug:
+                print("bore? %s end: an inner wall r %.1f seen in only %.0f%% of the sectors" % (end, r0, 100 * share))
+            continue
+        wall = r_end - r0
+        if wall < wall_min:
+            if debug:
+                print("bore? %s end: r %.1f inside r %.1f is a %.1f mm wall, under %.1f" % (end, r0, r_end, wall, wall_min))
+            continue
+        # Nothing standing in the mouth: a stem or a nut inside a collar
+        # faces OUT inside the collar's radius (a hydrant's operating nut
+        # in the raised ring on its bonnet), and the ring is a recess round
+        # it, not a bore.
+        standing = (depth >= -slab) & (depth < 3 * slab) & (radius < r0 - wall_min) & (n_radial > 0.5)
+        if standing.sum() > 0.25 * members.sum():
+            if debug:
+                print("bore? %s end: %d points face out inside r %.1f at the mouth — something stands in it" % (
+                    end, int(standing.sum()), r0 - wall_min))
+            continue
+        # Walk inward slab by slab while the inner wall keeps its radius; a
+        # step to a new radius (held for two slabs) starts a new run; one
+        # sparse slab is stepped over when the next agrees.
+        n_min = max(8, int(0.15 * counts[:3].max()))
+        med = np.full(nb, np.nan)
+        for k in range(nb):
+            sel = cand & (k_of == k)
+            if sel.sum() >= n_min:
+                med[k] = float(np.median(radius[sel]))
+        if debug:
+            print("bore? %s end (r %.1f, wall ≥ %.1f): inner wall per %.0f mm slab: %s" % (
+                end, r_end, wall_min, slab, " ".join("%d:%s" % (counts[k], "-" if np.isnan(med[k]) else "%.1f" % med[k])
+                                                        for k in range(min(nb, 40)))))
+        def ok(k):
+            """Enough inner wall in slab k — and a wall's worth of body
+            outside it: the outer profile must be at least `wall_min`
+            wider there, or the "bore" would be wider than the part."""
+            if not (k < nb and counts[k] >= n_min and not np.isnan(med[k])):
+                return False
+            if outer_r is None:
+                return True
+            h_k = (k + 0.5) * slab if end == "start" else height - (k + 0.5) * slab
+            return float(outer_r(h_k)) >= med[k] + wall_min
+
+        runs = []                     # [r, first slab, last slab]
+        r_cur, start = r0, 0
+        last = -1
+        k = 0
+        while k < nb:
+            if ok(k) and abs(med[k] - r_cur) <= tol_r(r_cur):
+                last = k
+                k += 1
+                continue
+            # Up to two slabs of transition (a chamfer, a thread's run-out,
+            # a sparse slab): the wall again at its radius, or a new
+            # radius held for two slabs — a step.
+            move = None
+            for j in range(k, min(k + 3, nb)):
+                if ok(j) and abs(med[j] - r_cur) <= tol_r(r_cur):
+                    move = ("same", j)
+                    break
+                if ok(j) and ok(j + 1) and abs(med[j + 1] - med[j]) <= tol_r(med[j]) and last >= start:
+                    move = ("step", j)
+                    break
+            if move is None:
+                break
+            if move[0] == "same":
+                k = move[1]
+                continue
+            runs.append([r_cur, start, last])
+            r_cur, start, last = float(med[move[1]]), move[1], move[1]
+            k = move[1] + 1
+        if last >= start:
+            runs.append([r_cur, start, last])
+        # Neighbouring runs that agree to the tolerance are one run (a slab
+        # or two of jitter had split them).
+        merged = []
+        for run in runs:
+            if merged and abs(run[0] - merged[-1][0]) <= tol_r(max(run[0], merged[-1][0])):
+                merged[-1][2] = run[2]
+                continue
+            merged.append(run)
+        runs = merged
+        if not runs:
+            continue
+        depth_mm = float(min((runs[-1][2] + 1) * slab, height))
+        r_in = min(run[0] for run in runs)
+        # Nothing standing in the hole over its depth: a nut or a stem
+        # faces OUT inside the bore's radius (a hydrant's operating nut
+        # sits 28 mm down in the raised ring on its bonnet), and seen
+        # round the circle it is in the hole, not a stray patch — the ring
+        # is a recess round it, not a bore.
+        standing = (depth >= -slab) & (depth < depth_mm + 2 * slab) & (radius < r_in - wall_min) & (n_radial > 0.5)
+        if standing.sum() >= 20 and len(np.unique(sector[standing])) >= 0.5 * sectors:
+            if debug:
+                print("bore? %s end: %d points face out inside r %.1f within %.0f mm of the mouth — something stands in the hole" % (
+                    end, int(standing.sum()), r_in - wall_min, depth_mm + 2 * slab))
+            continue
+        # The floor, where the scanner saw it: points inside the bore's
+        # radius facing back toward the mouth, round a good part of the
+        # circle. A hole with a floor is never through.
+        floor = None
+        if n_axial is not None or caps is not None:
+            f_depth, f_radius, f_sector = depth, radius, sector
+            f_axial = n_axial if n_axial is not None else np.zeros(len(h))
+            if caps is not None and len(caps[0]):
+                f_depth = np.concatenate([f_depth, sign * (np.asarray(caps[0], dtype=float) - h_end)])
+                f_radius = np.concatenate([f_radius, np.asarray(caps[1], dtype=float)])
+                f_sector = np.concatenate([f_sector, ((np.asarray(caps[2], dtype=float) + 180.0) / (360.0 / sectors)).astype(int) % sectors])
+                f_axial = np.concatenate([f_axial, np.asarray(caps[3], dtype=float)])
+            on_floor = ((-sign * f_axial) > 0.5) & (f_radius < r_in - wall_min) & (f_depth >= 2 * slab) & (f_depth <= height)
+            if debug:
+                print("bore? %s end: %d points inside r %.1f face the mouth%s" % (
+                    end, int(on_floor.sum()), r_in - wall_min,
+                    "" if not on_floor.sum() else " — a floor at %.0f mm (median), round %.0f%% of the circle" % (
+                        float(np.median(f_depth[on_floor])), 100.0 * len(np.unique(f_sector[on_floor])) / sectors)))
+            if on_floor.sum() >= 20 and len(np.unique(f_sector[on_floor])) >= 0.3 * sectors:
+                floor = float(np.median(f_depth[on_floor]))
+        through = floor is None and depth_mm >= 0.85 * height
+        if through:
+            depth_mm = float(height)
+        elif floor is not None:
+            if debug and depth_mm >= 0.85 * height:
+                print("bore? %s end: the wall runs %.0f mm but a floor is seen %.0f mm in — not through" % (end, depth_mm, floor))
+            depth_mm = float(min(depth_mm, max(floor, 2.0 * slab)))
+        if depth_mm < max(2.0 * slab, 3.0):
+            continue
+        if not secondary and not through and depth_mm > open_end_depth(height) and r0 > 0.6 * r_end:
+            if debug:
+                print("bore? %s end: %.0f mm deep and r %.1f of %.1f — a container's cavity, left to the open-end test" % (
+                    end, depth_mm, r0, r_end))
+            continue
+        # Each run's radius from all its member points, and the profile as
+        # steps: [r, depth] from the end plane inward.
+        profile = []
+        for i, (r_run, k0, k1) in enumerate(runs):
+            sel = cand & (k_of >= k0) & (k_of <= k1) & (np.abs(radius - r_run) <= tol_r(r_run))
+            r_run = float(np.median(radius[sel])) if sel.sum() >= 8 else float(r_run)
+            d0 = 0.0 if i == 0 else float(k0 * slab)
+            d1 = depth_mm if i == len(runs) - 1 else float((k1 + 1) * slab)
+            profile.append([round(r_run, 2), round(d0, 1)])
+            profile.append([round(r_run, 2), round(d1, 1)])
+        found.append({"end": end, "rInnerMM": round(float(profile[0][0]), 2), "depthMM": round(depth_mm, 1),
+                      "wallMM": round(r_end - float(profile[0][0]), 2), "share": round(share, 3), "through": bool(through),
+                      "profile": profile})
+    if len(found) == 2 and (found[0]["through"] or found[1]["through"]
+                            or found[0]["depthMM"] + found[1]["depthMM"] >= height - slab):
+        # Two bores that meet are one through bore, read from the end that
+        # showed more of its wall.
+        keep = max(found, key=lambda b: (b["share"], b["depthMM"]))
+        keep["through"], keep["depthMM"] = True, round(float(height), 1)
+        keep["profile"][-1][1] = round(float(height), 1)
+        found = [keep]
+    return found
+
+
 def detect_open_top(mesh, origin, axis, u, v, height, radii_ends, bands, radius, h, grid=12, facing=None):
     """Is the part a container open at one end? Rays along the axis from
     just outside each end, over a disc of 0.7 × that end's radius.
@@ -571,7 +820,7 @@ def detect_open_top(mesh, origin, axis, u, v, height, radii_ends, bands, radius,
             locations, index_ray, index_tri = mesh.ray.intersects_location(origins, dirs, multiple_hits=False)
         except Exception:  # noqa: BLE001 — no ray support for this mesh
             return None
-        deep_limit = lift + max(0.15 * height, 25.0)
+        deep_limit = lift + open_end_depth(height)
         lost = len(origins) - len(index_ray)
         if len(index_ray):
             locations = np.asarray(locations, dtype=float).reshape(-1, 3)
@@ -1296,6 +1545,10 @@ def analyze(mesh, band_mm=None, lump_margin_mm=6.0, out_dir=None, name="scan", e
     # wall's, and the shelves come out as the radius steps anyway.
     source = trace_cropped
     apex_h = float(h.max())        # the scan's true top, before any face is left out
+    # The axial-facing samples (an end face, a shelf, a floor) are kept
+    # apart for the bore detector: a hole's floor is where they face back
+    # toward its mouth, and the trace itself never sees them.
+    cap_h, cap_perp, cap_n_axial = np.zeros(0), np.zeros((0, 3)), np.zeros(0)
     if samples and len(source.faces):
         sampled, face_index = trimesh.sample.sample_surface(source, int(samples), seed=7)
         sampled = np.asarray(sampled, dtype=float)
@@ -1309,6 +1562,7 @@ def analyze(mesh, band_mm=None, lump_margin_mm=6.0, out_dir=None, name="scan", e
         perp = np.vstack([perp[v_side], s_perp[side]])
         radius = np.linalg.norm(perp, axis=1)
         normals = np.vstack([normals[v_side], s_normals[side]])
+        cap_h, cap_perp, cap_n_axial = s_h[~side], s_perp[~side], s_normals[~side] @ axis
     # The OUTER surface is the profile. A thin-walled bucket or drum is
     # scanned inside as well as out, and a band's sector medians then fall
     # on whichever wall has more points there — the inner one as often as
@@ -1326,6 +1580,8 @@ def analyze(mesh, band_mm=None, lump_margin_mm=6.0, out_dir=None, name="scan", e
     u /= np.linalg.norm(u)
     v = np.cross(axis, u)
     azimuth = np.degrees(np.arctan2(perp @ v, perp @ u))
+    cap_radius = np.linalg.norm(cap_perp, axis=1)
+    cap_azimuth = np.degrees(np.arctan2(cap_perp @ v, cap_perp @ u))
 
     # How fine to trace: a clean mesh to the millimetre, a noisy scan in
     # bands wide enough that each band's radius is a median of many points.
@@ -1723,6 +1979,7 @@ def analyze(mesh, band_mm=None, lump_margin_mm=6.0, out_dir=None, name="scan", e
         if secondary or b["h"] > 150 or counts[i] >= 0.3 * typical:
             break
         first = i + 1
+    drop_h = 0.0
     if first:
         bands = bands[first:]
         drop_h = bands[0]["h"] - band_mm / 2
@@ -1976,6 +2233,22 @@ def analyze(mesh, band_mm=None, lump_margin_mm=6.0, out_dir=None, name="scan", e
             if bosses:
                 print("dished: %d boss candidate(s) left to the residual fit" % len(bosses))
                 bosses = []
+    # A bore at a free end: an open pipe end, a coupling's socket, a
+    # recessed port. Not where the open-end test or the traced section
+    # already describe the hollow — a bucket's open top is no bore.
+    bores = []
+    if not (open_top or dished or section_loop):
+        # The scanner's noise as the band says it (3× the noise, 1–4 mm):
+        # a small body's own estimate can read 3 mm on a 0.03 mm scan.
+        bores = detect_bores(h - drop_h, radius, azimuth, n_radial, height, ends, band_mm,
+                             noise_mm=min(point_noise, band_mm / 3.0), secondary=secondary, debug=debug,
+                             profile=simplified, n_axial=n_axial,
+                             caps=(cap_h - drop_h, cap_radius, cap_azimuth, cap_n_axial))
+    for b in bores:
+        print("bore at the %s: r %.1f inside r %.1f (a %.1f mm wall), %.0f mm deep%s, seen round %.0f%% of the circle%s" % (
+            b["end"], b["rInnerMM"], b["rInnerMM"] + b["wallMM"], b["wallMM"], b["depthMM"],
+            " (through)" if b["through"] else "", 100 * b["share"],
+            "" if len(b["profile"]) <= 2 else "; steps %s" % " ".join("r %.1f to %.0f" % (r, d) for r, d in b["profile"][1::2])))
 
     analysis = {
         "name": name,
@@ -1994,6 +2267,7 @@ def analyze(mesh, band_mm=None, lump_margin_mm=6.0, out_dir=None, name="scan", e
         "windows": windows,
         "nuts": nuts,
         "openTop": open_top,
+        "bores": bores,
         "bosses": bosses,
         "boundsMM": {"min": [float(x) for x in mesh.bounds[0]], "max": [float(x) for x in mesh.bounds[1]]},
         "bodies": [],
@@ -2002,7 +2276,7 @@ def analyze(mesh, band_mm=None, lump_margin_mm=6.0, out_dir=None, name="scan", e
         analysis["axes"] = [{k: ax[k] for k in ("origin", "direction", "share", "lengthMM", "radiusMM", "parent", "junction")}
                             for ax in selection["axes"]]
         analysis["bodies"] = secondary_bodies(mesh, selection, face_labels, name, samples, lump_margin_mm,
-                                              band_mm=band_mm, epsilon=epsilon)
+                                              band_mm=band_mm, epsilon=epsilon, debug=debug)
     if out_dir:
         os.makedirs(out_dir, exist_ok=True)
         if cropped is None:
@@ -2133,7 +2407,7 @@ def trim_profile(a, start_mm=0.0, end_mm=0.0):
     return a
 
 
-def secondary_bodies(mesh, selection, face_labels, name, samples, lump_margin_mm, band_mm=None, epsilon=None):
+def secondary_bodies(mesh, selection, face_labels, name, samples, lump_margin_mm, band_mm=None, epsilon=None, debug=False):
     """Every body of revolution the axis finder found beyond the main one,
     traced on its own axis — the faces labelled its own, `analyze` again
     with that axis fixed — and lengthened into the body it runs into.
@@ -2142,7 +2416,7 @@ def secondary_bodies(mesh, selection, face_labels, name, samples, lump_margin_mm
     bodies = []
     keys = ("name", "axisOrigin", "axisDirection", "azimuthZero", "azimuthNinety", "heightMM", "profile",
             "profileSegments", "bodyRadiusMM", "maxRadiusMM", "bandMM", "epsilonMM", "noiseMM", "topNotARingMM",
-            "extendedMM", "trimmedMM", "nuts")
+            "extendedMM", "trimmedMM", "nuts", "bores")
     import fit_axes
     jobs = []
     for k, ax in enumerate(selection["axes"][1:], 1):
@@ -2182,7 +2456,7 @@ def secondary_bodies(mesh, selection, face_labels, name, samples, lump_margin_mm
             a = analyze(sub, out_dir=None, name="%s-body%s" % (name, tag), axis_choice=choice,
                         axis_origin=np.asarray(ax["origin"], dtype=float), flip=False,
                         samples=max(40000, int(samples) // 3), multi=False, secondary=True,
-                        lump_margin_mm=lump_margin_mm, band_mm=band_mm, epsilon=epsilon, nut_mesh=mesh)
+                        lump_margin_mm=lump_margin_mm, band_mm=band_mm, epsilon=epsilon, nut_mesh=mesh, debug=debug)
         except Exception as error:  # noqa: BLE001 — a body too thin to trace is left to the residual fit
             print("   body %s not traced: %s" % (tag, error))
             continue
@@ -2198,6 +2472,24 @@ def secondary_bodies(mesh, selection, face_labels, name, samples, lump_margin_mm
         # first clean radius.
         r_parent = float(ax.get("junctionParentRadiusMM") or 0.0)
         start_mm = end_mm = 0.0
+        # A bore is at a FREE end: whatever the tracer read at the junction
+        # end is the parent's skin cut by the branch, and it is trimmed away.
+        if ax["junction"] in ("start", "end"):
+            kept_bores = []
+            for b in a.get("bores", []):
+                if b["end"] != ax["junction"]:
+                    kept_bores.append(b)
+                elif b.get("through"):
+                    # A through bore read from the junction end is the same
+                    # hole seen from the free end: one radius (the run nearest
+                    # the free end), measured from there, so the trim of the
+                    # root does not move its steps.
+                    free = "end" if ax["junction"] == "start" else "start"
+                    r_free = float(b["profile"][-1][0])
+                    r_outer = float(a["profile"][-1][0] if free == "end" else a["profile"][0][0])
+                    kept_bores.append(dict(b, end=free, rInnerMM=round(r_free, 2), wallMM=round(r_outer - r_free, 2),
+                                           profile=[[round(r_free, 2), 0.0], [round(r_free, 2), b["depthMM"]]]))
+            a["bores"] = kept_bores
         if ax["junction"] in ("start", "end") and ax["parent"] is not None:
             d_parent = np.asarray(selection["axes"][ax["parent"]]["direction"], dtype=float)
             cos_t = abs(float(d @ d_parent))
@@ -2216,9 +2508,11 @@ def secondary_bodies(mesh, selection, face_labels, name, samples, lump_margin_mm
         body.update({"index": k, "tag": tag, "parent": ax["parent"], "junction": ax["junction"],
                      "shareOfSurface": ax["share"], "finderRadiusMM": ax["radiusMM"], "finderLengthMM": ax["lengthMM"]})
         bodies.append(body)
-        print("   body %s: %d profile points over %.0f mm, radius ~%.1f mm%s" % (
+        print("   body %s: %d profile points over %.0f mm, radius ~%.1f mm%s%s" % (
             tag, len(a["profile"]), a["heightMM"], a["bodyRadiusMM"],
-            "" if not (start_mm or end_mm) else ", lengthened %.0f mm into body %s" % (start_mm or end_mm, ax["parent"])))
+            "" if not (start_mm or end_mm) else ", lengthened %.0f mm into body %s" % (start_mm or end_mm, ax["parent"]),
+            "".join(", bored r %.1f %s at its %s" % (b["rInnerMM"], "right through" if b.get("through") else "%.0f mm deep" % b["depthMM"], b["end"])
+                    for b in body.get("bores", []))))
     return bodies
 
 

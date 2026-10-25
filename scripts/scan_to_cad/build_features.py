@@ -82,6 +82,54 @@ def sweep_sketch(feature):
     return plane, entities, [0.0, 0.0]
 
 
+def bore_profile(feature, overshoot=5.0):
+    """The inner cone to cut out of a hollow horn (`fit_features.cone_mouth`:
+    `boreDepthMM`, `wallMM`, `boreMouth`, `boreProfile`): the inner skin the
+    scanner saw (`boreProfile`, [[r, h]] along the axis), or failing that
+    the feature's own profile a wall in, from `overshoot` past the mouth
+    (so the cut opens the end face) to the bore's floor, as [[r, h], …]
+    along the feature's axis for `revolve_region` to close along the axis
+    and revolve — subtracted after the horn's own union. Every radius is
+    kept a millimetre inside the outer profile, so the cut never opens the
+    skin. None when the feature has no bore."""
+    depth = float(feature.get("boreDepthMM") or 0.0)
+    wall = float(feature.get("wallMM") or 0.0)
+    if depth <= 0 or wall <= 0:
+        return None
+    P = sorted(((float(r), float(h)) for r, h in feature["profile"]), key=lambda p: p[1])
+    hs = [h for _, h in P]
+    rs = [r for r, _ in P]
+    at_hi = feature.get("boreMouth", "end") == "end"
+    # The mouth as the fit measured it (`boreMouthHMM`: the mouth plane's
+    # height before the fit lengthened the profile's end into what it
+    # meets); an older record without it: the profile's end.
+    h_m = feature.get("boreMouthHMM")
+    h_m = float(h_m) if h_m is not None else (hs[-1] if at_hi else hs[0])
+    floor_h = h_m - depth if at_hi else h_m + depth
+    lo, hi = sorted((h_m, floor_h))
+    margin = max(1.0, 0.3 * wall)
+
+    def outer(h):
+        return float(np.interp(h, hs, rs))
+
+    seen = feature.get("boreProfile") or []
+    if len(seen) >= 2:
+        s_h = [float(h) for _, h in seen]
+        s_r = [float(r) for r, _ in seen]
+
+        def r_at(h):
+            return max(min(float(np.interp(h, s_h, s_r)), outer(h) - margin), 0.5)
+        heights = [lo, hi] + [h for h in s_h if lo < h < hi] + [h for h in hs if lo < h < hi]
+    else:
+        def r_at(h):
+            return max(outer(h) - wall, 0.5)
+        heights = [lo, hi] + [h for h in hs if lo < h < hi]
+    beyond = (h_m + overshoot) if at_hi else (h_m - overshoot)
+    inner = {round(h, 2): r_at(h) for h in heights}
+    inner[round(beyond, 2)] = r_at(h_m)
+    return [[round(inner[h], 2), h] for h in sorted(inner)]
+
+
 def build_feature(mcp, feature, cad_id, label, note=True):
     """One fitted feature into the body: its sketch and its op, unioned.
     Returns the op's reply (`reply["failed"]` when the kernel refused it).
@@ -108,10 +156,36 @@ def build_feature(mcp, feature, cad_id, label, note=True):
         mcp.os3d("sketch.addEntities", {"sketchID": sk, "entities": entities},
                  note=say("%d lines: %s" % (len(entities), "the ring's own section" if feature.get("hoop")
                                             else "the radial profile, closed along the axis")))
-        return mcp.os3d("feature.revolve", {"sketchID": sk, "seedPoint": seed, "axisPoint": [0, 0],
-                                            "axisDirection": [0, 1], "angleDegrees": 360,
-                                            "boolean": "union", "booleanTargets": [cad_id]},
-                        note=say("revolved 360° about its axis, unioned into the body"))
+        reply = mcp.os3d("feature.revolve", {"sketchID": sk, "seedPoint": seed, "axisPoint": [0, 0],
+                                             "axisDirection": [0, 1], "angleDegrees": 360,
+                                             "boolean": "union", "booleanTargets": [cad_id]},
+                         note=say("revolved 360° about its axis, unioned into the body"))
+        bore = bore_profile(feature)
+        if bore and not reply.get("failed"):
+            # A hollow horn: the inner cone, a wall in from the mouth to the
+            # bore's floor, revolved on the same plane and SUBTRACTED. The
+            # horn stays if the cut is refused (the refusal is undone here,
+            # so the caller's undo does not take the horn with it).
+            sk_in = mcp.os3d("sketch.create", {"origin": [float(x) for x in ax["origin"]],
+                                               "xAxis": [float(x) for x in u], "yAxis": [float(x) for x in d],
+                                               "name": label + " bore"}, note=say("the bore's sketch, on the same axis plane"))["sketchID"]
+            ents_in, seed_in = revolve_region(bore)
+            mcp.os3d("sketch.addEntities", {"sketchID": sk_in, "entities": ents_in},
+                     note=say("%d lines: the inner cone, a %.1f mm wall in, %.0f mm deep from the mouth" % (
+                         len(ents_in), feature["wallMM"], feature["boreDepthMM"])))
+            cut = mcp.os3d("feature.revolve", {"sketchID": sk_in, "seedPoint": seed_in, "axisPoint": [0, 0],
+                                               "axisDirection": [0, 1], "angleDegrees": 360,
+                                               "boolean": "subtract", "booleanTargets": [cad_id]},
+                           note=say("revolved and subtracted: the horn is hollow"))
+            if cut.get("failed"):
+                reply["boreRefused"] = cut.get("message", "the bore did not cut")
+                try:
+                    mcp.os3d("command.run", {"id": "edit.undo"}, note=say("the refused bore undone; the horn stays solid"))
+                except MCPError:
+                    pass
+            else:
+                reply = cut
+        return reply
     if kind == "extrude":
         pl = feature["plane"]
         sk = mcp.os3d("sketch.create", {"origin": pl["origin"], "xAxis": pl["xAxis"], "yAxis": pl["yAxis"],
@@ -144,6 +218,13 @@ def shift_feature(feature, delta):
     return f
 
 
+def bore_words(feature):
+    """", bored 30 mm, 120 deep" for a hollow horn, else ""."""
+    if not feature.get("boreDepthMM"):
+        return ""
+    return ", bored %.0f mm, %.0f deep" % (2 * float(feature.get("boreRadiusMM") or 0.0), float(feature["boreDepthMM"]))
+
+
 SHAPE_WORDS = {"stadium": "a bar with rounded ends", "rectangle": "a rectangle", "square": "a square",
                "hexagon": "a hexagon", "octagon": "an octagon", "circle": "a disc", "ellipse": "an oval"}
 
@@ -165,6 +246,7 @@ def part_caption(feature):
         tail = {"hoop": "a ring on the body's own axis, revolved and unioned in",
                 "horn": "a cone on the hose's end, revolved and unioned in"}.get(
             part, "a radial profile on its own axis, revolved and unioned in")
+        tail += bore_words(feature)
     else:
         what = SHAPE_WORDS.get(shape.get("kind"), "its outline")
         if shape.get("cornerMM"):
@@ -197,7 +279,7 @@ def feature_caption(feature):
         what = "a round section" if prof["shape"] == "circle" else "an oval section"
         return "Swept · %s along its own centreline, unioned in" % what
     if kind == "revolve":
-        return ("A cone on its own axis · revolved and unioned in" if feature.get("cone")
+        return ("A cone on its own axis · revolved and unioned in%s" % bore_words(feature) if feature.get("cone")
                 else "Its own axis · a radial profile, revolved and unioned in")
     if feature.get("bar"):
         return "A bar · its section extruded along its length, unioned in"
