@@ -1260,21 +1260,6 @@ x turned by the phase and x × y up the axis, the preview's volume the
 cylinder plus what the prism adds outside it to 1 %; and the band clamp
 that leaves a crown's ring alone.
 
-## Gotchas
-
-- A nut is read on the whole scan, not on the body's labelled faces
-  (2026-10-26): `fit_axes.assign` gives a face no normal line claims to
-  the body whose ring radius it sits just under (≤ 1.15 × the ring +
-  tolerance), and a hex nut's corners at 1.155 × its apothem fall
-  outside that for a nut wider than the pipe — the branch's sub-mesh
-  then holds some flats and no corners. `nut_samples` projects the full
-  mesh into the body's frame (its final one, 0 ≤ h ≤ height) instead.
-- The hydrant's operating nut (2026-10-26): its apothem and phase are
-  steady from window to window (23 mm, 23–25°), its sector radii are
-  not — a quarter within tolerance. Loosening the tolerance until it
-  passes also passes the off-centre round collars (the hydrant's crown
-  reads ±1.5 mm round its sectors). Leave it out rather than tune for
-  one part; it is buried in the solid crown anyway.
 ### Bores at open ends (2026-10-26)
 
 The valve's pipes ended in solid discs. The scan shows open ends — an
@@ -1417,32 +1402,6 @@ profile (the floor stays 100 mm below the MEASURED mouth), the horn's cut
 (`feature_cut_mesh`) and `build_preview` taking it out of the whole model
 (a rod in the throat goes with it; one apart does not).
 
-## Gotchas
-
-- A collar with a nut in it is not a bore (2026-10-26): the hydrant's
-  bonnet has a hollow ring r 36 inside r 45 with the operating nut 28 mm
-  down inside it, and the first bore detector read a 50 mm bore there
-  (the ring's inner wall runs on past the nut); a second looked for
-  something standing only in the mouth's first three slabs, found the
-  nut's top 28 mm down instead, and cut the collar to it — the excess
-  round the nut grew and the largest-excess gate moved 8 925 → 9 495 mm²
-  (a control with the bore stripped reproduced the old numbers exactly:
-  it was the bore, not sampling jitter). Points facing OUT inside the
-  bore's radius anywhere down to two slabs past the floor refuse a bore;
-  the walk stops where the outer profile comes within a wall of the inner
-  one.
-- The trace's points hold no floors (2026-10-26): every sample on a face
-  that looks along the axis is left out before the profile is traced (a
-  band through a flat end would read the disc's radii as the wall's), so
-  a bore detector working from those points can never see a hole's floor
-  — a bucket with the open-end test silent read as a floorless tube. The
-  axial-facing samples are kept apart and handed to `detect_bores` as
-  `caps`.
-- A small secondary body's own noise estimate is not the scanner's
-  (3 mm on a 0.03 mm scan: a branch 80 mm long has few clean cylinder
-  cells); a wall tolerance scaled by it threw away the real r 19 wall of
-  the valve's coupling and read the bore from the r 14 pipe behind it.
-  The band width (3 × the main trace's noise) is the bound.
 ### Bent bars and levers (2026-10-26)
 
 The CO₂ extinguisher's valve head carries a squeeze lever under a carry
@@ -1622,6 +1581,43 @@ refuses a semicircle.
 
 ## Gotchas
 
+- A nut is read on the whole scan, not on the body's labelled faces
+  (2026-10-26): `fit_axes.assign` gives a face no normal line claims to
+  the body whose ring radius it sits just under (≤ 1.15 × the ring +
+  tolerance), and a hex nut's corners at 1.155 × its apothem fall
+  outside that for a nut wider than the pipe — the branch's sub-mesh
+  then holds some flats and no corners. `nut_samples` projects the full
+  mesh into the body's frame (its final one, 0 ≤ h ≤ height) instead.
+- The hydrant's operating nut (2026-10-26): its apothem and phase are
+  steady from window to window (23 mm, 23–25°), its sector radii are
+  not — a quarter within tolerance. Loosening the tolerance until it
+  passes also passes the off-centre round collars (the hydrant's crown
+  reads ±1.5 mm round its sectors). Leave it out rather than tune for
+  one part; it is buried in the solid crown anyway.
+- A collar with a nut in it is not a bore (2026-10-26): the hydrant's
+  bonnet has a hollow ring r 36 inside r 45 with the operating nut 28 mm
+  down inside it, and the first bore detector read a 50 mm bore there
+  (the ring's inner wall runs on past the nut); a second looked for
+  something standing only in the mouth's first three slabs, found the
+  nut's top 28 mm down instead, and cut the collar to it — the excess
+  round the nut grew and the largest-excess gate moved 8 925 → 9 495 mm²
+  (a control with the bore stripped reproduced the old numbers exactly:
+  it was the bore, not sampling jitter). Points facing OUT inside the
+  bore's radius anywhere down to two slabs past the floor refuse a bore;
+  the walk stops where the outer profile comes within a wall of the inner
+  one.
+- The trace's points hold no floors (2026-10-26): every sample on a face
+  that looks along the axis is left out before the profile is traced (a
+  band through a flat end would read the disc's radii as the wall's), so
+  a bore detector working from those points can never see a hole's floor
+  — a bucket with the open-end test silent read as a floorless tube. The
+  axial-facing samples are kept apart and handed to `detect_bores` as
+  `caps`.
+- A small secondary body's own noise estimate is not the scanner's
+  (3 mm on a 0.03 mm scan: a branch 80 mm long has few clean cylinder
+  cells); a wall tolerance scaled by it threw away the real r 19 wall of
+  the valve's coupling and read the bore from the r 14 pipe behind it.
+  The band width (3 × the main trace's noise) is the bound.
 - A quarter circle reads as three gentle legs (2026-10-26): a 120 mm
   radius arc sampled as centreline points fits a three-leg spine of 32°
   bends to 1.4 mm RMS, within the 15 %-of-width allowance of any bar
