@@ -1701,8 +1701,20 @@ def analyze(mesh, band_mm=None, lump_margin_mm=6.0, out_dir=None, name="scan", e
     # axis from above hit the inside bottom, not a top. Then the revolve is
     # shelled, at the rim's wall thickness.
     ends = (float(simplified[0][0]), float(simplified[-1][0])) if simplified else (float(body_r[0]), float(body_r[-1]))
-    open_top = None if secondary else detect_open_top(cropped if cropped is not None else mesh, origin, axis, u, v,
-                                                      height, ends, bands, radius, h, facing=facing)
+    # But a dished wheel first: a band of a tyre on a hub holds two full
+    # rings far apart, and from the hub side the rim's dish reads as an
+    # open end 260 mm deep (the truck wheel's rays fell into the dish and
+    # through the hub's bore, and the "cavity" cut the rim away, 21 mm
+    # mean deviation). The dish test asks for proper rings (six tenths
+    # of the circle) 40 mm apart: an open container's floor sits a wall's
+    # thickness in from its skin and is no dish, so a bucket and a drum
+    # keep their cavity cut.
+    cell = max(band_mm, 2.0)
+    dish = (not secondary) and is_dished(surface_grid(h, radius, azimuth, cell, min_share=0.6), cell, min_gap_mm=40.0)
+    open_top = None if (secondary or dish) else detect_open_top(cropped if cropped is not None else mesh, origin, axis, u, v,
+                                                                height, ends, bands, radius, h, facing=facing)
+    if dish:
+        print("dished: two rings in one band (a tyre on a hub) — the half-section is traced; no open end is looked for")
     if open_top:
         print("open %s: rays from outside fall %.0f mm in (or through) on %.0f%% of that end; wall %.1f mm — the revolve will be shelled" % (
             open_top["end"], open_top["depthMM"], open_top["share"] * 100, open_top["wallMM"]))
@@ -1719,18 +1731,14 @@ def analyze(mesh, band_mm=None, lump_margin_mm=6.0, out_dir=None, name="scan", e
     # One radius per height cannot describe a dished wheel: a band there
     # holds two full rings far apart (the tyre and the hub) with nothing
     # between. Such a part gets its whole half-section traced instead.
-    cell = max(band_mm, 2.0)
     with np.errstate(invalid="ignore", divide="ignore"):
         n_radial = np.where(radius > 1e-9, (perp * normals).sum(axis=1) / np.maximum(radius, 1e-9), 0.0)
     n_axial = normals @ axis
     surface_mask, cell_normals = surface_grid(h, radius, azimuth, cell, n_radial=n_radial, n_axial=n_axial)
-    # The test for a dish asks for proper rings (six tenths of the circle):
-    # a valve's stem, branch and side port together fill half the sectors
-    # of one band and are no ring.
-    # An open container's floor sits a wall's thickness in from its skin
-    # and is no dish: the test wants a gap of 40 mm, on a part with no
-    # open end (a bucket and a drum keep their band trace and cavity cut).
-    dished = (not open_top) and (not secondary) and is_dished(surface_grid(h, radius, azimuth, cell, min_share=0.6), cell, min_gap_mm=40.0)
+    # The dish test ran above, before the open end was looked for (a
+    # valve's stem, branch and side port together fill half the sectors
+    # of one band and are no ring; a bucket's floor is no dish).
+    dished = dish
     section_loop = None
     # A ring on a hub (a hand-wheel) within a part that is otherwise one
     # radius per height: the annulus between them is a window to cut.

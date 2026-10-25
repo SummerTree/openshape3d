@@ -1127,6 +1127,14 @@ again.
 
 ## Gotchas
 
+- A dished wheel is tested for BEFORE the open end (2026-10-25): from the
+  hub side a rim's dish reads as an open container (rays fall 260 mm into
+  the dish and through the hub's bore), the "cavity" cut the rim away and
+  the dished-section tracer never ran. The truck wheel had been saved
+  from this only by a wrong ground trim that happened to clip the tyre's
+  face (gone since the floor-is-not-a-sidewalk rule); with the dish test
+  first it traces as a section again (body alone 7.7 mm mean, was 21).
+  Test: `test_a_tyre_on_a_hub_is_dished_and_not_an_open_container`.
 - Import names the format from the file name's extension: pass
   `fileName: "scan.glb"`, not a bare label.
 - `view.fit` right after `view.<direction>` is fine over the bridge, but

@@ -285,6 +285,42 @@ class TracerHelperTests(unittest.TestCase):
         self.assertLessEqual(max(us), 285.0 + 1e-6)
         self.assertTrue(0 < seed[1] < 900 and 0 < seed[0] < 285)
 
+    def test_a_tyre_on_a_hub_is_dished_and_not_an_open_container(self):
+        """From the hub side a wheel's rim dish reads as an open end (rays
+        fall into the dish and through the hub's bore); the dish test must
+        run first, or the cavity cuts the rim away (the truck wheel, 21 mm
+        mean deviation). A tyre (annulus 150–200 mm, 60 wide) and a hub
+        disc (r 50, 20 thick) in one plane: dished, no open end."""
+        import numpy as np
+        import trimesh
+        import analyze_scan as A
+        n = 96
+        a = np.linspace(0, 2 * np.pi, n, endpoint=False)
+        V = []
+        for r in (150.0, 200.0):
+            for z in (-30.0, 30.0):
+                V += [[r * np.cos(t), r * np.sin(t), z] for t in a]
+        F = []
+
+        def band(i0, i1):
+            for k in range(n):
+                k2 = (k + 1) % n
+                F.append([i0 + k, i1 + k, i1 + k2])
+                F.append([i0 + k, i1 + k2, i0 + k2])
+        band(2 * n, 3 * n)      # outer wall
+        band(n, 0)              # inner wall
+        band(0, 2 * n)          # one face
+        band(3 * n, n)          # the other
+        tyre = trimesh.Trimesh(np.array(V), np.array(F), process=True)
+        tyre.fix_normals()
+        hub = trimesh.creation.cylinder(radius=50.0, height=20.0, sections=64)
+        wheel = trimesh.util.concatenate([tyre, hub])
+        with tempfile.TemporaryDirectory() as out:
+            analysis = A.analyze(wheel, out_dir=out, name="wheel", samples=10000, axis_choice="0,0,1!", multi=False)
+        self.assertIsNone(analysis.get("openTop"))
+        self.assertTrue(analysis.get("sectionLoop"), "the half-section should be traced as a region")
+        self.assertAlmostEqual(analysis["heightMM"], 60.0, delta=2.0)
+
 
 @unittest.skipUnless(HAVE_DEPS, "needs the scan_to_cad venv (trimesh, numpy, scipy, rtree, pillow)")
 class FeatureBuilderTests(unittest.TestCase):
