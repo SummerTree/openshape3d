@@ -3,7 +3,7 @@
 the MCP server, and have the app grade the result.
 
     python3 build_hydrant.py --scan scan.glb --analysis analysis/ --out run/ --port 8947 \
-        [--name bollard --label "Bollard" --color 0.75 0.75 0.72]
+        [--name bollard --label "Bollard" --color 0.75 0.75 0.72 | --color scan]
 
 Every step is an `os3d` tool call to `scripts/mcp_openshape3d.py` — the
 same server Claude Desktop and Claude Code use — so this is a full test of
@@ -47,6 +47,9 @@ import numpy as np
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from mcp_client import MCPClient, MCPError  # noqa: E402
 from fit_primitives import cavity_section, hollow_section, sketch_entities  # noqa: E402
+# Re-exported: the films, the reel and the tests take the colour rule from
+# here; `run_corpus.py` imports it from `spec_color` so it stays numpy-free.
+from spec_color import HYDRANT_RED, model_color, color_option  # noqa: E402,F401
 
 
 def unit(v):
@@ -334,6 +337,7 @@ class Session:
 def build(args):
     with open(os.path.join(args.analysis, "profile.json")) as f:
         analysis = json.load(f)
+    args.color = model_color({"color": color_option(args.color)}, analysis)
     axis_origin = np.array(analysis["axisOrigin"])
     axis = unit(analysis["axisDirection"])
     u = unit(analysis["azimuthZero"])
@@ -603,8 +607,9 @@ def main():
     ap.add_argument("--port", type=int, default=8787)
     ap.add_argument("--name", default="hydrant", help="file names: <name>-cad.step and friends")
     ap.add_argument("--label", default="Hydrant", help="what the part is, for the sketch names")
-    ap.add_argument("--color", type=float, nargs=3, default=[0.86, 0.17, 0.12], metavar=("R", "G", "B"),
-                    help="the model's colour (default hydrant red)")
+    ap.add_argument("--color", nargs="+", default=["scan"], metavar="R G B | scan",
+                    help="the model's colour: three numbers in 0…1, or 'scan' (default) for the analysis's "
+                         "scanColor — the scan's own dominant colour — falling back to hydrant red")
     ap.add_argument("--tolerance", type=float, default=2.0, help="mm; what counts as within tolerance")
     args = ap.parse_args()
     os.makedirs(args.out, exist_ok=True)

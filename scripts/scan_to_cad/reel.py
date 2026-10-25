@@ -46,7 +46,7 @@ import numpy as np
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))
 sys.path.insert(0, HERE)
-from build_hydrant import body_section, boss_section, unit, world, secondary_sections, revolve_secondary, window_sections, cut_window  # noqa: E402
+from build_hydrant import body_section, boss_section, unit, world, secondary_sections, revolve_secondary, window_sections, cut_window, model_color  # noqa: E402
 from build_features import build_feature, shift_feature  # noqa: E402
 from demo_video import Recorder, caption, ffmpeg_watched, narrate, scan_on_floor, title_overlay  # noqa: E402
 from mcp_client import MCPClient, MCPError  # noqa: E402
@@ -196,7 +196,7 @@ def take_part(slug, part, spec, analysis, tolerance, udid, port, out):
 
         scan_id = mcp.os3d("document.import", {"path": os.path.abspath(floor), "fileName": os.path.basename(floor)})["bodyIDs"][0]
         mcp.os3d("item.select", {"ids": []})
-        cad = build_model(mcp, analysis, spec.get("label", slug), spec.get("color", [0.86, 0.17, 0.12]),
+        cad = build_model(mcp, analysis, spec.get("label", slug), model_color(spec, analysis),
                           features=built_features(part))
 
         # The preview: the scan wears the colours, the model is ghosted.

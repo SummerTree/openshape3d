@@ -26,10 +26,26 @@ pieces, and tries the four things a CAD feature can be on each piece:
               of the plane across it that its points run the length of,
               extruded that length (`bar_fit`; built as an extrude)
 
+    hoop      a ring round the MAIN body's axis (`--analysis` gives it) — a
+              barrel's hoop, a rolled rim, a bead: a height band in which
+              the piece runs round the axis at one radius, revolved on
+              that axis with its own annular section (`hoop_fit`; built
+              as a revolve)
+
 Each candidate is scored by the share of the piece's points it covers within
 tolerance; the best one wins, what it leaves uncovered is split again and
 tried again (a hose with a horn on its end is a sweep and then a revolve).
 Pieces nothing explains are listed as `unexplained`, with where they are.
+
+The parts library: a plate's or a bar's outline is matched against the
+shapes real parts are designed with — a circle, a stadium (a lever), a
+rectangle with rounded corners (a flange), a hexagon or an octagon (a
+nut), an oval — and the designed shape is taken whenever it explains the
+piece as well as the free-form outline does (`regularise_outline`); a
+tube is ONE sweep along ONE spine at one radius, with its horn a cone on
+the end. Each feature carries a `shape` (what it is, with its sizes) and a
+`part` (lever, handle, hose, horn, grip, nut, flange, hoop, knob, bar,
+plate, lug) for the captions.
 
 Writes `features.json` — a list of features in `build_recipe.py`'s terms,
 world millimetres, every end that meets the body extended into it so the
@@ -176,6 +192,10 @@ DEBUG = bool(os.environ.get("FIT_DEBUG"))
 # ahead of its lugs.
 BAR_MIN_AREA = 400.0
 
+# The smallest residual piece worth a feature (mm²); `main` sets it from
+# the scan's area (0.4 %, 150 at least).
+MIN_PIECE_AREA = 150.0
+
 
 def say(*parts):
     if DEBUG:
@@ -315,8 +335,49 @@ def tube_fit(comp, tol, far, model_tree):
                                                        " ".join("%.1f" % x["r"] if x else "-" for x in rows_out)))
     if sum(x is not None for x in rows_out) < 3:
         return None
-    # Runs of one radius: a hose keeps its radius, a horn on its end does
-    # not; a mixed bin breaks the run.
+    # One spine per piece. The samples split into runs where the radius
+    # steps by more than two tolerances (a hose into its horn; the valve
+    # body the geodesic walked through); neighbouring runs whose radii
+    # agree to that are one run at one radius (a stein's handle, thick
+    # above and thinner below, is one tube, not two with a step between).
+    # A run whose radius grows steadily is a cone — a horn — and becomes
+    # a revolve on the line that continues the spine; the longest tube and
+    # the runs that follow it along the spine are the piece's story: ONE
+    # sweep with one radius, or a short chain meeting end to end where
+    # the radius really steps, with the horn on its end. Whatever else the
+    # spine crossed — a lever, a valve — is left for the next pass to
+    # explain as what it is. (Three overlapping sweeps once stood in for a
+    # CO₂ extinguisher's grip, hose and horn.)
+    def step_r(r):
+        return max(2.0 * tol, 0.35 * r)
+
+    def radius_of(run):
+        return float(np.median([x["r"] for x in run]))
+
+    def cone_run(run, r, tol):
+        """The run (or the run less up to three end samples) when its radius
+        grows steadily — trend over 0.85 and a spread of more than half its
+        median radius — else None. The shortest trim that passes wins, and
+        the trimmed run keeps at least four samples and 70 % of the run."""
+        n = len(run)
+        for cut in range(0, 4):
+            for head in range(0, cut + 1):
+                tail = cut - head
+                sub = run[head:n - tail]
+                if len(sub) < max(4, int(math.ceil(0.7 * n))):
+                    continue
+                rr = np.array([x["r"] for x in sub])
+                if rr.std() <= 1e-9:
+                    continue
+                trend = float(np.corrcoef(np.arange(len(rr)), rr)[0, 1])
+                spread = float(rr.max() - rr.min())
+                if cut == 0:
+                    say("tube: run of %d: r %.1f, radii %.1f → %.1f (spread %.1f), trend %.2f" % (n, r, rr[0], rr[-1], spread, trend))
+                if abs(trend) > 0.85 and spread > 0.5 * float(np.median(rr)):
+                    if cut:
+                        say("tube: run of %d less %d at the start and %d at the end is a cone (trend %.2f)" % (n, head, tail, trend))
+                    return sub
+        return None
     runs, run = [], []
     for x in rows_out:
         if x is None:
@@ -324,55 +385,33 @@ def tube_fit(comp, tol, far, model_tree):
                 runs.append(run)
             run = []
             continue
-        if run:
-            med = float(np.median([y["r"] for y in run]))
-            if abs(x["r"] - med) > max(0.35 * med, tol):
-                runs.append(run)
-                run = []
+        if run and abs(x["r"] - radius_of(run)) > step_r(radius_of(run)):
+            runs.append(run)
+            run = []
         run.append(x)
     if run:
         runs.append(run)
-    # Runs that follow one another along the tube and differ in radius by
-    # less than six tenths (a handle thick at the top, thinner below) are
-    # ONE sweep at the median section — a continuous handle, not two
-    # pieces with a step between; runs farther apart in radius meet end
-    # to end so the union has no gap.
     merged = []
     for run in runs:
-        if merged and run and merged[-1]:
-            prev = merged[-1]
-            r_prev = float(np.median([x["r"] for x in prev]))
-            r_run = float(np.median([x["r"] for x in run]))
-            near = abs(run[0]["i"] - prev[-1]["i"]) <= 6
-            # Only runs of a steady radius merge: a hose must not be swept
-            # into the horn that grows out of it.
-            steady = all((max(x["r"] for x in rr) - min(x["r"] for x in rr)) < 0.5 * float(np.median([x["r"] for x in rr]))
-                         for rr in (prev, run))
-            if near and steady and max(r_prev, r_run) / max(min(r_prev, r_run), 1e-6) < 1.6:
-                merged[-1] = prev + run
-                continue
-            if near:
-                bridge = dict(run[0])
-                bridge["r"] = prev[-1]["r"]
-                bridge["a"], bridge["b"] = prev[-1]["a"], prev[-1]["b"]
-                merged[-1] = prev + [bridge]
+        if merged and run[0]["i"] - merged[-1][-1]["i"] <= 6 and abs(radius_of(run) - radius_of(merged[-1])) <= step_r(max(radius_of(run), radius_of(merged[-1]))):
+            merged[-1] = merged[-1] + run
+            continue
         merged.append(run)
     runs = merged
-    features = []
+    # Each run judged on its own: a cone, a tube, or neither.
+    judged = []
     for run in runs:
-        if len(run) < 3:
-            continue
-        r = float(np.median([x["r"] for x in run]))
-        a = float(np.median([x["a"] for x in run]))
-        b = float(np.median([x["b"] for x in run]))
+        r = radius_of(run)
+        rr = np.array([x["r"] for x in run])
         spine = np.array([x["c"] for x in run])
-        span = float(np.sum(np.linalg.norm(np.diff(spine, axis=0), axis=1)))
-        if r < 1.0 or span < max(4.0 * r, 15.0):
+        span = float(np.sum(np.linalg.norm(np.diff(spine, axis=0), axis=1))) if len(run) > 1 else 0.0
+        verdict = {"run": run, "r": r, "spine": spine, "span": span, "kind": None}
+        judged.append(verdict)
+        if len(run) < 3 or r < 1.0 or span < max(4.0 * r, 15.0):
             say("tube: run of %d dropped (r %.1f, span %.0f)" % (len(run), r, span))
             continue
         # The run's own points against its own tube: a lever or a valve body
         # the geodesic walked through is no tube, whatever its bins' medians.
-        rr = np.array([x["r"] for x in run])
         own = np.concatenate([np.abs(x["rho"] - x["r"]) <= max(tol, 0.3 * x["r"]) for x in run])
         # Half its points on the tube: a corrugated hose's bins carry the
         # valve's and the horn's neighbours and read 53–57 %.
@@ -380,29 +419,19 @@ def tube_fit(comp, tol, far, model_tree):
             say("tube: run of %d dropped (r %.1f): only %.0f%% of its own points on the tube" % (len(run), r, own.mean() * 100))
             continue
         # A radius that grows steadily along the run is a cone — a horn, a
-        # nozzle: a revolve about the run's own line, not a tube.
-        idx = np.arange(len(rr))
-        trend = float(np.corrcoef(idx, rr)[0, 1]) if len(rr) >= 4 and rr.std() > 1e-9 else 0.0
-        if abs(trend) > 0.85 and (rr.max() - rr.min()) > 0.5 * r:
-            c0 = spine.mean(axis=0)
-            _, _, vt = np.linalg.svd(spine - c0, full_matrices=False)
-            d = unit(vt[0])
-            if d @ (spine[-1] - spine[0]) < 0:
-                d = -d
-            hs = (spine - c0) @ d
-            prof = [[float(x["r"]), float(hh)] for x, hh in zip(run, hs)]
-            prof = douglas_peucker_2d(prof, max(tol * 0.5, 0.5))
-            d_lo, _ = model_tree.query(c0 + d * hs.min())
-            d_hi, _ = model_tree.query(c0 + d * hs.max())
-            if d_lo < far + r:
-                prof = [[prof[0][0], prof[0][1] - (far + 4.0)]] + prof
-            if d_hi < far + r:
-                prof = prof + [[prof[-1][0], prof[-1][1] + (far + 4.0)]]
-            features.append({"kind": "revolve", "axis": {"origin": [round(float(v), 2) for v in c0],
-                                                         "direction": [round(float(v), 5) for v in d]},
-                             "profile": [[round(float(q), 2), round(float(hh), 2)] for q, hh in prof],
-                             "lengthMM": round(span, 1), "radiusMM": round(r, 2), "cone": True})
-            say("tube: run of %d is a cone (r %.1f → %.1f over %.0f mm): a revolve" % (len(run), rr[0], rr[-1], span))
+        # nozzle: a revolve about the run's own line, not a tube. The
+        # geodesic can overshoot the horn's mouth and walk a sample or
+        # two down its rim (15.5 → 32.7 → 17.7 on the CO₂ extinguisher's
+        # horn against the app's model, trend 0.63; the same horn against
+        # the offline model stopped at 33 and read 0.98), so the trend is
+        # judged on the run with up to three end samples trimmed, and a
+        # cone is the trimmed run.
+        cone = cone_run(run, r, tol)
+        if cone is not None:
+            verdict["run"], verdict["kind"] = cone, "cone"
+            verdict["r"] = radius_of(cone)
+            verdict["spine"] = np.array([x["c"] for x in cone])
+            verdict["span"] = float(np.sum(np.linalg.norm(np.diff(verdict["spine"], axis=0), axis=1)))
             continue
         # A steady run three times fatter than the chords measured is not
         # the tube they measured: a stand's post and beam, walked through
@@ -413,12 +442,77 @@ def tube_fit(comp, tol, far, model_tree):
         if r0 >= 2.0 * tol and r > 3.0 * r0:
             say("tube: run of %d dropped (r %.1f): three times the chord radius %.1f" % (len(run), r, r0))
             continue
-        # Ends that meet the body run on into it; a free end gets back the
-        # half bin the mean took off it.
+        verdict["kind"] = "tube"
+    tubes = [k for k, v in enumerate(judged) if v["kind"] == "tube"]
+    if not tubes:
+        say("tube: no run survived")
+        return None
+    # The chain: the longest tube, and the tubes and cones that follow it
+    # along the spine within six bins (a short run of junk between two
+    # tubes — a lug the handle passes — is stepped over).
+    main_k = max(tubes, key=lambda k: judged[k]["span"])
+    chain = [main_k]
+    for direction in (-1, 1):
+        k = main_k
+        while True:
+            nxt = k + direction
+            while 0 <= nxt < len(judged) and judged[nxt]["kind"] is None and len(judged[nxt]["run"]) <= 3:
+                nxt += direction
+            if not (0 <= nxt < len(judged)) or judged[nxt]["kind"] is None:
+                break
+            a, b = (judged[k], judged[nxt]) if direction > 0 else (judged[nxt], judged[k])
+            if b["run"][0]["i"] - a["run"][-1]["i"] > 6:
+                break
+            chain.append(nxt)
+            if judged[nxt]["kind"] == "cone":
+                break
+            k = nxt
+    chain.sort()
+    features = []
+    for pos, k in enumerate(chain):
+        v = judged[k]
+        run, r, spine, span = v["run"], v["r"], v["spine"], v["span"]
+        rr = np.array([x["r"] for x in run])
+        if v["kind"] == "cone":
+            c0 = spine.mean(axis=0)
+            _, _, vt = np.linalg.svd(spine - c0, full_matrices=False)
+            d = unit(vt[0])
+            if d @ (spine[-1] - spine[0]) < 0:
+                d = -d
+            hs = (spine - c0) @ d
+            prof = [[float(x["r"]), float(hh)] for x, hh in zip(run, hs)]
+            prof = douglas_peucker_2d(prof, max(tol * 0.5, 0.5))
+            d_lo, _ = model_tree.query(c0 + d * hs.min())
+            d_hi, _ = model_tree.query(c0 + d * hs.max())
+            # The end that meets the hose (or the body) runs on into it.
+            if d_lo < far + r or pos > 0:
+                prof = [[prof[0][0], prof[0][1] - (far + 4.0)]] + prof
+            if d_hi < far + r or pos < len(chain) - 1:
+                prof = prof + [[prof[-1][0], prof[-1][1] + (far + 4.0)]]
+            features.append({"kind": "revolve", "axis": {"origin": [round(float(q), 2) for q in c0],
+                                                         "direction": [round(float(q), 5) for q in d]},
+                             "profile": [[round(float(q), 2), round(float(hh), 2)] for q, hh in prof],
+                             "lengthMM": round(span, 1), "radiusMM": round(r, 2), "cone": True})
+            say("tube: run of %d is a cone (r %.1f → %.1f over %.0f mm): a revolve" % (len(run), rr[0], rr[-1], span))
+            continue
+        a = float(np.median([x["a"] for x in run]))
+        b = float(np.median([x["b"] for x in run]))
+        # Ends: a free end meets the body (`reach_body`) or gets back the
+        # half bin the mean took off it; an end that meets the next run of
+        # the chain reaches into it by a radius so the union fuses.
         t0 = unit(spine[1] - spine[0])
         t1 = unit(spine[-1] - spine[-2])
-        start = reach_body(spine[0], -t0, r, far, model_tree, step)
-        end = reach_body(spine[-1], t1, r, far, model_tree, step)
+        attached = [False, False]
+        if pos > 0:
+            prev = judged[chain[pos - 1]]["spine"]
+            start = spine[0] + unit(prev[-1] - spine[0]) * min(r, float(np.linalg.norm(prev[-1] - spine[0])))
+        else:
+            start, attached[0] = reach_body(spine[0], -t0, r, far, model_tree, step)
+        if pos < len(chain) - 1:
+            nxt = judged[chain[pos + 1]]["spine"]
+            end = spine[-1] + unit(nxt[0] - spine[-1]) * min(r, float(np.linalg.norm(nxt[0] - spine[-1])))
+        else:
+            end, attached[1] = reach_body(spine[-1], t1, r, far, model_tree, step)
         spine = np.vstack([start, spine, end])
         simplified = douglas_peucker_3d(spine, max(tol * 0.5, 0.5))
         ellipse = a / max(b, 1e-6) > 1.25
@@ -427,10 +521,15 @@ def tube_fit(comp, tol, far, model_tree):
         features.append({
             "kind": "sweep", "profile": ({"shape": "ellipse", "rx": round(a, 2), "ry": round(b, 2)} if ellipse
                                          else {"shape": "circle", "radius": round(r, 2)}),
-            "xAxis": [round(float(v), 5) for v in major], "spine": [[round(float(v), 2) for v in p] for p in simplified],
-            "lengthMM": round(span, 1), "radiusMM": round(r, 2),
+            "xAxis": [round(float(q), 5) for q in major], "spine": [[round(float(q), 2) for q in p] for p in simplified],
+            "lengthMM": round(span, 1), "radiusMM": round(r, 2), "attached": attached,
+            # Which ends run on into another run of the chain, and whether
+            # the one after is a horn (a hose ends in one).
+            "joins": [pos > 0, pos < len(chain) - 1],
+            "intoHorn": pos < len(chain) - 1 and judged[chain[pos + 1]]["kind"] == "cone",
         })
-    if not features:
+    say("tube: the chain is %s (of %d runs)" % (" + ".join("%s r %.1f over %.0f mm" % (judged[k]["kind"], judged[k]["r"], judged[k]["span"]) for k in chain), len(judged)))
+    if not any(f["kind"] == "sweep" for f in features):
         say("tube: no run survived")
         return None
     # Coverage: distance of the piece's points to the tube surfaces.
@@ -454,11 +553,14 @@ def tube_fit(comp, tol, far, model_tree):
 
 def reach_body(point, direction, r, far, model_tree, step):
     """The end of a tube carried on along its tangent until it is a radius
-    inside the body (so the union fuses), up to 60 mm; a free end gets
-    half a bin back for what the binning took off it."""
-    d0, _ = model_tree.query(point)
+    inside the body (so the union fuses), up to 60 mm; when the tangent
+    misses the skin but the body is within three radii (a stein's handle
+    meets the belly at an angle), straight to the nearest point of the
+    skin and a radius in. A free end gets half a bin back for what the
+    binning took off it. Returns (the end, whether it met the body)."""
+    d0, nearest = model_tree.query(point)
     if d0 > 60.0 + r:
-        return point + direction * (0.5 * step)
+        return point + direction * (0.5 * step), False
     p = np.array(point, dtype=float)
     travelled, last = 0.0, d0
     while travelled < 60.0:
@@ -466,9 +568,13 @@ def reach_body(point, direction, r, far, model_tree, step):
         travelled += 1.0
         d, _ = model_tree.query(p)
         if d < 1.0 or (d > last and last < 2.0):      # at the skin, or just through it
-            return p + direction * (r + far)
+            return p + direction * (r + far), True
         last = d
-    return point + direction * (0.5 * step)
+    if d0 <= max(3.0 * r, 2.0 * far):
+        skin = np.asarray(model_tree.data[nearest], dtype=float)
+        inward = unit(skin - np.asarray(point, dtype=float))
+        return skin + inward * (r + far), True
+    return point + direction * (0.5 * step), False
 
 
 # ---- revolve ----------------------------------------------------------------
@@ -645,24 +751,37 @@ def extrude_fit(comp, tol, far, model_tree):
     grow_hi = (far + 3.0) if d_hi < far + 2.0 else 0.0
     origin = origin + e3 * ((grow_hi - grow_lo) / 2)
     thickness = t + grow_lo + grow_hi
+    verts = np.asarray(comp.vertices, dtype=float)
+    pv = np.column_stack([(verts - centre) @ e1, (verts - centre) @ e2, (verts - centre) @ e3])
+    covered = slab_covered(pv, loop, z_mid, t, tol)
     feature = {"kind": "extrude",
                "plane": {"origin": [round(float(v), 2) for v in origin], "xAxis": [round(float(v), 5) for v in e1],
                          "yAxis": [round(float(v), 5) for v in e2]},
                "segments": segments, "distance": round(thickness / 2, 2), "symmetric": True,
-               "thicknessMM": round(t, 2), "areaMM2": round(area, 1)}
-    verts = np.asarray(comp.vertices, dtype=float)
-    pv = np.column_stack([(verts - centre) @ e1, (verts - centre) @ e2, (verts - centre) @ e3])
-    # Covered means within tolerance of the SLAB'S SURFACE — a face or the
-    # outline's edge — not merely inside it: a wire arch sits inside an
-    # 8 mm slab shaped like itself without touching its faces.
+               "thicknessMM": round(t, 2), "areaMM2": round(area, 1), "attached": [grow_lo > 0, grow_hi > 0]}
+    # The designed outline — a stadium, a hexagon, a rounded rectangle —
+    # when it explains the plate as well as the alpha shape does.
+    designed = regularise_outline(xy, area, float(covered.mean()), tol,
+                                  lambda lp: slab_covered(pv, lp, z_mid, t, tol))
+    if designed:
+        feature.update({"segments": designed["segments"], "seed": designed["seed"], "shape": designed["shape"],
+                        "outlineAreaMM2": round(designed["area"], 1)})
+        covered = designed["covered"]
+    return {"kind": "extrude", "features": [feature], "covered": covered, "coverage": float(covered.mean())}
+
+
+def slab_covered(pv, loop, z_mid, t, tol):
+    """Points (in the plate's frame) within tolerance of the SLAB'S SURFACE
+    — a face or the outline's edge — not merely inside it: a wire arch
+    sits inside an 8 mm slab shaped like itself without touching its
+    faces."""
     dz = np.abs(pv[:, 2] - z_mid)
     in_slab = dz <= t / 2 + tol
     near_face = np.abs(dz - t / 2) <= tol
     loop_tree = cKDTree(np.vstack([loop, resample_closed(loop, 1.0)]))
     d_edge, _ = loop_tree.query(pv[:, :2])
-    inside = np.array([point_in_polygon(q, loop) for q in pv[:, :2]])
-    covered = in_slab & ((inside & near_face) | (d_edge <= tol))
-    return {"kind": "extrude", "features": [feature], "covered": covered, "coverage": float(covered.mean())}
+    inside = points_in_polygon(pv[:, :2], loop)
+    return in_slab & ((inside & near_face) | (d_edge <= tol))
 
 
 def resample_closed(loop, step):
@@ -1018,7 +1137,7 @@ def prism_covered(P, origin, e1, e2, d, loop, half, tol):
     near = within & (d_edge <= 2.5 * tol)
     inside = np.zeros(len(P), dtype=bool)
     if near.any():
-        inside[near] = np.array([point_in_polygon(q, loop) for q in xy[near]])
+        inside[near] = points_in_polygon(xy[near], loop)
     return within & (inside | (d_edge <= tol))
 
 
@@ -1146,10 +1265,18 @@ def bar_fit(comp, tol, far, model_tree):
             if L < 1.5 * section:
                 say("bar: along %s: length %.0f under 1.5 × its section %.0f" % (np.round(d, 2).tolist(), L, section))
                 continue
-            area = 0.5 * abs(float(np.dot(loop[:, 0], np.roll(loop[:, 1], -1)) - np.dot(loop[:, 1], np.roll(loop[:, 0], -1))))
+            area = polygon_area(loop)
             half = L / 2
             origin = c + d * ((h_lo + h_hi) / 2)
             own = prism_covered(P, origin, e1, e2, d, loop, half, tol)
+            # The section as designed — round, hexagonal, a rounded
+            # rectangle — when it explains the bar as well as the raster.
+            segs, shape = None, None
+            designed = regularise_outline(sxy, area, float(own.mean()), tol,
+                                          lambda lp: prism_covered(P, origin, e1, e2, d, lp, half, tol))
+            if designed:
+                loop, segs, shape, own, area = designed["loop"], designed["segments"], designed["shape"], designed["covered"], designed["area"]
+                seed2d = designed["seed"]
             hb = np.clip(((h - h_lo) / max(L, 1e-9) * 8).astype(int), 0, 7)
             per_bin = [own[hb == k].mean() for k in range(8) if (hb == k).sum() >= 10]
             own_median = float(np.median(per_bin)) if per_bin else float(own.mean())
@@ -1158,7 +1285,8 @@ def bar_fit(comp, tol, far, model_tree):
             if own_median < 0.5:
                 continue
             bars.append({"d": d, "e1": e1, "e2": e2, "origin": origin, "loop": loop, "half": half, "L": L,
-                         "section": section, "own": own_median, "area": area, "seed": seed2d})
+                         "section": section, "own": own_median, "area": area, "seed": seed2d,
+                         "segments": segs, "shape": shape})
     if not bars:
         say("bar: no bar survived")
         return None
@@ -1195,7 +1323,7 @@ def bar_fit(comp, tol, far, model_tree):
     features = []
     for b in chosen:
         d, e1, e2, origin, loop, half = b["d"], b["e1"], b["e2"], b["origin"], b["loop"], b["half"]
-        grow = [0.0, 0.0]
+        grow, touches = [0.0, 0.0], [False, False]
         rel_all = pts - origin
         h_all = rel_all @ d
         lat = np.column_stack([rel_all @ e1, rel_all @ e2])
@@ -1205,6 +1333,7 @@ def bar_fit(comp, tol, far, model_tree):
             dm, _ = model_tree.query(end)
             if dm < far + 2.0:
                 grow[k] = far + 3.0          # into the body, so the union fuses
+                touches[k] = True
                 continue
             # The piece goes on past this end within the section's reach:
             # the bar it is welded to — run on into it. A free end runs
@@ -1213,9 +1342,11 @@ def bar_fit(comp, tol, far, model_tree):
             grow[k] = 0.5 * b["section"] if past.sum() >= 20 else tol
         origin = origin + d * ((grow[1] - grow[0]) / 2)
         half2 = half + (grow[0] + grow[1]) / 2
-        segs = segments_from_loop(loop, tol=max(tol * 0.5, 0.3), max_radius=float(np.ptp(loop, axis=0).max()))
-        if len(segs) < 3:
-            segs = [{"kind": "line", "a": loop[i].tolist(), "b": loop[(i + 1) % len(loop)].tolist()} for i in range(len(loop))]
+        segs = b["segments"]
+        if segs is None:
+            segs = segments_from_loop(loop, tol=max(tol * 0.5, 0.3), max_radius=float(np.ptp(loop, axis=0).max()))
+            if len(segs) < 3:
+                segs = [{"kind": "line", "a": loop[i].tolist(), "b": loop[(i + 1) % len(loop)].tolist()} for i in range(len(loop))]
         # The seed must lie inside the outline AS DRAWN (the line-and-arc
         # fit merges close vertices and can move a thin section's edge
         # past the blob's centre).
@@ -1223,25 +1354,512 @@ def bar_fit(comp, tol, far, model_tree):
         seed = b["seed"]
         if len(drawn) >= 3 and not point_in_polygon(seed, drawn):
             seed = interior_seed(drawn, max(0.5 * cell, 0.5))
-        features.append({"kind": "extrude", "bar": True,
-                         "plane": {"origin": [round(float(v), 2) for v in origin],
-                                   "xAxis": [round(float(v), 5) for v in e1], "yAxis": [round(float(v), 5) for v in e2]},
-                         "segments": segs, "seed": [round(float(v), 3) for v in seed],
-                         "distance": round(half2, 2), "symmetric": True,
-                         "thicknessMM": round(b["L"], 2), "lengthMM": round(b["L"], 1), "sectionMM": round(b["section"], 1),
-                         "areaMM2": round(b["area"], 1), "ownCoverage": round(b["own"], 3)})
+        feature = {"kind": "extrude", "bar": True,
+                   "plane": {"origin": [round(float(v), 2) for v in origin],
+                             "xAxis": [round(float(v), 5) for v in e1], "yAxis": [round(float(v), 5) for v in e2]},
+                   "segments": segs, "seed": [round(float(v), 3) for v in seed],
+                   "distance": round(half2, 2), "symmetric": True,
+                   "thicknessMM": round(b["L"], 2), "lengthMM": round(b["L"], 1), "sectionMM": round(b["section"], 1),
+                   "areaMM2": round(b["area"], 1), "ownCoverage": round(b["own"], 3), "attached": touches}
+        if b["shape"]:
+            feature["shape"] = b["shape"]
+        features.append(feature)
     return {"kind": "bar", "features": features, "covered": covered, "coverage": float(covered.mean())}
+
+
+# ---- the parts library: parametric outlines ---------------------------------
+#
+# A lever is a bar with rounded ends, a nut a regular hexagon, a flange a
+# rectangle with rounded corners, a knob a disc: the free-form outline of
+# a plate or a bar's section is matched against these, and the designed
+# shape is taken whenever it explains the piece as well as the wiggly one
+# (`regularise_outline`). Every shape is written as the same lines and
+# arcs `segments_from_loop` produces, so nothing downstream changes.
+
+PARAMETRIC_ORDER = ("circle", "stadium", "square", "rectangle", "hexagon", "octagon", "ellipse")
+
+
+def arc_segment(center, radius, start, end):
+    """An arc in `segments_from_loop`'s terms, counter-clockwise from
+    `start` to `end` (radians), its ends computed."""
+    c = np.asarray(center, dtype=float)
+    a = c + radius * np.array([math.cos(start), math.sin(start)])
+    b = c + radius * np.array([math.cos(end), math.sin(end)])
+    return {"kind": "arc", "center": [float(c[0]), float(c[1])], "radius": float(radius), "start": float(start),
+            "end": float(end), "ccw": True, "a": [float(a[0]), float(a[1])], "b": [float(b[0]), float(b[1])]}
+
+
+def line_segment(a, b):
+    return {"kind": "line", "a": [float(a[0]), float(a[1])], "b": [float(b[0]), float(b[1])]}
+
+
+def circle_segments(r):
+    """A circle as two semicircles: the sketch takes arcs, and a full turn
+    is not one."""
+    return [arc_segment((0.0, 0.0), r, 0.0, math.pi), arc_segment((0.0, 0.0), r, math.pi, 2 * math.pi)]
+
+
+def stadium_segments(length, width):
+    """Two semicircles joined by two lines, the long axis along u."""
+    r = width / 2
+    s = length / 2 - r
+    if s < 1e-6:
+        return circle_segments(r)
+    return [arc_segment((s, 0.0), r, -math.pi / 2, math.pi / 2), line_segment((s, r), (-s, r)),
+            arc_segment((-s, 0.0), r, math.pi / 2, 1.5 * math.pi), line_segment((-s, -r), (s, -r))]
+
+
+def rounded_rectangle_segments(length, width, corner):
+    """A rectangle `length` along u by `width` along v, its corners rounded
+    to `corner` (none when 0), counter-clockwise from the right edge."""
+    a, b = length / 2, width / 2
+    r = min(corner, 0.45 * min(a, b))
+    if r < 1e-6:
+        return [line_segment((a, -b), (a, b)), line_segment((a, b), (-a, b)),
+                line_segment((-a, b), (-a, -b)), line_segment((-a, -b), (a, -b))]
+    return [line_segment((a, r - b), (a, b - r)), arc_segment((a - r, b - r), r, 0.0, math.pi / 2),
+            line_segment((a - r, b), (r - a, b)), arc_segment((r - a, b - r), r, math.pi / 2, math.pi),
+            line_segment((-a, b - r), (-a, r - b)), arc_segment((r - a, r - b), r, math.pi, 1.5 * math.pi),
+            line_segment((r - a, -b), (a - r, -b)), arc_segment((a - r, r - b), r, 1.5 * math.pi, 2 * math.pi)]
+
+
+def polygon_segments(n, apothem, phi):
+    """A regular n-gon of the given apothem (half its across-flats), one
+    face normal at angle `phi`, counter-clockwise."""
+    R = apothem / math.cos(math.pi / n)
+    verts = [(R * math.cos(phi + math.pi / n + 2 * math.pi * k / n), R * math.sin(phi + math.pi / n + 2 * math.pi * k / n))
+             for k in range(n)]
+    return [line_segment(verts[k], verts[(k + 1) % n]) for k in range(n)]
+
+
+def oval_segments(a, b):
+    """The draughtsman's four-centre oval of semi-axes a ≥ b — the arcs
+    `build_features.oval_entities` sweeps — as segments."""
+    a, b = float(max(a, b)), float(min(a, b))
+    if a - b < 0.05 * a:
+        return circle_segments((a + b) / 2)
+    r1 = b * b / a
+    r2 = ((a - r1) ** 2 + b * b - r1 * r1) / (2 * (b - r1))
+    c1, c2 = a - r1, r2 - b
+    phi = math.atan2(c2, c1)
+    return [arc_segment((c1, 0.0), r1, -phi, phi), arc_segment((0.0, -c2), r2, phi, math.pi - phi),
+            arc_segment((-c1, 0.0), r1, math.pi - phi, math.pi + phi),
+            arc_segment((0.0, c2), r2, math.pi + phi, 2 * math.pi - phi)]
+
+
+def place_segments(segs, centre, theta):
+    """The segments moved from the shape's own frame into the sketch plane:
+    rotated by `theta`, then shifted to `centre`."""
+    c, s = math.cos(theta), math.sin(theta)
+    R = np.array([[c, -s], [s, c]])
+    cen = np.asarray(centre, dtype=float)
+
+    def move(p):
+        q = R @ np.asarray(p, dtype=float) + cen
+        return [round(float(q[0]), 4), round(float(q[1]), 4)]
+    out = []
+    for seg in segs:
+        t = {"kind": seg["kind"], "a": move(seg["a"]), "b": move(seg["b"])}
+        if seg["kind"] == "arc":
+            start = (seg["start"] + theta) % (2 * math.pi)
+            t.update({"center": move(seg["center"]), "radius": round(seg["radius"], 4), "start": round(start, 6),
+                      "end": round(start + (seg["end"] - seg["start"]), 6), "ccw": True})
+        out.append(t)
+    return out
+
+
+def polygon_area(loop):
+    loop = np.asarray(loop, dtype=float)
+    return 0.5 * abs(float(np.dot(loop[:, 0], np.roll(loop[:, 1], -1)) - np.dot(loop[:, 1], np.roll(loop[:, 0], -1))))
+
+
+def points_in_polygon(P, loop):
+    """`point_in_polygon` for many points at once (the same ray cast)."""
+    P = np.asarray(P, dtype=float)
+    L = np.asarray(loop, dtype=float)
+    x, y = P[:, 0], P[:, 1]
+    inside = np.zeros(len(P), dtype=bool)
+    n = len(L)
+    for i in range(n):
+        x0, y0 = L[i]
+        x1, y1 = L[(i + 1) % n]
+        crosses = (y0 > y) != (y1 > y)
+        if not crosses.any():
+            continue
+        xi = x0 + (y[crosses] - y0) * (x1 - x0) / (y1 - y0)
+        hit = np.zeros(len(P), dtype=bool)
+        hit[crosses] = x[crosses] < xi
+        inside ^= hit
+    return inside
+
+
+def solid_points(xy, cell):
+    """The projected points with their thin tails taken off: cells of
+    `cell` mm that hold points, opened (eroded then dilated by one cell —
+    a tail one cell wide vanishes, a body keeps its shape), and the
+    points in the cells that survive. A knob's cloud trailed a wisp of
+    the neck it sits on, and every shape fitted to the hull was hung on
+    it. All the points when fewer than half would survive."""
+    from scipy import ndimage
+    xy = np.asarray(xy, dtype=float)
+    lo = xy.min(axis=0) - 2 * cell
+    ij = np.floor((xy - lo) / cell).astype(int)
+    shape = (int(ij[:, 0].max()) + 3, int(ij[:, 1].max()) + 3)
+    counts = np.zeros(shape, dtype=int)
+    np.add.at(counts, (ij[:, 0], ij[:, 1]), 1)
+    mask = ndimage.binary_opening(counts > 0, structure=np.ones((3, 3), dtype=bool))
+    keep = mask[ij[:, 0], ij[:, 1]]
+    return xy[keep] if keep.sum() >= 0.5 * len(xy) else xy
+
+
+def hull_loop(xy, cell=1.0):
+    """The convex hull of the projected points, counter-clockwise, their
+    thin tails (`solid_points`) and the half percent farthest from their
+    centre left out (one stray point hangs a corner on the hull)."""
+    from scipy.spatial import ConvexHull
+    xy = np.asarray(xy, dtype=float)
+    if len(xy) < 8:
+        return None
+    xy = solid_points(xy, cell)
+    d = np.linalg.norm(xy - np.median(xy, axis=0), axis=1)
+    pts = xy[d <= np.percentile(d, 99.5)]
+    try:
+        hull = ConvexHull(pts)
+    except Exception:  # noqa: BLE001 — collinear points have no hull
+        return None
+    loop = pts[hull.vertices]
+    return loop if polygon_area(loop) > 1e-6 else None
+
+
+def tightest_box(hull):
+    """The smallest rectangle round a convex loop (one side lies along a
+    hull edge): (angle of its long side, length, width, centre)."""
+    best = None
+    n = len(hull)
+    for i in range(n):
+        e = hull[(i + 1) % n] - hull[i]
+        if np.linalg.norm(e) < 1e-9:
+            continue
+        theta = math.atan2(e[1], e[0])
+        c, s = math.cos(theta), math.sin(theta)
+        u = hull @ np.array([c, s])
+        v = hull @ np.array([-s, c])
+        L, W = float(np.ptp(u)), float(np.ptp(v))
+        if best is None or L * W < best[0]:
+            cu, cv = (u.min() + u.max()) / 2, (v.min() + v.max()) / 2
+            centre = cu * np.array([c, s]) + cv * np.array([-s, c])
+            if L < W:
+                theta, L, W = theta + math.pi / 2, W, L
+            best = (L * W, theta % math.pi, L, W, centre)
+    return best[1:] if best else None
+
+
+def regular_candidates(xy, tol):
+    """The parametric outlines that could be the piece's section, each as
+    (name, segments in the plane, seed, shape): a circle, a stadium, a
+    rectangle (its corner radius from the area the hull lacks), an oval,
+    and a hexagon and an octagon (the tightest about the hull's centroid)."""
+    hull = hull_loop(xy, cell=max(tol, 1.0))
+    if hull is None or len(hull) < 3:
+        return []
+    dense = resample_closed(hull, 0.5)
+    box = tightest_box(hull)
+    if box is None:
+        return []
+    theta, L, W, centre = box
+    area_hull = polygon_area(hull)
+    out = []
+    cc, R, _ = fit_circle_2d(dense)
+    if R > 0.5:
+        out.append(("circle", place_segments(circle_segments(R), cc, 0.0), cc,
+                    {"kind": "circle", "diameterMM": round(2 * R, 1)}))
+    if W > 1.0:
+        if L > 1.02 * W:
+            out.append(("stadium", place_segments(stadium_segments(L, W), centre, theta), centre,
+                        {"kind": "stadium", "lengthMM": round(L, 1), "widthMM": round(W, 1)}))
+        corner = math.sqrt(max(L * W - area_hull, 0.0) / (4 - math.pi))
+        corner = 0.0 if corner < max(tol, 0.05 * W) else min(corner, 0.45 * W)
+        name = "square" if L < 1.08 * W else "rectangle"
+        out.append((name, place_segments(rounded_rectangle_segments(L, W, corner), centre, theta), centre,
+                    {"kind": name, "lengthMM": round(L, 1), "widthMM": round(W, 1), "cornerMM": round(corner, 1)}))
+        if L > 1.1 * W:
+            out.append(("ellipse", place_segments(oval_segments(L / 2, W / 2), centre, theta), centre,
+                        {"kind": "ellipse", "lengthMM": round(L, 1), "widthMM": round(W, 1)}))
+    # The polygons sit about the hull's area centroid; of the rotations,
+    # the one whose n-gon needs the smallest apothem to hold every hull
+    # vertex is the one whose flats lie along the hull's.
+    closed = np.vstack([hull, hull[:1]])
+    cross = closed[:-1, 0] * closed[1:, 1] - closed[1:, 0] * closed[:-1, 1]
+    cen = (closed[:-1] + closed[1:]).T @ cross / (6 * polygon_area(hull)) * (1.0 if cross.sum() > 0 else -1.0)
+    rel = hull - cen
+    for n, name in ((6, "hexagon"), (8, "octagon")):
+        best = None
+        for phi in np.linspace(0.0, 2 * math.pi / n, 48, endpoint=False):
+            normals = np.array([[math.cos(phi + 2 * math.pi * k / n), math.sin(phi + 2 * math.pi * k / n)] for k in range(n)])
+            apothem = float((rel @ normals.T).max())
+            if best is None or apothem < best[0]:
+                best = (apothem, phi)
+        apothem, phi = best
+        if apothem > 0.5:
+            out.append((name, place_segments(polygon_segments(n, apothem, phi), cen, 0.0), cen,
+                        {"kind": name, "sides": n, "acrossFlatsMM": round(2 * apothem, 1)}))
+    return out
+
+
+def regularise_outline(xy, free_area, free_coverage, tol, covered_of):
+    """The designed outline for a section whose free-form outline covers
+    `free_coverage` of the piece: the parametric candidate (`regular_candidates`
+    of the projected points `xy`) whose outline runs along the points —
+    nine tenths of it within two tolerances of one; a box drawn round an
+    L-shaped plate crosses the notch in air — and that covers at least
+    as much as the free-form outline less 0.03: design intent beats a
+    wiggly outline that fits two percent better. Among those, the best
+    coverage, and to the hundredth the simpler shape. `covered_of(loop)`
+    is the fit's own coverage test on the piece's points. Returns a dict
+    (segments, loop, seed, shape, coverage, area) or None."""
+    best = None
+    points = cKDTree(np.asarray(xy, dtype=float))
+    for name, segs, seed, shape in regular_candidates(xy, tol):
+        loop = segments_polyline(segs, step=max(0.5, 0.25 * tol))
+        if len(loop) < 3 or _loop_crosses_itself(loop):
+            continue
+        area = polygon_area(loop)
+        d_pts, _ = points.query(resample_closed(loop, 1.0))
+        along = float((d_pts <= max(2.0 * tol, 2.0)).mean())
+        if along < 0.9:
+            say("outline: %s: only %.0f%% of its outline runs along the points" % (name, along * 100))
+            continue
+        covered = covered_of(loop)
+        coverage = float(covered.mean())
+        if coverage < free_coverage - 0.03:
+            say("outline: %s covers %.0f%% (free-form %.0f%%)" % (name, coverage * 100, free_coverage * 100))
+            continue
+        key = (round(coverage, 2), -PARAMETRIC_ORDER.index(name))
+        if best is None or key > best["key"]:
+            best = {"key": key, "segments": segs, "loop": loop, "seed": [round(float(v), 3) for v in seed],
+                    "shape": shape, "coverage": coverage, "covered": covered, "area": area}
+    if best:
+        say("outline: %s covers %.0f%% (free-form %.0f%%): the designed shape" % (
+            best["shape"]["kind"], best["coverage"] * 100, free_coverage * 100))
+    return best
+
+
+# ---- hoops ------------------------------------------------------------------
+
+# The main body's axis and radius-along, set by `main` from the analysis
+# (`--analysis profile.json`): a ring round it is a hoop, revolved on the
+# body's own axis rather than fitted as a lump.
+BODY = None
+
+
+def body_frame(analysis, far):
+    """What `hoop_fit` needs of the analysis: the axis, the body's radius at
+    each height (interpolated along its profile) and how far a hoop's
+    section may reach into the skin so the union fuses — half the wall of
+    a hollow body (a bucket's wall is 5 mm; the cavity must stay), far + 4
+    of a solid one."""
+    if not analysis or "axisOrigin" not in analysis:
+        return None
+    prof = np.asarray(analysis.get("profile") or [], dtype=float)
+    if len(prof) < 2:
+        return None
+    order = np.argsort(prof[:, 1])
+    hs, rs = prof[order, 1], prof[order, 0]
+    wall = (analysis.get("openTop") or {}).get("wallMM")
+    inset = min(0.5 * wall, far + 4.0) if wall else far + 4.0
+    return {"origin": np.asarray(analysis["axisOrigin"], dtype=float), "direction": unit(analysis["axisDirection"]),
+            "radius_at": lambda h: np.interp(h, hs, rs), "inset": float(inset), "heightMM": float(analysis.get("heightMM", hs[-1]))}
+
+
+def hoop_fit(comp, tol, far, model_tree, body=None):
+    """A ring round the main body's axis — a barrel's hoop, a rolled rim, a
+    bead: a height band on that axis in which the piece's points run at
+    least half way round (12 of 24 azimuth sectors), at one radius (the
+    sectors' outer radii — each sector's 75th percentile, the two or so
+    oddest sectors at either end left out (the 10th to 90th percentile of
+    them) for the dent or stray patch a scan always has — within
+    max(2 tol, 4 %) of each other, so a squashed bucket's bulge, which is
+    one-sided, is not a hoop), and no taller than 0.35 of its diameter —
+    a ring is a ring, not a wall; a body skin merely out of round by a
+    few mm over its whole height runs all the sectors at one radius and
+    would otherwise pass. The section is the outer radius per height bin
+    out, and the body's own skin a little inside back: a closed annular
+    profile revolved on the body's axis (kind `revolve`, the profile
+    closed so a hollow body's cavity is kept)."""
+    body = body or BODY
+    if body is None:
+        return None
+    pts, nrm = component_points(comp)
+    if len(pts) < 80:
+        return None
+    o, d = body["origin"], body["direction"]
+    h = (pts - o) @ d
+    perp = (pts - o) - np.outer(h, d)
+    r = np.linalg.norm(perp, axis=1)
+    e1, e2 = plane_frame(d)
+    sectors = 24
+    sec = ((np.arctan2(perp @ e2, perp @ e1) + math.pi) / (2 * math.pi) * sectors).astype(int) % sectors
+    band = max(2.0, tol)
+    h0 = float(h.min())
+    nb = int((h.max() - h0) / band) + 1
+    which = np.clip(((h - h0) / band).astype(int), 0, nb - 1)
+    occupied = np.zeros(nb)
+    for k in range(nb):
+        m = which == k
+        if m.sum() >= 12:
+            occupied[k] = len(np.unique(sec[m])) / float(sectors)
+    full = occupied >= 0.5
+    if not full.any():
+        say("hoop: no height band runs half way round the axis (best %.0f%%)" % (occupied.max() * 100))
+        return None
+    # The longest run of bands the ring runs round.
+    best, run = None, None
+    for k in range(nb):
+        if full[k]:
+            run = [k, k] if run is None else [run[0], k]
+            if best is None or run[1] - run[0] > best[1] - best[0]:
+                best = list(run)
+        else:
+            run = None
+    k0, k1 = best
+    sel = (which >= k0) & (which <= k1)
+    # The band ends where its points stop, not at the bin edge beyond them
+    # (a 10 mm ring in 2 mm bins would otherwise be 12 tall).
+    h_lo = max(h0 + k0 * band, float(h[sel].min()))
+    h_hi = min(h0 + (k1 + 1) * band, float(h[sel].max()))
+    if h_hi - h_lo < 0.5 * band:
+        return None
+    # Each sector's outer skin (the 75th percentile: a hoop's top and bottom
+    # faces, and its inner face where the scan saw it, lie inside it).
+    meds = [float(np.percentile(r[sel & (sec == s)], 75)) for s in range(sectors) if (sel & (sec == s)).sum() >= 5]
+    if len(meds) < sectors // 2:
+        say("hoop: band %.0f–%.0f mm: only %d sectors hold five points" % (h0 + k0 * band, h0 + (k1 + 1) * band, len(meds)))
+        return None
+    spread = float(np.percentile(meds, 90) - np.percentile(meds, 10))
+    r_med = float(np.median(meds))
+    if spread > max(2.0 * tol, 0.04 * r_med):
+        say("hoop: band %.0f–%.0f mm: %d sectors, radii spread %.1f mm — not one ring" % (
+            h0 + k0 * band, h0 + (k1 + 1) * band, len(meds), spread))
+        return None
+    # A ring is short against its diameter. A body wall a few mm out of
+    # round (within the 4 %) runs all the sectors at one radius over its
+    # whole height, and on a sparse sheet the band's extent is set by
+    # where the samples fell, not by the geometry: neither is a hoop.
+    if h_hi - h_lo > 0.35 * 2.0 * r_med:
+        say("hoop: band %.0f–%.0f mm is %.0f mm tall on a %.0f mm diameter — a wall, not a ring" % (
+            h_lo, h_hi, h_hi - h_lo, 2.0 * r_med))
+        return None
+    # The ring's outer face per height bin: the 75th percentile radius of
+    # the points that face sideways (normal across the axis, not along
+    # it). A hoop's top and bottom faces would otherwise pull its end
+    # bins' radius in towards the skin, and its own outer vertices would
+    # then miss the profile by more than `tol`.
+    radial = perp / np.maximum(r, 1e-9)[:, None]
+    side = (np.abs(nrm @ d) < 0.6) & (np.abs(np.einsum("ij,ij->i", nrm, radial)) > 0.5)
+    outer = []
+    for k in range(k0, k1 + 1):
+        hc = h0 + (k + 0.5) * band
+        m = sel & side & (which == k)
+        if m.sum() >= 6 and h_lo < hc < h_hi:
+            outer.append([float(np.percentile(r[m], 75)), hc])
+    if len(outer) < 1:
+        say("hoop: band %.0f–%.0f mm has no side-facing points to take an outer radius from" % (h_lo, h_hi))
+        return None
+    outer = [[outer[0][0], h_lo]] + outer + [[outer[-1][0], h_hi]]
+    outer = douglas_peucker_2d(outer, max(0.5 * tol, 0.5))
+    # The inner side follows the body's skin, a little inside it.
+    inner = []
+    for rr, hh in outer[::-1]:
+        r_in = float(body["radius_at"](hh)) - body["inset"]
+        inner.append([min(r_in, rr - max(2.0 * tol, 3.0)), hh])
+    profile = [[round(float(rr), 2), round(float(hh), 2)] for rr, hh in outer + inner] + [[round(float(outer[0][0]), 2), round(float(outer[0][1]), 2)]]
+    section = float(np.mean([rr for rr, _ in outer]) - np.mean([rr for rr, _ in inner]))
+    # Covered: within tolerance of the ring's outer face, or of its top or
+    # bottom face between the skin and the outer radius — the same `tol`
+    # every other fit is held to, so the score explain() ranks is honest.
+    verts = np.asarray(comp.vertices, dtype=float)
+    hv = (verts - o) @ d
+    rv = np.linalg.norm((verts - o) - np.outer(hv, d), axis=1)
+    prof = np.asarray(outer, dtype=float)
+    r_at = np.interp(hv, prof[:, 1], prof[:, 0])
+    in_band = (hv >= h_lo - tol) & (hv <= h_hi + tol)
+    on_face = np.abs(rv - r_at) <= tol
+    on_end = (rv <= r_at + tol) & ((np.abs(hv - h_lo) <= tol) | (np.abs(hv - h_hi) <= tol))
+    covered = in_band & (on_face | on_end)
+    rounded = (max(rr for rr, _ in outer) - min(outer[0][0], outer[-1][0])) > tol and len(outer) >= 4
+    feature = {"kind": "revolve", "hoop": True,
+               "axis": {"origin": [round(float(v), 2) for v in o], "direction": [round(float(v), 5) for v in d]},
+               "profile": profile, "lengthMM": round(h_hi - h_lo, 1), "radiusMM": round(r_med, 2),
+               "shape": {"kind": "bead" if rounded else "band", "heightMM": round(h_hi - h_lo, 1),
+                         "standsProudMM": round(section, 1), "diameterMM": round(2 * r_med, 1)}}
+    say("hoop: band %.0f–%.0f mm on the body's axis, radius %.0f (%d sectors, spread %.1f), covers %.0f%%" % (
+        h_lo, h_hi, r_med, len(meds), spread, covered.mean() * 100))
+    return {"kind": "hoop", "features": [feature], "covered": covered, "coverage": float(covered.mean())}
+
+
+# ---- naming -----------------------------------------------------------------
+
+def name_part(f):
+    """What the feature is, by simple rules on its shape, its ratios and
+    where it attaches — lever, handle, hose, horn, grip, nut, flange, hoop,
+    knob, bar, plate, lug — or None when the rules do not know."""
+    kind = f["kind"]
+    shape = (f.get("shape") or {}).get("kind")
+    if kind == "sweep":
+        ends = f.get("attached") or [False, False]
+        if all(ends):
+            return "handle"                         # an arch from the body back to the body
+        r = f.get("radiusMM", 1e9)
+        long = f.get("lengthMM", 0) >= 10.0 * r
+        if long and (f.get("intoHorn") or (r <= 8.0 and any(ends))):
+            return "hose"                           # a long tube into a horn, or a thin one out of the body
+        if not long and any(ends):
+            return "grip"                           # a short, fat one out of the body
+        return None                                 # a chain, a stein's handle to a hinge the model lacks: the rules do not know
+    if kind == "revolve":
+        if f.get("hoop"):
+            return "hoop"
+        if f.get("cone"):
+            return "horn"
+        return "knob" if f.get("lengthMM", 0) <= 2.2 * f.get("radiusMM", 0) else None
+    if f.get("bar"):
+        return "bar"
+    if not shape:
+        return None
+    t = f.get("thicknessMM", 0.0)
+    s = f["shape"]
+    if shape in ("hexagon", "octagon"):
+        return "nut"
+    if shape == "stadium":
+        return "lever" if s["lengthMM"] >= 2.0 * s["widthMM"] else "lug"
+    faced = any(f.get("attached") or [])
+    if shape in ("rectangle", "square"):
+        if t <= 0.35 * s["widthMM"]:
+            return "flange" if faced else "plate"
+        return "lug"
+    if shape == "circle":
+        if t >= 0.5 * s["diameterMM"]:
+            return "knob"
+        return "flange" if faced else "plate"
+    if shape == "ellipse":
+        return "lug" if t > 0.35 * s["widthMM"] else "plate"
+    return None
 
 
 # ---- choosing ---------------------------------------------------------------
 
-def explain(comp, tol, far, model_tree, depth, out_features, unexplained, budget, label):
-    """Try the four fits on a piece, keep the best, recurse on the rest."""
+def explain(comp, tol, far, model_tree, depth, out_features, unexplained, budget, label, fits=None):
+    """Try the fits on a piece (`fits` names a subset), keep the best,
+    recurse on the rest."""
     if budget[0] <= 0:
         unexplained.append(describe(comp, "feature budget spent"))
         return
     candidates = []
-    for name, fn in (("sweep", tube_fit), ("revolve", revolve_fit), ("extrude", extrude_fit), ("bar", bar_fit)):
+    for name, fn in (("hoop", hoop_fit), ("sweep", tube_fit), ("revolve", revolve_fit), ("extrude", extrude_fit), ("bar", bar_fit)):
+        if fits is not None and name not in fits:
+            continue
+        if name == "hoop" and BODY is None:
+            continue
         try:
             res = fn(comp, tol, far, model_tree)
         except Exception as error:  # noqa: BLE001 — one fit's failure is not the piece's
@@ -1260,15 +1878,21 @@ def explain(comp, tol, far, model_tree, depth, out_features, unexplained, budget
     # its points than the tube or the plate it is, so a bar only wins
     # over a tube that covers 0.38 less, a plate 0.3 less — a stand's
     # post and beam, where the tube fit has nothing and the slab a fifth.
+    # A hoop on the body's own axis is the strongest story of all; a plate
+    # or a bar whose outline is a designed shape (a stadium, a hexagon)
+    # earns a little over a free-form one — its coverage is still honest.
     def score(c):
-        bonus = {"sweep": 0.08, "revolve": 0.05, "extrude": 0.0, "bar": -0.3}[c["kind"]]
+        bonus = {"hoop": 0.08, "sweep": 0.08, "revolve": 0.05, "extrude": 0.0, "bar": -0.3}[c["kind"]]
+        if c["kind"] in ("extrude", "bar") and all(f.get("shape") for f in c["features"]):
+            bonus += 0.03
         return c["coverage"] + bonus
     # A sweep's runs were each proved on their own points, so a hose and
-    # its horn count even when the valve beside them is left over; a
-    # revolve, a block or a frame of bars is one fit for the whole piece
-    # and has to cover half of it. The best story that covers enough wins
-    # — a slab that covers too little does not stop the bars behind it.
-    needed = {"sweep": 0.25}
+    # its horn count even when the valve beside them is left over; a hoop
+    # likewise on its band's roundness. A revolve, a block or a frame of
+    # bars is one fit for the whole piece and has to cover half of it. The
+    # best story that covers enough wins — a slab that covers too little
+    # does not stop the bars behind it.
+    needed = {"sweep": 0.25, "hoop": 0.3}
     ranked = sorted(candidates, key=score, reverse=True)
     best = next((c for c in ranked if c["coverage"] >= needed.get(c["kind"], 0.5)), None)
     if best is None:
@@ -1276,7 +1900,10 @@ def explain(comp, tol, far, model_tree, depth, out_features, unexplained, budget
         unexplained.append(describe(comp, "best fit (%s) covers only %.0f%%" % (top["kind"], top["coverage"] * 100)))
         return
     for f in best["features"]:
-        f["name"] = "%s-%s" % (label, "bar" if f.get("bar") else f["kind"])
+        f["name"] = "%s-%s" % (label, "bar" if f.get("bar") else ("hoop" if f.get("hoop") else f["kind"]))
+        part = name_part(f)
+        if part:
+            f["part"] = part
         f["coverage"] = round(best["coverage"], 3)
         f["areaMM2"] = round(float(comp.area), 1)
         # The scan area this feature explains, the fit's share of the
@@ -1292,16 +1919,23 @@ def explain(comp, tol, far, model_tree, depth, out_features, unexplained, budget
         return
     sub = comp.submesh([left], append=True)
     comps = trimesh.graph.connected_components(sub.face_adjacency, nodes=np.arange(len(sub.faces)))
-    rest = []
+    rest, small = [], []
     for c in comps:
         c = np.asarray(c)
         if len(c) >= 4:
             m = sub.submesh([c], append=True)
-            if m.area >= 0.08 * comp.area and m.area >= 150.0:
+            # Worth another look: a twelfth of the piece, or a piece's
+            # worth of scan by `main`'s own bar (a mug's lid lever is 7 %
+            # of its handle piece).
+            if m.area >= 150.0 and (m.area >= 0.08 * comp.area or m.area >= 1.5 * MIN_PIECE_AREA):
                 rest.append(m)
+            else:
+                small.append(m.area)
     rest.sort(key=lambda m: -m.area)
+    say("%s leaves %s%s" % (label, ", ".join("%.0f mm²" % m.area for m in rest) or "nothing worth a feature",
+                            (" (and %d smaller: %s)" % (len(small), " ".join("%.0f" % a for a in sorted(small, reverse=True)[:6]))) if small else ""))
     for k, m in enumerate(rest[:3]):
-        explain(m, tol, far, model_tree, depth + 1, out_features, unexplained, budget, "%s.%d" % (label, k + 1))
+        explain(m, tol, far, model_tree, depth + 1, out_features, unexplained, budget, "%s.%d" % (label, k + 1), fits)
 
 
 def describe(comp, why):
@@ -1343,8 +1977,8 @@ def review_sheet(path, pieces, features, bounds):
                 d.line(pts, fill=(255, 255, 255), width=3)
             elif f["kind"] == "revolve":
                 o, dd = np.array(f["axis"]["origin"]), np.array(f["axis"]["direction"])
-                prof = f["profile"]
-                a, b = o + dd * prof[0][1], o + dd * prof[-1][1]
+                hs = [p[1] for p in f["profile"]]
+                a, b = o + dd * min(hs), o + dd * max(hs)
                 d.line([to_px(a, ax, ay, ox), to_px(b, ax, ay, ox)], fill=(255, 255, 255), width=3)
             elif f["kind"] == "extrude":
                 pl = f["plane"]
@@ -1366,7 +2000,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--scan", required=True)
     ap.add_argument("--model", required=True)
-    ap.add_argument("--analysis", default=None, help="profile.json (for the body's axis; optional)")
+    ap.add_argument("--analysis", default=None, help="profile.json, or the analysis folder holding it (for the body's axis; optional)")
     ap.add_argument("--tolerance", type=float, default=2.0)
     ap.add_argument("--far", type=float, default=None, help="mm; a scan triangle farther than this is unexplained (default 2.5× the tolerance, ≥ 4)")
     ap.add_argument("--min-area", type=float, default=None, help="mm²; smaller pieces are ignored (default 0.4%% of the scan)")
@@ -1379,8 +2013,17 @@ def main():
     tol = args.tolerance
     far = args.far or max(4.0, 2.5 * tol)
     min_area = args.min_area or max(150.0, 0.004 * float(scan.area))
-    global BAR_MIN_AREA
+    global BAR_MIN_AREA, BODY, MIN_PIECE_AREA
     BAR_MIN_AREA = max(400.0, 0.0025 * float(scan.area))
+    MIN_PIECE_AREA = min_area
+    if args.analysis:
+        # `run_corpus.py` hands over the analysis FOLDER (the same path
+        # build_hydrant.py takes); a file is the profile itself.
+        path = os.path.join(args.analysis, "profile.json") if os.path.isdir(args.analysis) else args.analysis
+        with open(path) as f:
+            BODY = body_frame(json.load(f), far)
+        if BODY is None:
+            print("the analysis has no axis: hoops will not be looked for", flush=True)
     print("scan %d faces, model %d faces; far = %.1f mm, pieces ≥ %.0f mm², a bar explains ≥ %.0f mm²" % (
         len(scan.faces), len(model.faces), far, min_area, BAR_MIN_AREA), flush=True)
     model_tree = surface_tree(model)
@@ -1404,6 +2047,18 @@ def main():
         dv, _ = model_tree.query(np.asarray(comp.vertices, dtype=float))
         proud = float(np.percentile(dv, 95))
         if proud < max(2.0 * far, 12.0) or comp.area > 25.0 * proud * proud:
+            # …unless it is a ring round the body's axis: a barrel's hoop
+            # stands a centimetre proud all the way round and reads as a
+            # sheet by area. Only the hoop fit is tried on such a piece —
+            # a slab fitted to a squashed wall would be a lump.
+            try:
+                hoop = hoop_fit(comp, tol, far, model_tree) if BODY else None
+            except Exception as error:  # noqa: BLE001 — one fit's failure is not the part's
+                print("   %s: hoop fit failed: %s" % (label, str(error)[:120]), flush=True)
+                hoop = None
+            if hoop and hoop["coverage"] >= 0.3:
+                explain(comp, tol, far, model_tree, 0, features, unexplained, budget, label, fits=("hoop",))
+                continue
             unexplained.append(describe(comp, "a sheet %.0f–%.0f mm off the model over %.0f mm², not a feature" % (
                 np.percentile(dv, 5), proud, comp.area)))
             print("   a sheet %.0f–%.0f mm off the model over %.0f mm² — the body's own surface, not a feature" % (

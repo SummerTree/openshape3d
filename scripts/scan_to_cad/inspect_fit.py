@@ -14,8 +14,13 @@ Writes into `--out`:
                   reference and the model shaded the same way, their
                   silhouettes laid over each other (blue where the model
                   lacks material, orange where it has too much), and the
-                  depth difference seen from that side on the same colours
-    views/*.png   the same tiles one by one, full size
+                  depth difference seen from that side on the same colours;
+                  the three largest missing (blue, M1–M3) and excess
+                  (orange, E1–E3) patches ringed and numbered on the
+                  reference and depth tiles, one legend line each
+    views/*.png   the same tiles one by one, full size, and patches.png —
+                  the shaded reference from the four sides with only the
+                  patch marks on it
 
 Why both ways and why depth: a silhouette overlap says nothing about a
 bucket modelled as a solid drum (the outline matches), and a reference-to-
@@ -44,6 +49,29 @@ longest extent, at least 0.5 mm):
     terraces      sign changes of the mean signed error along the up axis
                   (more than two = ridges or steps where the reference is
                   smooth)
+    largest_missing_patch / largest_excess_patch
+                  the area of the biggest connected region of reference
+                  surface farther than 1.5 tolerances from the model (the
+                  scan has material the model lacks) and of model surface
+                  farther than that from the reference (the model has
+                  material the scan lacks). WARN above max(300 mm², 0.25 %
+                  of the reference area), FAIL above max(1000 mm², 1 %)
+
+Why patches: a mean deviation and a silhouette overlap are owned by the big
+turned body. A valve at 94 % overlap has its whole lever missing, and a mean
+of 0.7 mm hides a 60 mm part because it is small. A person judges by the
+biggest thing that is wrong, so the inspection finds it: the far samples
+of each direction are joined into connected regions (a radius graph on the
+samples, radius 2.5 × the mean sample spacing) and the largest region is a
+check of its own, located in words relative to the part's bounds and up
+axis ("in the upper third, on the left, towards the front") so the
+sentence names the missing lever. Samples are dense enough that a 10 mm
+feature is a patch of twenty-odd samples (one sample per 15 mm² of
+surface, at least 40 000 and at most 120 000 per mesh — the cap only binds
+on the barrel and the truck wheel, at 30–37 mm² a sample). The threshold
+is 1.5 tolerances, not one: at one tolerance a scan's noise and a
+hydrant's cast detail cover more than a quarter of the surface and the far
+samples percolate into a single patch the size of the part.
 
 Everything is millimetres. Pure numpy + trimesh (+ pillow for the sheet);
 no app needed, so it runs on any exported pair.
@@ -65,7 +93,13 @@ except ImportError:
 VIEWS = ("front", "right", "top", "iso")
 PX = 1000             # pixels across the longest extent for silhouettes (fewer when the surface is large)
 MAX_SAMPLES = 5_000_000   # per mesh per view; ~1 GB of working memory — beside a running simulator, 8 M was killed
-DIST_SAMPLES = 40_000
+DIST_SAMPLES = 40_000          # per mesh for the two-way distances, at least; more on a large surface (see distance_samples)
+MAX_DIST_SAMPLES = 120_000     # the exact closest-point query costs ~35 µs a sample; 120k keeps the truck wheel near 20 s
+MM2_PER_SAMPLE = 15.0          # one sample per 15 mm² of surface: a 10 mm feature is a patch of twenty-odd samples
+PATCH_FAR = 1.5                # a sample is "far" beyond this many tolerances (see the docstring on why not 1)
+PATCH_RADIUS = 2.5             # neighbours within this many mean sample spacings are one patch
+PATCH_KEEP = 5                 # patches of each kind kept in checks.json
+PATCH_MARK = 3                 # patches of each kind ringed on the sheet
 
 
 # ---- loading -------------------------------------------------------------
@@ -302,6 +336,107 @@ def signed(dist, pts, container, closest):
     return s
 
 
+# ---- patches -------------------------------------------------------------
+
+def distance_samples(area):
+    """How many points to sample on a surface of `area` mm² for the two-way
+    distances: one per 15 mm² so a 10 mm feature holds twenty-odd, within
+    the floor the checks always had and a ceiling the query's cost sets."""
+    return int(np.clip(area / MM2_PER_SAMPLE, DIST_SAMPLES, MAX_DIST_SAMPLES))
+
+
+def horizontal_axes(up):
+    """The two horizontal world axes in the order frame() uses them: A is
+    screen right in the front view, B points toward the front viewer."""
+    up_i = {"x": 0, "y": 1, "z": 2}[up]
+    a, b = [i for i in range(3) if i != up_i]
+    return up_i, a, b
+
+
+def describe_location(centre, extent, lo, hi, up):
+    """Where a patch sits, in words a person reads against the front view:
+    thirds along the up axis, left / centre / right across the width, and
+    towards the front or the back ("in the upper third, on the left,
+    towards the front"). An axis the patch spans most of is said so
+    instead of placed."""
+    up_i, a, b = horizontal_axes(up)
+    size = np.maximum(hi - lo, 1e-9)
+    t = (np.asarray(centre) - lo) / size
+    span = np.asarray(extent) / size
+
+    def third(i, names, whole):
+        if span[i] > 0.6:
+            return whole
+        return names[0] if t[i] < 1 / 3 else names[2] if t[i] > 2 / 3 else names[1]
+
+    words = [third(up_i, ("in the lower third", "in the middle third", "in the upper third"), "over most of the height"),
+             third(a, ("on the left", "in the centre", "on the right"), "across the width")]
+    depth = third(b, ("towards the back", None, "towards the front"), "front to back")
+    if depth:
+        words.append(depth)
+    return ", ".join(words)
+
+
+def find_patches(pts, dist, far, area_per_sample, spacing, kind, lo, hi, up):
+    """The far samples joined into connected regions: a radius graph on the
+    samples (cKDTree pairs within PATCH_RADIUS mean spacings) and its
+    connected components, largest area first. Each patch says what it is,
+    how big, how far out and where, so the check's sentence can name it."""
+    idx = np.where(far)[0]
+    if len(idx) == 0:
+        return []
+    from scipy.sparse import coo_matrix
+    from scipy.sparse.csgraph import connected_components
+    from scipy.spatial import cKDTree
+    p = pts[idx]
+    pairs = cKDTree(p).query_pairs(PATCH_RADIUS * spacing, output_type="ndarray")
+    n = len(idx)
+    if len(pairs):
+        graph = coo_matrix((np.ones(len(pairs)), (pairs[:, 0], pairs[:, 1])), shape=(n, n))
+    else:
+        graph = coo_matrix((n, n))
+    count, label = connected_components(graph, directed=False)
+    patches = []
+    for k in range(count):
+        members = idx[label == k]
+        q = pts[members]
+        d = dist[members]
+        p_lo, p_hi = q.min(axis=0), q.max(axis=0)
+        centre = 0.5 * (p_lo + p_hi)
+        extent = p_hi - p_lo
+        patches.append({
+            "kind": kind,
+            "areaMM2": round(float(len(members) * area_per_sample), 1),
+            "samples": int(len(members)),
+            "meanMM": round(float(d.mean()), 3),
+            "maxMM": round(float(d.max()), 3),
+            "centreMM": np.round(centre, 1).tolist(),
+            "extentMM": np.round(extent, 1).tolist(),
+            "location": describe_location(centre, extent, lo, hi, up),
+        })
+    patches.sort(key=lambda r: -r["areaMM2"])
+    return patches
+
+
+def patch_limits(reference_area):
+    """WARN and FAIL areas for the largest patch: a fixed floor so a small
+    part's lost knob still counts, scaled up on a big one so cast detail
+    on a metre-tall hydrant does not."""
+    return max(300.0, 0.0025 * reference_area), max(1000.0, 0.01 * reference_area)
+
+
+def grouped(value):
+    """2140 → '2 140', the way the sheet and the sentences print areas."""
+    return "{:,.0f}".format(value).replace(",", " ")
+
+
+def patch_sentence(kind, patch, reference_area, other):
+    sides = sorted(patch["extentMM"], reverse=True)
+    return "the largest %s patch is %s mm² (%.0f × %.0f mm, %.2f%% of the reference area) %s, %.1f mm from the %s on average, %.1f mm at most" % (
+        kind, grouped(patch["areaMM2"]), sides[0], sides[1], 100.0 * patch["areaMM2"] / reference_area,
+        patch["location"], patch["meanMM"], other, patch["maxMM"])
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--reference", action="append", required=True, help="scan mesh(es); several are merged")
@@ -311,6 +446,8 @@ def main():
     ap.add_argument("--up", default="y", choices=("x", "y", "z"))
     ap.add_argument("--title", default=None)
     ap.add_argument("--model-color", type=float, nargs=3, default=[0.86, 0.17, 0.12])
+    ap.add_argument("--patch-far", type=float, default=PATCH_FAR,
+                    help="a sample this many tolerances out belongs to a patch (default %.1f; a calibration knob)" % PATCH_FAR)
     args = ap.parse_args()
     os.makedirs(os.path.join(args.out, "views"), exist_ok=True)
 
@@ -351,7 +488,8 @@ def main():
         notes.append("volume not compared: %s" % ("the reference mesh is open" if not ref.is_watertight else "the model mesh is open"))
 
     # Reference → model.
-    pts_r, d_rm, closest_r = surface_distances(ref, mod, DIST_SAMPLES)
+    n_r = distance_samples(ref.area)
+    pts_r, d_rm, closest_r = surface_distances(ref, mod, n_r)
     s_rm = signed(d_rm, pts_r, mod, closest_r)
     within = float((d_rm <= tol).mean())
     add("ref_to_model_mean", float(d_rm.mean()), 1.5 * tol, 3 * tol,
@@ -371,7 +509,8 @@ def main():
     # scan point lies on an open edge is facing a hole: not excess, not
     # evidence either. A drum's lid is nearest the rim's SURFACE, and
     # counts.
-    pts_m, d_mr, _ = surface_distances(mod, ref, DIST_SAMPLES)
+    n_m = distance_samples(mod.area)
+    pts_m, d_mr, _ = surface_distances(mod, ref, n_m)
     hole_facing = np.zeros(len(pts_m), dtype=bool)
     boundary = boundary_points(ref)
     if len(boundary):
@@ -394,6 +533,37 @@ def main():
     if hole_share > 0.005:
         notes.append("%.0f%% of the model's surface faces holes in the scan (open edges) and is not judged" % (hole_share * 100))
 
+    # The largest patch. The far samples of each direction, joined into
+    # connected regions; the biggest region of each kind is a check, located
+    # in words. The patch bounds are the reference's, so "upper third" means
+    # the same thing for a missing lever and for an excess lid.
+    far_mm = args.patch_far * tol
+    missing = find_patches(pts_r, d_rm, d_rm > far_mm, ref.area / n_r, math.sqrt(ref.area / n_r), "missing",
+                           ref.bounds[0], ref.bounds[1], args.up)
+    excess = find_patches(pts_m, d_mr, judged & (d_mr > far_mm), mod.area / n_m, math.sqrt(mod.area / n_m), "excess",
+                          ref.bounds[0], ref.bounds[1], args.up)
+    warn_area, fail_area = patch_limits(ref.area)
+    for kind, found, other in (("missing", missing, "model"), ("excess", excess, "reference")):
+        if found:
+            text = patch_sentence(kind, found[0], ref.area, other)
+            if len(found) > 1:
+                text += "; %d patches of this kind in all, %s mm² together" % (
+                    len(found), grouped(sum(p["areaMM2"] for p in found)))
+            area = found[0]["areaMM2"]
+        else:
+            text = "no %s patch: no connected region of surface is more than %.1f mm from the %s" % (kind, far_mm, other)
+            area = 0.0
+        add("largest_%s_patch" % kind, area, warn_area, fail_area, text, unit="mm²",
+            extra={"patches": len(found), "totalMM2": round(sum(p["areaMM2"] for p in found), 1)})
+    patch_report = {
+        "thresholdMM": far_mm, "radiusMM": round(PATCH_RADIUS * math.sqrt(ref.area / n_r), 2),
+        "missing": missing[:PATCH_KEEP], "excess": excess[:PATCH_KEEP],
+        "missingTotalMM2": round(sum(p["areaMM2"] for p in missing), 1),
+        "missingShare": round(sum(p["areaMM2"] for p in missing) / ref.area, 4),
+        "excessTotalMM2": round(sum(p["areaMM2"] for p in excess), 1),
+        "excessShare": round(sum(p["areaMM2"] for p in excess) / max(mod.area * (1 - hole_share), 1e-9), 4),
+    }
+
     # Terraces: mean signed error (ref → model) per band along the up axis.
     up_i = {"x": 0, "y": 1, "z": 2}[args.up]
     hts = pts_r[:, up_i]
@@ -413,9 +583,11 @@ def main():
     # Views: silhouettes and depth.
     colour = tuple(int(c * 255) for c in args.model_color)
     tiles = {}
+    grids = {}
     for view in VIEWS:
         F = frame(view, args.up)
         g = Grid(lo, hi, F, Grid.fit_pixels(lo, hi, F, PX, max(ref.area, mod.area)))
+        grids[view] = g
         zr = g.splat(ref)
         zm = g.splat(mod)
         rm, mm = np.isfinite(zr), np.isfinite(zm)
@@ -493,12 +665,40 @@ def main():
     tile = 640
     cols = ("reference", "model", "silhouettes", "depth")
     header, left, rowgap = 150, 150, 10
+    marks = [("M%d" % (i + 1), (70, 130, 255), p) for i, p in enumerate(missing[:PATCH_MARK])] + \
+            [("E%d" % (i + 1), (255, 140, 40), p) for i, p in enumerate(excess[:PATCH_MARK])]
     W = left + len(cols) * (tile + rowgap)
-    H = header + len(VIEWS) * (tile + rowgap) + 120
+    H = header + len(VIEWS) * (tile + rowgap) + 120 + 30 * len(marks)
     sheet = Image.new("RGB", (W, H), (18, 19, 22))
     draw = ImageDraw.Draw(sheet)
     big, small, tiny = font(44), font(26), font(22)
     colour_v = {"PASS": (90, 200, 120), "WARN": (240, 190, 60), "FAIL": (255, 90, 80)}
+
+    def ring(view, patch):
+        """Centre and radius of a patch in the view's full-size tile pixels:
+        the centre through the tile's own frame, the radius half the
+        projected extent of the patch's box, never smaller than a dot."""
+        g = grids[view]
+        c = np.asarray(patch["centreMM"])
+        e = 0.5 * np.asarray(patch["extentMM"])
+        corners = np.array([c + e * np.array([sx, sy, sz]) for sx in (-1, 1) for sy in (-1, 1) for sz in (-1, 1)])
+        s = corners @ g.F.T
+        sc = c @ g.F.T
+        px = (sc[0] - g.lo[0]) * g.scale
+        py = (g.hi[1] - sc[1]) * g.scale
+        r = 0.5 * (s.max(axis=0) - s.min(axis=0))[:2].max() * g.scale
+        return px, py, max(r, 12.0)
+
+    def draw_marks(canvas, view, x0, y0, k, scale_r=1.0):
+        """Rings and labels for the marked patches on a tile pasted at
+        (x0, y0) with thumbnail factor k (full-size pixels × k)."""
+        d = ImageDraw.Draw(canvas)
+        label_font = font(int(26 * max(scale_r, 0.85)))
+        for label, col, patch in marks:
+            px, py, r = ring(view, patch)
+            px, py, r = x0 + px * k, y0 + py * k, min(max(r * k, 10.0), 0.45 * tile * scale_r)
+            d.ellipse([px - r, py - r, px + r, py + r], outline=col, width=max(2, int(3 * scale_r)))
+            d.text((px + r + 4, py - 14 * scale_r), label, fill=col, font=label_font)
     draw.text((left, 24), "%s — %s" % (title, overall), fill=colour_v[overall], font=big)
     draw.text((left, 84), "tolerance %.1f mm · blue = the model lacks material · orange = it has too much · slate = seen through a hole in the scan · reference %s mm" % (
         tol, " × ".join("%.0f" % v for v in dref)), fill=(170, 174, 182), font=small)
@@ -512,7 +712,10 @@ def main():
             im = im.copy()
             im.thumbnail((tile, tile))
             x0 = left + j * (tile + rowgap)
-            sheet.paste(im, (x0 + (tile - im.width) // 2, y0 + (tile - im.height) // 2))
+            px0, py0 = x0 + (tile - im.width) // 2, y0 + (tile - im.height) // 2
+            sheet.paste(im, (px0, py0))
+            if c in ("reference", "depth"):
+                draw_marks(sheet, view, px0, py0, im.width / grids[view].w)
         # The view's own numbers under its label.
         rows = [c for c in checks if c["check"] in ("silhouette_%s" % view, "depth_%s" % view)]
         yy = y0 + 48
@@ -533,10 +736,43 @@ def main():
         if x > W - 400:
             x = left
             yy += 30
+    # One legend line per ringed patch.
+    yy += 44
+    legend = []
+    for label, col, patch in marks:
+        sides = sorted(patch["extentMM"], reverse=True)
+        line = "%s  %s %s mm² — %s · %.1f mm from the %s on average · %.0f × %.0f mm" % (
+            label, patch["kind"], grouped(patch["areaMM2"]), patch["location"], patch["meanMM"],
+            "model" if patch["kind"] == "missing" else "reference", sides[0], sides[1])
+        legend.append((line, col))
+        draw.text((left, yy), line, fill=col, font=tiny)
+        yy += 30
     sheet.save(os.path.join(args.out, "review.png"))
 
+    # Just the marks on the shaded reference, the four views in a row.
+    refs = [tiles[v]["reference"] for v in VIEWS]
+    ph = max(im.height for im in refs)
+    gap = 20
+    pw = sum(im.width for im in refs) + gap * (len(refs) + 1)
+    patches_img = Image.new("RGB", (pw, ph + 80 + 34 * (len(legend) + 1)), (18, 19, 22))
+    pd = ImageDraw.Draw(patches_img)
+    pd.text((gap, 14), "%s — the largest patches: blue rings = the model lacks material, orange = it has too much" % title,
+            fill=(200, 204, 210), font=small)
+    x = gap
+    for v, im in zip(VIEWS, refs):
+        patches_img.paste(im, (x, 60))
+        draw_marks(patches_img, v, x, 60, 1.0, scale_r=1.4)
+        pd.text((x + 8, 60 + 8), v, fill=(200, 204, 210), font=small)
+        x += im.width + gap
+    yy = 60 + ph + 20
+    for line, col in legend:
+        pd.text((gap, yy), line, fill=col, font=small)
+        yy += 34
+    patches_img.save(os.path.join(args.out, "views", "patches.png"))
+
     result = {"title": title, "overall": overall, "toleranceMM": tol, "upAxis": args.up,
-              "reference": args.reference, "model": args.model, "notes": notes, "checks": checks}
+              "reference": args.reference, "model": args.model, "notes": notes, "checks": checks,
+              "patches": patch_report}
     with open(os.path.join(args.out, "checks.json"), "w") as f:
         json.dump(result, f, indent=1)
     print("%s: %s (tolerance %.1f mm)" % (title, overall, tol))

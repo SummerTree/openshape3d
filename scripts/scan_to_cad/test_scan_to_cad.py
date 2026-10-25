@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Offline tests for the scan-to-CAD helpers that need no app: the line-and-
 arc fitter, the open-polyline arc fitter, the shared half-section the build,
-film and reel revolve, and the fit inspector's verdicts
+film and reel revolve, and the fit inspector's verdicts and patches
 on synthetic pairs (a drum that should have been a bucket, a dome cut into
-steps, an identical part).
+steps, a cylinder whose boss the model lacks, an identical part).
 
     scripts/scan_to_cad/venv/bin/python -I scripts/scan_to_cad/test_scan_to_cad.py
 
@@ -285,6 +285,42 @@ class TracerHelperTests(unittest.TestCase):
         self.assertLessEqual(max(us), 285.0 + 1e-6)
         self.assertTrue(0 < seed[1] < 900 and 0 < seed[0] < 285)
 
+    def test_a_tyre_on_a_hub_is_dished_and_not_an_open_container(self):
+        """From the hub side a wheel's rim dish reads as an open end (rays
+        fall into the dish and through the hub's bore); the dish test must
+        run first, or the cavity cuts the rim away (the truck wheel, 21 mm
+        mean deviation). A tyre (annulus 150–200 mm, 60 wide) and a hub
+        disc (r 50, 20 thick) in one plane: dished, no open end."""
+        import numpy as np
+        import trimesh
+        import analyze_scan as A
+        n = 96
+        a = np.linspace(0, 2 * np.pi, n, endpoint=False)
+        V = []
+        for r in (150.0, 200.0):
+            for z in (-30.0, 30.0):
+                V += [[r * np.cos(t), r * np.sin(t), z] for t in a]
+        F = []
+
+        def band(i0, i1):
+            for k in range(n):
+                k2 = (k + 1) % n
+                F.append([i0 + k, i1 + k, i1 + k2])
+                F.append([i0 + k, i1 + k2, i0 + k2])
+        band(2 * n, 3 * n)      # outer wall
+        band(n, 0)              # inner wall
+        band(0, 2 * n)          # one face
+        band(3 * n, n)          # the other
+        tyre = trimesh.Trimesh(np.array(V), np.array(F), process=True)
+        tyre.fix_normals()
+        hub = trimesh.creation.cylinder(radius=50.0, height=20.0, sections=64)
+        wheel = trimesh.util.concatenate([tyre, hub])
+        with tempfile.TemporaryDirectory() as out:
+            analysis = A.analyze(wheel, out_dir=out, name="wheel", samples=10000, axis_choice="0,0,1!", multi=False)
+        self.assertIsNone(analysis.get("openTop"))
+        self.assertTrue(analysis.get("sectionLoop"), "the half-section should be traced as a region")
+        self.assertAlmostEqual(analysis["heightMM"], 60.0, delta=2.0)
+
 
 @unittest.skipUnless(HAVE_DEPS, "needs the scan_to_cad venv (trimesh, numpy, scipy, rtree, pillow)")
 class FeatureBuilderTests(unittest.TestCase):
@@ -370,6 +406,149 @@ class BarFitTests(unittest.TestCase):
         self.assertAlmostEqual(by_axis[2]["plane"]["origin"][2], 100.0, delta=12.0)
 
 
+@unittest.skipUnless(HAVE_DEPS, "needs the scan_to_cad venv (trimesh, numpy, scipy, rtree, pillow)")
+class PartsLibraryTests(unittest.TestCase):
+    """fit_features' parts library: a stadium plate, a hex nut, a bent
+    tube and a hoop come out as the parts they are."""
+
+    def _far_plate(self):
+        """A body the pieces stand clear of (so no end reaches into it)."""
+        import fit_features as FF
+        plate = trimesh.creation.box(extents=(600, 600, 10))
+        plate.apply_translation((0, 0, -300))
+        return FF.surface_tree(plate)
+
+    def test_a_stadium_plate_is_a_lever(self):
+        import fit_features as FF
+        import preview_model as P
+        loop = rounded_rectangle(90, 24, 12, per_arc=16)                 # a stadium 90 × 24 (the arcs meet at r = 12)
+        lever = P.extrude_loop(loop, [30.0, -20.0, 50.0], [math.cos(0.4), math.sin(0.4), 0.0],
+                               [-math.sin(0.4), math.cos(0.4), 0.0], 3.0, symmetric=True)
+        res = FF.extrude_fit(lever, 1.0, 4.0, self._far_plate())
+        self.assertIsNotNone(res)
+        f = res["features"][0]
+        self.assertEqual(f.get("shape", {}).get("kind"), "stadium", f.get("shape"))
+        self.assertAlmostEqual(f["shape"]["lengthMM"], 90.0, delta=4.5)
+        self.assertAlmostEqual(f["shape"]["widthMM"], 24.0, delta=1.2)
+        self.assertEqual(FF.name_part(f), "lever")
+        self.assertGreater(res["coverage"], 0.9)
+        kinds = [s["kind"] for s in f["segments"]]
+        self.assertEqual(kinds.count("arc"), 2)
+        self.assertEqual(kinds.count("line"), 2)
+        # The outline is drawn as the sketch takes it: a closed chain of lines and arcs.
+        ents = F.sketch_entities(f["segments"])
+        self.assertEqual(len(ents), 4)
+        self.assertTrue(FF.point_in_polygon(f["seed"], FF.segments_polyline(f["segments"])))
+
+    def test_a_hexagonal_prism_is_a_nut(self):
+        import fit_features as FF
+        across_flats = 36.0
+        R = across_flats / 2 / math.cos(math.pi / 6)
+        import preview_model as P
+        hexagon = np.array([[R * math.cos(a), R * math.sin(a)] for a in np.linspace(0, 2 * math.pi, 6, endpoint=False) + 0.3])
+        nut = P.extrude_loop(hexagon, [-40.0, 25.0, 80.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0], 7.0, symmetric=True)
+        res = FF.extrude_fit(nut, 1.0, 4.0, self._far_plate())
+        self.assertIsNotNone(res)
+        f = res["features"][0]
+        self.assertEqual(f.get("shape", {}).get("kind"), "hexagon", f.get("shape"))
+        self.assertAlmostEqual(f["shape"]["acrossFlatsMM"], across_flats, delta=0.05 * across_flats)
+        self.assertEqual(FF.name_part(f), "nut")
+        self.assertEqual(len(f["segments"]), 6)
+        self.assertGreater(res["coverage"], 0.9)
+
+    def test_a_bent_tube_is_one_sweep_with_one_radius(self):
+        import fit_features as FF
+        # A 6 mm tube along a quarter circle of 120 mm (an arch), standing clear of the body.
+        t = np.linspace(0, math.pi / 2, 40)
+        spine = np.column_stack([120 * np.cos(t), 120 * np.sin(t), np.zeros_like(t)])
+        rings = []
+        for i in range(len(t)):
+            tangent = np.array([-math.sin(t[i]), math.cos(t[i]), 0.0])
+            n1 = np.array([math.cos(t[i]), math.sin(t[i]), 0.0])
+            n2 = np.cross(tangent, n1)
+            rings.append([spine[i] + 6.0 * (math.cos(a) * n1 + math.sin(a) * n2) for a in np.linspace(0, 2 * math.pi, 24, endpoint=False)])
+        rings = np.array(rings)
+        faces = []
+        k = 24
+        for i in range(len(t) - 1):
+            for j in range(k):
+                a, b = i * k + j, i * k + (j + 1) % k
+                c, d = (i + 1) * k + j, (i + 1) * k + (j + 1) % k
+                faces += [[a, b, d], [a, d, c]]
+        tube = trimesh.Trimesh(vertices=rings.reshape(-1, 3), faces=np.array(faces))
+        tube.apply_translation((0, 0, 100))
+        res = FF.tube_fit(tube, 1.0, 4.0, self._far_plate())
+        self.assertIsNotNone(res)
+        sweeps = [f for f in res["features"] if f["kind"] == "sweep"]
+        self.assertEqual(len(res["features"]), 1, [f["kind"] for f in res["features"]])
+        self.assertEqual(len(sweeps), 1)
+        self.assertEqual(sweeps[0]["profile"]["shape"], "circle", sweeps[0]["profile"])
+        self.assertAlmostEqual(sweeps[0]["profile"]["radius"], 6.0, delta=1.0)
+        self.assertGreater(res["coverage"], 0.8)
+        self.assertEqual(sweeps[0]["attached"], [False, False])
+        self.assertIsNone(FF.name_part(sweeps[0]))                       # no body to hang from, no horn: the rules do not know
+        self.assertEqual(FF.name_part(dict(sweeps[0], attached=[True, True])), "handle")
+        self.assertEqual(FF.name_part(dict(sweeps[0], intoHorn=True)), "hose")
+
+    def test_a_ring_round_the_body_axis_is_a_hoop(self):
+        import fit_features as FF
+        # The body: a cylinder r 100, h 300 on y; the piece: a 10 × 12 mm hoop round it at h 150.
+        body = trimesh.creation.cylinder(radius=100.0, height=300.0, sections=96)
+        body.apply_transform(trimesh.transformations.rotation_matrix(math.pi / 2, [1, 0, 0]))
+        body.apply_translation([0, 150.0, 0])
+        hoop = trimesh.creation.annulus(r_min=100.0, r_max=112.0, height=10.0, sections=96)
+        hoop.apply_transform(trimesh.transformations.rotation_matrix(math.pi / 2, [1, 0, 0]))
+        hoop.apply_translation([0, 150.0, 0])
+        analysis = {"axisOrigin": [0.0, 0.0, 0.0], "axisDirection": [0.0, 1.0, 0.0], "heightMM": 300.0,
+                    "profile": [[100.0, 0.0], [100.0, 300.0]]}
+        frame = FF.body_frame(analysis, 4.0)
+        res = FF.hoop_fit(hoop, 1.0, 4.0, FF.surface_tree(body), body=frame)
+        self.assertIsNotNone(res)
+        self.assertEqual(res["kind"], "hoop")
+        self.assertEqual(len(res["features"]), 1)
+        f = res["features"][0]
+        self.assertEqual(f["kind"], "revolve")
+        self.assertTrue(f["hoop"])
+        self.assertEqual(FF.name_part(f), "hoop")
+        self.assertGreater(abs(f["axis"]["direction"][1]), 0.999)
+        self.assertAlmostEqual(f["radiusMM"], 112.0, delta=1.5)
+        self.assertAlmostEqual(f["lengthMM"], 10.0, delta=3.0)
+        self.assertGreater(res["coverage"], 0.6)
+        # The section is closed (first point = last) so a hollow body keeps its cavity…
+        self.assertEqual(f["profile"][0], f["profile"][-1])
+        self.assertGreater(min(p[0] for p in f["profile"]), 80.0)
+        # …and it revolves to a ring of the right volume, placed on the body.
+        import preview_model as P
+        mesh = P.feature_mesh(f, sections=128)
+        self.assertTrue(mesh.is_watertight)
+        self.assertAlmostEqual(float(mesh.bounds[1][0]), 112.0, delta=1.5)
+        self.assertGreater(mesh.volume, 0.8 * math.pi * (112 ** 2 - 100 ** 2) * 10)
+        # A one-sided bulge is not a hoop (it spans 3 of the 24 sectors)…
+        bulge = trimesh.creation.box(extents=(20, 40, 60))
+        bulge.apply_translation([108.0, 150.0, 0])
+        self.assertIsNone(FF.hoop_fit(bulge, 1.0, 4.0, FF.surface_tree(body), body=frame))
+        # …nor is a ring all the way round that is out of round: the same
+        # hoop stretched 10 % on x has its sectors' outer radii 112 → 123 mm,
+        # a spread of ~11 mm against the max(2 tol, 4 %) = 4.5 allowed.
+        oval = hoop.copy()
+        oval.apply_scale([1.10, 1.0, 1.0])
+        self.assertIsNone(FF.hoop_fit(oval, 1.0, 4.0, FF.surface_tree(body), body=frame))
+        # …nor a round wall standing a few mm proud over most of the body's
+        # height: 24 sectors at one radius, but 120 mm tall on a 216 mm
+        # diameter — a ring is no taller than 0.35 of its diameter.
+        wall = trimesh.creation.annulus(r_min=104.0, r_max=108.0, height=120.0, sections=96)
+        wall.apply_transform(trimesh.transformations.rotation_matrix(math.pi / 2, [1, 0, 0]))
+        wall.apply_translation([0, 150.0, 0])
+        self.assertIsNone(FF.hoop_fit(wall, 1.0, 4.0, FF.surface_tree(body), body=frame))
+        # The same wall only 20 mm tall is a band round the body again.
+        short = trimesh.creation.annulus(r_min=104.0, r_max=108.0, height=20.0, sections=96)
+        short.apply_transform(trimesh.transformations.rotation_matrix(math.pi / 2, [1, 0, 0]))
+        short.apply_translation([0, 150.0, 0])
+        res = FF.hoop_fit(short, 1.0, 4.0, FF.surface_tree(body), body=frame)
+        self.assertIsNotNone(res)
+        self.assertAlmostEqual(res["features"][0]["lengthMM"], 20.0, delta=3.0)
+
+
 def run_inspect(reference, model, out, tolerance, up="y"):
     subprocess.run([sys.executable, "-I", os.path.join(HERE, "inspect_fit.py"), "--reference", reference,
                     "--model", model, "--out", out, "--tolerance", str(tolerance), "--up", up, "--title", "test"],
@@ -394,6 +573,42 @@ class InspectFitTests(unittest.TestCase):
         a.export(pb)
         checks = run_inspect(pa, pb, os.path.join(self.tmp, "same"), 2.0, up="z")
         self.assertEqual(checks["overall"], "PASS", [c for c in checks["checks"] if c["verdict"] != "PASS"])
+        # Nothing is far from anything: no patch of either kind.
+        self.assertEqual(checks["patches"]["missing"], [])
+        self.assertEqual(checks["patches"]["excess"], [])
+        by = {c["check"]: c for c in checks["checks"]}
+        self.assertEqual(by["largest_missing_patch"]["value"], 0.0)
+        self.assertEqual(by["largest_excess_patch"]["value"], 0.0)
+
+    def test_a_missing_boss_is_one_patch_where_the_boss_is(self):
+        # Reference: a cylinder with a 20 mm boss on its +x side in the upper
+        # third. Model: the plain cylinder. The boss's five exposed faces are
+        # 2 000 mm²; the strip of its sides within 1.5 tolerances of the
+        # wall does not count, so a little under that.
+        plain = self._cylinder(100, 300)
+        boss = trimesh.creation.box(extents=[20, 20, 20])
+        boss.apply_translation([110, 0, 250])
+        with_boss = trimesh.util.concatenate([self._cylinder(100, 300), boss])
+        pr, pm = os.path.join(self.tmp, "boss.stl"), os.path.join(self.tmp, "plain.stl")
+        with_boss.export(pr)
+        plain.export(pm)
+        checks = run_inspect(pr, pm, os.path.join(self.tmp, "boss-out"), 2.0, up="z")
+        missing = checks["patches"]["missing"]
+        self.assertEqual(len(missing), 1, missing)
+        patch = missing[0]
+        self.assertAlmostEqual(patch["areaMM2"], 2000.0, delta=500.0, msg=patch)
+        self.assertIn("upper third", patch["location"])
+        self.assertIn("on the right", patch["location"])          # +x is screen right in the front view
+        self.assertAlmostEqual(patch["centreMM"][2], 250.0, delta=3.0)
+        self.assertAlmostEqual(patch["centreMM"][0], 110.0, delta=3.0)
+        self.assertGreater(patch["meanMM"], 5.0)
+        by = {c["check"]: c for c in checks["checks"]}
+        # The cylinder is 254 000 mm², so the limits are 0.25 % = 635 mm²
+        # (WARN) and 1 % = 2 536 mm² (FAIL): the lost boss warns the part even
+        # though every mean deviation passes — it is 0.7 % of the surface.
+        self.assertEqual(by["largest_missing_patch"]["verdict"], "WARN", by["largest_missing_patch"])
+        self.assertIn("on the right", by["largest_missing_patch"]["why"])
+        self.assertEqual(by["ref_to_model_mean"]["verdict"], "PASS")
 
     def test_a_drum_for_a_bucket_fails_on_excess_and_depth(self):
         # Reference: an open bucket (a thin shell with no lid). Model: a solid drum.
@@ -414,6 +629,12 @@ class InspectFitTests(unittest.TestCase):
         # …and seen from above the lid sits 300 mm nearer than the bucket's floor: that fails.
         self.assertEqual(by["depth_top"]["verdict"], "FAIL", by["depth_top"])
         self.assertGreater(by["depth_top"]["excessShare"], 0.5)
+        # …and the lid is the largest excess patch: a disc at the rim's height.
+        lid = checks["patches"]["excess"][0]
+        self.assertGreater(lid["areaMM2"], 20000.0, lid)          # π·93² = 27 000 mm² beyond 3 mm of the ring
+        self.assertAlmostEqual(lid["centreMM"][2], 300.0, delta=3.0, msg=lid)
+        self.assertIn("upper third", lid["location"])
+        self.assertEqual(by["largest_excess_patch"]["verdict"], "FAIL", by["largest_excess_patch"])
 
     def test_a_terraced_dome_fails_the_top_strip(self):
         # Reference: a cylinder with a spherical dome. Model: the dome cut into three flat steps.
@@ -604,6 +825,145 @@ class AxisFinderTests(unittest.TestCase):
         # barrel keep the barrel's radius.
         meds = ([150.0] * 5 + [80.0] * 7) * 3
         self.assertAlmostEqual(self.A.agreed_radius(meds, previous=80.0, sector_medians=meds), 80.0)
+
+
+@unittest.skipUnless(HAVE_DEPS, "needs the scan_to_cad venv (trimesh, numpy, scipy, rtree, pillow)")
+class ScanColorTests(unittest.TestCase):
+    """`analyze_scan.scan_color` reads the scan's dominant colour off its
+    texture or vertex colours, and `build_hydrant.model_color` resolves a
+    spec's colour against it."""
+
+    @staticmethod
+    def textured_quad(image):
+        # A unit quad whose UVs span the whole texture, so the texture's
+        # area shares are the surface's.
+        quad = trimesh.Trimesh([[0, 0, 0], [1, 0, 0], [1, 1, 0], [0, 1, 0]], [[0, 1, 2], [0, 2, 3]], process=False)
+        # A glTF-style material, as the corpus scans carry: the texture with
+        # no base-colour factor (trimesh's SimpleMaterial would export a
+        # default grey diffuse as a factor of 0.4 and darken the swatch).
+        material = trimesh.visual.material.PBRMaterial(baseColorTexture=image)
+        quad.visual = trimesh.visual.TextureVisuals(uv=[[0, 0], [1, 0], [1, 1], [0, 1]], material=material)
+        return quad
+
+    def test_texture_that_is_mostly_one_colour_gives_that_colour(self):
+        import analyze_scan as A
+        from PIL import Image
+        # 70 % of the columns blue, 30 % yellow.
+        image = Image.new("RGB", (100, 20), (51, 102, 204))
+        image.paste((230, 200, 25), (70, 0, 100, 20))
+        found = A.scan_color_record(self.textured_quad(image))
+        self.assertEqual(found["source"], "texture")
+        for got, want in zip(found["rgb"], [0.2, 0.4, 0.8]):
+            self.assertAlmostEqual(got, want, delta=0.03)
+        self.assertAlmostEqual(found["share"], 0.7, delta=0.05)
+        self.assertEqual(len(A.scan_color(self.textured_quad(image))), 3)
+
+    def test_a_painted_colour_beats_a_slightly_larger_neutral_one(self):
+        # A spray can: 45 % white lettering and bare metal, 40 % blue label,
+        # 15 % yellow cap — the eye calls it blue, and so does the vote.
+        import analyze_scan as A
+        from PIL import Image
+        image = Image.new("RGB", (100, 20), (235, 235, 230))
+        image.paste((15, 25, 105), (45, 0, 85, 20))
+        image.paste((225, 200, 25), (85, 0, 100, 20))
+        found = A.scan_color_record(self.textured_quad(image))
+        r, g, b = found["rgb"]
+        self.assertGreater(b, 0.3)
+        self.assertLess(r, 0.15)
+        self.assertAlmostEqual(found["share"], 0.4, delta=0.05)
+
+    def test_dark_colour_is_lifted_with_its_hue(self):
+        import analyze_scan as A
+        rgb = A.lift_shadow([0.10, 0.02, 0.02])
+        self.assertAlmostEqual(rgb[0], 0.25, places=3)
+        self.assertAlmostEqual(rgb[1] / rgb[0], 0.2, places=3)
+        self.assertEqual(A.lift_shadow([0.5, 0.5, 0.5]), [0.5, 0.5, 0.5])
+
+    def test_textured_glb_round_trip_by_path(self):
+        import analyze_scan as A
+        from PIL import Image
+        image = Image.new("RGB", (16, 16), (51, 102, 204))
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "quad.glb")
+            self.textured_quad(image).export(path)
+            rgb = A.scan_color(path)
+        for got, want in zip(rgb, [0.2, 0.4, 0.8]):
+            self.assertAlmostEqual(got, want, delta=0.03)
+
+    def test_vertex_colours_are_the_fallback_and_a_plain_mesh_has_none(self):
+        import analyze_scan as A
+        box = trimesh.creation.box()
+        self.assertIsNone(A.scan_color(box))
+        self.assertIsNone(A.scan_color_record(box))
+        box.visual.vertex_colors = [200, 30, 40, 255]
+        found = A.scan_color_record(box)
+        self.assertEqual(found["source"], "vertex")
+        for got, want in zip(found["rgb"], [200 / 255, 30 / 255, 40 / 255]):
+            self.assertAlmostEqual(got, want, delta=0.01)
+
+    def test_base_colour_factor_multiplies_in_linear_light(self):
+        # glTF's baseColorFactor scales the texture in linear light: half
+        # of white is 0.5 linear, 0.735 in sRGB — not a mid grey of 0.5.
+        import analyze_scan as A
+        from PIL import Image
+        quad = self.textured_quad(Image.new("RGB", (16, 16), (255, 255, 255)))
+        quad.visual.material.baseColorFactor = [0.5, 0.5, 0.5, 1.0]
+        found = A.scan_color_record(quad)
+        for c in found["rgb"]:
+            self.assertAlmostEqual(c, 0.735, delta=0.01)
+        # The curve is its own inverse, and 0.5 linear is the known 0.735.
+        self.assertAlmostEqual(float(A.linear_to_srgb(A.srgb_to_linear(0.3))), 0.3, places=6)
+        self.assertAlmostEqual(float(A.linear_to_srgb(0.5)), 0.7354, places=3)
+
+    def test_color_option_takes_scan_or_three_numbers_only(self):
+        from build_hydrant import color_option
+        self.assertEqual(color_option(None), "scan")
+        self.assertEqual(color_option(["scan"]), "scan")
+        self.assertEqual(color_option(["0.1", "0.2", "0.3"]), [0.1, 0.2, 0.3])
+        for bad in (["scan", "1", "2"], ["0.1", "0.2"], ["red"], ["a", "b", "c"]):
+            with self.assertRaises(SystemExit):
+                color_option(bad)
+
+    def test_every_profile_writing_recursion_of_analyze_forwards_the_source(self):
+        # analyze() traces an open drum again when its rim comes out at the
+        # bottom, and the inner call is the one that writes profile.json —
+        # so it must carry `source`, or the profile has no scanColor and
+        # the model falls back to hydrant red. A full run on a synthetic
+        # cup takes 40 s, so the call is checked where it stands.
+        import ast
+        with open(os.path.join(HERE, "analyze_scan.py")) as f:
+            tree = ast.parse(f.read())
+        analyze = next(n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name == "analyze")
+        recursions = [n for n in ast.walk(analyze)
+                      if isinstance(n, ast.Call) and getattr(n.func, "id", None) == "analyze"]
+        self.assertTrue(recursions)
+        for call in recursions:
+            keywords = {k.arg: k.value for k in call.keywords}
+            writes = not (isinstance(keywords.get("out_dir"), ast.Constant) and keywords["out_dir"].value is None)
+            if writes:
+                self.assertIn("source", keywords, ast.unparse(call))
+
+    def test_the_colour_resolver_is_standard_library_only(self):
+        # `run_corpus.py` runs under any python3 and imports the resolver
+        # from `spec_color`; it must not pull numpy in behind it.
+        import ast
+        with open(os.path.join(HERE, "spec_color.py")) as f:
+            tree = ast.parse(f.read())
+        imported = [n.names[0].name for n in ast.walk(tree) if isinstance(n, (ast.Import, ast.ImportFrom))]
+        self.assertEqual(imported, [])
+        with open(os.path.join(HERE, "run_corpus.py")) as f:
+            self.assertNotIn("from build_hydrant", f.read())
+
+    def test_model_color_resolves_the_spec_against_the_analysis(self):
+        from build_hydrant import model_color, HYDRANT_RED
+        analysis = {"scanColor": {"rgb": [0.2, 0.4, 0.8], "share": 0.7, "source": "texture"}}
+        self.assertEqual(model_color({"color": [0.1, 0.2, 0.3]}, analysis), [0.1, 0.2, 0.3])   # a list is itself
+        self.assertEqual(model_color({"color": "scan"}, analysis), [0.2, 0.4, 0.8])            # "scan": the analysis
+        self.assertEqual(model_color({}, analysis), [0.2, 0.4, 0.8])                           # absent: the same
+        self.assertEqual(model_color({"color": "scan"}, {}), HYDRANT_RED)                      # no colour recorded
+        self.assertEqual(model_color({}, None), HYDRANT_RED)
+        with self.assertRaises(ValueError):
+            model_color({"color": "red"}, analysis)
 
 
 if __name__ == "__main__":

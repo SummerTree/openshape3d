@@ -4,8 +4,9 @@
     python3 run_corpus.py corpus/ --port 8947 --simulator os3d-hydrant [--only bollard,beer-mug] [--python venv/bin/python]
 
 `corpus/` holds one folder per part (`order.json` lists them) with
-`analysis/` from `analyze_scan.py` and a `spec.json` (label, colour — the
-same file `demo_video.py --spec` reads). For each part this relaunches the
+`analysis/` from `analyze_scan.py` and a `spec.json` (label, colour — a
+list, or "scan" for the scan's own colour — the same file `demo_video.py
+--spec` reads). For each part this relaunches the
 app in an empty design (`OS3D_FRESH=1`, the agent bridge on `--port`),
 waits for the bridge, runs `build_hydrant.py` into `<part>/run/`, then
 `report.py`, and writes `corpus/results.json` — one row per part with the
@@ -21,6 +22,9 @@ import time
 import urllib.request
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, HERE)
+from spec_color import model_color  # noqa: E402 — stdlib only; this script runs under any python3
+
 BUNDLE = "com.laan.labs.openshape3d"
 
 
@@ -48,6 +52,15 @@ def relaunch(udid, port):
         except Exception:  # noqa: BLE001 — not up yet
             pass
     sys.exit("the app's bridge never answered on port %d" % port)
+
+
+def patch_lines(patches, top=3):
+    """One line per largest patch of each kind: kind, area, where."""
+    lines = []
+    for kind in ("missing", "excess"):
+        for p in patches.get(kind, [])[:top]:
+            lines.append("%s %s mm² %s" % (kind, "{:,.0f}".format(p["areaMM2"]).replace(",", " "), p["location"]))
+    return lines
 
 
 def main():
@@ -91,6 +104,9 @@ def main():
         profile = json.load(open(os.path.join(analysis, "profile.json")))
         scan = profile.get("croppedScan") or os.path.join(analysis, "scan_cropped.glb")
         tolerance = 2.0 if profile["heightMM"] < 300 else 3.0
+        # The spec's colour, or with "scan" the scan's own (`scanColor` in
+        # the analysis); the build and the inspection sheet paint it alike.
+        color = [str(c) for c in model_color(spec, profile)]
         run_dir = os.path.join(part, "run")
         print("=== %s: %s, %.0f mm tall, %d bosses, tolerance %.0f mm" % (
             slug, spec["label"], profile["heightMM"], len(profile["bosses"]), tolerance), flush=True)
@@ -101,7 +117,7 @@ def main():
             relaunch(udid, args.port)
             cmd = [args.python, "-I", os.path.join(HERE, "build_hydrant.py"), "--scan", scan, "--analysis", analysis,
                    "--out", run_dir, "--port", str(args.port), "--name", slug, "--label", spec["label"],
-                   "--tolerance", str(tolerance), "--color"] + [str(c) for c in spec["color"]]
+                   "--tolerance", str(tolerance), "--color"] + color
             with open(os.path.join(part, "build.log"), "w") as log:
                 build = subprocess.run(cmd, stdout=log, stderr=subprocess.STDOUT, timeout=1500)
             if build.returncode != 0:
@@ -115,6 +131,7 @@ def main():
                 fit = subprocess.run([args.python, "-I", os.path.join(HERE, "fit_features.py"),
                                       "--scan", os.path.join(run_dir, "scan.stl"),
                                       "--model", os.path.join(run_dir, slug + "-cad.stl"),
+                                      "--analysis", os.path.join(analysis, "profile.json"),
                                       "--tolerance", str(tolerance), "--out", feat_dir],
                                      capture_output=True, text=True, timeout=1200,
                                      env=dict(os.environ, FIT_DEBUG="1"))
@@ -170,13 +187,17 @@ def main():
                                  "--reference", os.path.join(run_dir, "scan.stl"),
                                  "--model", os.path.join(run_dir, slug + "-cad.stl"),
                                  "--out", qa_dir, "--title", spec["label"], "--tolerance", str(tolerance),
-                                 "--model-color"] + [str(c) for c in spec["color"]],
+                                 "--model-color"] + color,
                                 capture_output=True, text=True, timeout=900)
             if qa.returncode == 0:
                 checks = json.load(open(os.path.join(qa_dir, "checks.json")))
                 row["qa"] = {"verdict": checks["overall"], "sheet": os.path.join(qa_dir, "review.png"),
                              "failed": [c["check"] for c in checks["checks"] if c["verdict"] == "FAIL"],
-                             "warned": [c["check"] for c in checks["checks"] if c["verdict"] == "WARN"]}
+                             "warned": [c["check"] for c in checks["checks"] if c["verdict"] == "WARN"],
+                             # The biggest things wrong, one line each, so the
+                             # row says "missing 5 218 mm² in the middle third"
+                             # and not just which check failed.
+                             "patches": patch_lines(checks.get("patches", {}))}
                 print("    qa: %s%s — look at %s" % (checks["overall"],
                                                      (" (" + ", ".join(row["qa"]["failed"]) + ")") if row["qa"]["failed"] else "",
                                                      row["qa"]["sheet"]), flush=True)

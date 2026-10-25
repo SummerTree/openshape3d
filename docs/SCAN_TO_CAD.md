@@ -136,6 +136,76 @@ Offline tests: `test_scan_to_cad.py` (a drum for a bucket fails on excess
 and the top view, a terraced dome fails its top strip, an identical part
 passes; the arc fitter on a rounded rectangle, a stadium, a dome).
 
+### The largest patch (2026-10-25)
+
+The checks above are owned by the big turned body: a valve at 94 %
+overlap has its whole branch missing, a mean of 0.7 mm hides a 60 mm part
+because it is small. A person judges by the biggest thing that is wrong,
+so `inspect_fit.py` now finds it. The reference samples farther than
+1.5 tolerances from the model ("missing": the scan has material the model
+lacks) and the model samples farther than that from the reference
+("excess", the hole-facing ones left out as before) are joined into
+connected regions — a radius graph on the samples (`cKDTree`, radius
+2.5 × the mean sample spacing, spacing = √(area / n)) and scipy's connected
+components. The samples are dense enough that a 10 mm feature is a patch
+of twenty-odd: one per 15 mm² of surface, at least 40 000 and at most
+120 000 per mesh (the cap binds only on the barrel and the truck wheel, at
+30–37 mm² a sample, and keeps the wheel at 21 s). Each patch records its
+kind, area (samples × area per sample), mean and max distance, centre,
+extent and a location in words against the part's bounds and up axis —
+"in the upper third, on the left, towards the front"; an axis a patch spans
+most of is said so ("across the width"). `checks.json` keeps the top five
+of each kind under `patches` (with the total missing and excess area and
+their shares at that threshold), and two checks gate on the largest:
+
+    largest_missing_patch, largest_excess_patch   value = area in mm²
+        WARN above max(300 mm², 0.25 % of the reference area)
+        FAIL above max(1000 mm², 1 % of the reference area)
+
+The `why` names the patch: *the largest missing patch is 5 218 mm²
+(58 × 48 mm, 5.38 % of the reference area) in the middle third, in the
+centre, 5.1 mm from the model on average, 17.9 mm at most; 45 patches of
+this kind in all, 17 003 mm² together*. On `review.png` the three largest
+of each kind are ringed on the reference and depth tiles (blue M1–M3,
+orange E1–E3, the ring the patch's projected extent) with a legend line
+each, and `views/patches.png` is the shaded reference from the four sides
+with only the marks. `run_corpus.py` writes the same lines into the
+results row as `qa.patches`; `film_corpus.py` prints them under a part it
+skips.
+
+Why 1.5 tolerances and not one: at one tolerance a scan's noise and cast
+detail put more than a quarter of the surface over the line, and in a
+radius graph that dense the far samples percolate into a single patch
+the size of the part — the rusty extinguisher's largest went from
+1 983 mm² (the valve knob) to 8 389 mm² (185 × 72 mm of its body at 4.2 mm)
+and the hydrant's bonnet became one 223 × 221 mm patch at 4.1 mm. At 1.5
+the patches are the features. The limits above are the first ones tried
+and were not adjusted: on the ten corpus builds of 2026-10-24 nothing
+clean fails and nothing broken passes (`--patch-far` is the knob, for the
+next calibration):
+
+| Part | Before | After | Largest missing | Largest excess | Total missing / excess | What it is |
+|---|---|---|---|---|---|---|
+| Rusty extinguisher | WARN | WARN | 1 983 mm² WARN, upper third, centre | 3 883 mm² WARN, middle third, right | 2.1 % / 3.6 % | the valve knob read as a plain cap; the strap handle a few mm off — the eye agrees |
+| CO2 extinguisher | FAIL | FAIL | 19 620 mm² FAIL, upper third, left | 9 680 mm² FAIL, upper third, centre, front | 13.1 % / 12.5 % | the horn, hose and grip, crudely made: M1 is the horn, E1 the grip |
+| Hydrant 02 | WARN | **FAIL** | 3 615 mm² WARN, upper third, centre | 10 410 mm² FAIL, middle third, right, back | 3.3 % / 3.7 % | E1 is a 173 mm wedge the model hangs under the right nozzle (orange in the silhouettes) — a real flaw the old checks let through; M1 the bonnet nut |
+| Bollard | PASS | PASS | none | none | 0 / 0 | clean |
+| Pail bucket | FAIL | FAIL | 71 560 mm² FAIL, middle third, left | 227 432 mm² FAIL, lower third, across the width | 15.7 % / 41.0 % | the oval scan against a round model: one side missing, the other excess, all the way round |
+| Tin barrel | FAIL | FAIL | 538 003 mm² FAIL, upper third, across the width | 513 726 mm² FAIL, most of the height | 31.8 % / 33.8 % | a dented, leaning scan: a third of the surface is 9–17 mm out |
+| WD40 can | PASS | PASS | none | 14 mm² PASS | 0 / 0 | clean |
+| Beer mug | WARN | **FAIL** | 1 609 mm² FAIL, middle third, right, back | 2 056 mm² FAIL, middle third, right, back | 5.5 % / 5.8 % | both patches are the handle: its lower arm sits 4 mm from the scan's over 76 mm. The rough handle is the known flaw; at 1 % of a 150 000 mm² mug that is a FAIL, not a WARN |
+| Truck wheel | FAIL | FAIL | 529 025 mm² FAIL, most of the height | 730 696 mm² FAIL, most of the height | 33.6 % / 36.8 % | tread and hub detail everywhere: here the story is the totals, a third of each surface, not one patch |
+| Pipe wheel (valve) | FAIL | FAIL | 5 218 mm² FAIL, middle third, centre | 977 mm² WARN, middle third, right | 17.5 % / 9.4 % | M1 the left branch's elbow (the model's is straight), M2 the right branch, M3 the bottom port; the wheel's openings are the blue in the top view |
+
+Two parts change verdict and both for a reason a person can point at on
+the sheet. The other way round would be the worry — the wedge on the
+hydrant is exactly the kind of thing a 98 % overlap and a 1.1 mm mean
+were hiding. Offline tests: a cylinder whose 20 mm boss the model lacks
+is exactly one missing patch of 1 744 mm² (the boss's 2 000 mm² less the
+strip within 3 mm of the wall) "in the upper third, on the right"; the
+drum for a bucket has the lid as its largest excess patch (27 000 mm² at
+the rim's height); identical parts have no patch.
+
 ## Recipes — `fit_primitives.py` and `build_recipe.py`
 
 A part that is not one revolution needs more than `build_hydrant.py`'s
@@ -382,6 +452,31 @@ one a valid solid):
 The depth checks (2–3 mm) still fail where a scan is oval or dented, on a
 tyre's tread, and on cast detail a revolve smooths over; the silhouettes
 pass everywhere but the oval pail's top view.
+
+Rebuilt on 2026-10-25 with the model painted the scan's colour, the
+inspection gated on the largest unexplained patch and the parts library
+(*Colour*, *The largest patch* and *The parts library* below; `run_corpus.py
+--analyze`; every one a valid solid). The last column is the biggest thing
+still wrong, in the inspection's own words:
+
+| Scan (Sketchfab, CC-BY) | Overlap | Model→scan | Scan→model | Parts fitted | Largest patch |
+|---|---:|---:|---:|---|---|
+| Fire Extinguisher Old Rusty 3D Scan | 98 % | 0.8 mm | 0.9 mm | 3 plates | missing 1 983 mm², upper third, centre (the knob) — WARN |
+| Fire Extinguisher | 95 % | 3.5 mm | 1.7 mm | hose, horn, bar, sweep, 2 plates, revolve | missing 6 517 mm², upper third, right (the valve head) — was 92 % |
+| Scan Fire Hydrant 02-Freepoly.org | 98 % | 1.1 mm | 1.8 mm | 3 plates, chain | missing 3 615 mm², upper third, centre (the bonnet nut) |
+| Concrete Bollard Scan 01 | 100 % | 1.4 mm | 0.6 mm | none | none — PASS |
+| Pail Bucket Plastic 3D Scan | 96 % | 1.6 mm | 2.1 mm | handle sweep, 3 plates | missing 72 720 mm², middle third, left (the oval scan) — was 77 % |
+| Old tin barrel | 97 % | 5.0 mm | 7.1 mm | none | missing 538 003 mm² across the upper third (dented, leaning scan) |
+| WD40 Scan LOWPOLY | 99 % | 0.2 mm | 0.3 mm | none | excess 14 mm² at the nozzle tip — PASS |
+| Bavarian Beer Mug | 97 % | 1.4 mm | 0.8 mm | handle sweep, lug, lid lever | missing 3 112 mm², upper third, right, back (the handle) |
+| Truck wheel with rusty rim | 94 % | 8.2 mm | 4.8 mm | 3 bars | missing 920 952 mm² over the tyre (tread, hub) |
+| Pipe Wheel 3D scan | 95 % | 0.7 mm | 2.0 mm | 2 plates, 3 lugs | missing 5 218 mm², middle third, centre (the left branch's nut) |
+
+What a person still sees: the valve's branch nuts and flange (the
+secondary bodies get no feature pass yet) and its filled bores (the
+excess patches); the CO₂ extinguisher's valve head as a tube, not a
+lever; the oval bucket and the dented barrel (the scans); the tyre's
+tread and hub detail.
 
 ### The reel — `reel.py`
 
@@ -664,7 +759,7 @@ the boss detector found are left to the residual fit.
 
 ### What the revolve cannot make — `fit_features.py` and `build_features.py`
 
-    python3 fit_features.py --scan run/scan.stl --model run/part-cad.stl --tolerance 2 --out features/
+    python3 fit_features.py --scan run/scan.stl --model run/part-cad.stl --analysis analysis/profile.json --tolerance 2 --out features/
     python3 build_features.py --features features/features.json --run run/ --port 8947
 
 `run_corpus.py` runs both after the revolve (`--no-features` skips;
@@ -837,8 +932,234 @@ bodies, the pipe's extent stopping at the body's skin, its faces
 labelled), a lone cylinder, `trim_profile` / `extend_profile`, and the
 ring-over-continuity rule.
 
+### Colour — the model painted like the scan (2026-10-25)
+
+The films and the reel used to paint the model from a hand-picked `color`
+in each part's `spec.json` (hydrant red by default), so a red valve stood
+beside a grey scan and a yellow can beside a blue one, and the eye read
+the colour mismatch as a shape mismatch. The model's colour now comes
+from the scan's own texture:
+
+- `analyze_scan.scan_color(source)` samples ~20 000 surface points
+  (area-weighted faces, barycentric UVs looked up in each geometry's
+  base-colour image, times the material's base-colour factor; vertex
+  colours are the fallback, a plain mesh gives None) and finds the
+  dominant colour by k-means into four clusters. The winner is not the
+  raw largest cluster: a spray can's white lettering, bare-metal ends and
+  highlights make one light cluster of 40 % against the label's blue at
+  31 %, and a person still calls the can blue — so each cluster's share is
+  weighted by one plus its saturation ((max − min) / max of its centre)
+  before the largest is taken, and the swatch is the mean of that
+  cluster's samples. A painted colour thus beats a neutral one of nearly
+  twice its area, while a grey bollard or a white mug, with no saturated
+  cluster of any size, stays grey or white. Shadow baked into the texture
+  is lifted (a colour whose brightest channel is under 0.25 is scaled up
+  to 0.25, hue kept — the truck's black tyre). The analysis JSON records
+  it as `"scanColor": {"rgb": [r, g, b], "share": <raw share of the
+  winning cluster>, "source": "texture" | "vertex"}`, read off the source
+  file's scene (the cropped copy may have lost its texture); the scene is
+  loaded once and shared with the geometry, because a 4096² RGBA PNG
+  costs five seconds to decode and the colour itself takes 0.1–0.6 s.
+- `spec_color.model_color(spec, analysis)` (re-exported by
+  `build_hydrant`): a spec `color` that is a list is itself; `"scan"` or
+  no `color` at all is the analysis's `scanColor`, and hydrant red when
+  the analysis has none (older analyses). `build_hydrant.py --color scan`
+  (the default now), `run_corpus.py` (the build and `inspect_fit.py
+  --model-color` painted alike), `demo_video.py take --spec` and `reel.py`
+  all resolve the colour this way; every corpus spec now says `"color":
+  "scan"`. The resolver lives in its own standard-library-only module
+  because `run_corpus.py` runs under whatever `python3` is on the path and
+  hands the venv to the scripts it launches — importing it from
+  `build_hydrant` dragged numpy in and broke `python3 run_corpus.py`.
+  `--color` refuses anything but `scan` or three numbers with the usage
+  line (`--color scan 1 2` used to die in `float('scan')`).
+- Two edges fixed in review: the base-colour factor multiplies in linear
+  light (glTF's rule — half of white is 0.735 in sRGB, not 0.5; none of
+  the ten corpus scans carries a factor, so their swatches did not move),
+  and `analyze()`'s re-trace of a drum whose open rim came out at the
+  bottom now forwards `source`, so the inner call that writes
+  `profile.json` records `scanColor` too (checked on a synthetic cup
+  standing on its rim: the re-trace fires and the profile carries the
+  colour; a test reads the call in place because a full run takes 40 s).
+
+Measured on the ten corpus scans (sRGB in 0…1, the share of the samples
+in the winning cluster): rusty extinguisher 0.49 0.28 0.27 (42 %), the
+3dhdscan extinguisher 0.73 0.34 0.28 (56 %), hydrant 0.52 0.09 0.10
+(31 %), bollard 0.52 0.47 0.39 (37 %, a warm khaki grey — what its
+texture holds), pail 0.51 0.55 0.59 (31 %), tin barrel 0.53 0.51 0.51
+(40 %), WD-40 can 0.06 0.09 0.40 (32 %, blue; the raw largest cluster
+was the light one at 40 %), beer mug 0.87 0.88 0.87 (47 %), truck wheel
+0.25 0.23 0.24 (36 %, lifted from a near-black tyre), pipe valve 0.38
+0.38 0.34 (41 %). Offline tests: a quad with a 70/30 texture gives the
+70 % colour within 0.03, a 45 % white / 40 % blue / 15 % yellow texture
+gives blue, a white texture under a 0.5 factor gives 0.735, vertex
+colours and a plain mesh, `model_color`'s and `--color`'s cases, and that
+the resolver imports nothing.
+
+### The parts library — `fit_features.py` names what it fits (2026-10-25)
+
+Nearly every visible error the corpus had left was a recognisable part
+fitted as a lump: the CO₂ extinguisher's grip, hose and horn as three
+overlapping sweeps on one piece (radii 19, 8 and 26 mm), the stein's
+handle as two sweeps with a block at the knuckle, levers and lugs as
+blobby alpha-shape extrudes. Real parts are designed — a lever is a bar
+with rounded ends, a nut a regular hexagon, a flange a rectangle with
+rounded corners, a hoop a ring on the body's own axis, a hose ONE tube
+along ONE spline at one radius with the horn a cone on its end — and
+`fit_features.py` now fits that intent.
+
+- **Parametric outlines** (`regular_candidates`, `regularise_outline`).
+  After `extrude_fit`'s alpha shape or `bar_fit`'s raster outline, the
+  same projected points are fitted with a circle (least squares on the
+  convex hull), a stadium, a rectangle with rounded corners and an oval
+  (all on the tightest box round the hull — rotating calipers; the
+  corner radius from the area the hull lacks against its box, r² =
+  (LW − A) / (4 − π)), and a hexagon and an octagon (about the hull's
+  centroid, at the rotation whose n-gon needs the smallest apothem to
+  hold every hull vertex). Each candidate is scored with the fit's OWN
+  coverage test on the piece's points (`slab_covered`, `prism_covered`)
+  and the designed shape is taken when its outline runs along the points
+  (nine tenths of it within two tolerances of a projected point — a box
+  round an L-shaped plate crosses the notch in air; an area guard was
+  tried first and threw out nearly every lever, since an alpha shape
+  hugging a noisy cloud has a much smaller area than any convex shape)
+  and it covers at least the free-form coverage − 0.03; ties to the
+  hundredth go to
+  the simpler shape (circle < stadium < square < rectangle < hexagon <
+  octagon < oval). The outline is emitted as the same lines and arcs
+  `segments_from_loop` produces (a circle as two semicircles), so
+  `build_features.py`, `preview_model.py`, the film and the reel build
+  it unchanged; the feature gains `shape` — `{"kind": "stadium",
+  "lengthMM", "widthMM"}`, `rectangle`/`square` with `cornerMM`,
+  `hexagon`/`octagon` with `acrossFlatsMM`, `circle` with `diameterMM`,
+  `ellipse` — and `seed` (the shape's centre). `explain()` gives a
+  designed outline +0.03 over a free-form one; the coverage thresholds
+  are unchanged.
+- **One tube, one spine** (`tube_fit`). The centreline samples split
+  into runs only where the radius steps by more than max(2 tol, 35 %) of
+  the run's median; neighbouring runs that agree to that merge into one
+  run at one radius (the stein's handle, 14 mm at the top and 9 below,
+  is one tube now). A run whose radius grows steadily (|trend| > 0.85
+  over more than half its radius) is a cone and becomes a revolve on the
+  line that continues the spine (the horn). The longest tube and the
+  runs that follow it along the spine within six bins are the piece's
+  story — one sweep, or a short chain meeting end to end where the
+  radius really steps, with the horn on the end; a chain member reaches
+  a radius into the next so the union fuses — and whatever else the
+  geodesic crossed (a valve body, a lever) is left for the next pass to
+  explain as what it is. `reach_body` now also carries an end straight
+  to the nearest skin when the tangent misses it but the body is within
+  three radii (a handle meets a belly at an angle), and says which ends
+  met the body (`attached`), which run on into the chain (`joins`) and
+  whether a horn follows (`intoHorn`).
+- **Hoops** (`hoop_fit`, with `--analysis profile.json`, which
+  `run_corpus.py` now passes). A piece is a ring round the main body's
+  axis when a band of height bins (max(2, tol) mm each) has its points
+  in at least 12 of 24 azimuth sectors, the sectors' outer radii (each
+  sector's 75th percentile; the 10th to 90th percentile of those, so the
+  two or so oddest sectors a dent or a stray patch makes do not decide)
+  agree within max(2 tol, 4 %) — a squashed bucket's bulge is one-sided
+  and fails — and the band is no taller than 0.35 of its diameter: a
+  ring is a ring, not a wall. Without that last rule a body skin merely
+  out of round by a few mm (within the 4 %) over its whole height ran
+  all 24 sectors at one radius and passed as one 900 mm "hoop" (a probe:
+  a 900 mm wall r 303 round a body r 295, ±6 mm out of round, tol 3 →
+  accepted, lengthMM 897; now refused, "897 mm tall on a 606 mm
+  diameter — a wall, not a ring"), and on a sparse sheet the band's
+  extent was set by where the samples fell, not by the geometry. A hoop's
+  coverage counts a vertex within `tol` of the ring's outer face or its
+  end faces — the same tolerance every other fit is held to, so the
+  score `explain()` ranks it by is comparable (it was max(tol, 5 % of
+  the radius), 15 mm on a barrel). For that to be fair the profile has
+  to be true: the outer radius per bin is taken from the points that
+  face sideways (normal across the axis, not along it) and the band ends
+  where its points stop, not at the bin edge beyond them — a hoop's top
+  and bottom faces pulled the end bins' 75th-percentile radius 3 mm in
+  and the bin edges made a 10 mm ring 12 tall, so the test ring covered
+  25 % under an honest `tol`; it covers 100 % now. The section is the
+  outer radius per bin out,
+  and the body's own skin back, a little inside it (half the wall of a
+  hollow body so the cavity stays, far + 4 mm of a solid one): a CLOSED
+  annular profile (first point = last) revolved on the body's axis as
+  kind `revolve` with `hoop: true`. `build_recipe.revolve_entities`
+  draws a closed profile as the loop it is and `revolve_region` seeds it
+  at its centroid (the half-section case is unchanged); a hoop earns
+  +0.08 in `explain()` and is proved on its band, so it counts from 30 %
+  coverage. A piece the sheet rule would drop (a wall a few mm out of
+  round) is still offered to `hoop_fit`, and only to it.
+- **Names** (`name_part`): `part` on every feature the rules know —
+  `handle` (a sweep from the body back to the body), `hose` (long, into
+  a horn or thin out of the body), `grip` (short and fat out of the
+  body), `horn` (a cone), `hoop`, `knob` (a revolve no longer than its
+  diameter, or a disc as thick as half its diameter), `nut` (a hexagon
+  or an octagon), `lever` (a stadium twice as long as wide), `lug` (a
+  short stadium, a thick rectangle or oval), `flange` (a thin rectangle
+  or disc standing on the body by a face), `plate` (a thin one that does
+  not), `bar`. `build_features.feature_caption` (which the film and the
+  reel call) says "A lever · a bar with rounded ends, extruded and
+  unioned in", "A hex nut · a hexagon extruded along the branch, unioned
+  in", "A hoop · a ring on the body's own axis, revolved and unioned in";
+  the old caption stands when the rules do not know (a chain, a stein's
+  handle whose top meets a hinge the model lacks).
+
+Measured offline on the ten corpus parts (`preview_model.py` with every
+feature of the file, against the model before features — the revolve,
+cavity, bodies and bosses — and the same tolerance as the run):
+
+| part | IoU before → after | model→scan mm | scan→model mm | features before → after (kind, shape → part) | unexplained |
+|---|---|---|---|---|---|
+| extinguisher-rusty | 97.6 → 97.7 | 0.85 → 0.87 | 0.81 → 0.80 | 3 extrudes → 3 extrudes | 0 → 0 |
+| extinguisher-3dhd | 92.5 → 93.3 | 3.95 → 3.78 | 2.43 → 1.76 | 3 sweeps (r 19, 8, 26) + revolve → sweep (grip region), sweep → **hose**, cone → **horn**, 4 extrudes, revolve | 0 → 1 |
+| hydrant-02 | 98.0 → 98.3 | 1.03 → 1.11 | 1.46 → 1.44 | 3 extrudes + sweep → 2 sweeps (the cap chains) + 3 extrudes (the lugs) | 0 → 0 |
+| bollard | 99.6 → 99.6 | 1.03 → 1.03 | 0.52 → 0.52 | none | 0 → 0 |
+| pail-bucket | 77.0 → 77.0 | 1.92 → 1.86 | 2.15 → 2.15 | sweep + 2 extrudes → the same | 4 → 4 |
+| tin-barrel | 96.5 → 96.5 | 5.18 → 5.18 | 7.20 → 7.20 | none → none | 2 → 2 |
+| wd40-can | 99.5 → 99.5 | 0.20 → 0.20 | 0.27 → 0.27 | none | 0 → 0 |
+| beer-mug | 97.3 → 97.4 | 1.36 → 1.83 | 0.71 → 0.76 | 2 sweeps + 2 extrudes → 2 sweeps (one spine, 11.9 then 7.2 mm), extrude ellipse → **lug**, extrude | 0 → 0 |
+| truck-wheel | 94.5 → 94.6 | 9.01 → 9.01 | 4.43 → 4.36 | 2 bars + sweep + 2 extrudes → 2 **bars**, sweep → **grip**, 3 extrudes | 4 → 4 |
+| pipe-wheel | 94.7 → 94.6 | 0.64 → 0.64 | 2.09 → 2.09 | 5 extrudes → 3 extrudes, extrude circle → **plate** (a 34 mm disc), extrude stadium → **lug** | 1 → 1 |
+
+Nothing got worse by more than 0.1 point; the CO₂ extinguisher gained
+0.8 (its scan→model mean fell from 2.43 to 1.76 mm) and now reads as a
+hose (one 7.9 mm tube), a horn (a cone revolve, 16 → 33 mm over 236 mm)
+and the grip region as one 17.6 mm tube with the levers as plates; the
+stein's handle is one spine from the belly (which `reach_body` now
+reaches) up to the knuckle, with its lid lever back as a plate and the
+knuckle an oval lug. What did not happen, honestly: the designed outlines
+win in 15 fits across the corpus but survive in the final list on only
+three features — most levers in this corpus are bent straps (the rusty
+extinguisher's carry handle is a 190 mm arch; no convex shape runs along
+it) or corroded blobs whose wiggly alpha outline covers 8–12 points more
+than any designed shape within tolerance; the valve's hex nut was never
+a residual piece of its own (the hub is one piece with the wheel's
+spokes, 53 % coverage free-form, every designed outline under 45 %); and
+no hoop was accepted — the barrel's bottom chime runs all 24 sectors but
+its outer radii spread 23 mm (the barrel is that far out of round), the
+truck wheel's bands 11–13 mm, and the pail's rim pieces cover only 40 %
+of the azimuth — so a squashed part is still reported, not chased. The
+grip region of the CO₂ extinguisher is still a fat tube, not a lever.
+
+Tests (`PartsLibraryTests`): a stadium plate 90 × 24 → `stadium`, length
+and width within 5 %, named `lever`; a hexagonal prism of 36 mm across
+flats → `hexagon` within 5 %, `nut`; a 6 mm tube along a quarter circle
+→ exactly one sweep with one circle section; a 12 mm ring round a
+cylinder's axis → one `revolve` on that axis with a closed section that
+revolves to the ring's volume, while a one-sided bulge (3 of 24
+sectors), the same ring stretched 10 % on one axis (radii spread 11 mm
+against 4.5 allowed) and a round 4 mm wall 120 mm tall on a 216 mm
+diameter are each refused, and that wall cut to 20 mm tall is a band
+again.
+
 ## Gotchas
 
+- A dished wheel is tested for BEFORE the open end (2026-10-25): from the
+  hub side a rim's dish reads as an open container (rays fall 260 mm into
+  the dish and through the hub's bore), the "cavity" cut the rim away and
+  the dished-section tracer never ran. The truck wheel had been saved
+  from this only by a wrong ground trim that happened to clip the tyre's
+  face (gone since the floor-is-not-a-sidewalk rule); with the dish test
+  first it traces as a section again (body alone 7.7 mm mean, was 21).
+  Test: `test_a_tyre_on_a_hub_is_dished_and_not_an_open_container`.
 - Import names the format from the file name's extension: pass
   `fileName: "scan.glb"`, not a bare label.
 - `view.fit` right after `view.<direction>` is fine over the bridge, but

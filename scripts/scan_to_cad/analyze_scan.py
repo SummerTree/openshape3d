@@ -35,6 +35,9 @@ Method, in the order it runs:
    estimated from the angular span of the excess.
 5. Polyline. The median profile is simplified (Douglas–Peucker in the
    (radius, height) plane) to the corners a revolve sketch wants.
+6. Colour. The scan's dominant colour, read off its own texture (or vertex
+   colours), goes into the JSON as `scanColor` so the model can be painted
+   like the scan instead of a hand-picked red (`scan_color`).
 """
 import argparse
 import json
@@ -53,7 +56,11 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from fit_primitives import arcs_in_polyline  # noqa: E402
 
 
-def load_mesh(path, unit_scale=None):
+def load_mesh(path, unit_scale=None, keep_scene=False):
+    """The scan as one mesh in millimetres, with the scale applied. With
+    `keep_scene` the loaded scene comes back as well, textures and all, for
+    `scan_color` — a 4096² RGBA texture costs five seconds to decode, and
+    once is enough."""
     scene = trimesh.load(path, force="scene")
     meshes = [g for g in scene.geometry.values() if isinstance(g, trimesh.Trimesh)]
     if not meshes:
@@ -77,7 +84,137 @@ def load_mesh(path, unit_scale=None):
             size = float(np.max(mesh.extents))
             unit_scale = 1000.0 if size < 5 else (10.0 if size < 50 else 1.0)
     mesh.apply_scale(unit_scale)
+    if keep_scene:
+        return mesh, unit_scale, scene
     return mesh, unit_scale
+
+
+def srgb_to_linear(c):
+    """sRGB 0…1 to linear light, the IEC 61966-2-1 curve (not a plain gamma)."""
+    c = np.asarray(c, dtype=float)
+    return np.where(c <= 0.04045, c / 12.92, ((c + 0.055) / 1.055) ** 2.4)
+
+
+def linear_to_srgb(c):
+    """Linear light back to sRGB 0…1, clipped."""
+    c = np.clip(np.asarray(c, dtype=float), 0.0, 1.0)
+    return np.where(c <= 0.0031308, c * 12.92, 1.055 * c ** (1 / 2.4) - 0.055)
+
+
+def color_samples(source, count=20000, seed=7):
+    """Points on the scan's surface with the colour the file paints there:
+    an (n, 3) sRGB array in 0…1 and where it came from ("texture" or
+    "vertex"), or None when nothing in the file carries colour.
+
+    `source` is the scan's path or an already loaded scene or mesh. The
+    corpus scans are glTF binaries whose texture lives per geometry (a
+    `force='mesh'` load drops it), so each geometry is sampled on its own,
+    in proportion to its area, by area-weighted faces and barycentric UVs
+    looked up in the material's base-colour image, times the material's
+    base-colour factor when it has one. Vertex (or face) colours are the
+    fallback for a scan that has no photo texture."""
+    scene = trimesh.load(source) if isinstance(source, str) else source
+    geometries = list(scene.geometry.values()) if isinstance(scene, trimesh.Scene) else [scene]
+    geometries = [g for g in geometries if isinstance(g, trimesh.Trimesh) and len(g.faces)]
+    areas = np.array([g.area for g in geometries], dtype=float)
+    if not len(areas) or areas.sum() <= 0:
+        return None
+    rgb, sources = [], set()
+    for g, area in zip(geometries, areas):
+        n = int(round(count * area / areas.sum()))
+        if n < 1:
+            continue
+        visual = g.visual
+        points, faces = trimesh.sample.sample_surface(g, n, seed=seed)
+        weights = trimesh.triangles.points_to_barycentric(g.triangles[faces], points)
+        image = None
+        material = getattr(visual, "material", None)
+        if material is not None:
+            image = getattr(material, "baseColorTexture", None) or getattr(material, "image", None)
+        uv = getattr(visual, "uv", None)
+        if image is not None and uv is not None and len(uv) == len(g.vertices):
+            at = (np.asarray(uv, dtype=float)[g.faces[faces]] * weights[:, :, None]).sum(axis=1)
+            colors = trimesh.visual.color.uv_to_color(at, image)[:, :3].astype(float) / 255.0
+            factor = getattr(material, "baseColorFactor", None)
+            if factor is not None:
+                # glTF multiplies in linear light while the texture (and the
+                # swatch) are sRGB: a factor of 0.5 on white is 0.5 linear,
+                # which is 0.74 on screen, not 0.5.
+                linear = srgb_to_linear(colors) * (np.asarray(factor, dtype=float)[:3] / 255.0)
+                colors = linear_to_srgb(linear)
+            rgb.append(colors)
+            sources.add("texture")
+        elif getattr(visual, "kind", None) == "vertex" and visual.defined:
+            per_vertex = np.asarray(visual.vertex_colors, dtype=float)[:, :3] / 255.0
+            rgb.append((per_vertex[g.faces[faces]] * weights[:, :, None]).sum(axis=1))
+            sources.add("vertex")
+        elif getattr(visual, "kind", None) == "face" and visual.defined:
+            rgb.append(np.asarray(visual.face_colors, dtype=float)[faces, :3] / 255.0)
+            sources.add("vertex")
+    if not rgb:
+        return None
+    return np.clip(np.vstack(rgb), 0.0, 1.0), ("texture" if "texture" in sources else "vertex")
+
+
+def dominant_color(rgb, k=4, seed=7):
+    """The colour that covers the scan, with the share of the samples it
+    holds: k-means into a few clusters, then the cluster whose share
+    weighted by its saturation is the largest, as the mean of its members.
+
+    The raw largest cluster is not what the eye names a part by: a spray
+    can's white lettering, bare-metal ends and highlights make one light
+    cluster of 40 % against the label's blue at 31 %, and a person still
+    calls the can blue. Weighting each cluster's share by one plus its
+    saturation ((max − min) / max of its centre) lets a painted colour win
+    over a neutral one of nearly twice its area, while a grey bollard or a
+    white mug, with no saturated cluster of any size, stays grey or
+    white. `share` is the cluster's raw share, so a low value says the
+    swatch is one colour among several."""
+    from scipy.cluster.vq import kmeans2
+    rgb = np.asarray(rgb, dtype=float)
+    # A texture of two flat colours has no four clusters to find.
+    k = min(k, len(np.unique(np.round(rgb, 2), axis=0)))
+    if k < 2:
+        return [float(c) for c in rgb.mean(axis=0)], 1.0
+    centres, labels = kmeans2(rgb, k, minit="++", rng=seed)
+    shares = np.bincount(labels, minlength=k) / float(len(labels))
+    peak = centres.max(axis=1)
+    saturation = np.where(peak > 0, (peak - centres.min(axis=1)) / np.maximum(peak, 1e-9), 0.0)
+    best = int(np.argmax(shares * (1.0 + saturation)))
+    return [float(c) for c in rgb[labels == best].mean(axis=0)], float(shares[best])
+
+
+def lift_shadow(rgb, floor=0.25):
+    """The colour scaled up until its brightest channel is at least `floor`,
+    hue kept: a scan's texture has the lighting baked in, and a swatch read
+    off a dark side of a red hydrant is a muddy brown nobody would paint a
+    model."""
+    rgb = np.asarray(rgb, dtype=float)
+    peak = float(rgb.max())
+    if peak <= 0:
+        return [floor] * 3
+    if peak < floor:
+        rgb = rgb * (floor / peak)
+    return [round(float(c), 4) for c in np.clip(rgb, 0.0, 1.0)]
+
+
+def scan_color_record(source):
+    """What the analysis JSON records as `scanColor`: the scan's dominant
+    colour as sRGB in 0…1, the share of the surface samples in its cluster
+    and whether it was read from the texture or from vertex colours — or
+    None when the scan carries no colour at all."""
+    found = color_samples(source)
+    if found is None:
+        return None
+    rgb, where = found
+    colour, share = dominant_color(rgb)
+    return {"rgb": lift_shadow(colour), "share": round(share, 3), "source": where}
+
+
+def scan_color(source):
+    """The scan's dominant albedo as sRGB [r, g, b] in 0…1, or None."""
+    record = scan_color_record(source)
+    return None if record is None else record["rgb"]
 
 
 def principal_axis(points):
@@ -810,7 +947,7 @@ def refine_section(points, h, radius, cell):
 
 def analyze(mesh, band_mm=None, lump_margin_mm=6.0, out_dir=None, name="scan", epsilon=None, debug=False,
             axis_choice="auto", flip=False, samples=200000, multi=True, secondary=False, axis_origin=None,
-            up_rule="y", _reflipped=False):
+            up_rule="y", _reflipped=False, source=None):
     """The scan as a body of revolution: its axis, the profile along it,
     the bosses off it. With `multi`, the axis finder (`fit_axes`) looks for
     more bodies of revolution first — a valve's pipe, branches and side
@@ -1564,8 +1701,20 @@ def analyze(mesh, band_mm=None, lump_margin_mm=6.0, out_dir=None, name="scan", e
     # axis from above hit the inside bottom, not a top. Then the revolve is
     # shelled, at the rim's wall thickness.
     ends = (float(simplified[0][0]), float(simplified[-1][0])) if simplified else (float(body_r[0]), float(body_r[-1]))
-    open_top = None if secondary else detect_open_top(cropped if cropped is not None else mesh, origin, axis, u, v,
-                                                      height, ends, bands, radius, h, facing=facing)
+    # But a dished wheel first: a band of a tyre on a hub holds two full
+    # rings far apart, and from the hub side the rim's dish reads as an
+    # open end 260 mm deep (the truck wheel's rays fell into the dish and
+    # through the hub's bore, and the "cavity" cut the rim away, 21 mm
+    # mean deviation). The dish test asks for proper rings (six tenths
+    # of the circle) 40 mm apart: an open container's floor sits a wall's
+    # thickness in from its skin and is no dish, so a bucket and a drum
+    # keep their cavity cut.
+    cell = max(band_mm, 2.0)
+    dish = (not secondary) and is_dished(surface_grid(h, radius, azimuth, cell, min_share=0.6), cell, min_gap_mm=40.0)
+    open_top = None if (secondary or dish) else detect_open_top(cropped if cropped is not None else mesh, origin, axis, u, v,
+                                                                height, ends, bands, radius, h, facing=facing)
+    if dish:
+        print("dished: two rings in one band (a tyre on a hub) — the half-section is traced; no open end is looked for")
     if open_top:
         print("open %s: rays from outside fall %.0f mm in (or through) on %.0f%% of that end; wall %.1f mm — the revolve will be shelled" % (
             open_top["end"], open_top["depthMM"], open_top["share"] * 100, open_top["wallMM"]))
@@ -1577,22 +1726,19 @@ def analyze(mesh, band_mm=None, lump_margin_mm=6.0, out_dir=None, name="scan", e
         print("open at the bottom: traced again with the wider end as the base")
         return analyze(mesh, band_mm=band_mm, lump_margin_mm=lump_margin_mm, out_dir=out_dir, name=name,
                        epsilon=epsilon, debug=debug, axis_choice=axis_choice, flip=flip, samples=samples,
-                       multi=multi, secondary=secondary, axis_origin=axis_origin, up_rule="wider", _reflipped=True)
+                       multi=multi, secondary=secondary, axis_origin=axis_origin, up_rule="wider", _reflipped=True,
+                       source=source)
     # One radius per height cannot describe a dished wheel: a band there
     # holds two full rings far apart (the tyre and the hub) with nothing
     # between. Such a part gets its whole half-section traced instead.
-    cell = max(band_mm, 2.0)
     with np.errstate(invalid="ignore", divide="ignore"):
         n_radial = np.where(radius > 1e-9, (perp * normals).sum(axis=1) / np.maximum(radius, 1e-9), 0.0)
     n_axial = normals @ axis
     surface_mask, cell_normals = surface_grid(h, radius, azimuth, cell, n_radial=n_radial, n_axial=n_axial)
-    # The test for a dish asks for proper rings (six tenths of the circle):
-    # a valve's stem, branch and side port together fill half the sectors
-    # of one band and are no ring.
-    # An open container's floor sits a wall's thickness in from its skin
-    # and is no dish: the test wants a gap of 40 mm, on a part with no
-    # open end (a bucket and a drum keep their band trace and cavity cut).
-    dished = (not open_top) and (not secondary) and is_dished(surface_grid(h, radius, azimuth, cell, min_share=0.6), cell, min_gap_mm=40.0)
+    # The dish test ran above, before the open end was looked for (a
+    # valve's stem, branch and side port together fill half the sectors
+    # of one band and are no ring; a bucket's floor is no dish).
+    dished = dish
     section_loop = None
     # A ring on a hub (a hand-wheel) within a part that is otherwise one
     # radius per height: the annulus between them is a window to cut.
@@ -1665,6 +1811,13 @@ def analyze(mesh, band_mm=None, lump_margin_mm=6.0, out_dir=None, name="scan", e
                 analysis["croppedScan"] = path
                 analysis["groundTrimmedMM"] = round(float(base_h - bottom), 1)
                 print("cropped scan written without its texture:", error)
+        if source is not None:
+            # The model's colour comes from the scan's own texture, read off
+            # the source file: `mesh` may be a cropped or concatenated copy
+            # whose texture the exporter could not carry.
+            colour = scan_color_record(source)
+            if colour is not None:
+                analysis["scanColor"] = colour
         with open(os.path.join(out_dir, "profile.json"), "w") as f:
             json.dump(analysis, f, indent=1)
         try:
@@ -1932,14 +2085,17 @@ def main():
     ap.add_argument("--flip", action="store_true", help="invert which end is the base (the scan's +Y end when the axis is near vertical, else the wider end)")
     ap.add_argument("--single", action="store_true", help="one axis only: skip the axis finder's search for more bodies of revolution")
     args = ap.parse_args()
-    mesh, scale = load_mesh(args.scan, args.units)
+    mesh, scale, scene = load_mesh(args.scan, args.units, keep_scene=True)
     name = os.path.splitext(os.path.basename(args.scan))[0]
     band = None if args.band == "auto" else float(args.band)
     epsilon = None if args.epsilon == "auto" else float(args.epsilon)
     a = analyze(mesh, band_mm=band, out_dir=args.out, name=name, epsilon=epsilon, debug=args.debug,
-                axis_choice=args.axis, flip=args.flip, samples=args.samples, multi=not args.single)
+                axis_choice=args.axis, flip=args.flip, samples=args.samples, multi=not args.single, source=scene)
     print("scan: %d triangles, %.0f mm tall, body radius %.1f mm (file units x%g)" % (
         a["triangles"], a["heightMM"], a["bodyRadiusMM"], scale))
+    if a.get("scanColor"):
+        print("colour: rgb %s from the %s, %.0f%% of the surface" % (
+            np.round(a["scanColor"]["rgb"], 2), a["scanColor"]["source"], a["scanColor"]["share"] * 100))
     print("axis origin", np.round(a["axisOrigin"], 1), "direction", np.round(a["axisDirection"], 3))
     print("profile points:", len(a["profile"]))
     for b in a.get("bodies", []):
