@@ -1150,8 +1150,131 @@ against 4.5 allowed) and a round 4 mm wall 120 mm tall on a 216 mm
 diameter are each refused, and that wall cut to 20 mm tall is a band
 again.
 
+### Nuts and collars on an axis (2026-10-26)
+
+A revolve turns a hex nut into a round ring at its mean radius — missing
+at the corners, excess at the flats — and on a branch the nut sits in the
+very root that `secondary_bodies()` cuts off and replaces by a straight
+lengthening. `analyze_scan.py` now looks for polygonal bands on every
+axis and the build extrudes them as the prisms they are:
+
+- **The detector** (`find_nuts`). The scan is sampled about the axis —
+  the whole scan, not the body's labelled faces (`nut_samples`): a nut's
+  flats are faces no normal line through the axis claims, so the
+  labelling may give a body only some of them — at about three points
+  per mm² (a 2 mm window round a 22 mm nut then holds a few points in
+  every 5° sector; 600 000 samples left the hydrant's nut with two per
+  sector and nothing to fit). Over windows of max(2 bands, 2 mm) the
+  outward-facing points are split into the radius levels they cluster
+  at (the modes of a 1 mm histogram, 4 mm apart, a tenth of the points
+  each — a nut inside a crown is two levels in one window), and for each
+  level the radius against azimuth on 72 sectors (the 24-sector grid
+  cannot see a 60° flat) is fitted with a regular n-gon for n = 4, 6, 8:
+  r(θ) = a / cos(((θ − φ + π/n) mod 2π/n) − π/n), the phase φ searched
+  in 1° steps over one period and the apothem a the median of
+  r · cos(angle from the nearest flat's normal), which is a in every
+  sector of a true polygon (`fit_polygon`). The n-gon is taken when 80 %
+  of ALL the sectors lie within max(3 × the scanner's noise, 0.5 mm,
+  2.5 % of a) of it, its median residual is under half the circle's
+  (the same sectors against their median radius — a round collar fits a
+  circle better than any polygon) and the corner stands above the flat
+  by max(1 mm, 2.5 tolerances): an octagon of apothem 22 rises 1.8 mm at
+  its corners and is within a noisy scan's reach, a hexagon of the same
+  size 3.4 mm. Windows that agree on n, a (within max(1 mm, 4 %)) and φ
+  (within 4°) join; a record is at least two windows and 4 mm tall:
+  `"nuts": [{"h0", "h1", "sides", "acrossFlatsMM", "phaseDeg",
+  "share", "contrastMM", "residualMM"}]` on the main record and on each
+  body under `bodies`, h along that body's axis, `phaseDeg` the azimuth
+  of one flat's outward normal from the body's `azimuthZero`. A
+  secondary body's nuts are read on its untrimmed trace, so a nut at the
+  root is seen; `trim_profile` and `extend_profile` carry the span into
+  the trimmed-and-lengthened frame, where it lands over the lengthening
+  — which is where the nut sits.
+- **The revolve stays inside the flats.** The bands over a nut's span
+  are held to its apothem before the profile is traced
+  (`clamp_bands_to_nuts`), but only the bands that sit on the nut's own
+  level: the hydrant's operating nut sits inside a crown of twice its
+  radius, and clamping the crown's bands to the nut would have cut the
+  crown away. The lengthened profile of a branch thus runs at the
+  inscribed radius (or under it) wherever the prism is, and the union
+  is sound.
+- **The build** (`build_hydrant.nut_sections` beside
+  `secondary_sections`): each nut is a sketch on the plane normal to its
+  axis at h0 — origin on the axis, x = `azimuthZero` turned by
+  `phaseDeg`, y = axis × x, so the extrude (along x × y) runs up the
+  axis — with the n-gon as lines (`nut_polygon`: corners at
+  a / cos(π/n), ±π/n from x), `feature.extrude` by h1 − h0 with
+  `boolean: union` (`extrude_nut`), after the bodies on their own axes
+  and before the bosses. `build_hydrant.build`, `demo_video.py take`
+  (its own beat, captioned by `build_features.nut_caption`: "A 46 mm
+  hex nut · a hexagon on the branch's axis, extruded 18 mm and unioned
+  in"), `reel.build_model` and `preview_model.build_preview`
+  (`nut_mesh`, an `extrude_loop` on the same plane; `--no-nuts` leaves
+  them out) all call it; `run_corpus.py` writes `nuts` into the results
+  row in words (`spec_color.nut_words`: "a 26 mm hex nut, 10 mm tall on
+  body 1"); `summary.json` gains `nuts`. The residual fit needs nothing:
+  it measures the scan against the model, and a piece the prism
+  explains is simply no longer far.
+
+What the corpus actually holds, measured offline (`preview_model.py`
+with each part's features, before → after; the sheets' M1/M2 named in
+the track brief turned out not to be nuts, and the numbers say so):
+
+| Part | Found | Overlap | Model→scan / scan→model | M1 / M2 |
+|---|---|---|---|---|
+| Pipe wheel (valve) | a 26 mm hex nut, 10 mm tall on the pipe (body 1, h 73–83, 95 % of the sectors; the union nut behind the nipple) | 94.7 → 94.7 % | 0.64 / 2.09 → 0.64 / 2.09 mm | 5 218 → 5 218 mm², 5 114 → 5 114 mm² |
+| Hydrant 02 | a 55 mm hex nut, 8 mm tall on nozzle 1b's axis (the cap's nut, h 115–123 of the lengthened body, 91 %; its sectors run 28 → 32 → 28 mm six times round, and the revolve there is held from 31 to 27.7 mm) | 98.0 → 98.0 % | 1.03 / 1.46 → 1.03 / 1.46 mm | 3 615 → 3 615 mm² |
+| Rusty extinguisher, WD-40 can, bollard | nothing (`nuts` empty on every record) | unchanged | unchanged | — |
+
+Honestly, then: the two real nuts the detector found are small (a 26 mm
+union nut, a cap's nut) and move nothing the inspection measures; the
+patches the brief pointed at are something else. The hydrant's "bonnet
+nut" (M1, 3 615 mm² in the upper third, centre) is a castellated crown —
+a round ring r 42–46 over h 912–941 with six 35° slots and a hollow
+inside — and the operating nut sits INSIDE it, 46 mm across the flats
+(the detector reads apothem 23.0–23.2 and a steady phase of 23–25° at h
+900–908, but only a quarter to a third of the sectors within tolerance:
+the scan inside the crown is bumpy to a millimetre and partly hidden, so
+it is not recorded). The model fills the crown solid, which is M1 (the
+crown's inner wall) and E2/E3 (its floor and top). The valve's M1
+(5 218 mm², the left branch's root) and M2 (5 114 mm², the right branch's
+root) are the branch roots' cast collars, round, with the fitted branch
+axes a few millimetres off the scan's — in body 2's frame the root reads
+r 17–18 in 55 of 72 sectors, no polygon; in body 3's the branch is a
+sinusoid of ±3 mm about its axis — not hexagons. Those are the next
+track (a root fillet, and a branch axis refined on the branch alone).
+The valve's main body and every other corpus part stay round: no false
+nut on the bollard, the can, either extinguisher, the mug, the pail, the
+barrel or the wheel.
+
+Tests (`NutTests`): a hexagonal prism (46 mm across the flats, phase
+20°, 18 mm tall) on a cylinder → one nut, sides 6, across-flats within
+2 %, phase within 3°, the profile held to 23 mm over its span; a round
+collar of the same size → none, the profile 23 mm; an octagon (60 mm) →
+sides 8; the T of `AxisFinderTests` with a 34 mm hex nut on the pipe
+where it meets the body → recorded on the pipe's body, 34 mm within 2 %,
+its span at x 8–20 in the world, the build's one prism on that axis and
+the preview's union within 4 % of the true volume; `nut_sections`' six
+corners at a / cos 30° at 30°, 90°, … from the flat's normal, the sketch
+x turned by the phase and x × y up the axis, the preview's volume the
+cylinder plus what the prism adds outside it to 1 %; and the band clamp
+that leaves a crown's ring alone.
+
 ## Gotchas
 
+- A nut is read on the whole scan, not on the body's labelled faces
+  (2026-10-26): `fit_axes.assign` gives a face no normal line claims to
+  the body whose ring radius it sits just under (≤ 1.15 × the ring +
+  tolerance), and a hex nut's corners at 1.155 × its apothem fall
+  outside that for a nut wider than the pipe — the branch's sub-mesh
+  then holds some flats and no corners. `nut_samples` projects the full
+  mesh into the body's frame (its final one, 0 ≤ h ≤ height) instead.
+- The hydrant's operating nut (2026-10-26): its apothem and phase are
+  steady from window to window (23 mm, 23–25°), its sector radii are
+  not — a quarter within tolerance. Loosening the tolerance until it
+  passes also passes the off-centre round collars (the hydrant's crown
+  reads ±1.5 mm round its sectors). Leave it out rather than tune for
+  one part; it is buried in the solid crown anyway.
 - A dished wheel is tested for BEFORE the open end (2026-10-25): from the
   hub side a rim's dish reads as an open container (rays fall 260 mm into
   the dish and through the hub's bore), the "cavity" cut the rim away and

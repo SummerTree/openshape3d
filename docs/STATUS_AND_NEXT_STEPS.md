@@ -75,6 +75,35 @@ passes alone.
   on every call, which a dense STEP import could make slow — cache on the
   body's mesh revision if an agent loop ever feels it.
 
+## Mission log — 2026-10-26, scan-to-CAD: nuts and polygonal collars on an axis
+
+The user: "they look a lot better -- can we work on next improvements".
+One track of several, in its own worktree: polygonal bands on a body's
+axis (docs/SCAN_TO_CAD.md, *Nuts and collars on an axis*).
+
+- `analyze_scan.find_nuts` fits a regular 4-, 6- or 8-gon to the radius
+  against azimuth (72 sectors, per radius level, per 2 mm window) of the
+  whole scan about every axis — the main one and each secondary body's,
+  on its untrimmed trace — and records `nuts` [{h0, h1, sides,
+  acrossFlatsMM, phaseDeg, share, …}] on the body; the bands over a nut
+  are held to its apothem so the revolve stays inside the flats.
+  `build_hydrant.nut_sections` / `extrude_nut` build each as a prism on
+  a plane normal to the axis, unioned; the build, the film, the reel and
+  `preview_model.py` all call it; `run_corpus.py` rows carry `nuts` in
+  words; `build_features.nut_caption` names it.
+- What the corpus holds: the valve's 26 mm union nut on its pipe and the
+  hydrant's 55 mm cap nut on nozzle 1b — both real, both small, no
+  measurable change (valve 94.7 % · 0.64 / 2.09 mm; hydrant 98.0 % ·
+  1.03 / 1.46 mm). The brief's targets are not nuts: the hydrant's M1 is
+  a castellated crown with the (46 mm, hexagonal) operating nut inside
+  it, too bumpy and hidden to pass; the valve's M1/M2 are the branch
+  roots' round cast collars and branch axes a few mm off. No false nut on
+  any of the other eight parts. Tests 48 → 54.
+
+Next, for the eye: the branch-root fillets and a branch axis refined on
+the branch alone (the valve's M1/M2); a top recess for the hydrant's
+crown; the open bores.
+
 ## Mission log — 2026-10-25, scan-to-CAD: colour, the largest patch, a parts library
 
 The user: "its better but still not great -- any ideas on how to improve" →
