@@ -75,6 +75,39 @@ passes alone.
   on every call, which a dense STEP import could make slow — cache on the
   body's mesh revision if an agent loop ever feels it.
 
+## Mission log — 2026-10-26, scan-to-CAD: bent bars and levers
+
+The user: "they look a lot better -- can we work on next improvements" →
+the bent-bar track (docs/SCAN_TO_CAD.md, "Bent bars and levers"). The CO₂
+extinguisher's squeeze lever — a flat bar off the valve head that bends
+50° and runs down the hose side — had been an oval tube; `fit_features.py`
+now has a bent bar: a flat run of a tube chain (section ≥ 1.8× as wide as
+thick, `FLAT_RATIO`) or a piece on its own (`bent_bar_fit`, a sixth
+candidate in `explain()`) gets a spine of two or three straight legs
+(`corner_spine`, refitted on slice box centres by `refine_legs`), one
+designed section from the parts library read across its longest leg's
+middle (`bar_along`, proved leg by leg with `prism_covered`), bends
+rounded to the radius the points ask for (`fillet_spine`), and is built as
+ONE `feature.sweep` of that section along the polyline — the feature is a
+`sweep` with a `section` {shape, widthMM, thicknessMM, cornerMM,
+segments, seed}, `corners`, `bendRadiusMM`, `bendsDeg`, `legsMM`, `bent`;
+`build_features.sweep_sketch` draws the section's entities,
+`preview_model.feature_mesh` mirrors it through the same call, captions
+say "A lever · a 51 × 22 mm flat, rounded-edged bar bent 51° on a 26 mm
+radius, 211 mm long". Offline, same model and scan as the corpus run:
+overlap 94.8 → 94.8 %, scan→model 1.65 → 1.54 mm, model→scan 3.83 →
+4.08 mm, the lever's missing patch 6 517 → 3 638 mm², its excess
+5 051 → 7 250 mm² — the lever assembly tapers (49 → 42 mm) and a constant
+section cannot follow it; honestly a wash on the numbers, a lever by
+name and shape. The beer mug and the valve are unchanged to the digit.
+Not built in the app yet (no simulator in this session): the sweep of a
+rounded rectangle along a ten-point polyline is the hose's call, but the
+26 mm arcs with a 51 mm section are for the next corpus run to confirm.
+Tests: `PartsLibraryTests` gains an L-shaped flat bar (90.0° measured,
+20 × 5 section, previewed to 13 200 mm³), a straight bar that is still a
+bar, a tube that is still a tube, and `corner_spine`'s leg counts (51
+tests).
+
 ## Mission log — 2026-10-25, scan-to-CAD: colour, the largest patch, a parts library
 
 The user: "its better but still not great -- any ideas on how to improve" →
