@@ -353,6 +353,31 @@ def tube_fit(comp, tol, far, model_tree):
 
     def radius_of(run):
         return float(np.median([x["r"] for x in run]))
+
+    def cone_run(run, r, tol):
+        """The run (or the run less up to three end samples) when its radius
+        grows steadily — trend over 0.85 and a spread of more than half its
+        median radius — else None. The shortest trim that passes wins, and
+        the trimmed run keeps at least four samples and 70 % of the run."""
+        n = len(run)
+        for cut in range(0, 4):
+            for head in range(0, cut + 1):
+                tail = cut - head
+                sub = run[head:n - tail]
+                if len(sub) < max(4, int(math.ceil(0.7 * n))):
+                    continue
+                rr = np.array([x["r"] for x in sub])
+                if rr.std() <= 1e-9:
+                    continue
+                trend = float(np.corrcoef(np.arange(len(rr)), rr)[0, 1])
+                spread = float(rr.max() - rr.min())
+                if cut == 0:
+                    say("tube: run of %d: r %.1f, radii %.1f → %.1f (spread %.1f), trend %.2f" % (n, r, rr[0], rr[-1], spread, trend))
+                if abs(trend) > 0.85 and spread > 0.5 * float(np.median(rr)):
+                    if cut:
+                        say("tube: run of %d less %d at the start and %d at the end is a cone (trend %.2f)" % (n, head, tail, trend))
+                    return sub
+        return None
     runs, run = [], []
     for x in rows_out:
         if x is None:
@@ -394,11 +419,19 @@ def tube_fit(comp, tol, far, model_tree):
             say("tube: run of %d dropped (r %.1f): only %.0f%% of its own points on the tube" % (len(run), r, own.mean() * 100))
             continue
         # A radius that grows steadily along the run is a cone — a horn, a
-        # nozzle: a revolve about the run's own line, not a tube.
-        idx = np.arange(len(rr))
-        trend = float(np.corrcoef(idx, rr)[0, 1]) if len(rr) >= 4 and rr.std() > 1e-9 else 0.0
-        if abs(trend) > 0.85 and (rr.max() - rr.min()) > 0.5 * r:
-            verdict["kind"] = "cone"
+        # nozzle: a revolve about the run's own line, not a tube. The
+        # geodesic can overshoot the horn's mouth and walk a sample or
+        # two down its rim (15.5 → 32.7 → 17.7 on the CO₂ extinguisher's
+        # horn against the app's model, trend 0.63; the same horn against
+        # the offline model stopped at 33 and read 0.98), so the trend is
+        # judged on the run with up to three end samples trimmed, and a
+        # cone is the trimmed run.
+        cone = cone_run(run, r, tol)
+        if cone is not None:
+            verdict["run"], verdict["kind"] = cone, "cone"
+            verdict["r"] = radius_of(cone)
+            verdict["spine"] = np.array([x["c"] for x in cone])
+            verdict["span"] = float(np.sum(np.linalg.norm(np.diff(verdict["spine"], axis=0), axis=1)))
             continue
         # A steady run three times fatter than the chords measured is not
         # the tube they measured: a stand's post and beam, walked through
