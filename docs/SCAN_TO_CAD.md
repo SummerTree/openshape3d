@@ -1150,7 +1150,128 @@ against 4.5 allowed) and a round 4 mm wall 120 mm tall on a 216 mm
 diameter are each refused, and that wall cut to 20 mm tall is a band
 again.
 
+### Bores at open ends (2026-10-26)
+
+The valve's pipes ended in solid discs. The scan shows open ends — an
+annular end face and an inner wall — at the end of both branches and the
+bottom of the main pipe, a recessed ring on the side port, and the
+inspection sheet marked each as an excess patch 700–1 000 mm² across with
+a matching "missing" patch on the inner wall the model lacked (the
+left branch's 5 200 mm² patch was never the nut: it was the inside of the
+pipe). `analyze_scan.detect_bores` now reads a bore at each FREE end of
+the main body and of every secondary body:
+
+- **An inner wall.** The points that face IN (normal toward the axis,
+  `n_radial < −0.5`) just inside the end plane, between 0.2 of the end's
+  radius and a wall inside it, are the bore's wall: their median radius
+  over the first three slabs (slabs of max(band, 2 mm)) is `rInnerMM`,
+  seen round at least half of 24 sectors (`share`); the wall is the
+  profile's radius at that end less the bore's. Then the walk inward,
+  slab by slab, while the wall keeps its radius (±max(1.5 mm, 3 × noise,
+  8 %)); a new radius held for two slabs is a step (a coupling's socket
+  r 19 for 12 mm, then the pipe's own r 14), two slabs of chamfer or
+  sparse scan are stepped over, and the walk stops where the outer
+  profile comes within a wall of the inner one (a bore cannot be wider
+  than the part). `depthMM` is as far as the wall is seen — a lower bound,
+  since a scanner sees less of a hole the deeper it goes — and the record
+  carries the steps as `profile: [[r, depth], …]`. Seen along 85 % of
+  the body, or two bores that meet, it is `through` with depth = the
+  length: a branch unioned into its parent is filled where the parent is
+  solid, so a through-bored branch stays open to the parent's skin.
+- **Not a container, not a collar.** `detect_open_top` keeps its say on
+  the main body: no bore is looked for at all where it found an open end,
+  or where the dished-section tracer ran; and on the main body a hole is
+  a bore only when it is shallower than `open_end_depth` (max(15 % of the
+  height, 25 mm) — the depth at which the open-end test would have called
+  it a container) or narrower than 0.6 of the end radius, so one hole is
+  never both. A thin wall is a wall: the main body wants ≥ max(1.5 mm,
+  6 %), a secondary body (no open-end test runs there) ≥ 1 mm — the
+  valve's side port is a 1.4 mm wall round a 10.6 mm recess. And nothing
+  may stand in the mouth: points facing OUT inside the bore's radius in
+  the first three slabs (a stem in a cup, a nut in a collar) make it a
+  recess round something, not a bore. The hydrant's bonnet is the case
+  that bit: a hollow collar r 36 inside r 45 with the operating nut 28 mm
+  down inside it — nothing faces out for 28 mm, then the nut's top — so
+  it IS cut 28 mm deep (the 3 600 mm² "missing" patch at the top was the
+  collar's inside; scan→model 1.46 → 1.40 mm), and the nut, now standing
+  in a hole the model has, is the residual fit's.
+- A secondary body is traced before its junction is known, so both ends
+  are tried; `secondary_bodies` then keeps only the free end's bore (a
+  through bore read from the junction end is turned round, one radius,
+  from the free end), and a small body's own noise estimate (3 mm on a
+  0.03 mm scan) is not trusted: the band says the scanner's noise.
+
+`build_hydrant.body_section` folds the bore into the ONE half-section
+loop (`bore_chains`): from the axis at the bore's floor out to the bore's
+wall, along it — step by step — to the mouth, out along the end face to
+the profile's foot, up the outer profile and back; a bore at the top
+mirrors that; a through bore is an annular loop with no axis segment.
+Every bore radius is kept a wall inside the outer profile over its own
+depth (`outer_min`: a profile that narrows onto the bore would cross it)
+and the seed moves to `section_seed` of the bored outline, so it sits in
+the wall and not in the hole. `secondary_sections` and the film and the
+reel go through `body_section` and inherit it; `preview_model.body_mesh`
+/ `secondary_mesh` do too, so the offline preview shows the same hole.
+The note and the body's label say "bored r 19 mm 50 deep at its end".
+
+The CO₂ extinguisher's horn is hollow in the scan and was a solid cone.
+`fit_features.cone_mouth` reads the wide end of a cone fitted by
+`tube_fit` the same way — the inner skin facing in, a wall inside the
+fitted outer profile, round half the circle, nothing across the mouth —
+and records `boreRadiusMM`, `boreDepthMM`, `wallMM`, `boreMouth`
+("end"/"start": the profile's high or low end), `boreShare` and
+`boreProfile` (the inner skin's radius per slab, where it was seen: the
+fitted outer cone runs fat mid-way, and "outer less a wall" sat 7 mm off
+it). The walk inward stops where the medians stop tracking: the hose
+running up the horn's throat faces the axis too. `build_features.
+bore_profile` turns that into the inner cone — the seen skin, clamped a
+millimetre inside the outer profile, from 5 mm past the mouth to the
+floor — and `build_feature` revolves it on the same plane with
+`boolean: subtract` right after the horn's union (a refused cut is
+undone there, so the horn stays); `preview_model.feature_mesh` subtracts
+the same cone with manifold. `part_caption` says "A horn · a cone on the
+hose's end, revolved and unioned in, bored 59 mm, 69 deep".
+
+Measured offline (`preview_model.py` with every feature of the file; the
+"before" is the corpus's own analysis):
+
+| part | IoU | model→scan mm | scan→model mm | missing total mm² | excess total mm² | the patches |
+|---|---|---|---|---|---|---|
+| pipe-wheel | 94.7 → 94.7 | 0.64 → 0.73 | 2.09 → 1.29 | 17 916 → 9 520 | 7 994 → 7 390 | left branch mouth E 732 → gone, right branch mouth E 795 → 641, bottom disc E 659 → 590 (the floor); the inner walls M 5 218 → gone, M 5 114 → 2 924 (the hex nut), M 2 241 → 933 |
+| extinguisher-3dhd | 95.1 → 95.1 | 3.85 → 3.62 | 1.59 → 1.55 | 22 560 → 21 620 | 40 728 → 40 266 | the horn's inside M 2 715 → 1 871 (the throat beyond the 69 mm the scanner saw into stays solid) |
+| hydrant-02 | 98.0 → 98.0 | 1.03 → 1.04 | 1.46 → 1.40 | 24 180 → 19 395 | 26 310 → 24 465 | the collar's inside M 3 615 → gone; the recess floor round the nut E 5 085 → 6 420 |
+| beer-mug | 97.2 → 97.2 | 1.69 → 1.69 | 0.77 → 0.77 | same | same | no bore fires |
+
+Honestly: the bores are found and cut, the scan→model means fall, and
+model→scan rises a little on the valve (0.64 → 0.73) — a bore's floor
+and the deep part of its wall are surfaces the scanner never saw, so
+they count against the model wherever the scan stops short of them. The
+valve's E1 (an 850 mm² wedge where the right branch's root meets the
+body) is not a bore and is unchanged; the hex nut on that branch is
+still the largest missing patch. Tests (`BoreTests`): a pipe with a
+20 mm bore (bored, not open), a solid pipe (nothing), a bucket (open top,
+no bore), a through tube (one through bore), a 60 mm bore in a secondary
+body; `body_section` with a bore at the top, a stepped bore under a dome
+(one simple loop, the arc kept, the seed in the wall, the volume by
+Pappus), a through bore (an annulus) and a bore wider than its profile
+(pulled in); a hollow cone's mouth (`cone_mouth` wall, radius, depth and
+inner profile; a solid cone and a lidded one refused), `bore_profile`
+and the hollow horn's volume in the preview.
+
 ## Gotchas
+
+- A collar with a nut in it is not a bore (2026-10-26): the hydrant's
+  bonnet has a hollow ring r 36 inside r 45 with the operating nut 28 mm
+  down inside it, and the first bore detector read a 50 mm bore there
+  (the ring's inner wall runs on past the nut). Points facing OUT inside
+  the bore's radius at the mouth refuse a bore; the walk stops where the
+  outer profile comes within a wall of the inner one. The collar is still
+  cut, 28 mm deep to the nut's top — that is what the scan shows.
+- A small secondary body's own noise estimate is not the scanner's
+  (3 mm on a 0.03 mm scan: a branch 80 mm long has few clean cylinder
+  cells); a wall tolerance scaled by it threw away the real r 19 wall of
+  the valve's coupling and read the bore from the r 14 pipe behind it.
+  The band width (3 × the main trace's noise) is the bound.
 
 - A dished wheel is tested for BEFORE the open end (2026-10-25): from the
   hub side a rim's dish reads as an open container (rays fall 260 mm into
