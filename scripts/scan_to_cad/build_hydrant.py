@@ -203,6 +203,86 @@ def body_section(analysis):
     return {"entities": entities, "seed": seed, "note": note, "hollow": hollow, "outline": cleaned, "inner": inner}
 
 
+def window_sections(analysis, shift=None):
+    """Each opening of each window of the analysis (`find_windows`: a
+    hand-wheel's openings between its spokes) as a sketch plane through
+    the axis turned to the opening's first azimuth, the annulus rectangle
+    to revolve on it by the opening's span and SUBTRACT:
+    [{plane, entities, seed, angleDegrees, note}]. `shift` is added to the
+    origin (the film stands the scan on the floor)."""
+    out = []
+    axis = unit(analysis["axisDirection"])
+    u, v = unit(analysis["azimuthZero"]), unit(analysis["azimuthNinety"])
+    origin = np.asarray(analysis["axisOrigin"], dtype=float) + (np.zeros(3) if shift is None else np.asarray(shift, dtype=float))
+    for w in analysis.get("windows", []) or []:
+        r0, r1, h0, h1 = float(w["rInnerMM"]), float(w["rOuterMM"]), float(w["h0"]), float(w["h1"])
+        if r1 - r0 < 1.0 or h1 - h0 < 1.0:
+            continue
+        pts = [[r0, h0 - 0.5], [r1, h0 - 0.5], [r1, h1 + 0.5], [r0, h1 + 0.5]]
+        for n, (start_deg, span_deg) in enumerate(w["openings"], 1):
+            x = unit(math.cos(math.radians(start_deg)) * u + math.sin(math.radians(start_deg)) * v)
+            out.append({"plane": {"origin": [float(c) for c in origin], "xAxis": [float(c) for c in x],
+                                  "yAxis": [float(c) for c in axis], "name": "Opening %d" % n},
+                        "entities": lines_for(pts), "seed": [(r0 + r1) / 2, (h0 + h1) / 2],
+                        "angleDegrees": round(float(span_deg), 2),
+                        "note": "an opening between two spokes: the annulus r %.0f–%.0f over h %.0f–%.0f from %.0f° for %.0f°, revolved and subtracted" % (
+                            r0, r1, h0, h1, start_deg, span_deg)})
+    return out
+
+
+def cut_window(mcp, win, cad_id, label, note=True):
+    """Sketch and revolve one opening by its span about the axis,
+    subtracted from `cad_id`. Returns the app's reply."""
+    sk = mcp.os3d("sketch.create", dict(win["plane"], name=label + " " + win["plane"]["name"]),
+                  note="the opening's sketch, through the axis at its first azimuth" if note else None)["sketchID"]
+    mcp.os3d("sketch.addEntities", {"sketchID": sk, "entities": win["entities"]}, note=win["note"] if note else None)
+    return mcp.os3d("feature.revolve", {"sketchID": sk, "seedPoint": win["seed"], "axisPoint": [0, 0],
+                                        "axisDirection": [0, 1], "angleDegrees": win["angleDegrees"],
+                                        "boolean": "subtract", "booleanTargets": [cad_id]},
+                    note="revolved by the opening's span and subtracted" if note else None)
+
+
+def secondary_sections(analysis, shift=None):
+    """Each body of revolution the analysis traced on its own axis
+    (`analysis["bodies"]` — a valve's pipe, its branches, its side port;
+    a hydrant's nozzles) as the sketch plane through its axis and the
+    half-section to revolve on it, in the build's world frame (`shift`
+    added to every origin: the film stands the scan on the floor).
+    Returns [{plane, entities, seed, note, label, index, parent,
+    junction, radiusMM, lengthMM}], in the analysis's order — a body
+    that runs into another is listed after it, so each union meets
+    material already there."""
+    out = []
+    delta = np.zeros(3) if shift is None else np.asarray(shift, dtype=float)
+    for body in analysis.get("bodies", []):
+        origin = np.asarray(body["axisOrigin"], dtype=float) + delta
+        axis = unit(body["axisDirection"])
+        u = unit(body["azimuthZero"])
+        section = body_section(body)
+        plane = {"origin": [float(x) for x in origin], "xAxis": [float(x) for x in u],
+                 "yAxis": [float(x) for x in axis], "name": "Body %d profile" % body["index"]}
+        out.append({"plane": plane, "entities": section["entities"], "seed": section["seed"],
+                    "note": section["note"], "index": body["index"], "parent": body.get("parent"),
+                    "junction": body.get("junction"), "radiusMM": body["bodyRadiusMM"], "lengthMM": body["heightMM"],
+                    "label": "body %d: radius ~%.0f mm over %.0f mm on its own axis%s" % (
+                        body["index"], body["bodyRadiusMM"], body["heightMM"],
+                        "" if body.get("parent") is None else ", into body %s" % body["parent"])})
+    return out
+
+
+def revolve_secondary(mcp, sec, cad_id, note=True):
+    """Sketch and revolve one secondary body (`secondary_sections`) 360°
+    about its own axis, unioned into `cad_id`. Returns the app's reply."""
+    sk = mcp.os3d("sketch.create", sec["plane"],
+                  note="a sketch through the axis of %s" % sec["label"] if note else None)["sketchID"]
+    mcp.os3d("sketch.addEntities", {"sketchID": sk, "entities": sec["entities"]},
+             note=sec["note"] if note else None)
+    return mcp.os3d("feature.revolve", {"sketchID": sk, "seedPoint": sec["seed"], "axisPoint": [0, 0],
+                                        "axisDirection": [0, 1], "angleDegrees": 360,
+                                        "boolean": "union", "booleanTargets": [cad_id]},
+                    note="revolved about its own axis and unioned into the body" if note else None)
+
+
 def boss_section(boss):
     """A boss's measured radius-along profile closed back along its own axis
     (sketch u across the boss, v along it), and a seed inside the loop:
@@ -324,6 +404,14 @@ def build(args):
             else:
                 cad = next(b for b in reply_in["bodies"] if b["id"] == cad_id)
                 print("   cavity subtracted: volume %.0f → %.0f mm³" % (reply["bodies"][0]["volumeMM3"] if reply.get("bodies") else 0, cad["volumeMM3"]))
+        for win in window_sections(analysis):
+            reply_w = cut_window(mcp, win, cad_id, args.label)
+            if reply_w.get("failed"):
+                print("   window cut did not build:", reply_w.get("message"))
+                mcp.os3d("command.run", {"id": "edit.undo"}, note="the refused cut undone")
+            else:
+                cad = next(b for b in reply_w["bodies"] if b["id"] == cad_id)
+                print("   %s: volume → %.0f mm³" % (win["note"], cad["volumeMM3"]))
         # Pappus check: the revolve's volume from the profile's own area.
         area = 0.0
         cx = 0.0
@@ -345,6 +433,27 @@ def build(args):
         mcp.os3d("item.setHidden", {"allSketches": True}, note="hide the construction sketch")
         s.shot("02-revolve-iso", "isometric")
         s.stage("stage-1-revolve", cad_id)
+
+        secondaries = secondary_sections(analysis)
+        for n, sec in enumerate(secondaries, 1):
+            s.step("Body %d of %d on its own axis: radius ~%.0f mm over %.0f mm%s" % (
+                n, len(secondaries), sec["radiusMM"], sec["lengthMM"],
+                "" if sec["parent"] is None else ", into body %s" % sec["parent"]))
+            reply = revolve_secondary(mcp, sec, cad_id)
+            if reply.get("failed"):
+                print("   not built:", reply.get("message"))
+                mcp.os3d("command.run", {"id": "edit.undo"}, note="the refused revolve undone")
+                s.summary.setdefault("secondaryBodies", []).append({"index": sec["index"], "ok": False,
+                                                                     "message": reply.get("message")})
+                continue
+            vol = next(b for b in reply["bodies"] if b["id"] == cad_id)["volumeMM3"]
+            print("   %d entities; volume → %.0f mm³" % (len(sec["entities"]), vol))
+            s.summary.setdefault("secondaryBodies", []).append({"index": sec["index"], "ok": True, "volumeMM3": vol,
+                                                                 "radiusMM": sec["radiusMM"], "lengthMM": sec["lengthMM"],
+                                                                 "parent": sec["parent"], "junction": sec["junction"]})
+            mcp.os3d("item.setHidden", {"allSketches": True})
+            s.shot("02-body-%d-iso" % n, "isometric")
+            s.stage("stage-1-body-%d" % n, cad_id)
 
         bosses = [b for b in analysis["bosses"] if b["reachMM"] - b["bodyRadiusMM"] > 15]
         for n, boss in enumerate(bosses, 1):

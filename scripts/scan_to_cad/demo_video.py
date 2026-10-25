@@ -115,7 +115,7 @@ def modelling_calls(calls):
 def take(args):
     with open(os.path.join(args.analysis, "profile.json")) as f:
         analysis = json.load(f)
-    from build_hydrant import body_section, boss_section, unit, world
+    from build_hydrant import body_section, boss_section, unit, world, secondary_sections, revolve_secondary, window_sections, cut_window
     from build_features import build_feature, feature_caption, shift_feature
     from mcp_client import MCPError
     spec = args.spec or {}
@@ -123,6 +123,7 @@ def take(args):
     color = list(spec.get("color", [0.86, 0.17, 0.12]))
     captions = {"import": "Import the iPhone scan", "revolve": "One sketch on the scan's own axis, one revolve",
                 "boss": "Nozzle {n} · its own profile, revolved and unioned in", "lug": "A lug on the bonnet · the same way",
+                "body": "A second axis · its own profile, revolved and unioned in",
                 "check": "A valid solid, every step in the history"}
     captions.update(spec.get("captions", {}))
     axis_origin = np.array(analysis["axisOrigin"])
@@ -224,9 +225,30 @@ def take(args):
                 mcp.os3d("feature.revolve", {"sketchID": sk_in, "seedPoint": section["inner"]["seed"],
                                              "axisPoint": [0, 0], "axisDirection": [0, 1], "angleDegrees": 360,
                                              "boolean": "subtract", "booleanTargets": [cad_id]})
+            for win in window_sections(analysis, shift=-np.array(analysis["axisOrigin"], dtype=float)):
+                try:
+                    if cut_window(mcp, win, cad_id, label, note=False).get("failed"):
+                        mcp.os3d("command.run", {"id": "edit.undo"})
+                except MCPError:
+                    pass
             mcp.os3d("body.setMaterial", {"bodyIDs": [cad_id], "color": color, "roughness": 0.45})
             mcp.os3d("item.setHidden", {"allSketches": True})
             turn(3.6)
+
+            # The other bodies of revolution the analysis traced on their
+            # own axes (a valve's pipe and branches, a hydrant's nozzles),
+            # each revolved and unioned in under its own caption. The scan
+            # stands on the floor: every origin shifts with it.
+            for n, sec in enumerate(secondary_sections(analysis, shift=-np.array(analysis["axisOrigin"], dtype=float)), 1):
+                beat("body%d" % n, captions["body"].format(n=n))
+                try:
+                    reply = revolve_secondary(mcp, sec, cad_id, note=False)
+                    if reply.get("failed"):
+                        mcp.os3d("command.run", {"id": "edit.undo"})
+                except MCPError:
+                    pass
+                mcp.os3d("item.setHidden", {"allSketches": True})
+                turn(1.6)
 
             nozzle_no = 0
             for n, boss in enumerate(bosses, 1):
@@ -427,6 +449,11 @@ def script_for(timeline, title_say, scan_name, spec=None):
         "import": "The scan comes straight into OpenShape 3D as a mesh, texture and all.",
         "revolve": "One sketch on the scan's own axis, one revolve — the barrel, the flanges, the bonnet.",
         "boss1": "Each nozzle is read off the scan as a profile of its own, revolved, and unioned into the body.",
+        "body1": "Every other body of revolution is found on its own axis from the scan's normals — read off the scan "
+                 "on that axis, revolved, and unioned in.",
+        "body2": "",
+        "body3": "",
+        "body4": "",
         "boss2": "",
         "boss3": "",
         "boss4": "",

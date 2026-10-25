@@ -725,22 +725,65 @@ def sketch_entities(segments, snap=1e-3):
                 sb += 2 * math.pi
             ents.append({"kind": "arc", "center": [round(v, 4) for v in s["center"]], "radius": round(s["radius"], 4),
                          "startAngle": round(sa, 6), "endAngle": round(sb, 6)})
-    # Two arcs in a row meet only to the rounding: a short line between
-    # their computed ends closes the loop (the detector bridges nothing).
+    # A line under a tenth of a millimetre (a 0.04 mm stub the arc splice
+    # left between two arcs) is dropped and its neighbours welded: two
+    # lines meet at the first's end; an arc beside it is met below.
+    kept = []
+    for i, e in enumerate(ents):
+        if e["kind"] == "line" and math.hypot(e["a"][0] - e["b"][0], e["a"][1] - e["b"][1]) < 0.1:
+            prev_e = kept[-1] if kept else None
+            next_e = ents[(i + 1) % len(ents)]
+            if prev_e is not None and prev_e["kind"] == "line" and next_e["kind"] == "line":
+                prev_e["b"] = list(next_e["a"])
+            continue
+        kept.append(e)
+    ents = kept
+    # Two arcs in a row meet only to the rounding. A gap under a tenth of
+    # a millimetre is closed by making the second arc start exactly where
+    # the first ends (its radius and that angle re-read from the point —
+    # the app's solver merged a 0.04 mm bridge line into nothing and
+    # found no loop); a wider one gets a short line between the computed
+    # ends (the detector bridges nothing by itself).
     def arc_ends(e):
         c, r = e["center"], e["radius"]
         return ([c[0] + r * math.cos(e["startAngle"]), c[1] + r * math.sin(e["startAngle"])],
                 [c[0] + r * math.cos(e["endAngle"]), c[1] + r * math.sin(e["endAngle"])])
+    for e, f in zip(ents, ents[1:] + ents[:1]):
+        if e["kind"] != "arc" or f["kind"] != "arc":
+            continue
+        pairs = [(p, q, which) for p in arc_ends(e) for q, which in zip(arc_ends(f), ("startAngle", "endAngle"))]
+        p, q, which = min(pairs, key=lambda pqw: math.hypot(pqw[0][0] - pqw[1][0], pqw[0][1] - pqw[1][1]))
+        gap = math.hypot(p[0] - q[0], p[1] - q[1])
+        if 1e-7 < gap <= 0.1:
+            c = f["center"]
+            f["radius"] = round(math.hypot(p[0] - c[0], p[1] - c[1]), 6)
+            angle = math.atan2(p[1] - c[1], p[0] - c[0])
+            other = "endAngle" if which == "startAngle" else "startAngle"
+            # Keep the arc's sweep direction and length as it was.
+            sweep = f["endAngle"] - f["startAngle"]
+            f[which] = round(angle, 6)
+            f[other] = round(angle + sweep if which == "startAngle" else angle - sweep, 6)
+            if f["endAngle"] <= f["startAngle"]:
+                f["endAngle"] += 2 * math.pi
     arc_end_points = [end for e in ents if e["kind"] == "arc" for end in arc_ends(e)]
     for f in ents:
         if f["kind"] != "line" or not arc_end_points:
             continue
         # Each line end goes to its NEAREST arc end only: a 0.3 mm line
-        # between two arcs had both its ends pulled onto one arc and vanished.
+        # between two arcs had both its ends pulled onto one arc and
+        # vanished. When both ends would go to the same point (a 0.4 mm
+        # foot under one arc), only the nearer end moves.
+        moves = {}
         for key in ("a", "b"):
             end = min(arc_end_points, key=lambda q: math.hypot(f[key][0] - q[0], f[key][1] - q[1]))
-            if math.hypot(f[key][0] - end[0], f[key][1] - end[1]) <= 0.5:
-                f[key] = [round(end[0], 6), round(end[1], 6)]
+            dist = math.hypot(f[key][0] - end[0], f[key][1] - end[1])
+            if dist <= 0.5:
+                moves[key] = (dist, [round(end[0], 6), round(end[1], 6)])
+        if len(moves) == 2 and moves["a"][1] == moves["b"][1]:
+            nearer = "a" if moves["a"][0] <= moves["b"][0] else "b"
+            moves = {nearer: moves[nearer]}
+        for key, (_, end) in moves.items():
+            f[key] = end
     joined = []
     for e, f in zip(ents, ents[1:] + ents[:1]):
         joined.append(e)
