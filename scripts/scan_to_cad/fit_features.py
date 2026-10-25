@@ -237,6 +237,7 @@ def tube_fit(comp, tol, far, model_tree):
         say("tube: only %d of %d points stand clear of the body" % (int(clear.sum()), n))
         return None
     say("tube: %d of %d points stand clear of the body" % (int(clear.sum()), n))
+    all_pts, all_nrm = pts, nrm                  # the whole piece: a horn's inner skin is read off it
     pts, nrm = pts[clear], nrm[clear]
     n = len(pts)
     # The spine: the longest geodesic on a nearest-neighbour graph.
@@ -482,6 +483,9 @@ def tube_fit(comp, tol, far, model_tree):
             hs = (spine - c0) @ d
             prof = [[float(x["r"]), float(hh)] for x, hh in zip(run, hs)]
             prof = douglas_peucker_2d(prof, max(tol * 0.5, 0.5))
+            # An open mouth: the inner skin of a hollow horn, read off the
+            # whole piece before the ends are lengthened.
+            mouth = cone_mouth(all_pts, all_nrm, c0, d, prof, tol)
             d_lo, _ = model_tree.query(c0 + d * hs.min())
             d_hi, _ = model_tree.query(c0 + d * hs.max())
             # The end that meets the hose (or the body) runs on into it.
@@ -489,10 +493,15 @@ def tube_fit(comp, tol, far, model_tree):
                 prof = [[prof[0][0], prof[0][1] - (far + 4.0)]] + prof
             if d_hi < far + r or pos < len(chain) - 1:
                 prof = prof + [[prof[-1][0], prof[-1][1] + (far + 4.0)]]
-            features.append({"kind": "revolve", "axis": {"origin": [round(float(q), 2) for q in c0],
-                                                         "direction": [round(float(q), 5) for q in d]},
-                             "profile": [[round(float(q), 2), round(float(hh), 2)] for q, hh in prof],
-                             "lengthMM": round(span, 1), "radiusMM": round(r, 2), "cone": True})
+            feature = {"kind": "revolve", "axis": {"origin": [round(float(q), 2) for q in c0],
+                                                   "direction": [round(float(q), 5) for q in d]},
+                       "profile": [[round(float(q), 2), round(float(hh), 2)] for q, hh in prof],
+                       "lengthMM": round(span, 1), "radiusMM": round(r, 2), "cone": True}
+            if mouth:
+                feature.update(mouth)
+                say("tube: the cone's mouth is open: a %.1f mm wall, bored %.0f mm in (r %.1f at the mouth)" % (
+                    mouth["wallMM"], mouth["boreDepthMM"], mouth["boreRadiusMM"]))
+            features.append(feature)
             say("tube: run of %d is a cone (r %.1f → %.1f over %.0f mm): a revolve" % (len(run), rr[0], rr[-1], span))
             continue
         a = float(np.median([x["a"] for x in run]))
@@ -549,6 +558,97 @@ def tube_fit(comp, tol, far, model_tree):
             slack = (f["profile"]["rx"] - f["profile"]["ry"]) / 2
         covered |= np.abs(dc - r) <= max(tol, 0.3 * r) + slack
     return {"kind": "sweep", "features": features, "covered": covered, "coverage": float(covered.mean())}
+
+
+def cone_mouth(pts, nrm, c0, d, prof, tol, sectors=24):
+    """Is the wide end of a cone open — a CO₂ horn, a funnel? The piece's
+    points that face IN (normal toward the cone's axis) and sit a wall
+    inside the fitted outer profile are the inner skin; seen round at
+    least half the circle just inside the mouth, with nothing across the
+    mouth, the horn is hollow as far in as that skin is seen (slabs of
+    max(2 mm, tol) from the mouth, two sparse slabs forgiven). Returns
+    {"boreRadiusMM" (the mouth's radius less the wall), "boreDepthMM",
+    "wallMM", "boreMouth": "end"|"start" (the profile's high or low end),
+    "boreShare"} or None. `prof` is the cone's [[r, h], …] along `d` from
+    `c0`, not yet lengthened into what it meets."""
+    P = np.asarray(prof, dtype=float)
+    if len(P) < 2 or len(pts) < 60:
+        return None
+    order = np.argsort(P[:, 1])
+    p_h, p_r = P[order, 1], P[order, 0]
+    at_hi = P[-1, 0] >= P[0, 0]
+    h_m, r_m = (p_h[-1], p_r[-1]) if at_hi else (p_h[0], p_r[0])
+    span = float(p_h[-1] - p_h[0])
+    if span < 4.0 or r_m < 3.0:
+        return None
+    pts = np.asarray(pts, dtype=float)
+    hv = (pts - c0) @ d
+    perp = (pts - c0) - np.outer(hv, d)
+    rv = np.linalg.norm(perp, axis=1)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        n_rad = (perp * np.asarray(nrm, dtype=float)).sum(axis=1) / np.maximum(rv, 1e-9)
+    depth = (h_m - hv) if at_hi else (hv - h_m)
+    r_out = np.interp(hv, p_h, p_r)
+    slab = max(2.0, float(tol))
+    wall_min = max(1.0, 0.3 * tol)
+    inside = (depth >= -slab) & (depth < span) & (rv < r_out - wall_min) & (rv > 0.3 * r_out) & (n_rad < -0.5)
+    if inside.sum() < 30:
+        return None
+    nb = int(span / slab) + 1
+    k_of = np.clip(np.floor(np.maximum(depth, 0.0) / slab).astype(int), 0, nb - 1)
+    counts = np.bincount(k_of[inside], minlength=nb)
+    mouth = inside & (k_of <= 2)
+    if mouth.sum() < 30:
+        return None
+    wall = float(np.median(r_out[mouth] - rv[mouth]))
+    if wall < wall_min or wall > 0.5 * r_m:
+        return None
+    e1 = unit(np.cross(d, [0, 0, 1.0]) if abs(d[2]) < 0.9 else np.cross(d, [1.0, 0, 0]))
+    e2 = np.cross(d, e1)
+    az = np.degrees(np.arctan2(perp[mouth] @ e2, perp[mouth] @ e1))
+    share = len(np.unique(((az + 180.0) / (360.0 / sectors)).astype(int) % sectors)) / float(sectors)
+    if share < 0.5:
+        return None
+    across = (depth >= -slab) & (depth < slab) & (rv < 0.6 * r_m)
+    if across.sum() > 0.25 * mouth.sum():
+        return None                                         # something covers the mouth: no bore
+    n_min = max(8, int(0.15 * counts[:3].max()))
+    # Inward from the mouth while the inner skin keeps tracking: a slab's
+    # median radius within a tolerance of the last one (a cone tapers a
+    # fraction of a millimetre a slab), two sparse slabs forgiven. The
+    # hose running up the horn's throat faces the axis too, and the
+    # medians jump about where it takes over — the bore stops there.
+    med = np.full(nb, np.nan)
+    for k in range(nb):
+        sel = inside & (k_of == k)
+        if sel.sum() >= n_min:
+            med[k] = float(np.median(rv[sel]))
+    last, gap, r_prev = -1, 0, None
+    for k in range(nb):
+        if np.isnan(med[k]):
+            gap += 1
+            if gap > 2:
+                break
+            continue
+        if r_prev is not None and abs(med[k] - r_prev) > max(float(tol), 0.08 * r_prev):
+            break
+        last, gap, r_prev = k, 0, med[k]
+    bore_depth = float(min((last + 1) * slab, span))
+    if bore_depth < max(2.0 * slab, 2.0 * wall):
+        return None
+    # The inner skin's own radius slab by slab, as [[r, h]] along the axis
+    # (the fitted outer cone can run fat where the scan's outer skin is
+    # thin on points; the cut follows the inner skin the scanner saw).
+    inner = []
+    for k in range(last + 1):
+        if not np.isnan(med[k]):
+            h_k = (h_m - (k + 0.5) * slab) if at_hi else (h_m + (k + 0.5) * slab)
+            inner.append([float(med[k]), float(h_k)])
+    inner = douglas_peucker_2d(inner, max(0.5 * tol, 0.5)) if len(inner) >= 2 else inner
+    inner.sort(key=lambda p: p[1])
+    return {"boreRadiusMM": round(float(r_m - wall), 2), "boreDepthMM": round(bore_depth, 1), "wallMM": round(wall, 2),
+            "boreMouth": "end" if at_hi else "start", "boreShare": round(share, 3),
+            "boreProfile": [[round(float(q), 2), round(float(hh), 2)] for q, hh in inner]}
 
 
 def reach_body(point, direction, r, far, model_tree, step):
