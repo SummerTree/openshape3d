@@ -99,9 +99,11 @@ def bore_profile(feature, overshoot=5.0):
     hs = [h for _, h in P]
     rs = [r for r, _ in P]
     at_hi = feature.get("boreMouth", "end") == "end"
-    # The mouth as the fit measured it: the profile's end before the fit
-    # lengthened it into what it meets (only the far end is lengthened).
-    h_m = hs[-1] if at_hi else hs[0]
+    # The mouth as the fit measured it (`boreMouthHMM`: the mouth plane's
+    # height before the fit lengthened the profile's end into what it
+    # meets); an older record without it: the profile's end.
+    h_m = feature.get("boreMouthHMM")
+    h_m = float(h_m) if h_m is not None else (hs[-1] if at_hi else hs[0])
     floor_h = h_m - depth if at_hi else h_m + depth
     lo, hi = sorted((h_m, floor_h))
     margin = max(1.0, 0.3 * wall)

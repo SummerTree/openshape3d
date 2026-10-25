@@ -569,7 +569,9 @@ def cone_mouth(pts, nrm, c0, d, prof, tol, sectors=24):
     max(2 mm, tol) from the mouth, two sparse slabs forgiven). Returns
     {"boreRadiusMM" (the mouth's radius less the wall), "boreDepthMM",
     "wallMM", "boreMouth": "end"|"start" (the profile's high or low end),
-    "boreShare"} or None. `prof` is the cone's [[r, h], …] along `d` from
+    "boreMouthHMM" (the mouth plane's height along the axis, as measured
+    here — the profile's end may be lengthened afterwards), "boreShare",
+    "boreProfile"} or None. `prof` is the cone's [[r, h], …] along `d` from
     `c0`, not yet lengthened into what it meets."""
     P = np.asarray(prof, dtype=float)
     if len(P) < 2 or len(pts) < 60:
@@ -647,7 +649,7 @@ def cone_mouth(pts, nrm, c0, d, prof, tol, sectors=24):
     inner = douglas_peucker_2d(inner, max(0.5 * tol, 0.5)) if len(inner) >= 2 else inner
     inner.sort(key=lambda p: p[1])
     return {"boreRadiusMM": round(float(r_m - wall), 2), "boreDepthMM": round(bore_depth, 1), "wallMM": round(wall, 2),
-            "boreMouth": "end" if at_hi else "start", "boreShare": round(share, 3),
+            "boreMouth": "end" if at_hi else "start", "boreMouthHMM": round(float(h_m), 2), "boreShare": round(share, 3),
             "boreProfile": [[round(float(q), 2), round(float(hh), 2)] for q, hh in inner]}
 
 

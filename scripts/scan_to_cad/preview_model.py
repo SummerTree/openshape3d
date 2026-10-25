@@ -443,20 +443,7 @@ def feature_mesh(feature, sections=96):
         u, d = radial_frame(ax["direction"])
         entities, seed = revolve_region(feature["profile"])
         loop = pick_loop(loops_of_entities(entities), seed)
-        solid = revolve_loop(loop, ax["origin"], u, d, sections)
-        bore = bore_profile(feature)
-        if bore:
-            # A hollow horn, as `build_features.build_feature` cuts it: the
-            # inner cone revolved on the same axis and subtracted.
-            ents_in, seed_in = revolve_region(bore)
-            cut = revolve_loop(pick_loop(loops_of_entities(ents_in), seed_in), ax["origin"], u, d, sections)
-            try:
-                hollow = trimesh.boolean.difference([solid, cut], engine="manifold")
-                if hollow is not None and len(hollow.faces) and hollow.is_watertight:
-                    return hollow
-            except Exception:  # noqa: BLE001 — the solid horn stands
-                pass
-        return solid
+        return revolve_loop(loop, ax["origin"], u, d, sections)
     if kind == "extrude":
         pl = feature["plane"]
         entities = sketch_entities(feature["segments"])
@@ -465,6 +452,24 @@ def feature_mesh(feature, sections=96):
         return extrude_loop(loop, pl["origin"], pl["xAxis"], pl["yAxis"], float(feature["distance"]),
                             bool(feature.get("symmetric")))
     raise ValueError("unknown feature kind %r" % kind)
+
+
+def feature_cut_mesh(feature, sections=96):
+    """The cut a feature takes out of the model AFTER its own union — a
+    hollow horn's inner cone (`build_features.bore_profile`) revolved on
+    the feature's axis — or None. `build_features.build_feature` subtracts
+    it from the whole body (its booleanTargets is the model, not the horn),
+    so anything else inside the cone goes with it; `build_preview` does the
+    same, after the feature's union."""
+    if feature["kind"] != "revolve":
+        return None
+    bore = bore_profile(feature)
+    if not bore:
+        return None
+    ax = feature["axis"]
+    u, d = radial_frame(ax["direction"])
+    ents_in, seed_in = revolve_region(bore)
+    return revolve_loop(pick_loop(loops_of_entities(ents_in), seed_in), ax["origin"], u, d, sections)
 
 
 def combine(acc, tool, op, label, notes):
@@ -540,7 +545,17 @@ def build_preview(analysis, features=(), sections=96, bosses=True, secondaries=T
             notes.append("feature %s could not be drawn: %s" % (label, str(error)[:120]))
             continue
         model = combine(model, tool, "union", label, notes)
-        parts.append({"what": "feature", "name": label, "kind": feature["kind"]})
+        row = {"what": "feature", "name": label, "kind": feature["kind"]}
+        try:
+            cut = feature_cut_mesh(feature, sections)
+        except Exception as error:  # noqa: BLE001 — the horn stays solid, as in the build
+            notes.append("feature %s: its bore could not be drawn: %s" % (label, str(error)[:120]))
+            cut = None
+        if cut is not None:
+            # The bore, subtracted from the WHOLE model as the build does.
+            model = combine(model, cut, "subtract", label + " bore", notes)
+            row["bored"] = True
+        parts.append(row)
     return model, notes, parts
 
 

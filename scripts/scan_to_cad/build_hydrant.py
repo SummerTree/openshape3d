@@ -304,7 +304,11 @@ def body_section(analysis):
                    last["center"][1] + last["radius"] * math.sin(last["endAngle"])]
         else:
             top = last["b"]
-        if not any(b["end"] == "end" for b in bored):
+        if suffix and not any(b["end"] == "end" for b in bored):
+            # The plain axis close, moved to the drawn top's own height (an
+            # arc's end moves when it is kept off the axis). A through bore
+            # from the foot has emptied the suffix — the loop closes along
+            # the top face to the bore's wall — and keeps it empty.
             suffix = [[0.0, float(top[1])]]
         foot_pt = [max(float(foot[0]), 0.0), float(foot[1])]
         top_pt = [max(float(top[0]), 0.0), float(top[1])]
