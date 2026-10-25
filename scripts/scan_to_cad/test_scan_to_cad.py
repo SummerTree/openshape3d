@@ -487,10 +487,30 @@ class PartsLibraryTests(unittest.TestCase):
         self.assertTrue(mesh.is_watertight)
         self.assertAlmostEqual(float(mesh.bounds[1][0]), 112.0, delta=1.5)
         self.assertGreater(mesh.volume, 0.8 * math.pi * (112 ** 2 - 100 ** 2) * 10)
-        # A one-sided bulge is not a hoop.
+        # A one-sided bulge is not a hoop (it spans 3 of the 24 sectors)…
         bulge = trimesh.creation.box(extents=(20, 40, 60))
         bulge.apply_translation([108.0, 150.0, 0])
         self.assertIsNone(FF.hoop_fit(bulge, 1.0, 4.0, FF.surface_tree(body), body=frame))
+        # …nor is a ring all the way round that is out of round: the same
+        # hoop stretched 10 % on x has its sectors' outer radii 112 → 123 mm,
+        # a spread of ~11 mm against the max(2 tol, 4 %) = 4.5 allowed.
+        oval = hoop.copy()
+        oval.apply_scale([1.10, 1.0, 1.0])
+        self.assertIsNone(FF.hoop_fit(oval, 1.0, 4.0, FF.surface_tree(body), body=frame))
+        # …nor a round wall standing a few mm proud over most of the body's
+        # height: 24 sectors at one radius, but 120 mm tall on a 216 mm
+        # diameter — a ring is no taller than 0.35 of its diameter.
+        wall = trimesh.creation.annulus(r_min=104.0, r_max=108.0, height=120.0, sections=96)
+        wall.apply_transform(trimesh.transformations.rotation_matrix(math.pi / 2, [1, 0, 0]))
+        wall.apply_translation([0, 150.0, 0])
+        self.assertIsNone(FF.hoop_fit(wall, 1.0, 4.0, FF.surface_tree(body), body=frame))
+        # The same wall only 20 mm tall is a band round the body again.
+        short = trimesh.creation.annulus(r_min=104.0, r_max=108.0, height=20.0, sections=96)
+        short.apply_transform(trimesh.transformations.rotation_matrix(math.pi / 2, [1, 0, 0]))
+        short.apply_translation([0, 150.0, 0])
+        res = FF.hoop_fit(short, 1.0, 4.0, FF.surface_tree(body), body=frame)
+        self.assertIsNotNone(res)
+        self.assertAlmostEqual(res["features"][0]["lengthMM"], 20.0, delta=3.0)
 
 
 def run_inspect(reference, model, out, tolerance, up="y"):

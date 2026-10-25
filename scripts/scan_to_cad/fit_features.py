@@ -1642,16 +1642,21 @@ def hoop_fit(comp, tol, far, model_tree, body=None):
     """A ring round the main body's axis — a barrel's hoop, a rolled rim, a
     bead: a height band on that axis in which the piece's points run at
     least half way round (12 of 24 azimuth sectors), at one radius (the
-    sectors' median radii within max(2 tol, 4 %) of each other, so a
-    squashed bucket's bulge, which is one-sided, is not a hoop). The
-    section is the outer radius per height bin out, and the body's own
-    skin a little inside back: a closed annular profile revolved on the
-    body's axis (kind `revolve`, the profile closed so a hollow body's
-    cavity is kept)."""
+    sectors' outer radii — each sector's 75th percentile, the two or so
+    oddest sectors at either end left out (the 10th to 90th percentile of
+    them) for the dent or stray patch a scan always has — within
+    max(2 tol, 4 %) of each other, so a squashed bucket's bulge, which is
+    one-sided, is not a hoop), and no taller than 0.35 of its diameter —
+    a ring is a ring, not a wall; a body skin merely out of round by a
+    few mm over its whole height runs all the sectors at one radius and
+    would otherwise pass. The section is the outer radius per height bin
+    out, and the body's own skin a little inside back: a closed annular
+    profile revolved on the body's axis (kind `revolve`, the profile
+    closed so a hollow body's cavity is kept)."""
     body = body or BODY
     if body is None:
         return None
-    pts, _ = component_points(comp)
+    pts, nrm = component_points(comp)
     if len(pts) < 80:
         return None
     o, d = body["origin"], body["direction"]
@@ -1685,23 +1690,48 @@ def hoop_fit(comp, tol, far, model_tree, body=None):
             run = None
     k0, k1 = best
     sel = (which >= k0) & (which <= k1)
+    # The band ends where its points stop, not at the bin edge beyond them
+    # (a 10 mm ring in 2 mm bins would otherwise be 12 tall).
+    h_lo = max(h0 + k0 * band, float(h[sel].min()))
+    h_hi = min(h0 + (k1 + 1) * band, float(h[sel].max()))
+    if h_hi - h_lo < 0.5 * band:
+        return None
     # Each sector's outer skin (the 75th percentile: a hoop's top and bottom
     # faces, and its inner face where the scan saw it, lie inside it).
     meds = [float(np.percentile(r[sel & (sec == s)], 75)) for s in range(sectors) if (sel & (sec == s)).sum() >= 5]
+    if len(meds) < sectors // 2:
+        say("hoop: band %.0f–%.0f mm: only %d sectors hold five points" % (h0 + k0 * band, h0 + (k1 + 1) * band, len(meds)))
+        return None
     spread = float(np.percentile(meds, 90) - np.percentile(meds, 10))
     r_med = float(np.median(meds))
-    if len(meds) < sectors // 2 or spread > max(2.0 * tol, 0.04 * r_med):
+    if spread > max(2.0 * tol, 0.04 * r_med):
         say("hoop: band %.0f–%.0f mm: %d sectors, radii spread %.1f mm — not one ring" % (
             h0 + k0 * band, h0 + (k1 + 1) * band, len(meds), spread))
         return None
+    # A ring is short against its diameter. A body wall a few mm out of
+    # round (within the 4 %) runs all the sectors at one radius over its
+    # whole height, and on a sparse sheet the band's extent is set by
+    # where the samples fell, not by the geometry: neither is a hoop.
+    if h_hi - h_lo > 0.35 * 2.0 * r_med:
+        say("hoop: band %.0f–%.0f mm is %.0f mm tall on a %.0f mm diameter — a wall, not a ring" % (
+            h_lo, h_hi, h_hi - h_lo, 2.0 * r_med))
+        return None
+    # The ring's outer face per height bin: the 75th percentile radius of
+    # the points that face sideways (normal across the axis, not along
+    # it). A hoop's top and bottom faces would otherwise pull its end
+    # bins' radius in towards the skin, and its own outer vertices would
+    # then miss the profile by more than `tol`.
+    radial = perp / np.maximum(r, 1e-9)[:, None]
+    side = (np.abs(nrm @ d) < 0.6) & (np.abs(np.einsum("ij,ij->i", nrm, radial)) > 0.5)
     outer = []
     for k in range(k0, k1 + 1):
-        m = sel & (which == k)
-        if m.sum() >= 12:
-            outer.append([float(np.percentile(r[m], 75)), h0 + (k + 0.5) * band])
+        hc = h0 + (k + 0.5) * band
+        m = sel & side & (which == k)
+        if m.sum() >= 6 and h_lo < hc < h_hi:
+            outer.append([float(np.percentile(r[m], 75)), hc])
     if len(outer) < 1:
+        say("hoop: band %.0f–%.0f mm has no side-facing points to take an outer radius from" % (h_lo, h_hi))
         return None
-    h_lo, h_hi = h0 + k0 * band, h0 + (k1 + 1) * band
     outer = [[outer[0][0], h_lo]] + outer + [[outer[-1][0], h_hi]]
     outer = douglas_peucker_2d(outer, max(0.5 * tol, 0.5))
     # The inner side follows the body's skin, a little inside it.
@@ -1712,14 +1742,15 @@ def hoop_fit(comp, tol, far, model_tree, body=None):
     profile = [[round(float(rr), 2), round(float(hh), 2)] for rr, hh in outer + inner] + [[round(float(outer[0][0]), 2), round(float(outer[0][1]), 2)]]
     section = float(np.mean([rr for rr, _ in outer]) - np.mean([rr for rr, _ in inner]))
     # Covered: within tolerance of the ring's outer face, or of its top or
-    # bottom face between the skin and the outer radius.
+    # bottom face between the skin and the outer radius — the same `tol`
+    # every other fit is held to, so the score explain() ranks is honest.
     verts = np.asarray(comp.vertices, dtype=float)
     hv = (verts - o) @ d
     rv = np.linalg.norm((verts - o) - np.outer(hv, d), axis=1)
     prof = np.asarray(outer, dtype=float)
     r_at = np.interp(hv, prof[:, 1], prof[:, 0])
     in_band = (hv >= h_lo - tol) & (hv <= h_hi + tol)
-    on_face = (np.abs(rv - r_at) <= np.maximum(tol, 0.05 * r_at))
+    on_face = np.abs(rv - r_at) <= tol
     on_end = (rv <= r_at + tol) & ((np.abs(hv - h_lo) <= tol) | (np.abs(hv - h_hi) <= tol))
     covered = in_band & (on_face | on_end)
     rounded = (max(rr for rr, _ in outer) - min(outer[0][0], outer[-1][0])) > tol and len(outer) >= 4
@@ -1984,7 +2015,11 @@ def main():
             # stands a centimetre proud all the way round and reads as a
             # sheet by area. Only the hoop fit is tried on such a piece —
             # a slab fitted to a squashed wall would be a lump.
-            hoop = hoop_fit(comp, tol, far, model_tree) if BODY else None
+            try:
+                hoop = hoop_fit(comp, tol, far, model_tree) if BODY else None
+            except Exception as error:  # noqa: BLE001 — one fit's failure is not the part's
+                print("   %s: hoop fit failed: %s" % (label, str(error)[:120]), flush=True)
+                hoop = None
             if hoop and hoop["coverage"] >= 0.3:
                 explain(comp, tol, far, model_tree, 0, features, unexplained, budget, label, fits=("hoop",))
                 continue

@@ -896,9 +896,29 @@ along ONE spline at one radius with the horn a cone on its end — and
 - **Hoops** (`hoop_fit`, with `--analysis profile.json`, which
   `run_corpus.py` now passes). A piece is a ring round the main body's
   axis when a band of height bins (max(2, tol) mm each) has its points
-  in at least 12 of 24 azimuth sectors and the sectors' outer radii (75th
-  percentile) agree within max(2 tol, 4 %) — a squashed bucket's bulge
-  is one-sided and fails. The section is the outer radius per bin out,
+  in at least 12 of 24 azimuth sectors, the sectors' outer radii (each
+  sector's 75th percentile; the 10th to 90th percentile of those, so the
+  two or so oddest sectors a dent or a stray patch makes do not decide)
+  agree within max(2 tol, 4 %) — a squashed bucket's bulge is one-sided
+  and fails — and the band is no taller than 0.35 of its diameter: a
+  ring is a ring, not a wall. Without that last rule a body skin merely
+  out of round by a few mm (within the 4 %) over its whole height ran
+  all 24 sectors at one radius and passed as one 900 mm "hoop" (a probe:
+  a 900 mm wall r 303 round a body r 295, ±6 mm out of round, tol 3 →
+  accepted, lengthMM 897; now refused, "897 mm tall on a 606 mm
+  diameter — a wall, not a ring"), and on a sparse sheet the band's
+  extent was set by where the samples fell, not by the geometry. A hoop's
+  coverage counts a vertex within `tol` of the ring's outer face or its
+  end faces — the same tolerance every other fit is held to, so the
+  score `explain()` ranks it by is comparable (it was max(tol, 5 % of
+  the radius), 15 mm on a barrel). For that to be fair the profile has
+  to be true: the outer radius per bin is taken from the points that
+  face sideways (normal across the axis, not along it) and the band ends
+  where its points stop, not at the bin edge beyond them — a hoop's top
+  and bottom faces pulled the end bins' 75th-percentile radius 3 mm in
+  and the bin edges made a 10 mm ring 12 tall, so the test ring covered
+  25 % under an honest `tol`; it covers 100 % now. The section is the
+  outer radius per bin out,
   and the body's own skin back, a little inside it (half the wall of a
   hollow body so the cavity stays, far + 4 mm of a solid one): a CLOSED
   annular profile (first point = last) revolved on the body's axis as
@@ -965,7 +985,11 @@ and width within 5 %, named `lever`; a hexagonal prism of 36 mm across
 flats → `hexagon` within 5 %, `nut`; a 6 mm tube along a quarter circle
 → exactly one sweep with one circle section; a 12 mm ring round a
 cylinder's axis → one `revolve` on that axis with a closed section that
-revolves to the ring's volume, and a one-sided bulge is refused.
+revolves to the ring's volume, while a one-sided bulge (3 of 24
+sectors), the same ring stretched 10 % on one axis (radii spread 11 mm
+against 4.5 allowed) and a round 4 mm wall 120 mm tall on a 216 mm
+diameter are each refused, and that wall cut to 20 mm tall is a band
+again.
 
 ## Gotchas
 
