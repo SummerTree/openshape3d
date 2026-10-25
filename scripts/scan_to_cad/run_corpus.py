@@ -54,6 +54,15 @@ def relaunch(udid, port):
     sys.exit("the app's bridge never answered on port %d" % port)
 
 
+def patch_lines(patches, top=3):
+    """One line per largest patch of each kind: kind, area, where."""
+    lines = []
+    for kind in ("missing", "excess"):
+        for p in patches.get(kind, [])[:top]:
+            lines.append("%s %s mm² %s" % (kind, "{:,.0f}".format(p["areaMM2"]).replace(",", " "), p["location"]))
+    return lines
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("corpus")
@@ -183,7 +192,11 @@ def main():
                 checks = json.load(open(os.path.join(qa_dir, "checks.json")))
                 row["qa"] = {"verdict": checks["overall"], "sheet": os.path.join(qa_dir, "review.png"),
                              "failed": [c["check"] for c in checks["checks"] if c["verdict"] == "FAIL"],
-                             "warned": [c["check"] for c in checks["checks"] if c["verdict"] == "WARN"]}
+                             "warned": [c["check"] for c in checks["checks"] if c["verdict"] == "WARN"],
+                             # The biggest things wrong, one line each, so the
+                             # row says "missing 5 218 mm² in the middle third"
+                             # and not just which check failed.
+                             "patches": patch_lines(checks.get("patches", {}))}
                 print("    qa: %s%s — look at %s" % (checks["overall"],
                                                      (" (" + ", ".join(row["qa"]["failed"]) + ")") if row["qa"]["failed"] else "",
                                                      row["qa"]["sheet"]), flush=True)

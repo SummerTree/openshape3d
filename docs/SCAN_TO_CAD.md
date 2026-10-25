@@ -136,6 +136,76 @@ Offline tests: `test_scan_to_cad.py` (a drum for a bucket fails on excess
 and the top view, a terraced dome fails its top strip, an identical part
 passes; the arc fitter on a rounded rectangle, a stadium, a dome).
 
+### The largest patch (2026-10-25)
+
+The checks above are owned by the big turned body: a valve at 94 %
+overlap has its whole branch missing, a mean of 0.7 mm hides a 60 mm part
+because it is small. A person judges by the biggest thing that is wrong,
+so `inspect_fit.py` now finds it. The reference samples farther than
+1.5 tolerances from the model ("missing": the scan has material the model
+lacks) and the model samples farther than that from the reference
+("excess", the hole-facing ones left out as before) are joined into
+connected regions — a radius graph on the samples (`cKDTree`, radius
+2.5 × the mean sample spacing, spacing = √(area / n)) and scipy's connected
+components. The samples are dense enough that a 10 mm feature is a patch
+of twenty-odd: one per 15 mm² of surface, at least 40 000 and at most
+120 000 per mesh (the cap binds only on the barrel and the truck wheel, at
+30–37 mm² a sample, and keeps the wheel at 21 s). Each patch records its
+kind, area (samples × area per sample), mean and max distance, centre,
+extent and a location in words against the part's bounds and up axis —
+"in the upper third, on the left, towards the front"; an axis a patch spans
+most of is said so ("across the width"). `checks.json` keeps the top five
+of each kind under `patches` (with the total missing and excess area and
+their shares at that threshold), and two checks gate on the largest:
+
+    largest_missing_patch, largest_excess_patch   value = area in mm²
+        WARN above max(300 mm², 0.25 % of the reference area)
+        FAIL above max(1000 mm², 1 % of the reference area)
+
+The `why` names the patch: *the largest missing patch is 5 218 mm²
+(58 × 48 mm, 5.38 % of the reference area) in the middle third, in the
+centre, 5.1 mm from the model on average, 17.9 mm at most; 45 patches of
+this kind in all, 17 003 mm² together*. On `review.png` the three largest
+of each kind are ringed on the reference and depth tiles (blue M1–M3,
+orange E1–E3, the ring the patch's projected extent) with a legend line
+each, and `views/patches.png` is the shaded reference from the four sides
+with only the marks. `run_corpus.py` writes the same lines into the
+results row as `qa.patches`; `film_corpus.py` prints them under a part it
+skips.
+
+Why 1.5 tolerances and not one: at one tolerance a scan's noise and cast
+detail put more than a quarter of the surface over the line, and in a
+radius graph that dense the far samples percolate into a single patch
+the size of the part — the rusty extinguisher's largest went from
+1 983 mm² (the valve knob) to 8 389 mm² (185 × 72 mm of its body at 4.2 mm)
+and the hydrant's bonnet became one 223 × 221 mm patch at 4.1 mm. At 1.5
+the patches are the features. The limits above are the first ones tried
+and were not adjusted: on the ten corpus builds of 2026-10-24 nothing
+clean fails and nothing broken passes (`--patch-far` is the knob, for the
+next calibration):
+
+| Part | Before | After | Largest missing | Largest excess | Total missing / excess | What it is |
+|---|---|---|---|---|---|---|
+| Rusty extinguisher | WARN | WARN | 1 983 mm² WARN, upper third, centre | 3 883 mm² WARN, middle third, right | 2.1 % / 3.6 % | the valve knob read as a plain cap; the strap handle a few mm off — the eye agrees |
+| CO2 extinguisher | FAIL | FAIL | 19 620 mm² FAIL, upper third, left | 9 680 mm² FAIL, upper third, centre, front | 13.1 % / 12.5 % | the horn, hose and grip, crudely made: M1 is the horn, E1 the grip |
+| Hydrant 02 | WARN | **FAIL** | 3 615 mm² WARN, upper third, centre | 10 410 mm² FAIL, middle third, right, back | 3.3 % / 3.7 % | E1 is a 173 mm wedge the model hangs under the right nozzle (orange in the silhouettes) — a real flaw the old checks let through; M1 the bonnet nut |
+| Bollard | PASS | PASS | none | none | 0 / 0 | clean |
+| Pail bucket | FAIL | FAIL | 71 560 mm² FAIL, middle third, left | 227 432 mm² FAIL, lower third, across the width | 15.7 % / 41.0 % | the oval scan against a round model: one side missing, the other excess, all the way round |
+| Tin barrel | FAIL | FAIL | 538 003 mm² FAIL, upper third, across the width | 513 726 mm² FAIL, most of the height | 31.8 % / 33.8 % | a dented, leaning scan: a third of the surface is 9–17 mm out |
+| WD40 can | PASS | PASS | none | 14 mm² PASS | 0 / 0 | clean |
+| Beer mug | WARN | **FAIL** | 1 609 mm² FAIL, middle third, right, back | 2 056 mm² FAIL, middle third, right, back | 5.5 % / 5.8 % | both patches are the handle: its lower arm sits 4 mm from the scan's over 76 mm. The rough handle is the known flaw; at 1 % of a 150 000 mm² mug that is a FAIL, not a WARN |
+| Truck wheel | FAIL | FAIL | 529 025 mm² FAIL, most of the height | 730 696 mm² FAIL, most of the height | 33.6 % / 36.8 % | tread and hub detail everywhere: here the story is the totals, a third of each surface, not one patch |
+| Pipe wheel (valve) | FAIL | FAIL | 5 218 mm² FAIL, middle third, centre | 977 mm² WARN, middle third, right | 17.5 % / 9.4 % | M1 the left branch's elbow (the model's is straight), M2 the right branch, M3 the bottom port; the wheel's openings are the blue in the top view |
+
+Two parts change verdict and both for a reason a person can point at on
+the sheet. The other way round would be the worry — the wedge on the
+hydrant is exactly the kind of thing a 98 % overlap and a 1.1 mm mean
+were hiding. Offline tests: a cylinder whose 20 mm boss the model lacks
+is exactly one missing patch of 1 744 mm² (the boss's 2 000 mm² less the
+strip within 3 mm of the wall) "in the upper third, on the right"; the
+drum for a bucket has the lid as its largest excess patch (27 000 mm² at
+the rim's height); identical parts have no patch.
+
 ## Recipes — `fit_primitives.py` and `build_recipe.py`
 
 A part that is not one revolution needs more than `build_hydrant.py`'s
