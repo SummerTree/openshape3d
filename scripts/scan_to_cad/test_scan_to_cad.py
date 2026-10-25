@@ -483,12 +483,139 @@ class PartsLibraryTests(unittest.TestCase):
         self.assertEqual(len(res["features"]), 1, [f["kind"] for f in res["features"]])
         self.assertEqual(len(sweeps), 1)
         self.assertEqual(sweeps[0]["profile"]["shape"], "circle", sweeps[0]["profile"])
+        self.assertNotIn("section", sweeps[0])                            # a tube is still a tube, not a bent bar
         self.assertAlmostEqual(sweeps[0]["profile"]["radius"], 6.0, delta=1.0)
         self.assertGreater(res["coverage"], 0.8)
         self.assertEqual(sweeps[0]["attached"], [False, False])
         self.assertIsNone(FF.name_part(sweeps[0]))                       # no body to hang from, no horn: the rules do not know
         self.assertEqual(FF.name_part(dict(sweeps[0], attached=[True, True])), "handle")
         self.assertEqual(FF.name_part(dict(sweeps[0], intoHorn=True)), "hose")
+        # A bent round bar is the tube's: the bent-bar fit stands down (its
+        # section is not flat), whatever legs it could lay through the arch.
+        self.assertIsNone(FF.bent_bar_fit(tube, 1.0, 4.0, self._far_plate()))
+
+    @staticmethod
+    def _flat_bar(width=20.0, thick=5.0, legs=(80.0, 50.0), bend_deg=90.0):
+        """A flat bar `width` × `thick` whose first leg runs along +x from
+        the origin and whose second turns by `bend_deg` in the x/y plane
+        (the wide face normal is z: an L bent edgewise, like a lever); a
+        straight bar when `bend_deg` is 0. Subdivided so the sampler sees
+        a scan's worth of points."""
+        import preview_model as P
+        sec = np.array([[-width / 2, -thick / 2], [width / 2, -thick / 2], [width / 2, thick / 2], [-width / 2, thick / 2]])
+        a = math.radians(bend_deg)
+        d2 = np.array([math.cos(a), math.sin(a), 0.0])
+        corner = np.array([legs[0], 0.0, 0.0])
+        spine = [[0, 0, 0], corner.tolist(), (corner + d2 * legs[1]).tolist()] if bend_deg else [[0, 0, 0], [legs[0] + legs[1], 0, 0]]
+        mesh = P.sweep_section(sec, spine, [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]).subdivide().subdivide().subdivide()
+        mesh.apply_translation([30.0, -20.0, 100.0])
+        return mesh
+
+    def test_an_l_shaped_flat_bar_is_one_bent_bar(self):
+        """Two legs of 80 and 50 mm, a 20 × 5 mm section, a 90° bend: ONE
+        sweep of a 20 × 5 rectangle along a three-point spine, the bend
+        within 5°, the section within 10 %; the preview rebuilds it to
+        its volume; the sketch is the designed section; it is a lever
+        when it hangs from a body at one end."""
+        import fit_features as FF
+        import preview_model as P
+        from build_features import sweep_sketch, feature_caption, part_caption
+        from fit_primitives import sketch_entities
+        bar = self._flat_bar()
+        res = FF.bent_bar_fit(bar, 1.0, 4.0, self._far_plate())
+        self.assertIsNotNone(res)
+        self.assertEqual(res["kind"], "bentbar")
+        self.assertEqual(len(res["features"]), 1)
+        f = res["features"][0]
+        self.assertEqual(f["kind"], "sweep")
+        self.assertTrue(f["bent"])
+        self.assertEqual(len(f["bendsDeg"]), 1)
+        self.assertAlmostEqual(f["bendsDeg"][0], 90.0, delta=5.0)
+        self.assertAlmostEqual(f["section"]["widthMM"], 20.0, delta=2.0)
+        self.assertAlmostEqual(f["section"]["thicknessMM"], 5.0, delta=0.5)
+        self.assertIn(f["section"]["shape"], ("rectangle", "stadium"))
+        self.assertEqual(len(f["spine"]), 3 if f["bendRadiusMM"] == 0 else len(f["spine"]))
+        self.assertEqual(len(f["corners"]), 1)
+        self.assertAlmostEqual(sorted(f["legsMM"])[0], 50.0, delta=5.0)
+        self.assertAlmostEqual(sorted(f["legsMM"])[1], 80.0, delta=8.0)
+        self.assertGreater(res["coverage"], 0.85)
+        # The sketch the app gets: the designed section, closed, of the bar's area.
+        plane, entities, seed = sweep_sketch(f)
+        loops = P.loops_of_entities(entities)
+        self.assertEqual(len(loops), 1)
+        self.assertAlmostEqual(abs(P.signed_area(loops[0])), 100.0, delta=12.0)
+        self.assertTrue(P.point_in_loop(seed, loops[0]))
+        self.assertEqual(entities, sketch_entities(f["section"]["segments"]))
+        # The preview mirrors it: one closed solid of the bar's volume (its
+        # free ends run on a tolerance each).
+        mesh = P.feature_mesh(f)
+        self.assertTrue(mesh.is_watertight)
+        self.assertAlmostEqual(mesh.volume, 20 * 5 * 132, delta=0.06 * 20 * 5 * 132)
+        # Named by where it hangs; captioned with its sizes and its bend.
+        self.assertEqual(FF.name_part(f), "bar")
+        self.assertEqual(FF.name_part(dict(f, attached=[True, False])), "lever")
+        self.assertEqual(FF.name_part(dict(f, joins=[False, True])), "lever")
+        self.assertEqual(FF.name_part(dict(f, attached=[True, True])), "handle")
+        caption = part_caption(dict(f, part="lever"))
+        self.assertTrue(caption.startswith("A lever · a 20 × 5 mm"), caption)
+        self.assertIn("bent 9", caption)
+        self.assertIn("mm long", feature_caption(f))
+        # `tube_fit` on the same bar reads its flat run the same way: one sweep of a flat section.
+        tube = FF.tube_fit(bar, 1.0, 4.0, self._far_plate())
+        self.assertIsNotNone(tube)
+        self.assertEqual(len(tube["features"]), 1)
+        self.assertIn("section", tube["features"][0])
+        self.assertAlmostEqual(tube["features"][0]["bendsDeg"][0], 90.0, delta=5.0)
+        self.assertAlmostEqual(tube["features"][0]["section"]["widthMM"], 20.0, delta=2.0)
+
+    def test_a_straight_bar_is_still_a_bar(self):
+        """A straight 20 × 5 × 130 bar: the bent-bar fit stands down (its
+        spine is one leg) and `bar_fit` reads it as one bar of that section."""
+        import fit_features as FF
+        bar = self._flat_bar(bend_deg=0.0)
+        self.assertIsNone(FF.bent_bar_fit(bar, 1.0, 4.0, self._far_plate()))
+        res = FF.bar_fit(bar, 1.0, 4.0, self._far_plate())
+        self.assertIsNotNone(res)
+        self.assertEqual(res["kind"], "bar")
+        self.assertEqual(len(res["features"]), 1)
+        f = res["features"][0]
+        self.assertTrue(f["bar"])
+        self.assertAlmostEqual(f["lengthMM"], 130.0, delta=8.0)
+        self.assertAlmostEqual(f["sectionMM"], 20.0, delta=2.0)
+        self.assertEqual(FF.name_part(f), "bar")
+
+    def test_corner_spine_counts_the_legs(self):
+        """The spine fitter on centreline samples: a straight run is one
+        leg, a 60° elbow two, a Z three; a quarter circle of ten widths'
+        radius reads as three gentle legs (which the bend radius then
+        rounds), a semicircle as none — a curve, left to the sweep."""
+        import fit_features as FF
+        rng = np.random.default_rng(7)
+
+        def run(points, n):
+            P = np.asarray(points, dtype=float)
+            seg = np.linalg.norm(np.diff(P, axis=0), axis=1)
+            s = np.concatenate([[0.0], np.cumsum(seg)])
+            t = np.linspace(0, s[-1], n)
+            C = np.column_stack([np.interp(t, s, P[:, k]) for k in range(3)])
+            return C + rng.normal(0, 0.3, C.shape)
+        straight = FF.corner_spine(run([[0, 0, 0], [100, 0, 0]], 20), 1.0, 20.0)
+        self.assertEqual(straight["legs"], 1)
+        elbow = FF.corner_spine(run([[0, 0, 0], [80, 0, 0], [80 + 60 * math.cos(math.radians(60)), 60 * math.sin(math.radians(60)), 0]], 28), 1.0, 20.0)
+        self.assertEqual(elbow["legs"], 2)
+        self.assertAlmostEqual(elbow["bendsDeg"][0], 60.0, delta=4.0)
+        self.assertLess(np.linalg.norm(np.asarray(elbow["points"][1]) - [80, 0, 0]), 3.0)
+        zee = FF.corner_spine(run([[0, 0, 0], [70, 0, 0], [70, 60, 0], [140, 60, 0]], 40), 1.0, 20.0)
+        self.assertEqual(zee["legs"], 3)
+        self.assertEqual(len(zee["bendsDeg"]), 2)
+        a = np.linspace(0, math.pi / 2, 30)
+        arc = np.column_stack([120 * np.cos(a), 120 * np.sin(a), np.zeros_like(a)])
+        quarter = FF.corner_spine(arc, 1.0, 12.0)
+        self.assertEqual(quarter["legs"], 3)
+        self.assertLess(quarter["residualMM"], 1.8)
+        a = np.linspace(0, math.pi, 60)
+        half = np.column_stack([120 * np.cos(a), 120 * np.sin(a), np.zeros_like(a)])
+        self.assertIsNone(FF.corner_spine(half, 1.0, 12.0))
 
     def test_a_ring_round_the_body_axis_is_a_hoop(self):
         import fit_features as FF
