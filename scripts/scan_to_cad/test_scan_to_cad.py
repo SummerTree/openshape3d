@@ -606,5 +606,91 @@ class AxisFinderTests(unittest.TestCase):
         self.assertAlmostEqual(self.A.agreed_radius(meds, previous=80.0, sector_medians=meds), 80.0)
 
 
+@unittest.skipUnless(HAVE_DEPS, "needs the scan_to_cad venv (trimesh, numpy, scipy, rtree, pillow)")
+class ScanColorTests(unittest.TestCase):
+    """`analyze_scan.scan_color` reads the scan's dominant colour off its
+    texture or vertex colours, and `build_hydrant.model_color` resolves a
+    spec's colour against it."""
+
+    @staticmethod
+    def textured_quad(image):
+        # A unit quad whose UVs span the whole texture, so the texture's
+        # area shares are the surface's.
+        quad = trimesh.Trimesh([[0, 0, 0], [1, 0, 0], [1, 1, 0], [0, 1, 0]], [[0, 1, 2], [0, 2, 3]], process=False)
+        # A glTF-style material, as the corpus scans carry: the texture with
+        # no base-colour factor (trimesh's SimpleMaterial would export a
+        # default grey diffuse as a factor of 0.4 and darken the swatch).
+        material = trimesh.visual.material.PBRMaterial(baseColorTexture=image)
+        quad.visual = trimesh.visual.TextureVisuals(uv=[[0, 0], [1, 0], [1, 1], [0, 1]], material=material)
+        return quad
+
+    def test_texture_that_is_mostly_one_colour_gives_that_colour(self):
+        import analyze_scan as A
+        from PIL import Image
+        # 70 % of the columns blue, 30 % yellow.
+        image = Image.new("RGB", (100, 20), (51, 102, 204))
+        image.paste((230, 200, 25), (70, 0, 100, 20))
+        found = A.scan_color_record(self.textured_quad(image))
+        self.assertEqual(found["source"], "texture")
+        for got, want in zip(found["rgb"], [0.2, 0.4, 0.8]):
+            self.assertAlmostEqual(got, want, delta=0.03)
+        self.assertAlmostEqual(found["share"], 0.7, delta=0.05)
+        self.assertEqual(len(A.scan_color(self.textured_quad(image))), 3)
+
+    def test_a_painted_colour_beats_a_slightly_larger_neutral_one(self):
+        # A spray can: 45 % white lettering and bare metal, 40 % blue label,
+        # 15 % yellow cap — the eye calls it blue, and so does the vote.
+        import analyze_scan as A
+        from PIL import Image
+        image = Image.new("RGB", (100, 20), (235, 235, 230))
+        image.paste((15, 25, 105), (45, 0, 85, 20))
+        image.paste((225, 200, 25), (85, 0, 100, 20))
+        found = A.scan_color_record(self.textured_quad(image))
+        r, g, b = found["rgb"]
+        self.assertGreater(b, 0.3)
+        self.assertLess(r, 0.15)
+        self.assertAlmostEqual(found["share"], 0.4, delta=0.05)
+
+    def test_dark_colour_is_lifted_with_its_hue(self):
+        import analyze_scan as A
+        rgb = A.lift_shadow([0.10, 0.02, 0.02])
+        self.assertAlmostEqual(rgb[0], 0.25, places=3)
+        self.assertAlmostEqual(rgb[1] / rgb[0], 0.2, places=3)
+        self.assertEqual(A.lift_shadow([0.5, 0.5, 0.5]), [0.5, 0.5, 0.5])
+
+    def test_textured_glb_round_trip_by_path(self):
+        import analyze_scan as A
+        from PIL import Image
+        image = Image.new("RGB", (16, 16), (51, 102, 204))
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "quad.glb")
+            self.textured_quad(image).export(path)
+            rgb = A.scan_color(path)
+        for got, want in zip(rgb, [0.2, 0.4, 0.8]):
+            self.assertAlmostEqual(got, want, delta=0.03)
+
+    def test_vertex_colours_are_the_fallback_and_a_plain_mesh_has_none(self):
+        import analyze_scan as A
+        box = trimesh.creation.box()
+        self.assertIsNone(A.scan_color(box))
+        self.assertIsNone(A.scan_color_record(box))
+        box.visual.vertex_colors = [200, 30, 40, 255]
+        found = A.scan_color_record(box)
+        self.assertEqual(found["source"], "vertex")
+        for got, want in zip(found["rgb"], [200 / 255, 30 / 255, 40 / 255]):
+            self.assertAlmostEqual(got, want, delta=0.01)
+
+    def test_model_color_resolves_the_spec_against_the_analysis(self):
+        from build_hydrant import model_color, HYDRANT_RED
+        analysis = {"scanColor": {"rgb": [0.2, 0.4, 0.8], "share": 0.7, "source": "texture"}}
+        self.assertEqual(model_color({"color": [0.1, 0.2, 0.3]}, analysis), [0.1, 0.2, 0.3])   # a list is itself
+        self.assertEqual(model_color({"color": "scan"}, analysis), [0.2, 0.4, 0.8])            # "scan": the analysis
+        self.assertEqual(model_color({}, analysis), [0.2, 0.4, 0.8])                           # absent: the same
+        self.assertEqual(model_color({"color": "scan"}, {}), HYDRANT_RED)                      # no colour recorded
+        self.assertEqual(model_color({}, None), HYDRANT_RED)
+        with self.assertRaises(ValueError):
+            model_color({"color": "red"}, analysis)
+
+
 if __name__ == "__main__":
     unittest.main()

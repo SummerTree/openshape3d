@@ -3,7 +3,7 @@
 the MCP server, and have the app grade the result.
 
     python3 build_hydrant.py --scan scan.glb --analysis analysis/ --out run/ --port 8947 \
-        [--name bollard --label "Bollard" --color 0.75 0.75 0.72]
+        [--name bollard --label "Bollard" --color 0.75 0.75 0.72 | --color scan]
 
 Every step is an `os3d` tool call to `scripts/mcp_openshape3d.py` — the
 same server Claude Desktop and Claude Code use — so this is a full test of
@@ -47,6 +47,34 @@ import numpy as np
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from mcp_client import MCPClient, MCPError  # noqa: E402
 from fit_primitives import cavity_section, hollow_section, sketch_entities  # noqa: E402
+
+
+HYDRANT_RED = [0.86, 0.17, 0.12]
+
+
+def model_color(spec, analysis):
+    """The colour the model is painted, as [r, g, b] in 0…1: the spec's own
+    list when it gives one; otherwise ("scan", or no `color` at all) the
+    scan's dominant colour that `analyze_scan.py` recorded as `scanColor`,
+    and the hydrant's red when the analysis has none. A red model beside a
+    grey scan reads as a shape mismatch, so the scan's colour is the
+    default."""
+    chosen = (spec or {}).get("color", "scan")
+    if isinstance(chosen, str):
+        if chosen != "scan":
+            raise ValueError("color must be 'scan' or [r, g, b], not %r" % chosen)
+        found = (analysis or {}).get("scanColor") or {}
+        return [float(c) for c in found["rgb"]] if found.get("rgb") else list(HYDRANT_RED)
+    return [float(c) for c in chosen]
+
+
+def color_option(values):
+    """`--color scan` or `--color R G B` as a spec's `color` value."""
+    if values is None or list(values) == ["scan"]:
+        return "scan"
+    if len(values) != 3:
+        raise SystemExit("--color takes 'scan' or three numbers, not %r" % (values,))
+    return [float(v) for v in values]
 
 
 def unit(v):
@@ -334,6 +362,7 @@ class Session:
 def build(args):
     with open(os.path.join(args.analysis, "profile.json")) as f:
         analysis = json.load(f)
+    args.color = model_color({"color": color_option(args.color)}, analysis)
     axis_origin = np.array(analysis["axisOrigin"])
     axis = unit(analysis["axisDirection"])
     u = unit(analysis["azimuthZero"])
@@ -603,8 +632,9 @@ def main():
     ap.add_argument("--port", type=int, default=8787)
     ap.add_argument("--name", default="hydrant", help="file names: <name>-cad.step and friends")
     ap.add_argument("--label", default="Hydrant", help="what the part is, for the sketch names")
-    ap.add_argument("--color", type=float, nargs=3, default=[0.86, 0.17, 0.12], metavar=("R", "G", "B"),
-                    help="the model's colour (default hydrant red)")
+    ap.add_argument("--color", nargs="+", default=["scan"], metavar="R G B | scan",
+                    help="the model's colour: three numbers in 0…1, or 'scan' (default) for the analysis's "
+                         "scanColor — the scan's own dominant colour — falling back to hydrant red")
     ap.add_argument("--tolerance", type=float, default=2.0, help="mm; what counts as within tolerance")
     args = ap.parse_args()
     os.makedirs(args.out, exist_ok=True)

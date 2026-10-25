@@ -5,7 +5,8 @@
     python3 demo_video.py compose --out demo/ [--spec part.json] [--tts gemini|edge] [--music lyria|generated|path.m4a]
 
 `--spec` is a JSON file that says what the part is, so one script films any
-turned part: {"label": "Fire extinguisher", "color": [r, g, b], "title":
+turned part: {"label": "Fire extinguisher", "color": [r, g, b] or "scan"
+(the scan's own colour from the analysis, the default), "title":
 "…|…", "subtitle", "titleSay", "name", "credit": "Scan: CC-BY grafi on
 Sketchfab", "captions": {"import", "revolve", "boss" (with {n}), "lug",
 "check"}, "say": {beat: line, with {iou} {calls} {mean} {label}}}. Every
@@ -115,12 +116,12 @@ def modelling_calls(calls):
 def take(args):
     with open(os.path.join(args.analysis, "profile.json")) as f:
         analysis = json.load(f)
-    from build_hydrant import body_section, boss_section, unit, world, secondary_sections, revolve_secondary, window_sections, cut_window
+    from build_hydrant import body_section, boss_section, unit, world, secondary_sections, revolve_secondary, window_sections, cut_window, model_color
     from build_features import build_feature, feature_caption, shift_feature
     from mcp_client import MCPError
     spec = args.spec or {}
     label = spec.get("label", "Hydrant")
-    color = list(spec.get("color", [0.86, 0.17, 0.12]))
+    color = model_color(spec, analysis)
     captions = {"import": "Import the iPhone scan", "revolve": "One sketch on the scan's own axis, one revolve",
                 "boss": "Nozzle {n} · its own profile, revolved and unioned in", "lug": "A lug on the bonnet · the same way",
                 "body": "A second axis · its own profile, revolved and unioned in",

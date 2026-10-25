@@ -837,6 +837,54 @@ bodies, the pipe's extent stopping at the body's skin, its faces
 labelled), a lone cylinder, `trim_profile` / `extend_profile`, and the
 ring-over-continuity rule.
 
+### Colour — the model painted like the scan (2026-10-25)
+
+The films and the reel used to paint the model from a hand-picked `color`
+in each part's `spec.json` (hydrant red by default), so a red valve stood
+beside a grey scan and a yellow can beside a blue one, and the eye read
+the colour mismatch as a shape mismatch. The model's colour now comes
+from the scan's own texture:
+
+- `analyze_scan.scan_color(source)` samples ~20 000 surface points
+  (area-weighted faces, barycentric UVs looked up in each geometry's
+  base-colour image, times the material's base-colour factor; vertex
+  colours are the fallback, a plain mesh gives None) and finds the
+  dominant colour by k-means into four clusters. The winner is not the
+  raw largest cluster: a spray can's white lettering, bare-metal ends and
+  highlights make one light cluster of 40 % against the label's blue at
+  31 %, and a person still calls the can blue — so each cluster's share is
+  weighted by one plus its saturation ((max − min) / max of its centre)
+  before the largest is taken, and the swatch is the mean of that
+  cluster's samples. A painted colour thus beats a neutral one of nearly
+  twice its area, while a grey bollard or a white mug, with no saturated
+  cluster of any size, stays grey or white. Shadow baked into the texture
+  is lifted (a colour whose brightest channel is under 0.25 is scaled up
+  to 0.25, hue kept — the truck's black tyre). The analysis JSON records
+  it as `"scanColor": {"rgb": [r, g, b], "share": <raw share of the
+  winning cluster>, "source": "texture" | "vertex"}`, read off the source
+  file's scene (the cropped copy may have lost its texture); the scene is
+  loaded once and shared with the geometry, because a 4096² RGBA PNG
+  costs five seconds to decode and the colour itself takes 0.1–0.6 s.
+- `build_hydrant.model_color(spec, analysis)`: a spec `color` that is a
+  list is itself; `"scan"` or no `color` at all is the analysis's
+  `scanColor`, and hydrant red when the analysis has none (older
+  analyses). `build_hydrant.py --color scan` (the default now),
+  `run_corpus.py` (the build and `inspect_fit.py --model-color` painted
+  alike), `demo_video.py take --spec` and `reel.py` all resolve the colour
+  this way; every corpus spec now says `"color": "scan"`.
+
+Measured on the ten corpus scans (sRGB in 0…1, the share of the samples
+in the winning cluster): rusty extinguisher 0.49 0.28 0.27 (42 %), the
+3dhdscan extinguisher 0.73 0.34 0.28 (56 %), hydrant 0.52 0.09 0.10
+(31 %), bollard 0.52 0.47 0.39 (37 %, a warm khaki grey — what its
+texture holds), pail 0.51 0.55 0.59 (31 %), tin barrel 0.53 0.51 0.51
+(40 %), WD-40 can 0.06 0.09 0.40 (32 %, blue; the raw largest cluster
+was the light one at 40 %), beer mug 0.87 0.88 0.87 (47 %), truck wheel
+0.25 0.23 0.24 (36 %, lifted from a near-black tyre), pipe valve 0.38
+0.38 0.34 (41 %). Offline tests: a quad with a 70/30 texture gives the
+70 % colour within 0.03, a 45 % white / 40 % blue / 15 % yellow texture
+gives blue, vertex colours and a plain mesh, `model_color`'s cases.
+
 ## Gotchas
 
 - Import names the format from the file name's extension: pass
