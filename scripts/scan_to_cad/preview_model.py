@@ -59,7 +59,7 @@ import trimesh
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from build_hydrant import body_section, boss_section, secondary_sections, world, unit  # noqa: E402
-from build_features import sweep_sketch  # noqa: E402
+from build_features import sweep_sketch, bore_profile  # noqa: E402
 from build_recipe import revolve_region, radial_frame, seed_inside  # noqa: E402
 from fit_primitives import sketch_entities  # noqa: E402
 
@@ -443,7 +443,20 @@ def feature_mesh(feature, sections=96):
         u, d = radial_frame(ax["direction"])
         entities, seed = revolve_region(feature["profile"])
         loop = pick_loop(loops_of_entities(entities), seed)
-        return revolve_loop(loop, ax["origin"], u, d, sections)
+        solid = revolve_loop(loop, ax["origin"], u, d, sections)
+        bore = bore_profile(feature)
+        if bore:
+            # A hollow horn, as `build_features.build_feature` cuts it: the
+            # inner cone revolved on the same axis and subtracted.
+            ents_in, seed_in = revolve_region(bore)
+            cut = revolve_loop(pick_loop(loops_of_entities(ents_in), seed_in), ax["origin"], u, d, sections)
+            try:
+                hollow = trimesh.boolean.difference([solid, cut], engine="manifold")
+                if hollow is not None and len(hollow.faces) and hollow.is_watertight:
+                    return hollow
+            except Exception:  # noqa: BLE001 — the solid horn stands
+                pass
+        return solid
     if kind == "extrude":
         pl = feature["plane"]
         entities = sketch_entities(feature["segments"])

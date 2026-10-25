@@ -136,6 +136,111 @@ def keep_off_axis(entities, margin=0.05):
     return entities
 
 
+def open_lines(points):
+    """Line entities between consecutive distinct points of an OPEN chain
+    (no closing line)."""
+    pts = dedupe([[float(p[0]), float(p[1])] for p in points]) if points else []
+    return [{"kind": "line", "a": [round(a[0], 4), round(a[1], 4)], "b": [round(b[0], 4), round(b[1], 4)]}
+            for a, b in zip(pts, pts[1:])]
+
+
+def bore_chains(analysis, profile, height):
+    """The bores at a body's free ends (`analysis["bores"]`, from
+    `analyze_scan.detect_bores`) as the point chains the half-section runs
+    through instead of a plain end face. Returns (prefix, suffix, bored):
+    `prefix` runs from the loop's closing point to the outer profile's foot
+    (exclusive) — up the axis from the bore's floor, out to the bore wall,
+    along it to the mouth; `suffix` from the outer profile's top (exclusive)
+    back to the closing point; `bored` the bores as drawn, for the note.
+    Without a bore an end is the axis point, as every revolve was:
+    ([[0, 0]], [[0, height]], []).
+
+    Every bore radius is kept a wall inside the outer profile over the
+    bore's own depth (the loop must stay simple: a profile that narrows to
+    the bore's radius would cross it), capped at the body's length; a bore
+    seen along the whole body — or two that meet — is a through bore, an
+    annular loop with no axis segment at all."""
+    rs = [max(float(r), 0.0) for r, _ in profile]
+    hs = [float(hh) for _, hh in profile]
+
+    def outer_min(h0, h1):
+        """The smallest outer radius over h0..h1 (the profile's vertices
+        inside the range and its radius at both ends)."""
+        lo, hi = sorted((h0, h1))
+        inside = [r for r, hh in zip(rs, hs) if lo - 1e-6 <= hh <= hi + 1e-6]
+        ends = [float(np.interp(h, hs, rs)) for h in (lo, hi)] if len(hs) >= 2 else rs[:1]
+        return min(inside + ends) if (inside or ends) else 0.0
+
+    def steps_of(bore):
+        prof = bore.get("profile") or [[bore["rInnerMM"], 0.0], [bore["rInnerMM"], bore["depthMM"]]]
+        depth = float(min(bore["depthMM"], height))
+        through = bool(bore.get("through")) or depth >= height - 0.5
+        if through:
+            depth = float(height)
+        steps = []
+        for (r_a, d_a), (r_b, d_b) in zip(prof, prof[1:]):
+            if abs(r_a - r_b) > 1e-6 or d_a >= depth:
+                continue                                        # a level step between two runs, or past the floor
+            steps.append([float(r_a), float(d_a), float(min(d_b, depth))])
+        if steps:
+            steps[-1][2] = depth
+        return steps, depth, through
+
+    bores = {b["end"]: b for b in (analysis.get("bores") or []) if b.get("end") in ("start", "end")}
+    drawn = {}
+    for end, bore in bores.items():
+        steps, depth, through = steps_of(bore)
+        if not steps or depth < 1.0:
+            continue
+        kept = []
+        for r, d_a, d_b in steps:
+            h0, h1 = (d_a, d_b) if end == "start" else (height - d_b, height - d_a)
+            limit = outer_min(h0, h1)
+            r = min(r, limit - max(1.0, 0.1 * limit))
+            if r < 1.0:
+                kept = []
+                break
+            kept.append([r, d_a, d_b])
+        if kept:
+            drawn[end] = (kept, depth, through)
+    if "start" in drawn and "end" in drawn:
+        s, e = drawn["start"], drawn["end"]
+        if s[2] or e[2] or s[1] + e[1] >= height - 1.0:
+            # They meet: one through bore, from the end that reached farther.
+            keep = "start" if s[1] >= e[1] else "end"
+            steps, _, _ = drawn[keep]
+            steps[-1][2] = float(height)
+            drawn = {keep: (steps, float(height), True)}
+    bored = []
+    for end, (steps, depth, through) in drawn.items():
+        bored.append({"end": end, "rInnerMM": round(steps[0][0], 2), "depthMM": round(depth, 1), "through": through,
+                      "steps": [[round(r, 2), round(d_a, 1), round(d_b, 1)] for r, d_a, d_b in steps]})
+    prefix, suffix = [[0.0, 0.0]], [[0.0, height]]
+    if "start" in drawn:
+        steps, depth, through = drawn["start"]
+        prefix = [] if through else [[0.0, depth]]
+        for r, d_a, d_b in reversed(steps):
+            prefix += [[r, d_b], [r, d_a]]
+        if through:
+            suffix = []                 # the loop closes along the top face, from the profile's top to the bore wall
+    if "end" in drawn:
+        steps, depth, through = drawn["end"]
+        suffix = []
+        for r, d_a, d_b in steps:
+            suffix += [[r, height - d_a], [r, height - d_b]]
+        if through:
+            prefix = []                 # … and along the foot
+        else:
+            suffix.append([0.0, height - depth])
+    return prefix, suffix, bored
+
+
+def bore_words(bored):
+    """", bored r 14 mm 60 deep at its start" — for notes and labels."""
+    return "".join(", bored r %.0f mm %s at its %s" % (b["rInnerMM"], "right through" if b["through"] else "%.0f deep" % b["depthMM"], b["end"])
+                   for b in bored)
+
+
 def body_section(analysis):
     """The body's half-section to revolve — one answer for the build, the
     film (`demo_video.py take`) and the reel, so a film shows the model the
@@ -145,12 +250,20 @@ def body_section(analysis):
     container, else None), "outline" (the straightened profile closed along
     the axis — the Pappus check's polygon), "inner" (for a container: the
     cavity's {entities, seed, note} to revolve and subtract after the
-    outer revolve, else None)}."""
+    outer revolve, else None), "bores" (the bores drawn into the loop, as
+    `bore_chains` reports them)}.
+
+    A bore at an end (`analysis["bores"]`) is part of the ONE loop: the
+    outline runs in along the end face to the bore's radius, along the
+    bore to its floor and back to the axis — the solid is the wall round
+    the hole, no second op. The film and the reel revolve this same
+    section, so they inherit it."""
     profile, height, body_r = analysis["profile"], analysis["heightMM"], analysis["bodyRadiusMM"]
-    cleaned = dedupe([[0.0, 0.0]] + [[max(r, 0.0), h] for r, h in profile] + [[0.0, height]])
+    prefix, suffix, bored = bore_chains(analysis, profile, height)
+    cleaned = dedupe(prefix + [[max(r, 0.0), h] for r, h in profile] + suffix)
     segments = analysis.get("profileSegments")
     open_top = analysis.get("openTop")
-    seed = [body_r * 0.5, height * 0.5]
+    seed = section_seed(cleaned) if bored else [body_r * 0.5, height * 0.5]
     hollow = None
     inner = None
     loop = analysis.get("sectionLoop")
@@ -161,7 +274,7 @@ def body_section(analysis):
         entities = lines_for(dedupe(pts))
         seed = section_seed(pts)
         note = "{} lines: the traced half-section (a dished part), axis at u = 0".format(len(entities))
-        return {"entities": entities, "seed": seed, "note": note, "hollow": None, "outline": pts, "inner": None}
+        return {"entities": entities, "seed": seed, "note": note, "hollow": None, "outline": pts, "inner": None, "bores": []}
     if open_top and segments:
         # A container: the solid revolve of the outer profile, then the
         # cavity — the outer profile eroded a wall in, from the floor to
@@ -191,19 +304,24 @@ def body_section(analysis):
                    last["center"][1] + last["radius"] * math.sin(last["endAngle"])]
         else:
             top = last["b"]
-        top_axis = [0.0, round(float(top[1]), 4)]
-        entities = ([{"kind": "line", "a": [0.0, 0.0], "b": [round(max(foot[0], 0.0), 4), round(foot[1], 4)]}]
-                    + drawn
-                    + [{"kind": "line", "a": [round(max(top[0], 0.0), 4), round(top[1], 4)], "b": top_axis},
-                       {"kind": "line", "a": top_axis, "b": [0.0, 0.0]}])
+        if not any(b["end"] == "end" for b in bored):
+            suffix = [[0.0, float(top[1])]]
+        foot_pt = [max(float(foot[0]), 0.0), float(foot[1])]
+        top_pt = [max(float(top[0]), 0.0), float(top[1])]
+        # From the closing point (the axis, or a through bore's wall) to
+        # the foot, the drawn profile, then from its top through the bore
+        # (or straight to the axis) and back to the closing point.
+        close_to = prefix[0] if prefix else foot_pt
+        entities = open_lines(prefix + [foot_pt]) + drawn + open_lines([top_pt] + suffix + [close_to])
         entities = [e for e in entities if e["kind"] != "line" or
                     math.hypot(e["a"][0] - e["b"][0], e["a"][1] - e["b"][1]) > 0.02]
         arcs = sum(e["kind"] == "arc" for e in entities)
-        note = "{} entities ({} arcs): half the cross-section, axis at u = 0".format(len(entities), arcs)
+        note = "{} entities ({} arcs): half the cross-section, axis at u = 0{}".format(len(entities), arcs, bore_words(bored))
     else:
         entities = lines_for(cleaned)
-        note = "{} lines: half the cross-section, axis at u = 0".format(len(entities))
-    return {"entities": entities, "seed": seed, "note": note, "hollow": hollow, "outline": cleaned, "inner": inner}
+        note = "{} lines: half the cross-section, axis at u = 0{}".format(len(entities), bore_words(bored))
+    return {"entities": entities, "seed": seed, "note": note, "hollow": hollow, "outline": cleaned, "inner": inner,
+            "bores": bored}
 
 
 def window_sections(analysis, shift=None):
@@ -267,9 +385,11 @@ def secondary_sections(analysis, shift=None):
         out.append({"plane": plane, "entities": section["entities"], "seed": section["seed"],
                     "note": section["note"], "index": body["index"], "parent": body.get("parent"),
                     "junction": body.get("junction"), "radiusMM": body["bodyRadiusMM"], "lengthMM": body["heightMM"],
-                    "label": "body %d: radius ~%.0f mm over %.0f mm on its own axis%s" % (
+                    "bores": section["bores"],
+                    "label": "body %d: radius ~%.0f mm over %.0f mm on its own axis%s%s" % (
                         body["index"], body["bodyRadiusMM"], body["heightMM"],
-                        "" if body.get("parent") is None else ", into body %s" % body["parent"])})
+                        "" if body.get("parent") is None else ", into body %s" % body["parent"],
+                        bore_words(section["bores"]))})
     return out
 
 

@@ -108,11 +108,17 @@ def main():
         # the analysis); the build and the inspection sheet paint it alike.
         color = [str(c) for c in model_color(spec, profile)]
         run_dir = os.path.join(part, "run")
-        print("=== %s: %s, %.0f mm tall, %d bosses, tolerance %.0f mm" % (
-            slug, spec["label"], profile["heightMM"], len(profile["bosses"]), tolerance), flush=True)
+        print("=== %s: %s, %.0f mm tall, %d bosses, tolerance %.0f mm%s" % (
+            slug, spec["label"], profile["heightMM"], len(profile["bosses"]), tolerance,
+            ("; bored — " + ", ".join(bores)) if bores else ""), flush=True)
         t0 = time.time()
+        # The bores the analysis found at free ends (the main body's and
+        # each secondary body's), so the row says "bored r 14, 50 deep".
+        bores = ["%s: r %.0f mm %s" % ("body %d" % b["index"] if "index" in b else "body",
+                                        bore["rInnerMM"], "through" if bore.get("through") else "%.0f deep" % bore["depthMM"])
+                 for b in [profile] + profile.get("bodies", []) for bore in b.get("bores", [])]
         row = {"label": spec["label"], "heightMM": profile["heightMM"], "bosses": len(profile["bosses"]),
-               "profilePoints": len(profile["profile"]), "toleranceMM": tolerance}
+               "profilePoints": len(profile["profile"]), "toleranceMM": tolerance, "bores": bores}
         try:
             relaunch(udid, args.port)
             cmd = [args.python, "-I", os.path.join(HERE, "build_hydrant.py"), "--scan", scan, "--analysis", analysis,
