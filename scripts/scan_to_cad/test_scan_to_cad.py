@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Offline tests for the scan-to-CAD helpers that need no app: the line-and-
 arc fitter, the open-polyline arc fitter, the shared half-section the build,
-film and reel revolve, and the fit inspector's verdicts
+film and reel revolve, and the fit inspector's verdicts and patches
 on synthetic pairs (a drum that should have been a bucket, a dome cut into
-steps, an identical part).
+steps, a cylinder whose boss the model lacks, an identical part).
 
     scripts/scan_to_cad/venv/bin/python -I scripts/scan_to_cad/test_scan_to_cad.py
 
@@ -394,6 +394,42 @@ class InspectFitTests(unittest.TestCase):
         a.export(pb)
         checks = run_inspect(pa, pb, os.path.join(self.tmp, "same"), 2.0, up="z")
         self.assertEqual(checks["overall"], "PASS", [c for c in checks["checks"] if c["verdict"] != "PASS"])
+        # Nothing is far from anything: no patch of either kind.
+        self.assertEqual(checks["patches"]["missing"], [])
+        self.assertEqual(checks["patches"]["excess"], [])
+        by = {c["check"]: c for c in checks["checks"]}
+        self.assertEqual(by["largest_missing_patch"]["value"], 0.0)
+        self.assertEqual(by["largest_excess_patch"]["value"], 0.0)
+
+    def test_a_missing_boss_is_one_patch_where_the_boss_is(self):
+        # Reference: a cylinder with a 20 mm boss on its +x side in the upper
+        # third. Model: the plain cylinder. The boss's five exposed faces are
+        # 2 000 mm²; the strip of its sides within 1.5 tolerances of the
+        # wall does not count, so a little under that.
+        plain = self._cylinder(100, 300)
+        boss = trimesh.creation.box(extents=[20, 20, 20])
+        boss.apply_translation([110, 0, 250])
+        with_boss = trimesh.util.concatenate([self._cylinder(100, 300), boss])
+        pr, pm = os.path.join(self.tmp, "boss.stl"), os.path.join(self.tmp, "plain.stl")
+        with_boss.export(pr)
+        plain.export(pm)
+        checks = run_inspect(pr, pm, os.path.join(self.tmp, "boss-out"), 2.0, up="z")
+        missing = checks["patches"]["missing"]
+        self.assertEqual(len(missing), 1, missing)
+        patch = missing[0]
+        self.assertAlmostEqual(patch["areaMM2"], 2000.0, delta=500.0, msg=patch)
+        self.assertIn("upper third", patch["location"])
+        self.assertIn("on the right", patch["location"])          # +x is screen right in the front view
+        self.assertAlmostEqual(patch["centreMM"][2], 250.0, delta=3.0)
+        self.assertAlmostEqual(patch["centreMM"][0], 110.0, delta=3.0)
+        self.assertGreater(patch["meanMM"], 5.0)
+        by = {c["check"]: c for c in checks["checks"]}
+        # The cylinder is 254 000 mm², so the limits are 0.25 % = 635 mm²
+        # (WARN) and 1 % = 2 536 mm² (FAIL): the lost boss warns the part even
+        # though every mean deviation passes — it is 0.7 % of the surface.
+        self.assertEqual(by["largest_missing_patch"]["verdict"], "WARN", by["largest_missing_patch"])
+        self.assertIn("on the right", by["largest_missing_patch"]["why"])
+        self.assertEqual(by["ref_to_model_mean"]["verdict"], "PASS")
 
     def test_a_drum_for_a_bucket_fails_on_excess_and_depth(self):
         # Reference: an open bucket (a thin shell with no lid). Model: a solid drum.
@@ -414,6 +450,12 @@ class InspectFitTests(unittest.TestCase):
         # …and seen from above the lid sits 300 mm nearer than the bucket's floor: that fails.
         self.assertEqual(by["depth_top"]["verdict"], "FAIL", by["depth_top"])
         self.assertGreater(by["depth_top"]["excessShare"], 0.5)
+        # …and the lid is the largest excess patch: a disc at the rim's height.
+        lid = checks["patches"]["excess"][0]
+        self.assertGreater(lid["areaMM2"], 20000.0, lid)          # π·93² = 27 000 mm² beyond 3 mm of the ring
+        self.assertAlmostEqual(lid["centreMM"][2], 300.0, delta=3.0, msg=lid)
+        self.assertIn("upper third", lid["location"])
+        self.assertEqual(by["largest_excess_patch"]["verdict"], "FAIL", by["largest_excess_patch"])
 
     def test_a_terraced_dome_fails_the_top_strip(self):
         # Reference: a cylinder with a spherical dome. Model: the dome cut into three flat steps.

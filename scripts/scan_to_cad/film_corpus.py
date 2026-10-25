@@ -72,6 +72,8 @@ def main():
         if qa.get("verdict") == "FAIL" and not args.allow_fail:
             print("== %s: inspection FAILED (%s) — not filmed; see %s or pass --allow-fail" % (
                 slug, ", ".join(qa.get("failed", [])) or "see checks.json", qa.get("sheet", "qa/review.png")), flush=True)
+            for line in qa.get("patches", []):
+                print("     %s" % line, flush=True)
             continue
         if qa.get("verdict"):
             print("== %s: inspection %s" % (slug, qa["verdict"]), flush=True)
