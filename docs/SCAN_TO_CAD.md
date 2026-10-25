@@ -453,6 +453,31 @@ The depth checks (2–3 mm) still fail where a scan is oval or dented, on a
 tyre's tread, and on cast detail a revolve smooths over; the silhouettes
 pass everywhere but the oval pail's top view.
 
+Rebuilt on 2026-10-25 with the model painted the scan's colour, the
+inspection gated on the largest unexplained patch and the parts library
+(*Colour*, *The largest patch* and *The parts library* below; `run_corpus.py
+--analyze`; every one a valid solid). The last column is the biggest thing
+still wrong, in the inspection's own words:
+
+| Scan (Sketchfab, CC-BY) | Overlap | Model→scan | Scan→model | Parts fitted | Largest patch |
+|---|---:|---:|---:|---|---|
+| Fire Extinguisher Old Rusty 3D Scan | 98 % | 0.8 mm | 0.9 mm | 3 plates | missing 1 983 mm², upper third, centre (the knob) — WARN |
+| Fire Extinguisher | 95 % | 3.5 mm | 1.7 mm | hose, horn, bar, sweep, 2 plates, revolve | missing 6 517 mm², upper third, right (the valve head) — was 92 % |
+| Scan Fire Hydrant 02-Freepoly.org | 98 % | 1.1 mm | 1.8 mm | 3 plates, chain | missing 3 615 mm², upper third, centre (the bonnet nut) |
+| Concrete Bollard Scan 01 | 100 % | 1.4 mm | 0.6 mm | none | none — PASS |
+| Pail Bucket Plastic 3D Scan | 96 % | 1.6 mm | 2.1 mm | handle sweep, 3 plates | missing 72 720 mm², middle third, left (the oval scan) — was 77 % |
+| Old tin barrel | 97 % | 5.0 mm | 7.1 mm | none | missing 538 003 mm² across the upper third (dented, leaning scan) |
+| WD40 Scan LOWPOLY | 99 % | 0.2 mm | 0.3 mm | none | excess 14 mm² at the nozzle tip — PASS |
+| Bavarian Beer Mug | 97 % | 1.4 mm | 0.8 mm | handle sweep, lug, lid lever | missing 3 112 mm², upper third, right, back (the handle) |
+| Truck wheel with rusty rim | 94 % | 8.2 mm | 4.8 mm | 3 bars | missing 920 952 mm² over the tyre (tread, hub) |
+| Pipe Wheel 3D scan | 95 % | 0.7 mm | 2.0 mm | 2 plates, 3 lugs | missing 5 218 mm², middle third, centre (the left branch's nut) |
+
+What a person still sees: the valve's branch nuts and flange (the
+secondary bodies get no feature pass yet) and its filled bores (the
+excess patches); the CO₂ extinguisher's valve head as a tube, not a
+lever; the oval bucket and the dented barrel (the scans); the tyre's
+tread and hub detail.
+
 ### The reel — `reel.py`
 
 One film of the whole corpus, cut two ways: `reel-16x9.mp4` for a page or

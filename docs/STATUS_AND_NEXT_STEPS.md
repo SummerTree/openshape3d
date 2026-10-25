@@ -2,7 +2,7 @@
 
 > **Current unfinished-work register:** [Sketch parity open status](SKETCH_PARITY_OPEN_STATUS.md). Maintained at every meaningful checkpoint; older mission logs below are historical.
 
-Last updated: 2026-10-24 (every axis of revolution: `fit_axes.py` finds a scan's axes from its normals and the tracer builds each body on its own axis — the valve goes from 65 % to 95 %, the hydrant's nozzles to 1 mm, the wheel's stand as bars, no more spikes to the apex, a hand-wheel's openings cut; `preview_model.py` rebuilds the model offline; all ten films and both reels re-taken — newest mission log bullet under 2026-10-20. Before that, 2026-10-22, the fidelity pass: the scan trace reads the surface finely, containers get a subtracted cavity, dished parts a traced half-section, and `fit_features.py` / `build_features.py` add the handles, hoses, levers and chains a revolve cannot make — can and bollard PASS, the rest 88–97 % except the out-of-round pail and drum and the two-axis valve; the film and the reel revolve the build's own half-section — all ten corpus films and both reels re-taken on the rebuilt models; scan-to-CAD builds are now inspected both ways with depth maps and a review sheet — `inspect_fit.py`, gating the films and the reel; arcs and hollow revolves in the scan pipeline; a C-clamp rebuilt from recipes to 0.05 mm — the newest mission log bullet under 2026-10-20; a corpus of ten Sketchfab scans built over MCP, graded and filmed; CAD import over MCP: STEP and IGES sew loose faces into solids and sheet bodies, exact bounds, DXF units and ellipses, an open-mesh notice, and agents import STEP / IGES / DXF / FCStd; an OCCT oracle, a live MCP runner and offline XCTests behind it; test pack 36 / 36, FreeCAD IDF + NIST corpus 32 / 32, IGES twins 4 / 4 — newest mission log. Also today: Deviation Preview — the Accuracy Report's colours on the part; the scan's profile straightened; `item.select`) — **Accuracy Report** (one body measured against
+Last updated: 2026-10-25 (scan-to-CAD, three things a person sees: the model is painted the scan's own colour (`scanColor` from the texture; spec `"color": "scan"`), the inspection gates on the LARGEST unexplained patch and rings it on the review sheet (`largest_missing_patch` / `largest_excess_patch`), and `fit_features.py` fits designed parts instead of blobs — stadium / rectangle / hexagon / circle outlines, one tube per piece with its horn as a cone, hoops, and part names (hose, horn, lever, nut, lug…) in the captions; a wheel's rim dish no longer reads as an open container (the dish test runs before the open end); CO₂ extinguisher 92 → 95 %, bucket 77 → 96 %, films and reels re-taken — newest mission log bullet. Before that, 2026-10-24: every axis of revolution: `fit_axes.py` finds a scan's axes from its normals and the tracer builds each body on its own axis — the valve goes from 65 % to 95 %, the hydrant's nozzles to 1 mm, the wheel's stand as bars, no more spikes to the apex, a hand-wheel's openings cut; `preview_model.py` rebuilds the model offline; all ten films and both reels re-taken — newest mission log bullet under 2026-10-20. Before that, 2026-10-22, the fidelity pass: the scan trace reads the surface finely, containers get a subtracted cavity, dished parts a traced half-section, and `fit_features.py` / `build_features.py` add the handles, hoses, levers and chains a revolve cannot make — can and bollard PASS, the rest 88–97 % except the out-of-round pail and drum and the two-axis valve; the film and the reel revolve the build's own half-section — all ten corpus films and both reels re-taken on the rebuilt models; scan-to-CAD builds are now inspected both ways with depth maps and a review sheet — `inspect_fit.py`, gating the films and the reel; arcs and hollow revolves in the scan pipeline; a C-clamp rebuilt from recipes to 0.05 mm — the newest mission log bullet under 2026-10-20; a corpus of ten Sketchfab scans built over MCP, graded and filmed; CAD import over MCP: STEP and IGES sew loose faces into solids and sheet bodies, exact bounds, DXF units and ellipses, an open-mesh notice, and agents import STEP / IGES / DXF / FCStd; an OCCT oracle, a live MCP runner and offline XCTests behind it; test pack 36 / 36, FreeCAD IDF + NIST corpus 32 / 32, IGES twins 4 / 4 — newest mission log. Also today: Deviation Preview — the Accuracy Report's colours on the part; the scan's profile straightened; `item.select`) — **Accuracy Report** (one body measured against
 another: orthographic silhouette overlays per view, outline and surface
 deviation both ways; `Kernel/AccuracyKit.swift`, Views ▸ Accuracy Report…,
 `/v1/accuracy` + `/v1/accuracy/image`, MCP ops `accuracy` /
@@ -74,6 +74,74 @@ passes alone.
   every B-rep body's bounds with `BRepBndLib::AddOptimal` on exact geometry
   on every call, which a dense STEP import could make slow — cache on the
   body's mesh revision if an agent loop ever feels it.
+
+## Mission log — 2026-10-25, scan-to-CAD: colour, the largest patch, a parts library
+
+The user: "its better but still not great -- any ideas on how to improve" →
+"do the color match and largest-patch gate, then the parts library". Three
+tracks, each built in its own worktree and adversarially reviewed, merged
+on `feat/scan-to-cad-parts`:
+
+- **Colour** — `analyze_scan.scan_color` samples the scan's base-colour
+  texture (20 000 area-weighted points, k-means k = 4, the cluster with
+  the largest share × (1 + saturation) wins: the WD-40 can is blue, not
+  the 40 % light grey of its lettering; shadow lifted to a max channel of
+  0.25) into `analysis["scanColor"]`; `spec_color.model_color` (stdlib
+  only, so `run_corpus.py` still runs under any python3) resolves a spec's
+  `"color": "scan"` (now every corpus spec) for the build, the film and
+  the reel. The hydrant's model is the scan's deep red, the valve grey,
+  the bollard its khaki concrete.
+- **The largest patch** — `inspect_fit.py` joins the reference samples
+  farther than 1.5 tolerances from the model (missing) and the model's
+  samples farther from the reference (excess) into connected patches
+  (cKDTree radius graph, 2.5 × the sample spacing) and gates on the
+  largest of each: WARN at max(300 mm², 0.25 % of the reference area),
+  FAIL at max(1 000 mm², 1 %); the `why` sentence names the patch and its
+  place in words ("in the upper third, on the right, towards the back ·
+  7.8 mm from the model on average · 196 × 106 mm"); the review sheet
+  rings the top three of each kind; `results.json` rows carry `qa.patches`.
+  It found a real 10 000 mm² wedge the hydrant hung under a nozzle that
+  every old check passed.
+- **The parts library** — `fit_features.py`: after the free-form outline
+  of an extrude or a bar, parametric outlines (circle, stadium, rounded
+  rectangle, oval, hexagon, octagon) are fitted to the same points and
+  win when they run along the points (90 % within 2 tol) and cover at
+  least the free-form's share minus 0.03; a tubular piece is ONE spine
+  with one radius, split only where the radius really steps, and a run
+  whose radius grows steadily is a cone revolve (the CO₂ extinguisher's
+  horn — with the trend judged on the run less up to three end samples,
+  because the geodesic overshoots the horn's mouth against the app's
+  model); hoops on the main axis (`hoop_fit`, aspect ≤ 0.35 of the
+  diameter, side-facing radii, no corpus part has one yet); `name_part`
+  labels features (hose, horn, lever, nut, flange, hoop, lug, plate…)
+  for the captions. CO₂ extinguisher 92.4 → 95.0 % (hose + horn), the
+  stein's handle one tube into the body.
+- **Two defects on the way**: `run_corpus.py` handed the fitter the
+  analysis FOLDER (every part lost its features on the first run); and a
+  dished wheel read as an open container from its hub side (rays fall
+  into the rim's dish and through the bore) and the "cavity" cut the rim
+  away — the old ground trim had hidden that by clipping the tyre's face,
+  gone since the floor-is-not-a-sidewalk rule. The dish test now runs
+  before the open end (synthetic tyre-on-a-hub test, 1 s).
+
+Corpus 2026-10-25 (overlap · model→scan / scan→model mm · parts · the
+largest patch): rusty extinguisher 97.8 · 0.81/0.86 WARN; CO₂ extinguisher
+95.0 · 3.45/1.71 (hose, horn, bar) FAIL on a 6 500 mm² patch at the valve
+head; hydrant 97.9 · 1.08/1.79 FAIL (3 600 mm² bonnet nut); bollard 99.5
+PASS; bucket 95.9 · 1.58/2.12 (was 76.8 — the re-analysis traces it
+round; the scan is still oval, 72 700 mm² missing on the left); barrel
+96.5 · 5.02/7.14 (dented); spray can 99.4 PASS; beer mug 97.2 · 1.38/0.79
+(lug) FAIL on the handle's 3 100 mm²; truck wheel 94.1 · 8.15/4.80 (three
+bars) FAIL (tread, hub); valve 94.5 · 0.69/1.99 (three lugs) FAIL on the
+5 200 mm² left-branch nut. Tests 48 (`test_scan_to_cad.py`). Films 10 / 10
+and both reels re-taken.
+
+Next, in order of what the eye still sees: bore the open pipe ends (the
+valve's excess patches ARE its filled bores); the hex nut and square
+flange on the valve's branches (secondary bodies get no feature pass
+yet); a bent-bar shape (a swept rectangular section) for the levers that
+stay free-form; the oval bucket as an ellipse fit or a global affine
+correction of the scan; a vision critic closing the loop.
 
 ## Mission log — 2026-10-24, scan-to-CAD: every axis of revolution
 
