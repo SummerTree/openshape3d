@@ -343,7 +343,12 @@ def sweep_section(section, spine, x_axis, y_axis):
     leg) swept along the polyline spine: the section rides a rotation-
     minimising frame, and at each corner the ring is the previous leg's
     prism cut by the corner's bisector plane (a mitre), so neighbouring
-    legs meet without a gap or a fold."""
+    legs meet without a gap. A sweep whose ring folds back — a vertex of
+    the section advancing backwards along a leg, because a bend is
+    tighter than the section's reach toward its centre or a leg shorter
+    than its mitre — is refused (ValueError): its mesh would still close
+    with a plausible volume, so watertightness alone would pass a sweep
+    the kernel cannot make (`fit_features.sweep_folds` is the same test)."""
     section = ccw(np.asarray(section, dtype=float))
     P = np.asarray(spine, dtype=float)
     keep = np.ones(len(P), dtype=bool)
@@ -375,6 +380,11 @@ def sweep_section(section, spine, x_axis, y_axis):
         if i < m - 1:
             R = rotation_between(t_prev, T[i])
             X, Y = R @ X, R @ Y
+    for i in range(m - 1):
+        advance = (rings[i + 1] - rings[i]) @ T[i]
+        if (advance < -1e-6).any():
+            raise ValueError("the sweep folds back on itself on leg %d of %d (a section vertex advances %.1f mm backwards): "
+                             "the bend is tighter than the section's reach toward its centre" % (i + 1, m - 1, -float(advance.min())))
     verts = np.vstack(rings)
     faces = []
     cap = triangulate(section)

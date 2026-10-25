@@ -74,12 +74,21 @@ def sweep_sketch(feature):
     x = unit(x)
     y = np.cross(t0, x)                   # x × y = t0: the plane faces along the spine
     prof = feature["profile"]
-    if prof["shape"] == "ellipse":
+    seed = [0.0, 0.0]
+    if feature.get("section"):
+        # A bar's designed section (a stadium, a rounded rectangle, a
+        # disc) as the same lines and arcs an extrude's outline is drawn
+        # with, in the frame (xAxis, t0 × xAxis) `fit_features.sweep_frames`
+        # carries along the legs.
+        section = feature["section"]
+        entities = sketch_entities(section["segments"])
+        seed = section.get("seed") or seed_inside(section["segments"])
+    elif prof["shape"] == "ellipse":
         entities = oval_entities(prof["rx"], prof["ry"])
     else:
         entities = [{"kind": "circle", "center": [0, 0], "radius": prof["radius"]}]
     plane = {"origin": [float(v) for v in spine[0]], "xAxis": [float(v) for v in x], "yAxis": [float(v) for v in y]}
-    return plane, entities, [0.0, 0.0]
+    return plane, entities, seed
 
 
 def bore_profile(feature, overshoot=5.0):
@@ -211,6 +220,8 @@ def shift_feature(feature, delta):
     f = json.loads(json.dumps(feature))
     if f["kind"] == "sweep":
         f["spine"] = [[float(v) for v in (np.asarray(p, dtype=float) + delta)] for p in f["spine"]]
+        if f.get("corners"):
+            f["corners"] = [[float(v) for v in (np.asarray(p, dtype=float) + delta)] for p in f["corners"]]
     elif f["kind"] == "revolve":
         f["axis"]["origin"] = [float(v) for v in (np.asarray(f["axis"]["origin"], dtype=float) + delta)]
     elif f["kind"] == "extrude":
@@ -227,6 +238,24 @@ def bore_words(feature):
 
 SHAPE_WORDS = {"stadium": "a bar with rounded ends", "rectangle": "a rectangle", "square": "a square",
                "hexagon": "a hexagon", "octagon": "an octagon", "circle": "a disc", "ellipse": "an oval"}
+SECTION_WORDS = {"stadium": "stadium-section", "rectangle": "flat", "square": "square", "hexagon": "hexagonal",
+                 "octagon": "octagonal", "circle": "round", "ellipse": "oval"}
+
+
+def bar_words(feature):
+    """"a 22 × 6 mm flat bar bent 35°, 140 mm long" for a sweep of a
+    section (`fit_features.bar_feature`)."""
+    s = feature["section"]
+    bends = feature.get("bendsDeg") or []
+    kind = SECTION_WORDS.get(s.get("shape"), s.get("shape", ""))
+    if s.get("shape") == "rectangle" and s.get("cornerMM"):
+        kind = "flat, rounded-edged"
+    size = ("a %.0f mm %s bar" % (s["widthMM"], kind) if abs(s["widthMM"] - s["thicknessMM"]) < 0.05 * s["widthMM"]
+            else "a %.0f × %.0f mm %s bar" % (s["widthMM"], s["thicknessMM"], kind))
+    bent = (" bent " + " and ".join("%.0f°" % b for b in bends)) if bends else ""
+    if bends and feature.get("bendRadiusMM"):
+        bent += " on a %.0f mm radius" % feature["bendRadiusMM"]
+    return "%s%s, %.0f mm long" % (size, bent, feature.get("lengthMM", 0.0))
 
 
 def part_caption(feature):
@@ -239,7 +268,9 @@ def part_caption(feature):
     kind = feature["kind"]
     shape = feature.get("shape") or {}
     head = "A hex nut" if part == "nut" and shape.get("sides") == 6 else "%s %s" % ("An" if part[0] in "aeiou" else "A", part)
-    if kind == "sweep":
+    if kind == "sweep" and feature.get("section"):
+        tail = "%s, swept along its %s and unioned in" % (bar_words(feature), "legs" if feature.get("bent") else "length")
+    elif kind == "sweep":
         tail = ("one tube along one spline, swept and unioned in" if part == "hose"
                 else "a tube swept along its own centreline, unioned in")
     elif kind == "revolve":
@@ -274,6 +305,8 @@ def feature_caption(feature):
     if named:
         return named
     kind = feature["kind"]
+    if kind == "sweep" and feature.get("section"):
+        return "Swept · %s along its %s, unioned in" % (bar_words(feature), "legs" if feature.get("bent") else "length")
     if kind == "sweep":
         prof = feature["profile"]
         what = "a round section" if prof["shape"] == "circle" else "an oval section"

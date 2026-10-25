@@ -103,6 +103,55 @@ axis (docs/SCAN_TO_CAD.md, *Nuts and collars on an axis*).
 Next, for the eye: the branch-root fillets and a branch axis refined on
 the branch alone (the valve's M1/M2); a top recess for the hydrant's
 crown; the open bores.
+## Mission log — 2026-10-26, scan-to-CAD: bent bars and levers
+
+The user: "they look a lot better -- can we work on next improvements" →
+the bent-bar track (docs/SCAN_TO_CAD.md, "Bent bars and levers"). The CO₂
+extinguisher's squeeze lever — a flat bar off the valve head that bends
+50° and runs down the hose side — had been an oval tube; `fit_features.py`
+now has a bent bar: a flat run of a tube chain (section ≥ 1.8× as wide as
+thick, `FLAT_RATIO`) or a piece on its own (`bent_bar_fit`, a sixth
+candidate in `explain()`) gets a spine of two or three straight legs
+(`corner_spine`, refitted on slice box centres by `refine_legs`), one
+designed section from the parts library read across its longest leg's
+middle (`bar_along`, proved leg by leg with `prism_covered`), bends
+rounded to the radius the points ask for (`fillet_spine`), and is built as
+ONE `feature.sweep` of that section along the polyline — the feature is a
+`sweep` with a `section` {shape, widthMM, thicknessMM, cornerMM,
+segments, seed}, `corners`, `bendRadiusMM`, `bendsDeg`, `legsMM`, `bent`;
+`build_features.sweep_sketch` draws the section's entities,
+`preview_model.feature_mesh` mirrors it through the same call, captions
+say "A lever · a 51 × 22 mm flat, rounded-edged bar bent 51° on a 31 mm
+radius, 211 mm long". The bend's radius is bounded below by the
+section's reach toward the bend's centre plus a tolerance
+(`section_reach`; a lever bent edgewise reaches half its width — the
+first version's 26 mm arc had an inner edge of 0.5 mm and its sweep
+folded), `sweep_folds` tests the sweep's rings for a fold in the fit,
+and `preview_model.sweep_section` refuses a folding spine instead of
+drawing it (a folded sweep's mesh still closes at a plausible volume; it
+refuses the corpus's 17.8 × 4.2 oval, the one feature the kernel had
+refused). Offline, same model and scan as the corpus run, all rows
+`--all-features`: the corpus features score 95.1 % on the earlier
+preview and 94.8 % on the fold-refusing one (= as built); the corpus
+features with only the oval swapped for the bent bar 94.6 % (4.06 /
+1.70 mm, the lever's root M1 6 517 → 6 991 mm²) — the lever assembly
+tapers (49 → 42 mm) and a constant section cannot follow it; two tenths
+under the oval, a lever by name and shape with a sound bend. The whole
+new fit scores 92.9 %, not for the lever: the horn's bell wall (a
+12 200 mm² skin, the cone revolve's leftover) is a coin toss between a
+box from `extrude_fit` (50.4 %) and one from `bar_fit` (51 %) that turns
+on single faces, and this run's box is a 65.7 mm plate (M1 / E1 15 k mm²
+on the horn) where the first version's was a 54 × 54 × 106 "bar"
+(94.8 %) — the horn's own track, noted in the docs' Gotchas. The beer
+mug and the valve are unchanged to the digit. Not built in the app yet
+(no simulator in this session): the sweep of a rounded rectangle along a
+ten-point polyline is the hose's call, and the arcs clear the section by
+construction. Tests: `PartsLibraryTests` gains an L-shaped flat bar
+(90.0° measured, 20 × 5 section, reach 10, previewed to 13 200 mm³), a
+bend that never folds the section (fold detection, 12 mm arcs on the 30°
+and 60° L, a hairpin refused, the xAxis fallback), a straight bar that is
+still a bar, a tube that is still a tube, and `corner_spine`'s leg counts
+(52 tests).
 
 ## Mission log — 2026-10-25, scan-to-CAD: colour, the largest patch, a parts library
 
