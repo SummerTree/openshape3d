@@ -26,7 +26,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from mcp_client import MCPClient, MCPError  # noqa: E402
 from fit_primitives import sketch_entities  # noqa: E402
 from build_hydrant import Session, unit  # noqa: E402
-from build_recipe import revolve_entities, radial_frame, seed_inside  # noqa: E402
+from build_recipe import revolve_region, radial_frame, seed_inside  # noqa: E402
 
 
 def oval_entities(a, b):
@@ -103,12 +103,10 @@ def build_feature(mcp, feature, cad_id, label, note=True):
         sk = mcp.os3d("sketch.create", {"origin": [float(x) for x in ax["origin"]],
                                         "xAxis": [float(x) for x in u], "yAxis": [float(x) for x in d],
                                         "name": label}, note=say("a sketch through the feature's own axis"))["sketchID"]
-        entities, pts = revolve_entities(feature["profile"])
-        rs = [p[0] for p in pts if p[0] > 0]
-        hs = [p[1] for p in pts]
-        seed = [min(rs) * 0.5, (min(hs) + max(hs)) / 2]
+        entities, seed = revolve_region(feature["profile"])
         mcp.os3d("sketch.addEntities", {"sketchID": sk, "entities": entities},
-                 note=say("%d lines: the radial profile, closed along the axis" % len(entities)))
+                 note=say("%d lines: %s" % (len(entities), "the ring's own section" if feature.get("hoop")
+                                            else "the radial profile, closed along the axis")))
         return mcp.os3d("feature.revolve", {"sketchID": sk, "seedPoint": seed, "axisPoint": [0, 0],
                                             "axisDirection": [0, 1], "angleDegrees": 360,
                                             "boolean": "union", "booleanTargets": [cad_id]},
@@ -145,8 +143,41 @@ def shift_feature(feature, delta):
     return f
 
 
+SHAPE_WORDS = {"stadium": "a bar with rounded ends", "rectangle": "a rectangle", "square": "a square",
+               "hexagon": "a hexagon", "octagon": "an octagon", "circle": "a disc", "ellipse": "an oval"}
+
+
+def part_caption(feature):
+    """The caption for a feature `fit_features.py` named as a part — a
+    lever, a hex nut, a hoop — or None when it has no name (the old
+    caption then stands)."""
+    part = feature.get("part")
+    if not part:
+        return None
+    kind = feature["kind"]
+    shape = feature.get("shape") or {}
+    head = "A hex nut" if part == "nut" and shape.get("sides") == 6 else "%s %s" % ("An" if part[0] in "aeiou" else "A", part)
+    if kind == "sweep":
+        tail = ("one tube along one spline, swept and unioned in" if part == "hose"
+                else "a tube swept along its own centreline, unioned in")
+    elif kind == "revolve":
+        tail = {"hoop": "a ring on the body's own axis, revolved and unioned in",
+                "horn": "a cone on the hose's end, revolved and unioned in"}.get(
+            part, "a radial profile on its own axis, revolved and unioned in")
+    else:
+        what = SHAPE_WORDS.get(shape.get("kind"), "its outline")
+        if shape.get("cornerMM"):
+            what += " with rounded corners"
+        tail = ("%s extruded along the branch, unioned in" % what if feature.get("bar")
+                else "%s, extruded and unioned in" % what)
+    return "%s · %s" % (head, tail)
+
+
 def feature_caption(feature):
     """What a film's caption says for a feature."""
+    named = part_caption(feature)
+    if named:
+        return named
     kind = feature["kind"]
     if kind == "sweep":
         prof = feature["profile"]

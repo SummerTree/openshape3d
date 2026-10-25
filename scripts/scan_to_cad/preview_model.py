@@ -60,7 +60,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from build_hydrant import body_section, boss_section, secondary_sections, world, unit  # noqa: E402
 from build_features import sweep_sketch  # noqa: E402
-from build_recipe import revolve_entities, radial_frame, seed_inside  # noqa: E402
+from build_recipe import revolve_region, radial_frame, seed_inside  # noqa: E402
 from fit_primitives import sketch_entities  # noqa: E402
 
 VIEWS = {
@@ -441,10 +441,7 @@ def feature_mesh(feature, sections=96):
     if kind == "revolve":
         ax = feature["axis"]
         u, d = radial_frame(ax["direction"])
-        entities, pts = revolve_entities(feature["profile"])
-        rs = [p[0] for p in pts if p[0] > 0]
-        hs = [p[1] for p in pts]
-        seed = [min(rs) * 0.5, (min(hs) + max(hs)) / 2]
+        entities, seed = revolve_region(feature["profile"])
         loop = pick_loop(loops_of_entities(entities), seed)
         return revolve_loop(loop, ax["origin"], u, d, sections)
     if kind == "extrude":
