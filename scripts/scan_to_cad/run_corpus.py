@@ -23,7 +23,7 @@ import urllib.request
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
-from build_hydrant import model_color  # noqa: E402
+from spec_color import model_color  # noqa: E402 — stdlib only; this script runs under any python3
 
 BUNDLE = "com.laan.labs.openshape3d"
 

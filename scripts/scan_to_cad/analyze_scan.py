@@ -89,6 +89,18 @@ def load_mesh(path, unit_scale=None, keep_scene=False):
     return mesh, unit_scale
 
 
+def srgb_to_linear(c):
+    """sRGB 0…1 to linear light, the IEC 61966-2-1 curve (not a plain gamma)."""
+    c = np.asarray(c, dtype=float)
+    return np.where(c <= 0.04045, c / 12.92, ((c + 0.055) / 1.055) ** 2.4)
+
+
+def linear_to_srgb(c):
+    """Linear light back to sRGB 0…1, clipped."""
+    c = np.clip(np.asarray(c, dtype=float), 0.0, 1.0)
+    return np.where(c <= 0.0031308, c * 12.92, 1.055 * c ** (1 / 2.4) - 0.055)
+
+
 def color_samples(source, count=20000, seed=7):
     """Points on the scan's surface with the colour the file paints there:
     an (n, 3) sRGB array in 0…1 and where it came from ("texture" or
@@ -125,7 +137,11 @@ def color_samples(source, count=20000, seed=7):
             colors = trimesh.visual.color.uv_to_color(at, image)[:, :3].astype(float) / 255.0
             factor = getattr(material, "baseColorFactor", None)
             if factor is not None:
-                colors = colors * (np.asarray(factor, dtype=float)[:3] / 255.0)
+                # glTF multiplies in linear light while the texture (and the
+                # swatch) are sRGB: a factor of 0.5 on white is 0.5 linear,
+                # which is 0.74 on screen, not 0.5.
+                linear = srgb_to_linear(colors) * (np.asarray(factor, dtype=float)[:3] / 255.0)
+                colors = linear_to_srgb(linear)
             rgb.append(colors)
             sources.add("texture")
         elif getattr(visual, "kind", None) == "vertex" and visual.defined:
@@ -1698,7 +1714,8 @@ def analyze(mesh, band_mm=None, lump_margin_mm=6.0, out_dir=None, name="scan", e
         print("open at the bottom: traced again with the wider end as the base")
         return analyze(mesh, band_mm=band_mm, lump_margin_mm=lump_margin_mm, out_dir=out_dir, name=name,
                        epsilon=epsilon, debug=debug, axis_choice=axis_choice, flip=flip, samples=samples,
-                       multi=multi, secondary=secondary, axis_origin=axis_origin, up_rule="wider", _reflipped=True)
+                       multi=multi, secondary=secondary, axis_origin=axis_origin, up_rule="wider", _reflipped=True,
+                       source=source)
     # One radius per height cannot describe a dished wheel: a band there
     # holds two full rings far apart (the tyre and the hub) with nothing
     # between. Such a part gets its whole half-section traced instead.

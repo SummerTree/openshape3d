@@ -47,34 +47,9 @@ import numpy as np
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from mcp_client import MCPClient, MCPError  # noqa: E402
 from fit_primitives import cavity_section, hollow_section, sketch_entities  # noqa: E402
-
-
-HYDRANT_RED = [0.86, 0.17, 0.12]
-
-
-def model_color(spec, analysis):
-    """The colour the model is painted, as [r, g, b] in 0…1: the spec's own
-    list when it gives one; otherwise ("scan", or no `color` at all) the
-    scan's dominant colour that `analyze_scan.py` recorded as `scanColor`,
-    and the hydrant's red when the analysis has none. A red model beside a
-    grey scan reads as a shape mismatch, so the scan's colour is the
-    default."""
-    chosen = (spec or {}).get("color", "scan")
-    if isinstance(chosen, str):
-        if chosen != "scan":
-            raise ValueError("color must be 'scan' or [r, g, b], not %r" % chosen)
-        found = (analysis or {}).get("scanColor") or {}
-        return [float(c) for c in found["rgb"]] if found.get("rgb") else list(HYDRANT_RED)
-    return [float(c) for c in chosen]
-
-
-def color_option(values):
-    """`--color scan` or `--color R G B` as a spec's `color` value."""
-    if values is None or list(values) == ["scan"]:
-        return "scan"
-    if len(values) != 3:
-        raise SystemExit("--color takes 'scan' or three numbers, not %r" % (values,))
-    return [float(v) for v in values]
+# Re-exported: the films, the reel and the tests take the colour rule from
+# here; `run_corpus.py` imports it from `spec_color` so it stays numpy-free.
+from spec_color import HYDRANT_RED, model_color, color_option  # noqa: E402,F401
 
 
 def unit(v):

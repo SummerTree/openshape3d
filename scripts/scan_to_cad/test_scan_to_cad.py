@@ -680,6 +680,59 @@ class ScanColorTests(unittest.TestCase):
         for got, want in zip(found["rgb"], [200 / 255, 30 / 255, 40 / 255]):
             self.assertAlmostEqual(got, want, delta=0.01)
 
+    def test_base_colour_factor_multiplies_in_linear_light(self):
+        # glTF's baseColorFactor scales the texture in linear light: half
+        # of white is 0.5 linear, 0.735 in sRGB — not a mid grey of 0.5.
+        import analyze_scan as A
+        from PIL import Image
+        quad = self.textured_quad(Image.new("RGB", (16, 16), (255, 255, 255)))
+        quad.visual.material.baseColorFactor = [0.5, 0.5, 0.5, 1.0]
+        found = A.scan_color_record(quad)
+        for c in found["rgb"]:
+            self.assertAlmostEqual(c, 0.735, delta=0.01)
+        # The curve is its own inverse, and 0.5 linear is the known 0.735.
+        self.assertAlmostEqual(float(A.linear_to_srgb(A.srgb_to_linear(0.3))), 0.3, places=6)
+        self.assertAlmostEqual(float(A.linear_to_srgb(0.5)), 0.7354, places=3)
+
+    def test_color_option_takes_scan_or_three_numbers_only(self):
+        from build_hydrant import color_option
+        self.assertEqual(color_option(None), "scan")
+        self.assertEqual(color_option(["scan"]), "scan")
+        self.assertEqual(color_option(["0.1", "0.2", "0.3"]), [0.1, 0.2, 0.3])
+        for bad in (["scan", "1", "2"], ["0.1", "0.2"], ["red"], ["a", "b", "c"]):
+            with self.assertRaises(SystemExit):
+                color_option(bad)
+
+    def test_every_profile_writing_recursion_of_analyze_forwards_the_source(self):
+        # analyze() traces an open drum again when its rim comes out at the
+        # bottom, and the inner call is the one that writes profile.json —
+        # so it must carry `source`, or the profile has no scanColor and
+        # the model falls back to hydrant red. A full run on a synthetic
+        # cup takes 40 s, so the call is checked where it stands.
+        import ast
+        with open(os.path.join(HERE, "analyze_scan.py")) as f:
+            tree = ast.parse(f.read())
+        analyze = next(n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name == "analyze")
+        recursions = [n for n in ast.walk(analyze)
+                      if isinstance(n, ast.Call) and getattr(n.func, "id", None) == "analyze"]
+        self.assertTrue(recursions)
+        for call in recursions:
+            keywords = {k.arg: k.value for k in call.keywords}
+            writes = not (isinstance(keywords.get("out_dir"), ast.Constant) and keywords["out_dir"].value is None)
+            if writes:
+                self.assertIn("source", keywords, ast.unparse(call))
+
+    def test_the_colour_resolver_is_standard_library_only(self):
+        # `run_corpus.py` runs under any python3 and imports the resolver
+        # from `spec_color`; it must not pull numpy in behind it.
+        import ast
+        with open(os.path.join(HERE, "spec_color.py")) as f:
+            tree = ast.parse(f.read())
+        imported = [n.names[0].name for n in ast.walk(tree) if isinstance(n, (ast.Import, ast.ImportFrom))]
+        self.assertEqual(imported, [])
+        with open(os.path.join(HERE, "run_corpus.py")) as f:
+            self.assertNotIn("from build_hydrant", f.read())
+
     def test_model_color_resolves_the_spec_against_the_analysis(self):
         from build_hydrant import model_color, HYDRANT_RED
         analysis = {"scanColor": {"rgb": [0.2, 0.4, 0.8], "share": 0.7, "source": "texture"}}

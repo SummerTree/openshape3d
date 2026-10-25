@@ -865,13 +865,27 @@ from the scan's own texture:
   file's scene (the cropped copy may have lost its texture); the scene is
   loaded once and shared with the geometry, because a 4096² RGBA PNG
   costs five seconds to decode and the colour itself takes 0.1–0.6 s.
-- `build_hydrant.model_color(spec, analysis)`: a spec `color` that is a
-  list is itself; `"scan"` or no `color` at all is the analysis's
-  `scanColor`, and hydrant red when the analysis has none (older
-  analyses). `build_hydrant.py --color scan` (the default now),
-  `run_corpus.py` (the build and `inspect_fit.py --model-color` painted
-  alike), `demo_video.py take --spec` and `reel.py` all resolve the colour
-  this way; every corpus spec now says `"color": "scan"`.
+- `spec_color.model_color(spec, analysis)` (re-exported by
+  `build_hydrant`): a spec `color` that is a list is itself; `"scan"` or
+  no `color` at all is the analysis's `scanColor`, and hydrant red when
+  the analysis has none (older analyses). `build_hydrant.py --color scan`
+  (the default now), `run_corpus.py` (the build and `inspect_fit.py
+  --model-color` painted alike), `demo_video.py take --spec` and `reel.py`
+  all resolve the colour this way; every corpus spec now says `"color":
+  "scan"`. The resolver lives in its own standard-library-only module
+  because `run_corpus.py` runs under whatever `python3` is on the path and
+  hands the venv to the scripts it launches — importing it from
+  `build_hydrant` dragged numpy in and broke `python3 run_corpus.py`.
+  `--color` refuses anything but `scan` or three numbers with the usage
+  line (`--color scan 1 2` used to die in `float('scan')`).
+- Two edges fixed in review: the base-colour factor multiplies in linear
+  light (glTF's rule — half of white is 0.735 in sRGB, not 0.5; none of
+  the ten corpus scans carries a factor, so their swatches did not move),
+  and `analyze()`'s re-trace of a drum whose open rim came out at the
+  bottom now forwards `source`, so the inner call that writes
+  `profile.json` records `scanColor` too (checked on a synthetic cup
+  standing on its rim: the re-trace fires and the profile carries the
+  colour; a test reads the call in place because a full run takes 40 s).
 
 Measured on the ten corpus scans (sRGB in 0…1, the share of the samples
 in the winning cluster): rusty extinguisher 0.49 0.28 0.27 (42 %), the
@@ -883,7 +897,9 @@ was the light one at 40 %), beer mug 0.87 0.88 0.87 (47 %), truck wheel
 0.25 0.23 0.24 (36 %, lifted from a near-black tyre), pipe valve 0.38
 0.38 0.34 (41 %). Offline tests: a quad with a 70/30 texture gives the
 70 % colour within 0.03, a 45 % white / 40 % blue / 15 % yellow texture
-gives blue, vertex colours and a plain mesh, `model_color`'s cases.
+gives blue, a white texture under a 0.5 factor gives 0.735, vertex
+colours and a plain mesh, `model_color`'s and `--color`'s cases, and that
+the resolver imports nothing.
 
 ## Gotchas
 
