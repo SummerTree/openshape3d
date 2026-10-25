@@ -686,6 +686,196 @@ def estimate_noise(h, radius, azimuth, band=2.0, sectors=36):
     return 1.0
 
 
+def polygon_radius(theta, sides, apothem, phase):
+    """The distance from the axis to a regular polygon's outline at the
+    azimuth `theta` (radians): apothem / cos of the angle from the nearest
+    flat's normal. `phase` is the azimuth of one flat's outward normal."""
+    period = 2 * math.pi / sides
+    t = ((np.asarray(theta, dtype=float) - phase + period / 2) % period) - period / 2
+    return apothem / np.cos(t)
+
+
+def fit_polygon(theta, r, sides, step_deg=1.0):
+    """The regular `sides`-gon that best follows the sector radii `r` at
+    the azimuths `theta` (radians): the phase (a flat's normal) searched
+    in `step_deg` steps over one period, the apothem the median of
+    r · cos(angle from that flat's normal) — on a true polygon that
+    product is the apothem in every sector. Returns (median residual,
+    phase, apothem, residual per sector)."""
+    theta, r = np.asarray(theta, dtype=float), np.asarray(r, dtype=float)
+    period = 2 * math.pi / sides
+    phases = np.arange(0.0, period, math.radians(step_deg))
+    t = ((theta[None, :] - phases[:, None] + period / 2) % period) - period / 2
+    c = np.cos(t)
+    a = np.median(r[None, :] * c, axis=1)
+    res = np.abs(r[None, :] - a[:, None] / c)
+    score = np.median(res, axis=1)
+    k = int(np.argmin(score))
+    return float(score[k]), float(phases[k]), float(a[k]), res[k]
+
+
+def find_nuts(h, radius, azimuth, facing, band_mm, point_noise, sides=(4, 6, 8), sectors=72, min_share=0.8,
+              min_height=4.0, debug=False):
+    """Polygonal bands on the axis — a hex nut, a square collar, an
+    octagonal boss — on the surface the points describe: over windows of
+    height, for each radius level the window's outward-facing points
+    cluster at, the radius against azimuth (`sectors` sectors; a
+    hexagon's flats are 60° wide, so 72 of 5° resolve them) is fitted
+    with a regular n-gon (`fit_polygon`) for each n in `sides`. The
+    n-gon is taken when at least `min_share` of ALL the sectors lie
+    within a tolerance of it (max(3 × the scanner's noise, 0.5 mm,
+    2.5 % of the apothem)), its residual is under half the circle's
+    (the same sectors against their median radius — a round collar
+    fits a circle better than any polygon), and the corner stands
+    clear above the flat by max(1 mm, 2.5 tolerances): an octagon of
+    apothem 22 mm rises 1.8 mm at its corners and is within a noisy
+    scan's reach, a hexagon of the same size 3.4 mm. Windows that agree
+    on n, the apothem (within max(1 mm, 4 %)) and the phase (within 4°)
+    join into one record; a record is at least two windows and
+    `min_height` tall. Returns [{h0, h1, sides, acrossFlatsMM,
+    phaseDeg, share, contrastMM, residualMM}], `phaseDeg` the azimuth
+    of one flat's outward normal in [0, 360 / n) — the sketch's x axis
+    for `build_hydrant.nut_sections`."""
+    h, radius, azimuth = np.asarray(h, dtype=float), np.asarray(radius, dtype=float), np.asarray(azimuth, dtype=float)
+    keep = np.asarray(facing, dtype=bool) & (radius > 1.0)
+    h, radius, azimuth = h[keep], radius[keep], azimuth[keep]
+    if len(h) < 100:
+        return []
+    window = max(2.0 * band_mm, 2.0)
+    sector_of = ((azimuth + 180.0) / (360.0 / sectors)).astype(int) % sectors
+    theta = np.radians((np.arange(sectors) + 0.5) * (360.0 / sectors) - 180.0)
+    rows = []                                    # (h_lo, h_hi, sides, apothem, phase, share, contrast, residual)
+    for lo in np.arange(float(h.min()), float(h.max()), window):
+        sel = (h >= lo) & (h < lo + window)
+        if sel.sum() < 4 * sectors:
+            continue
+        r_w, s_w = radius[sel], sector_of[sel]
+        # The radius levels the window's surface sits at: the modes of a
+        # 1 mm histogram, at least 4 mm apart, each holding a tenth of the
+        # points (a nut inside a crown: two levels in one window).
+        bins = np.arange(0.0, r_w.max() + 2.0, 1.0)
+        counts, _ = np.histogram(r_w, bins)
+        levels = []
+        for k in np.argsort(counts)[::-1]:
+            if counts[k] < max(30, 0.1 * len(r_w)):
+                break
+            centre = bins[k] + 0.5
+            if all(abs(centre - lv) >= 4.0 for lv in levels):
+                levels.append(centre)
+            if len(levels) >= 3:
+                break
+        best_row = None
+        for level in levels:
+            near = np.abs(r_w - level) <= 1.5
+            if near.sum() < 20:
+                continue
+            level = float(np.median(r_w[near]))
+            for n in sides:
+                reach = level / math.cos(math.pi / n)
+                tol = max(3.0 * point_noise, 0.5, 0.025 * level)
+                band = (r_w >= level - 2.0 * tol - 1.0) & (r_w <= reach + 2.0 * tol + 1.0)
+                r_sec = np.full(sectors, np.nan)
+                for j in range(sectors):
+                    rj = r_w[band & (s_w == j)]
+                    if len(rj) >= 3:
+                        r_sec[j] = np.median(rj)
+                present = ~np.isnan(r_sec)
+                if present.sum() < min_share * sectors:
+                    continue
+                score, phase, apothem, res = fit_polygon(theta[present], r_sec[present], n)
+                if apothem <= 1.0:
+                    continue
+                contrast = apothem / math.cos(math.pi / n) - apothem
+                circle = float(np.median(np.abs(r_sec[present] - np.median(r_sec[present]))))
+                share = float((res <= tol).sum()) / sectors
+                ok = (share >= min_share and score <= 0.5 * circle and score <= tol
+                      and contrast >= max(1.0, 2.5 * tol))
+                if debug:
+                    print("nut? h %.0f level %.1f n %d: apothem %.1f phase %.0f° share %.2f residual %.2f (circle %.2f) contrast %.1f tol %.2f %s" % (
+                        lo, level, n, apothem, math.degrees(phase), share, score, circle, contrast, tol, "OK" if ok else ""))
+                if ok and (best_row is None or score / contrast < best_row[7] / best_row[6]):
+                    best_row = (lo, lo + window, n, apothem, phase, share, contrast, score)
+        if best_row is not None:
+            rows.append(best_row)
+    # Windows that agree join into one nut.
+    nuts, group = [], []
+
+    def close(group):
+        if len(group) < 2:
+            return
+        h0, h1 = group[0][0], group[-1][1]
+        if h1 - h0 < min_height:
+            return
+        n = group[0][2]
+        apothem = float(np.median([g[3] for g in group]))
+        period = 2 * math.pi / n
+        phase = math.atan2(np.mean([math.sin(g[4] * n) for g in group]), np.mean([math.cos(g[4] * n) for g in group])) / n
+        phase %= period
+        nuts.append({"h0": round(float(h0), 2), "h1": round(float(h1), 2), "sides": int(n),
+                     "acrossFlatsMM": round(2.0 * apothem, 2), "phaseDeg": round(math.degrees(phase), 2),
+                     "share": round(float(np.mean([g[5] for g in group])), 3),
+                     "contrastMM": round(float(np.mean([g[6] for g in group])), 2),
+                     "residualMM": round(float(np.mean([g[7] for g in group])), 3)})
+
+    for row in rows:
+        if group:
+            last = group[-1]
+            period = 360.0 / row[2]
+            d_phase = abs((math.degrees(row[4] - last[4]) + period / 2) % period - period / 2)
+            same = (row[2] == last[2] and abs(row[0] - last[1]) < 1e-6
+                    and abs(row[3] - last[3]) <= max(1.0, 0.04 * last[3]) and d_phase <= 4.0)
+            if not same:
+                close(group)
+                group = []
+        group.append(row)
+    close(group)
+    return nuts
+
+
+def nut_samples(mesh, origin, axis, u, v, samples=60000, h_range=None, r_max=None, seed=7):
+    """Points over the whole mesh's surface in a body's frame — (h, radius,
+    azimuth in degrees, facing out) — for `find_nuts`: a nut's flats are
+    faces no normal line through the axis claims, so the faces labelled
+    a body's own may lack them, and the detector reads the scan itself
+    about the body's axis, within `h_range` and `r_max`."""
+    if not len(mesh.faces):
+        return None
+    pts, face_index = trimesh.sample.sample_surface(mesh, int(samples), seed=seed)
+    pts = np.asarray(pts, dtype=float)
+    normals = np.asarray(mesh.face_normals, dtype=float)[face_index]
+    h = (pts - origin) @ axis
+    perp = (pts - origin) - np.outer(h, axis)
+    radius = np.linalg.norm(perp, axis=1)
+    keep = np.ones(len(h), dtype=bool)
+    if h_range is not None:
+        keep &= (h >= h_range[0]) & (h <= h_range[1])
+    if r_max is not None:
+        keep &= radius <= r_max
+    with np.errstate(invalid="ignore", divide="ignore"):
+        facing = (perp * normals).sum(axis=1) > 0.2 * radius
+    azimuth = np.degrees(np.arctan2(perp @ v, perp @ u))
+    return h[keep], radius[keep], azimuth[keep], facing[keep]
+
+
+def clamp_bands_to_nuts(bands, nuts, point_noise):
+    """The band radii over a nut's span held to its apothem — the revolve
+    then runs inside the flats and the polygon prism carries the
+    corners; a round ring at the mean radius pokes out of the flats and
+    misses the corners. Only a band that sits on the nut's own level is
+    clamped: a hex nut inside a crown (the hydrant's) leaves the crown's
+    ring alone. Returns how many bands moved."""
+    moved = 0
+    for nut in nuts:
+        a = nut["acrossFlatsMM"] / 2.0
+        reach = a / math.cos(math.pi / nut["sides"])
+        slack = max(1.0, 3.0 * point_noise)
+        for b in bands:
+            if nut["h0"] - 1e-6 <= b["h"] <= nut["h1"] + 1e-6 and a < b["median"] <= reach + slack:
+                b["median"] = a
+                moved += 1
+    return moved
+
+
 def surface_grid(h, radius, azimuth, cell, sectors=24, min_share=0.35, n_radial=None, n_axial=None):
     """Every point collapsed to (r, h): a cell of that grid is SURFACE of
     the body of revolution when points reach it from at least `min_share`
@@ -947,14 +1137,16 @@ def refine_section(points, h, radius, cell):
 
 def analyze(mesh, band_mm=None, lump_margin_mm=6.0, out_dir=None, name="scan", epsilon=None, debug=False,
             axis_choice="auto", flip=False, samples=200000, multi=True, secondary=False, axis_origin=None,
-            up_rule="y", _reflipped=False, source=None):
+            up_rule="y", _reflipped=False, source=None, nut_mesh=None):
     """The scan as a body of revolution: its axis, the profile along it,
     the bosses off it. With `multi`, the axis finder (`fit_axes`) looks for
     more bodies of revolution first — a valve's pipe, branches and side
     port on their own axes — and each is traced on its own (this function
     again, `secondary=True`: no ground trim, no bosses, no flip, the given
     axis kept) and listed under `bodies`; the main trace then sees only
-    the faces that are the main body's or nobody's."""
+    the faces that are the main body's or nobody's. `nut_mesh` is the
+    mesh the polygonal-band detector (`find_nuts`) reads instead of this
+    one — the whole scan, for a body traced on its own faces."""
     points = np.asarray(mesh.vertices, dtype=float)
     selection, pool, face_labels, trace_faces = None, None, None, None
     extra = None
@@ -1540,6 +1732,28 @@ def analyze(mesh, band_mm=None, lump_margin_mm=6.0, out_dir=None, name="scan", e
         for b in bosses:
             b["centerHeightMM"] = round(b["centerHeightMM"] - drop_h, 1)
         origin = origin + axis * drop_h
+    # Polygonal bands on the axis — a hex nut, a square collar — read off
+    # the scan itself about this axis (`nut_samples`: a nut's flats are
+    # faces no normal line claims, so a body's own faces may lack them),
+    # in the frame the profile is in. The bands over a nut are held to
+    # its apothem (`clamp_bands_to_nuts`): the revolve runs inside the
+    # flats and the build's polygon prism carries the corners.
+    nuts = []
+    nut_source = nut_mesh if nut_mesh is not None else (cropped if cropped is not None else mesh)
+    if len(bands) >= 2 and nut_source is not None and len(nut_source.faces):
+        # Dense enough that a 2 mm window round a 22 mm nut holds a few
+        # points in every 5° sector: about three per mm² of the scan.
+        nut_count = int(min(3_000_000, max(3 * int(samples or 0), 600_000, 3.0 * float(nut_source.area))))
+        sampled_nuts = nut_samples(nut_source, origin, axis, u, v, samples=nut_count,
+                                   h_range=(-band_mm, height + band_mm), r_max=3.0 * float(body_r.max()) + 10.0)
+        if sampled_nuts is not None:
+            nuts = find_nuts(*sampled_nuts, band_mm=band_mm, point_noise=point_noise, debug=debug)
+        for nut in nuts:
+            print("nut: a %d-sided %s %.0f mm across the flats over h %.0f–%.0f (flat normal at %.0f°, %.0f%% of the sectors within tolerance)" % (
+                nut["sides"], "hex nut" if nut["sides"] == 6 else ("square collar" if nut["sides"] == 4 else "octagonal nut"),
+                nut["acrossFlatsMM"], nut["h0"], nut["h1"], nut["phaseDeg"], 100 * nut["share"]))
+        if nuts:
+            clamp_bands_to_nuts(bands, nuts, point_noise)
     # Polyline for the revolve: (radius, height) from the body radii, with a
     # three-band running median against scanner noise, except where the
     # profile steps (a flange edge must stay sharp).
@@ -1727,7 +1941,7 @@ def analyze(mesh, band_mm=None, lump_margin_mm=6.0, out_dir=None, name="scan", e
         return analyze(mesh, band_mm=band_mm, lump_margin_mm=lump_margin_mm, out_dir=out_dir, name=name,
                        epsilon=epsilon, debug=debug, axis_choice=axis_choice, flip=flip, samples=samples,
                        multi=multi, secondary=secondary, axis_origin=axis_origin, up_rule="wider", _reflipped=True,
-                       source=source)
+                       source=source, nut_mesh=nut_mesh)
     # One radius per height cannot describe a dished wheel: a band there
     # holds two full rings far apart (the tyre and the hub) with nothing
     # between. Such a part gets its whole half-section traced instead.
@@ -1778,6 +1992,7 @@ def analyze(mesh, band_mm=None, lump_margin_mm=6.0, out_dir=None, name="scan", e
         "profileSegments": segments,
         "sectionLoop": section_loop,
         "windows": windows,
+        "nuts": nuts,
         "openTop": open_top,
         "bosses": bosses,
         "boundsMM": {"min": [float(x) for x in mesh.bounds[0]], "max": [float(x) for x in mesh.bounds[1]]},
@@ -1849,6 +2064,8 @@ def extend_profile(a, start_mm=0.0, end_mm=0.0):
         a["profile"] = [[r0, 0.0]] + a["profile"]
         a["profileSegments"] = [{"kind": "line", "a": [r0, 0.0], "b": [r0, h0]}] + a["profileSegments"]
         a["heightMM"] = round(float(a["heightMM"]) + start_mm, 2)
+        for nut in a.get("nuts") or []:
+            nut["h0"], nut["h1"] = round(nut["h0"] + start_mm, 2), round(nut["h1"] + start_mm, 2)
     if end_mm > 0:
         top = float(a["heightMM"])
         last = a["profileSegments"][-1]
@@ -1904,6 +2121,11 @@ def trim_profile(a, start_mm=0.0, end_mm=0.0):
             seg["b"] = [seg["b"][0], seg["b"][1] - lo]
             if "center" in seg:
                 seg["center"] = [seg["center"][0], seg["center"][1] - lo]
+        # A nut keeps its span in the new frame — one at the root is cut
+        # off with the root here and runs on into the parent, which is
+        # where it sits.
+        for nut in a.get("nuts") or []:
+            nut["h0"], nut["h1"] = round(nut["h0"] - lo, 2), round(nut["h1"] - lo, 2)
     a["profile"] = [[round(float(r), 2), round(float(hh), 2)] for r, hh in profile]
     a["profileSegments"] = segments
     a["heightMM"] = round(hi - lo, 2)
@@ -1920,7 +2142,7 @@ def secondary_bodies(mesh, selection, face_labels, name, samples, lump_margin_mm
     bodies = []
     keys = ("name", "axisOrigin", "axisDirection", "azimuthZero", "azimuthNinety", "heightMM", "profile",
             "profileSegments", "bodyRadiusMM", "maxRadiusMM", "bandMM", "epsilonMM", "noiseMM", "topNotARingMM",
-            "extendedMM", "trimmedMM")
+            "extendedMM", "trimmedMM", "nuts")
     import fit_axes
     jobs = []
     for k, ax in enumerate(selection["axes"][1:], 1):
@@ -1953,11 +2175,14 @@ def secondary_bodies(mesh, selection, face_labels, name, samples, lump_margin_mm
         print("== body %s: %d faces on its own axis" % (tag, len(faces_k)))
         try:
             # The scanner's noise is the scan's, not the body's: the main
-            # trace's band and simplifier serve every body.
+            # trace's band and simplifier serve every body. The nut
+            # detector reads the whole scan about this axis: a nut at the
+            # root is seen before the root is trimmed, and its flats are
+            # faces the labelling may not have given this body.
             a = analyze(sub, out_dir=None, name="%s-body%s" % (name, tag), axis_choice=choice,
                         axis_origin=np.asarray(ax["origin"], dtype=float), flip=False,
                         samples=max(40000, int(samples) // 3), multi=False, secondary=True,
-                        lump_margin_mm=lump_margin_mm, band_mm=band_mm, epsilon=epsilon)
+                        lump_margin_mm=lump_margin_mm, band_mm=band_mm, epsilon=epsilon, nut_mesh=mesh)
         except Exception as error:  # noqa: BLE001 — a body too thin to trace is left to the residual fit
             print("   body %s not traced: %s" % (tag, error))
             continue

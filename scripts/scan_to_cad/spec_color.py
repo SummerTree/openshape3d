@@ -1,5 +1,5 @@
 """The colour a part's model is painted, resolved from its spec and its
-analysis.
+analysis — and the words for a nut record, which the same scripts share.
 
 Standard library only, on purpose: `run_corpus.py` runs under whatever
 `python3` is on the path and hands the venv interpreter to the scripts it
@@ -9,6 +9,15 @@ must not drag numpy in with it.
 """
 
 HYDRANT_RED = [0.86, 0.17, 0.12]
+
+
+def nut_words(nut):
+    """A polygonal band (`analyze_scan.find_nuts`' record) in words: "a
+    46 mm hex nut, 18 mm tall", "a 40 mm square collar, 20 mm tall", "a
+    60 mm octagonal nut, 24 mm tall"."""
+    sides = int(nut["sides"])
+    what = {4: "square collar", 6: "hex nut", 8: "octagonal nut"}.get(sides, "%d-sided collar" % sides)
+    return "a %.0f mm %s, %.0f mm tall" % (float(nut["acrossFlatsMM"]), what, float(nut["h1"]) - float(nut["h0"]))
 
 
 def model_color(spec, analysis):

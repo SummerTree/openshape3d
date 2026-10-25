@@ -116,8 +116,8 @@ def modelling_calls(calls):
 def take(args):
     with open(os.path.join(args.analysis, "profile.json")) as f:
         analysis = json.load(f)
-    from build_hydrant import body_section, boss_section, unit, world, secondary_sections, revolve_secondary, window_sections, cut_window, model_color
-    from build_features import build_feature, feature_caption, shift_feature
+    from build_hydrant import body_section, boss_section, unit, world, secondary_sections, revolve_secondary, window_sections, cut_window, model_color, nut_sections, extrude_nut
+    from build_features import build_feature, feature_caption, shift_feature, nut_caption
     from mcp_client import MCPError
     spec = args.spec or {}
     label = spec.get("label", "Hydrant")
@@ -244,6 +244,20 @@ def take(args):
                 beat("body%d" % n, captions["body"].format(n=n))
                 try:
                     reply = revolve_secondary(mcp, sec, cad_id, note=False)
+                    if reply.get("failed"):
+                        mcp.os3d("command.run", {"id": "edit.undo"})
+                except MCPError:
+                    pass
+                mcp.os3d("item.setHidden", {"allSketches": True})
+                turn(1.6)
+
+            # The polygonal bands on the axes — a hex nut, a square
+            # collar — each a prism extruded up its axis, as the build
+            # built them, under its own caption.
+            for n, nut in enumerate(nut_sections(analysis, shift=-np.array(analysis["axisOrigin"], dtype=float)), 1):
+                beat("nut%d" % n, captions.get("nut") or nut_caption(nut))
+                try:
+                    reply = extrude_nut(mcp, nut, cad_id, label, note=False)
                     if reply.get("failed"):
                         mcp.os3d("command.run", {"id": "edit.undo"})
                 except MCPError:

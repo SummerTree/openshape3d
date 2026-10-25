@@ -828,6 +828,159 @@ class AxisFinderTests(unittest.TestCase):
 
 
 @unittest.skipUnless(HAVE_DEPS, "needs the scan_to_cad venv (trimesh, numpy, scipy, rtree, pillow)")
+class NutTests(unittest.TestCase):
+    """analyze_scan.find_nuts and build_hydrant.nut_sections: a hexagonal
+    prism on a cylinder is a hex nut (its sides, across-flats and phase
+    read back), a round collar is not, an octagon is eight-sided, a
+    hexagon at a branch's root is recorded on that body, and the polygon
+    the build extrudes has the corners where the scan had them."""
+
+    @staticmethod
+    def prism(n, apothem, phase_deg, z0, z1):
+        import preview_model as P
+        R = apothem / math.cos(math.pi / n)
+        phi = math.radians(phase_deg)
+        loop = np.array([[R * math.cos(phi + math.pi / n + 2 * math.pi * k / n),
+                          R * math.sin(phi + math.pi / n + 2 * math.pi * k / n)] for k in range(n)])
+        return P.extrude_loop(loop, [0, 0, z0], [1, 0, 0], [0, 1, 0], z1 - z0)
+
+    @classmethod
+    def on_a_cylinder(cls, tool):
+        body = trimesh.creation.cylinder(radius=15.0, height=200.0, sections=128)
+        body.apply_translation([0, 0, 100.0])
+        return trimesh.boolean.union([body, tool], engine="manifold")
+
+    @staticmethod
+    def analyse(mesh):
+        import analyze_scan as A
+        return A.analyze(mesh, out_dir=None, name="nut", samples=20000, axis_choice="0,0,1!", multi=False)
+
+    def test_a_hexagonal_prism_on_a_cylinder_is_a_hex_nut(self):
+        a = self.analyse(self.on_a_cylinder(self.prism(6, 23.0, 20.0, 100.0, 118.0)))
+        self.assertEqual(len(a["nuts"]), 1, a["nuts"])
+        nut = a["nuts"][0]
+        self.assertEqual(nut["sides"], 6)
+        self.assertAlmostEqual(nut["acrossFlatsMM"], 46.0, delta=0.02 * 46.0)
+        self.assertLess(abs((nut["phaseDeg"] - 20.0 + 30.0) % 60.0 - 30.0), 3.0)
+        self.assertAlmostEqual(nut["h0"], 100.0, delta=3.0)
+        self.assertAlmostEqual(nut["h1"], 118.0, delta=3.0)
+        self.assertGreaterEqual(nut["share"], 0.8)
+        # The revolve runs inside the flats over the nut's span: nothing
+        # round pokes out of them, the prism carries the corners.
+        inside = [r for r, h in a["profile"] if 100.0 <= h <= 118.0 and r > 16.0]
+        self.assertTrue(inside and max(inside) <= 23.0 + 0.3, a["profile"])
+
+    def test_a_round_collar_is_not_a_nut(self):
+        collar = trimesh.creation.cylinder(radius=23.0, height=18.0, sections=128)
+        collar.apply_translation([0, 0, 109.0])
+        a = self.analyse(self.on_a_cylinder(collar))
+        self.assertEqual(a["nuts"], [])
+        self.assertAlmostEqual(max(r for r, h in a["profile"] if 100.0 <= h <= 118.0), 23.0, delta=0.3)
+
+    def test_an_octagon_is_an_eight_sided_nut(self):
+        a = self.analyse(self.on_a_cylinder(self.prism(8, 30.0, 10.0, 60.0, 84.0)))
+        self.assertEqual([n["sides"] for n in a["nuts"]], [8])
+        self.assertAlmostEqual(a["nuts"][0]["acrossFlatsMM"], 60.0, delta=0.02 * 60.0)
+        self.assertLess(abs((a["nuts"][0]["phaseDeg"] - 10.0 + 22.5) % 45.0 - 22.5), 3.0)
+
+    def test_a_hexagon_at_a_branch_root_is_the_branch_body_s_nut(self):
+        """The T of AxisFinderTests (a body r 30 on y, a pipe r 15 on x
+        running into it at x = 20) with a 34 mm hex nut on the pipe where
+        it meets the body (x 8–20, a flat facing +z). The nut is read on
+        the pipe's own axis before its root is trimmed, recorded on that
+        body, and the build's prism sits where the scan's nut is."""
+        import analyze_scan as A
+        import build_hydrant as B
+        import preview_model as P
+        body = trimesh.creation.cylinder(radius=30.0, height=240.0, sections=96)
+        body.apply_transform(trimesh.transformations.rotation_matrix(math.pi / 2, [1, 0, 0]))
+        body.apply_translation([50.0, 120.0, 0.0])
+        pipe = trimesh.creation.cylinder(radius=15.0, height=160.0, sections=64)
+        pipe.apply_transform(trimesh.transformations.rotation_matrix(math.pi / 2, [0, 1, 0]))
+        pipe.apply_translation([-50.0, 60.0, 0.0])
+        nut = self.prism(6, 17.0, 90.0, 8.0, 20.0)                        # on z; a flat's normal along +y…
+        nut.apply_transform(trimesh.transformations.rotation_matrix(math.pi / 2, [0, 1, 0]))   # …now on x, that flat facing +z? no: (y stays y)
+        nut.apply_translation([0.0, 60.0, 0.0])
+        # After the turn about y the prism's axis is +x and the flat that
+        # faced +y still faces +y; the pipe's azimuth zero is +z, so that
+        # flat's normal sits at ±90° — a corner at 0°, a flat at 30°.
+        mesh = trimesh.boolean.union([trimesh.boolean.union([body, pipe], engine="manifold"), nut], engine="manifold")
+        self.assertTrue(mesh.is_watertight)
+        # The main axis as the corpus gets it: the finder's strongest body
+        # (a refined "0,1,0" is dragged onto the diagonal by the pipe).
+        a = A.analyze(mesh, out_dir=None, name="tee", samples=40000, axis_choice="auto", multi=True)
+        self.assertEqual(len(a["bodies"]), 1, [b.get("tag") for b in a["bodies"]])
+        branch = a["bodies"][0]
+        self.assertEqual(len(branch["nuts"]), 1, branch["nuts"])
+        found = branch["nuts"][0]
+        self.assertEqual(found["sides"], 6)
+        self.assertAlmostEqual(found["acrossFlatsMM"], 34.0, delta=0.02 * 34.0)
+        self.assertLess(abs((found["phaseDeg"] - 30.0 + 30.0) % 60.0 - 30.0), 3.0)
+        self.assertEqual(a["nuts"], [])                                   # nothing polygonal on the body's own axis
+        # In the world: the nut's span along the pipe's axis is x 8–20.
+        o, d = np.array(branch["axisOrigin"]), np.array(branch["axisDirection"])
+        ends = sorted(float((o + d * h)[0]) for h in (found["h0"], found["h1"]))
+        self.assertAlmostEqual(ends[0], 8.0, delta=3.0)
+        self.assertAlmostEqual(ends[1], 20.0, delta=3.0)
+        # The build: one prism on the branch's axis, 34 mm across the
+        # flats, placed where the nut is; the preview unions it in.
+        sections = B.nut_sections(a)
+        self.assertEqual(len(sections), 1)
+        sec = sections[0]
+        self.assertEqual(sec["body"], branch["index"])
+        self.assertEqual(len(sec["entities"]), 6)
+        self.assertAlmostEqual(abs(np.cross(sec["plane"]["xAxis"], sec["plane"]["yAxis"])[0]), 1.0, places=3)
+        self.assertAlmostEqual(min(sec["plane"]["origin"][0], sec["plane"]["origin"][0] + sec["distance"] * np.sign(d[0])), 8.0, delta=3.0)
+        model, notes, parts = P.build_preview(a, sections=64)
+        self.assertIn("nut", [p["what"] for p in parts])
+        self.assertTrue(model.is_watertight, notes)
+        self.assertLess(abs(model.volume - mesh.volume) / mesh.volume, 0.04)
+
+    def test_nut_sections_polygon_has_the_corners_where_the_record_says(self):
+        import build_hydrant as B
+        import preview_model as P
+        analysis = {"axisOrigin": [10.0, -5.0, 2.0], "axisDirection": [0.0, 1.0, 0.0],
+                    "azimuthZero": [0.0, 0.0, 1.0], "azimuthNinety": [-1.0, 0.0, 0.0],
+                    "heightMM": 100.0, "bodyRadiusMM": 15.0, "profile": [[15.0, 0.0], [15.0, 100.0]],
+                    "profileSegments": None, "openTop": None, "sectionLoop": None, "bosses": [], "bodies": [],
+                    "nuts": [{"h0": 40.0, "h1": 58.0, "sides": 6, "acrossFlatsMM": 46.0, "phaseDeg": 20.0, "share": 1.0}]}
+        secs = B.nut_sections(analysis)
+        self.assertEqual(len(secs), 1)
+        sec = secs[0]
+        self.assertEqual(sec["distance"], 18.0)
+        self.assertEqual(sec["plane"]["origin"], [10.0, 35.0, 2.0])
+        x, y = np.array(sec["plane"]["xAxis"]), np.array(sec["plane"]["yAxis"])
+        # x is azimuth zero (+z) turned 20° toward azimuth ninety (−x); the extrude (x × y) runs up the axis.
+        self.assertTrue(np.allclose(x, [-math.sin(math.radians(20.0)), 0.0, math.cos(math.radians(20.0))], atol=1e-6))
+        self.assertTrue(np.allclose(np.cross(x, y), [0.0, 1.0, 0.0], atol=1e-6))
+        # Six corners at the corner radius, the first pair ±30° from the flat's normal (+x of the sketch).
+        pts = [e["a"] for e in sec["entities"]]
+        self.assertEqual(len(pts), 6)
+        R = 23.0 / math.cos(math.pi / 6)
+        for p in pts:
+            self.assertAlmostEqual(math.hypot(*p), R, places=3)
+        angles = sorted(round(math.degrees(math.atan2(p[1], p[0])) % 360.0) for p in pts)
+        self.assertEqual(angles, [30, 90, 150, 210, 270, 330])
+        self.assertEqual(B.nut_words(analysis["nuts"][0]), "a 46 mm hex nut, 18 mm tall")
+        import build_features as BF
+        self.assertEqual(BF.nut_caption(sec), "A 46 mm hex nut · a hexagon on the body's axis, extruded 18 mm and unioned in")
+        # The preview: the cylinder plus what the prism adds outside it.
+        model, notes, parts = P.build_preview(analysis, sections=128)
+        self.assertEqual(notes, [])
+        self.assertEqual([p["what"] for p in parts], ["revolve", "nut"])
+        expected = math.pi * 225.0 * 100.0 + (2 * math.sqrt(3) * 23.0 ** 2 - math.pi * 225.0) * 18.0
+        self.assertAlmostEqual(model.volume, expected, delta=0.01 * expected)
+        self.assertAlmostEqual(float(model.bounds[1][1]), 95.0, places=3)                 # the axis origin sits at y = −5
+
+    def test_the_bands_over_a_nut_are_clamped_but_a_crown_round_it_is_not(self):
+        import analyze_scan as A
+        nut = {"h0": 10.0, "h1": 20.0, "sides": 6, "acrossFlatsMM": 46.0, "phaseDeg": 0.0, "share": 1.0}
+        bands = [{"h": 5.0, "median": 25.0}, {"h": 12.0, "median": 25.0}, {"h": 15.0, "median": 42.0}, {"h": 18.0, "median": 23.5}]
+        self.assertEqual(A.clamp_bands_to_nuts(bands, [nut], 0.1), 2)
+        self.assertEqual([b["median"] for b in bands], [25.0, 23.0, 42.0, 23.0])
+
+
+@unittest.skipUnless(HAVE_DEPS, "needs the scan_to_cad venv (trimesh, numpy, scipy, rtree, pillow)")
 class ScanColorTests(unittest.TestCase):
     """`analyze_scan.scan_color` reads the scan's dominant colour off its
     texture or vertex colours, and `build_hydrant.model_color` resolves a

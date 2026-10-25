@@ -49,7 +49,7 @@ from mcp_client import MCPClient, MCPError  # noqa: E402
 from fit_primitives import cavity_section, hollow_section, sketch_entities  # noqa: E402
 # Re-exported: the films, the reel and the tests take the colour rule from
 # here; `run_corpus.py` imports it from `spec_color` so it stays numpy-free.
-from spec_color import HYDRANT_RED, model_color, color_option  # noqa: E402,F401
+from spec_color import HYDRANT_RED, model_color, color_option, nut_words  # noqa: E402,F401
 
 
 def unit(v):
@@ -286,6 +286,71 @@ def revolve_secondary(mcp, sec, cad_id, note=True):
                     note="revolved about its own axis and unioned into the body" if note else None)
 
 
+def nut_polygon(nut):
+    """The n-gon of a nut record (`analyze_scan.find_nuts`) in its sketch
+    plane: vertices at the corner radius (half the across-flats over
+    cos(π/n)), the first flat's outward normal along +x, so the corners
+    sit at ±π/n from it. Returns [[x, y], …] counter-clockwise."""
+    n = int(nut["sides"])
+    R = nut["acrossFlatsMM"] / 2.0 / math.cos(math.pi / n)
+    return [[round(R * math.cos(math.pi / n + 2 * math.pi * k / n), 4), round(R * math.sin(math.pi / n + 2 * math.pi * k / n), 4)]
+            for k in range(n)]
+
+
+def nut_sections(analysis, shift=None):
+    """Every polygonal band the analysis found on an axis (`nuts` on the
+    main record and on each body under `bodies`: a hex nut, a square
+    collar) as a sketch on the plane normal to that axis at the nut's
+    foot — origin on the axis at h0, x along the first flat's outward
+    normal (azimuthZero turned by phaseDeg), y = axis × x so the extrude
+    (along x × y) runs up the axis — with the n-gon as lines, to extrude
+    by h1 − h0 and union: [{plane, entities, seed, distance, note, label,
+    sides, acrossFlatsMM, body}]. The revolve under it already runs at
+    the inscribed radius over that span (the analysis clamps its bands),
+    so the prism carries the corners and nothing round pokes out of the
+    flats. `shift` is added to every origin (the film stands the scan on
+    the floor). Main-body nuts first, then each body's in the analysis's
+    order."""
+    out = []
+    delta = np.zeros(3) if shift is None else np.asarray(shift, dtype=float)
+    hosts = [(None, analysis)] + [(body["index"], body) for body in analysis.get("bodies", [])]
+    for body_index, host in hosts:
+        axis = unit(host["axisDirection"])
+        u, v = unit(host["azimuthZero"]), unit(host["azimuthNinety"])
+        base = np.asarray(host["axisOrigin"], dtype=float) + delta
+        for k, nut in enumerate(host.get("nuts") or [], 1):
+            distance = float(nut["h1"]) - float(nut["h0"])
+            if distance < 1.0 or nut["acrossFlatsMM"] < 2.0:
+                continue
+            phi = math.radians(float(nut.get("phaseDeg", 0.0)))
+            x = unit(math.cos(phi) * u + math.sin(phi) * v)
+            y = unit(np.cross(axis, x))
+            origin = base + axis * float(nut["h0"])
+            words = nut_words(nut)
+            where = "the body's axis" if body_index is None else "body %d's axis" % body_index
+            out.append({"plane": {"origin": [float(c) for c in origin], "xAxis": [float(c) for c in x],
+                                  "yAxis": [float(c) for c in y],
+                                  "name": "%s %d" % ("Nut" if body_index is None else "Body %d nut" % body_index, k)},
+                        "entities": lines_for(nut_polygon(nut)), "seed": [0.0, 0.0], "distance": round(distance, 3),
+                        "sides": int(nut["sides"]), "acrossFlatsMM": float(nut["acrossFlatsMM"]), "body": body_index,
+                        "h0": float(nut["h0"]), "h1": float(nut["h1"]),
+                        "label": "%s on %s" % (words, where),
+                        "note": "a %d-gon %.0f mm across the flats on a plane normal to %s at h %.0f, extruded %.0f mm up the axis and unioned in" % (
+                            nut["sides"], nut["acrossFlatsMM"], where, nut["h0"], distance)})
+    return out
+
+
+def extrude_nut(mcp, nut, cad_id, label, note=True):
+    """Sketch and extrude one nut (`nut_sections`) up its axis, unioned
+    into `cad_id`. Returns the app's reply."""
+    sk = mcp.os3d("sketch.create", dict(nut["plane"], name=label + " " + nut["plane"]["name"]),
+                  note="a sketch normal to the axis at the nut's foot" if note else None)["sketchID"]
+    mcp.os3d("sketch.addEntities", {"sketchID": sk, "entities": nut["entities"]}, note=nut["note"] if note else None)
+    return mcp.os3d("feature.extrude", {"sketchID": sk, "seedPoint": nut["seed"], "distance": nut["distance"],
+                                        "boolean": "union", "booleanTargets": [cad_id]},
+                    note="extruded up the axis and unioned into the body" if note else None)
+
+
 def boss_section(boss):
     """A boss's measured radius-along profile closed back along its own axis
     (sketch u across the boss, v along it), and a seed inside the loop:
@@ -458,6 +523,28 @@ def build(args):
             mcp.os3d("item.setHidden", {"allSketches": True})
             s.shot("02-body-%d-iso" % n, "isometric")
             s.stage("stage-1-body-%d" % n, cad_id)
+
+        # The polygonal bands on the axes — a hex nut, a square collar —
+        # each a prism extruded up its axis over the revolve, which runs
+        # at the inscribed radius there.
+        nuts = nut_sections(analysis)
+        for n, nut in enumerate(nuts, 1):
+            s.step("Nut %d of %d: %s" % (n, len(nuts), nut["label"]))
+            reply = extrude_nut(mcp, nut, cad_id, args.label)
+            if reply.get("failed"):
+                print("   not built:", reply.get("message"))
+                mcp.os3d("command.run", {"id": "edit.undo"}, note="the refused extrude undone")
+                s.summary.setdefault("nuts", []).append({"label": nut["label"], "ok": False, "message": reply.get("message")})
+                continue
+            vol = next(b for b in reply["bodies"] if b["id"] == cad_id)["volumeMM3"]
+            print("   %d-gon, %.0f mm across the flats, %.0f mm tall; volume → %.0f mm³" % (
+                nut["sides"], nut["acrossFlatsMM"], nut["distance"], vol))
+            s.summary.setdefault("nuts", []).append({"label": nut["label"], "ok": True, "volumeMM3": vol,
+                                                     "sides": nut["sides"], "acrossFlatsMM": nut["acrossFlatsMM"],
+                                                     "heightMM": nut["distance"], "body": nut["body"]})
+            mcp.os3d("item.setHidden", {"allSketches": True})
+            s.shot("02-nut-%d-iso" % n, "isometric")
+            s.stage("stage-1-nut-%d" % n, cad_id)
 
         bosses = [b for b in analysis["bosses"] if b["reachMM"] - b["bodyRadiusMM"] > 15]
         for n, boss in enumerate(bosses, 1):

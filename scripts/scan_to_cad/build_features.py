@@ -27,6 +27,7 @@ from mcp_client import MCPClient, MCPError  # noqa: E402
 from fit_primitives import sketch_entities  # noqa: E402
 from build_hydrant import Session, unit  # noqa: E402
 from build_recipe import revolve_region, radial_frame, seed_inside  # noqa: E402
+from spec_color import nut_words  # noqa: E402
 
 
 def oval_entities(a, b):
@@ -171,6 +172,18 @@ def part_caption(feature):
         tail = ("%s extruded along the branch, unioned in" % what if feature.get("bar")
                 else "%s, extruded and unioned in" % what)
     return "%s · %s" % (head, tail)
+
+
+def nut_caption(nut):
+    """The caption for a polygonal band on an axis (`build_hydrant.
+    nut_sections`' row, or the analysis's own nut record): "A 46 mm hex
+    nut · a hexagon on the body's axis, extruded 18 mm and unioned in"."""
+    words = nut_words(nut)                                   # "a 46 mm hex nut, 18 mm tall"
+    head = words.split(",")[0]
+    head = head[0].upper() + head[1:]
+    shape = {4: "a square", 6: "a hexagon", 8: "an octagon"}.get(int(nut["sides"]), "a %d-gon" % int(nut["sides"]))
+    where = "the body's axis" if nut.get("body") is None else "the branch's axis"
+    return "%s · %s on %s, extruded %.0f mm and unioned in" % (head, shape, where, float(nut["h1"]) - float(nut["h0"]))
 
 
 def feature_caption(feature):
