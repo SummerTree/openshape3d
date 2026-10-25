@@ -370,6 +370,149 @@ class BarFitTests(unittest.TestCase):
         self.assertAlmostEqual(by_axis[2]["plane"]["origin"][2], 100.0, delta=12.0)
 
 
+@unittest.skipUnless(HAVE_DEPS, "needs the scan_to_cad venv (trimesh, numpy, scipy, rtree, pillow)")
+class PartsLibraryTests(unittest.TestCase):
+    """fit_features' parts library: a stadium plate, a hex nut, a bent
+    tube and a hoop come out as the parts they are."""
+
+    def _far_plate(self):
+        """A body the pieces stand clear of (so no end reaches into it)."""
+        import fit_features as FF
+        plate = trimesh.creation.box(extents=(600, 600, 10))
+        plate.apply_translation((0, 0, -300))
+        return FF.surface_tree(plate)
+
+    def test_a_stadium_plate_is_a_lever(self):
+        import fit_features as FF
+        import preview_model as P
+        loop = rounded_rectangle(90, 24, 12, per_arc=16)                 # a stadium 90 × 24 (the arcs meet at r = 12)
+        lever = P.extrude_loop(loop, [30.0, -20.0, 50.0], [math.cos(0.4), math.sin(0.4), 0.0],
+                               [-math.sin(0.4), math.cos(0.4), 0.0], 3.0, symmetric=True)
+        res = FF.extrude_fit(lever, 1.0, 4.0, self._far_plate())
+        self.assertIsNotNone(res)
+        f = res["features"][0]
+        self.assertEqual(f.get("shape", {}).get("kind"), "stadium", f.get("shape"))
+        self.assertAlmostEqual(f["shape"]["lengthMM"], 90.0, delta=4.5)
+        self.assertAlmostEqual(f["shape"]["widthMM"], 24.0, delta=1.2)
+        self.assertEqual(FF.name_part(f), "lever")
+        self.assertGreater(res["coverage"], 0.9)
+        kinds = [s["kind"] for s in f["segments"]]
+        self.assertEqual(kinds.count("arc"), 2)
+        self.assertEqual(kinds.count("line"), 2)
+        # The outline is drawn as the sketch takes it: a closed chain of lines and arcs.
+        ents = F.sketch_entities(f["segments"])
+        self.assertEqual(len(ents), 4)
+        self.assertTrue(FF.point_in_polygon(f["seed"], FF.segments_polyline(f["segments"])))
+
+    def test_a_hexagonal_prism_is_a_nut(self):
+        import fit_features as FF
+        across_flats = 36.0
+        R = across_flats / 2 / math.cos(math.pi / 6)
+        import preview_model as P
+        hexagon = np.array([[R * math.cos(a), R * math.sin(a)] for a in np.linspace(0, 2 * math.pi, 6, endpoint=False) + 0.3])
+        nut = P.extrude_loop(hexagon, [-40.0, 25.0, 80.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0], 7.0, symmetric=True)
+        res = FF.extrude_fit(nut, 1.0, 4.0, self._far_plate())
+        self.assertIsNotNone(res)
+        f = res["features"][0]
+        self.assertEqual(f.get("shape", {}).get("kind"), "hexagon", f.get("shape"))
+        self.assertAlmostEqual(f["shape"]["acrossFlatsMM"], across_flats, delta=0.05 * across_flats)
+        self.assertEqual(FF.name_part(f), "nut")
+        self.assertEqual(len(f["segments"]), 6)
+        self.assertGreater(res["coverage"], 0.9)
+
+    def test_a_bent_tube_is_one_sweep_with_one_radius(self):
+        import fit_features as FF
+        # A 6 mm tube along a quarter circle of 120 mm (an arch), standing clear of the body.
+        t = np.linspace(0, math.pi / 2, 40)
+        spine = np.column_stack([120 * np.cos(t), 120 * np.sin(t), np.zeros_like(t)])
+        rings = []
+        for i in range(len(t)):
+            tangent = np.array([-math.sin(t[i]), math.cos(t[i]), 0.0])
+            n1 = np.array([math.cos(t[i]), math.sin(t[i]), 0.0])
+            n2 = np.cross(tangent, n1)
+            rings.append([spine[i] + 6.0 * (math.cos(a) * n1 + math.sin(a) * n2) for a in np.linspace(0, 2 * math.pi, 24, endpoint=False)])
+        rings = np.array(rings)
+        faces = []
+        k = 24
+        for i in range(len(t) - 1):
+            for j in range(k):
+                a, b = i * k + j, i * k + (j + 1) % k
+                c, d = (i + 1) * k + j, (i + 1) * k + (j + 1) % k
+                faces += [[a, b, d], [a, d, c]]
+        tube = trimesh.Trimesh(vertices=rings.reshape(-1, 3), faces=np.array(faces))
+        tube.apply_translation((0, 0, 100))
+        res = FF.tube_fit(tube, 1.0, 4.0, self._far_plate())
+        self.assertIsNotNone(res)
+        sweeps = [f for f in res["features"] if f["kind"] == "sweep"]
+        self.assertEqual(len(res["features"]), 1, [f["kind"] for f in res["features"]])
+        self.assertEqual(len(sweeps), 1)
+        self.assertEqual(sweeps[0]["profile"]["shape"], "circle", sweeps[0]["profile"])
+        self.assertAlmostEqual(sweeps[0]["profile"]["radius"], 6.0, delta=1.0)
+        self.assertGreater(res["coverage"], 0.8)
+        self.assertEqual(sweeps[0]["attached"], [False, False])
+        self.assertIsNone(FF.name_part(sweeps[0]))                       # no body to hang from, no horn: the rules do not know
+        self.assertEqual(FF.name_part(dict(sweeps[0], attached=[True, True])), "handle")
+        self.assertEqual(FF.name_part(dict(sweeps[0], intoHorn=True)), "hose")
+
+    def test_a_ring_round_the_body_axis_is_a_hoop(self):
+        import fit_features as FF
+        # The body: a cylinder r 100, h 300 on y; the piece: a 10 × 12 mm hoop round it at h 150.
+        body = trimesh.creation.cylinder(radius=100.0, height=300.0, sections=96)
+        body.apply_transform(trimesh.transformations.rotation_matrix(math.pi / 2, [1, 0, 0]))
+        body.apply_translation([0, 150.0, 0])
+        hoop = trimesh.creation.annulus(r_min=100.0, r_max=112.0, height=10.0, sections=96)
+        hoop.apply_transform(trimesh.transformations.rotation_matrix(math.pi / 2, [1, 0, 0]))
+        hoop.apply_translation([0, 150.0, 0])
+        analysis = {"axisOrigin": [0.0, 0.0, 0.0], "axisDirection": [0.0, 1.0, 0.0], "heightMM": 300.0,
+                    "profile": [[100.0, 0.0], [100.0, 300.0]]}
+        frame = FF.body_frame(analysis, 4.0)
+        res = FF.hoop_fit(hoop, 1.0, 4.0, FF.surface_tree(body), body=frame)
+        self.assertIsNotNone(res)
+        self.assertEqual(res["kind"], "hoop")
+        self.assertEqual(len(res["features"]), 1)
+        f = res["features"][0]
+        self.assertEqual(f["kind"], "revolve")
+        self.assertTrue(f["hoop"])
+        self.assertEqual(FF.name_part(f), "hoop")
+        self.assertGreater(abs(f["axis"]["direction"][1]), 0.999)
+        self.assertAlmostEqual(f["radiusMM"], 112.0, delta=1.5)
+        self.assertAlmostEqual(f["lengthMM"], 10.0, delta=3.0)
+        self.assertGreater(res["coverage"], 0.6)
+        # The section is closed (first point = last) so a hollow body keeps its cavity…
+        self.assertEqual(f["profile"][0], f["profile"][-1])
+        self.assertGreater(min(p[0] for p in f["profile"]), 80.0)
+        # …and it revolves to a ring of the right volume, placed on the body.
+        import preview_model as P
+        mesh = P.feature_mesh(f, sections=128)
+        self.assertTrue(mesh.is_watertight)
+        self.assertAlmostEqual(float(mesh.bounds[1][0]), 112.0, delta=1.5)
+        self.assertGreater(mesh.volume, 0.8 * math.pi * (112 ** 2 - 100 ** 2) * 10)
+        # A one-sided bulge is not a hoop (it spans 3 of the 24 sectors)…
+        bulge = trimesh.creation.box(extents=(20, 40, 60))
+        bulge.apply_translation([108.0, 150.0, 0])
+        self.assertIsNone(FF.hoop_fit(bulge, 1.0, 4.0, FF.surface_tree(body), body=frame))
+        # …nor is a ring all the way round that is out of round: the same
+        # hoop stretched 10 % on x has its sectors' outer radii 112 → 123 mm,
+        # a spread of ~11 mm against the max(2 tol, 4 %) = 4.5 allowed.
+        oval = hoop.copy()
+        oval.apply_scale([1.10, 1.0, 1.0])
+        self.assertIsNone(FF.hoop_fit(oval, 1.0, 4.0, FF.surface_tree(body), body=frame))
+        # …nor a round wall standing a few mm proud over most of the body's
+        # height: 24 sectors at one radius, but 120 mm tall on a 216 mm
+        # diameter — a ring is no taller than 0.35 of its diameter.
+        wall = trimesh.creation.annulus(r_min=104.0, r_max=108.0, height=120.0, sections=96)
+        wall.apply_transform(trimesh.transformations.rotation_matrix(math.pi / 2, [1, 0, 0]))
+        wall.apply_translation([0, 150.0, 0])
+        self.assertIsNone(FF.hoop_fit(wall, 1.0, 4.0, FF.surface_tree(body), body=frame))
+        # The same wall only 20 mm tall is a band round the body again.
+        short = trimesh.creation.annulus(r_min=104.0, r_max=108.0, height=20.0, sections=96)
+        short.apply_transform(trimesh.transformations.rotation_matrix(math.pi / 2, [1, 0, 0]))
+        short.apply_translation([0, 150.0, 0])
+        res = FF.hoop_fit(short, 1.0, 4.0, FF.surface_tree(body), body=frame)
+        self.assertIsNotNone(res)
+        self.assertAlmostEqual(res["features"][0]["lengthMM"], 20.0, delta=3.0)
+
+
 def run_inspect(reference, model, out, tolerance, up="y"):
     subprocess.run([sys.executable, "-I", os.path.join(HERE, "inspect_fit.py"), "--reference", reference,
                     "--model", model, "--out", out, "--tolerance", str(tolerance), "--up", up, "--title", "test"],

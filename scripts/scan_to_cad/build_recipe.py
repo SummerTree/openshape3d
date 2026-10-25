@@ -109,10 +109,36 @@ def seed_inside(segments):
     return [float(c[0]), float(c[1])]
 
 
+def closed_profile(profile):
+    """Whether a revolve profile is a closed loop of its own (its first and
+    last points coincide): a hoop's annular section, which must not be
+    closed along the axis — that would fill a bucket."""
+    return len(profile) >= 4 and abs(profile[0][0] - profile[-1][0]) < 1e-6 and abs(profile[0][1] - profile[-1][1]) < 1e-6
+
+
+def revolve_region(profile):
+    """The entities of a revolve profile and a seed point inside them: the
+    half-section closed along the axis, seeded near the axis at mid-height
+    (as every revolve was), or a closed section as it is, seeded at its
+    own centroid (a hoop round a hollow body)."""
+    ents, pts = revolve_entities(profile)
+    if closed_profile(profile):
+        loop = np.array(pts, dtype=float)
+        seed = loop.mean(axis=0)
+        return ents, [float(seed[0]), float(seed[1])]
+    rs = [p[0] for p in pts if p[0] > 0]
+    hs = [p[1] for p in pts]
+    return ents, [min(rs) * 0.5, (min(hs) + max(hs)) / 2]
+
+
 def revolve_entities(profile, h_close=None):
     """Lines for a half-section: axis at u = 0, from (0, h0) out along the
-    profile and back to the axis at (0, h1)."""
-    pts = [[0.0, profile[0][1]]] + [[max(r, 0.0), h] for r, h in profile] + [[0.0, profile[-1][1]]]
+    profile and back to the axis at (0, h1); a closed profile (first point
+    = last) is drawn as the loop it is."""
+    if closed_profile(profile):
+        pts = [[max(r, 0.0), h] for r, h in profile[:-1]]
+    else:
+        pts = [[0.0, profile[0][1]]] + [[max(r, 0.0), h] for r, h in profile] + [[0.0, profile[-1][1]]]
     cleaned = [pts[0]]
     for p in pts[1:]:
         if abs(p[0] - cleaned[-1][0]) > 1e-6 or abs(p[1] - cleaned[-1][1]) > 1e-6:
