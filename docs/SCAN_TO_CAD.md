@@ -1611,6 +1611,75 @@ horn's run covers 89 % of its piece and nothing is left unexplained; the
 valve head's cap (E1 9 500 mm²) is what remains. Beer mug, valve and the
 rusty extinguisher are unchanged to the digit.
 
+### Passages — a branch's bore runs on into its parent (2026-10-26)
+
+#### The build cuts the passage last
+
+A secondary body's bore is drawn in its own revolve loop
+(`bore_chains`), and the union into the parent fills it wherever the
+parent is solid — so a branch bored "through" is still a solid plug
+from the parent's skin in, and the valve's two largest missing patches
+(M1 1 015 mm² on body 3's axis, M2 683 mm² on body 2's) lay 100 % INSIDE
+the model, where the scanner saw the passage continue into the parent's
+chamber. The analysis records that continuation on the bore
+(`bodies[k]["bores"][j]["passage"]`: `depthMM` from the free end plane,
+`rMM` the bore's last radius, `floor`, `capped`, `seenMM`), and the
+build cuts it:
+
+- `build_hydrant.passage_sections(analysis, shift)` lays, for each bore
+  with a passage, a rectangle on the body's own axis plane (the plane
+  `secondary_sections` uses: origin = axisOrigin + shift, x =
+  azimuthZero, y = axis): u from 0 to `rMM`, v from a millimetre OUTSIDE
+  the free end to `depthMM` in from it — a bore at the body's "end" is
+  cut from heightMM + 1 down to heightMM − depthMM, one at its "start"
+  from −1 up to depthMM — with the seed inside the rectangle, a note and
+  a label ("body 3's bore runs on 14 mm into body 0": the run-on is
+  `passage.depthMM − bore.depthMM`). `cut_passage` sketches it and
+  revolves 360° with `boolean: subtract` on the model, as `cut_window`
+  does. A main-body bore never gets one.
+- The cut comes AFTER every union that could fill it: the secondary
+  bodies and the nuts (a nut's prism on the branch would refill the
+  bore), and before the bosses, with a stage `stage-1-passage-N`, a
+  shot, a summary row (`passages`: body, parent, rMM, depthMM, runOnMM,
+  floor, capped, volume) and the words on the body's label. The film
+  (`demo_video.py take`, a `passage{n}` beat captioned by
+  `passage_caption`, no narration line of its own) and the reel cut it at
+  the same point in their rebuilds; `preview_model.passage_cut_mesh` /
+  `build_preview` subtract it after the nuts with a parts row
+  `{"what": "passage", "body", "rMM", "depthMM"}`, and the corpus table's
+  bore string says "r 20 mm through +14 on into body 0"
+  (`run_corpus.bore_lines`).
+
+Measured offline on the valve with the record HAND-WRITTEN (body 3:
+depth 66 r 13.27 to a floor; body 2: depth 60 r 12.38, no floor) before
+the analysis track's detector existed — `preview_model.py` with
+`--all-features` against the corpus run's scan, "before" the corpus's
+own analysis:
+
+| | before | after |
+|---|---|---|
+| IoU | 94.9 % | 94.9 % |
+| model→scan / scan→model mm | 0.71 / 1.08 | 0.81 / 0.97 |
+| missing patches, total | 34, 6 601 mm² | 35, 5 572 mm² |
+| largest missing | **1 015 mm²** on body 3's axis at [68, 147] (FAIL), then 683 on body 2's at [−32, 74] | 552 mm² at the top rim (WARN) — both axis patches gone |
+| excess patches, total | 42, 5 712 mm² | 37, 8 324 mm² |
+| largest excess | 630 mm² at the top rim (WARN) | **2 082 mm²** at [63, 137] on body 3's axis (FAIL), then 1 146 at [−30, 73] on body 2's |
+
+Honestly: the passages open where the scan is open, but at the bore's
+LAST radius, and inside the parent the scanned chamber is wider — the
+cut's own wall stands 8 mm from the scan's and comes back as an excess
+patch the size of that wall (2π · 13.27 · 25 ≈ 2 080 mm²). So the record's
+`rMM` wants the interior radius the scan shows past the parent's skin,
+not the bore's last step, or the passage wants to widen to the chamber;
+that is the analysis track's call, and the build takes whatever `rMM` it
+is handed. Tests (`PassageBuildTests`): `passage_sections` for a free
+end "end" and a free end "start" (v ranges, the overshoot, the seed in
+the loop, the radius, the shifted plane, the words; a main-body bore
+refused), `build_preview` on a solid parent with a bored branch (a probe
+down the branch's axis from the mouth travels ≥ depthMM − 1 with the
+passage and stops at the bore's floor without it; the removed volume;
+`--no-bodies` leaves it out), and the corpus table's words.
+
 ### Results — 2026-10-26, the app run (bores, nuts, levers, the horn refitted)
 
 Built over MCP by `run_corpus.py --analyze`, graded by `inspect_fit.py`;
