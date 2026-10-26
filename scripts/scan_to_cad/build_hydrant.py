@@ -422,7 +422,7 @@ def passages_of(body):
     if "index" not in body:
         return []
     return [(bore, bore["passage"]) for bore in body.get("bores") or []
-            if bore.get("passage") and bore.get("end") in ("start", "end")]
+            if bore.get("passage") and bore.get("end") in ("start", "end") and bore.get("end") != body.get("junction")]
 
 
 def passage_run_on(bore, passage):
@@ -430,9 +430,18 @@ def passage_run_on(bore, passage):
     return max(float(passage["depthMM"]) - float(bore["depthMM"]), 0.0)
 
 
+def passage_into(bore, passage):
+    """How far the cut runs INTO the parent, mm — past the parent's skin,
+    the stretch the union filled (`intoParentMM`; an older record without
+    it falls back to the run-on past the bore). On the valve a passage no
+    deeper than its bore still runs 8 and 14 mm into the parent."""
+    into = passage.get("intoParentMM")
+    return float(into) if into is not None else passage_run_on(bore, passage)
+
+
 def passage_words(body):
-    """", its bore running on 14 mm into body 0" — for the body's label."""
-    return "".join(", its bore running on %.0f mm into body %s" % (passage_run_on(bore, passage), body.get("parent"))
+    """", its bore kept open 14 mm into body 0" — for the body's label."""
+    return "".join(", its bore kept open %.0f mm into body %s" % (passage_into(bore, passage), body.get("parent"))
                    for bore, passage in passages_of(body))
 
 
@@ -466,17 +475,19 @@ def passage_sections(analysis, shift=None):
             plane = {"origin": [float(x) for x in origin], "xAxis": [float(x) for x in unit(body["azimuthZero"])],
                      "yAxis": [float(x) for x in unit(body["axisDirection"])], "name": "Body %d passage" % body["index"]}
             run_on = passage_run_on(bore, passage)
+            into = passage_into(bore, passage)
             parent = body.get("parent")
             why = (" to the floor the scan shows" if passage.get("floor")
                    else " and stopped short of body %s's far skin" % parent if passage.get("capped")
                    else " as deep as the scan shows surface inside it (%.0f mm)" % float(passage.get("seenMM", depth)))
             out.append({"plane": plane, "entities": lines_for(pts), "seed": [r / 2.0, (v0 + v1) / 2.0],
                         "index": body["index"], "parent": parent, "end": end, "rMM": round(r, 2), "depthMM": round(depth, 2),
-                        "runOnMM": round(run_on, 2), "floor": bool(passage.get("floor")), "capped": bool(passage.get("capped")),
-                        "label": "body %d's bore runs on %.0f mm into body %s" % (body["index"], run_on, parent),
+                        "runOnMM": round(run_on, 2), "intoParentMM": round(into, 2),
+                        "floor": bool(passage.get("floor")), "capped": bool(passage.get("capped")),
+                        "label": "body %d's bore kept open %.0f mm into body %s" % (body["index"], into, parent),
                         "note": "the passage: the bore's last radius r %.1f mm carried on along body %d's axis from its %s, "
-                                "%.0f mm deep in all (%.0f past the bore the loop cut)%s, revolved 360° and subtracted" % (
-                                    r, body["index"], end, depth, run_on, why)})
+                                "%.0f mm deep in all, %.0f mm of it inside body %s where the union had filled it%s, "
+                                "revolved 360° and subtracted" % (r, body["index"], end, depth, into, parent, why)})
     return out
 
 
@@ -496,7 +507,7 @@ def passage_caption(sec):
     """The film's caption for a passage: "The bore runs on · body 3's
     passage, 14 mm into body 0, revolved and subtracted"."""
     return "The bore runs on · body %d's passage, %.0f mm into body %s, revolved and subtracted" % (
-        sec["index"], sec["runOnMM"], sec["parent"])
+        sec["index"], sec["intoParentMM"], sec["parent"])
 
 
 def nut_polygon(nut):

@@ -75,7 +75,10 @@ def bore_lines(profile):
                                          bore["rInnerMM"], "through" if bore.get("through") else "%.0f deep" % bore["depthMM"])
             passage = bore.get("passage")
             if passage and "index" in b:
-                line += " +%.0f on into body %s" % (max(float(passage["depthMM"]) - float(bore["depthMM"]), 0.0), b.get("parent"))
+                into = passage.get("intoParentMM")
+                if into is None:
+                    into = max(float(passage["depthMM"]) - float(bore["depthMM"]), 0.0)
+                line += " +%.0f on into body %s" % (float(into), b.get("parent"))
             lines.append(line)
     return lines
 

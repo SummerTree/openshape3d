@@ -1460,7 +1460,10 @@ the bore at a secondary body's FREE end
                  end, never less than the bore's depthMM>,
                 "rMM": <the bore's last profile radius>,
                 "floor": <a floor was seen>, "capped": <the cap set it>,
-                "seenMM": <the deepest slab with surface inside the cylinder>}
+                "seenMM": <the deepest slab with surface inside the cylinder>,
+                "intoParentMM": <how much of that depth lies inside the parent,
+                 past where the axis enters its envelope — the stretch the
+                 union filled; the build's words quote it>}
 
 only when the hole the scan shows runs deeper than the hole the model has
 by more than a slab. The model's hole is the bore the loop cuts only as far
@@ -1526,8 +1529,11 @@ from the parent's skin in, and the valve's two largest missing patches
 the model, where the scanner saw the passage continue into the parent's
 chamber. The analysis records that continuation on the bore
 (`bodies[k]["bores"][j]["passage"]`: `depthMM` from the free end plane,
-`rMM` the bore's last radius, `floor`, `capped`, `seenMM`), and the
-build cuts it:
+`rMM` the bore's last radius, `floor`, `capped`, `seenMM`,
+`intoParentMM` — the part inside the parent, which is what the label,
+the film caption and the corpus row quote: on the valve the passages are
+no deeper than their bores, yet 8 and 14 mm of them lie inside the
+parent), and the build cuts it:
 
 - `build_hydrant.passage_sections(analysis, shift)` lays, for each bore
   with a passage, a rectangle on the body's own axis plane (the plane

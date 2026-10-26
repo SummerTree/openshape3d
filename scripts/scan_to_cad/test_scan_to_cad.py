@@ -1709,8 +1709,10 @@ class PassageDetectTests(unittest.TestCase):
         self.assertGreaterEqual(p["depthMM"], bore["depthMM"])
         self.assertGreater(p["depthMM"], bore["depthMM"] + 10.0)                  # well past what the loop cuts
         self.assertAlmostEqual(p["depthMM"], self.mouth_depth_of_x(branch, 69.0), delta=2.0)   # the far inner wall, x = 50 + 19
-        self.assertEqual(set(p), {"depthMM", "rMM", "floor", "capped", "seenMM"})
+        self.assertEqual(set(p), {"depthMM", "rMM", "floor", "capped", "seenMM", "intoParentMM"})
         self.assertLessEqual(p["seenMM"], p["depthMM"] + 2.0)
+        self.assertGreater(p["intoParentMM"], 10.0)                                 # most of it lies inside the parent
+        self.assertLess(p["intoParentMM"], p["depthMM"])
 
     def test_a_socket_onto_a_solid_parent_has_no_passage(self):
         # The bore ends a millimetre short of the parent's skin: nothing the
@@ -1884,10 +1886,10 @@ class PassageBuildTests(unittest.TestCase):
         # The record's numbers and words.
         self.assertEqual((secs[0]["rMM"], secs[0]["depthMM"], secs[0]["runOnMM"], secs[0]["end"]), (12.38, 60.0, 10.0, "end"))
         self.assertEqual((secs[1]["runOnMM"], secs[1]["floor"], secs[1]["capped"]), (14.0, True, False))
-        self.assertEqual(secs[1]["label"], "body 3's bore runs on 14 mm into body 0")
+        self.assertEqual(secs[1]["label"], "body 3's bore kept open 14 mm into body 0")
         self.assertIn("to the floor the scan shows", secs[1]["note"])
         self.assertIn("as deep as the scan shows surface inside it (60 mm)", secs[0]["note"])
-        self.assertEqual(passage_words(up), ", its bore running on 14 mm into body 0")
+        self.assertEqual(passage_words(up), ", its bore kept open 14 mm into body 0")   # no intoParentMM: the run-on past the bore
         self.assertEqual(passage_words(plain), "")
         self.assertIn("14 mm into body 0", passage_caption(secs[1]))
         # A main-body bore never gets a passage, even with the key on it.
@@ -1967,6 +1969,34 @@ class PassageBuildTests(unittest.TestCase):
             "body 3: r 20 mm through +14 on into body 0",
             "body 4: r 11 mm 14 deep"])
         self.assertEqual(run_corpus.bore_lines({}), [])
+        # A record that says how much lies inside the parent is quoted as such.
+        into = {"bodies": [{"index": 3, "parent": 0, "bores": [{"end": "start", "rInnerMM": 19.54, "depthMM": 52.0, "through": True,
+                            "passage": {"depthMM": 52.0, "rMM": 13.27, "floor": True, "capped": False, "seenMM": 52.0, "intoParentMM": 14.0}}]}]}
+        self.assertEqual(run_corpus.bore_lines(into), ["body 3: r 20 mm through +14 on into body 0"])
+
+    def test_a_passage_no_deeper_than_its_bore_is_still_cut(self):
+        """The valve's case: the scan's floor IS the bore's own floor, the
+        parent's skin is 14 mm before it, and the union filled that stretch.
+        The record's depthMM equals the bore's; the cut must still be laid,
+        and the words say how far it runs into the parent."""
+        from build_hydrant import passage_sections, passage_words, passage_caption, passages_of
+        same = self.branch(3, 0, "end", "start", [0.0, 70.0, 0.0], [0.0, 0.0, -1.0], 73.0, 20.0, 13.3, 52.0,
+                           passage={"depthMM": 52.0, "rMM": 13.27, "floor": True, "capped": False, "seenMM": 52.0,
+                                    "intoParentMM": 14.0})
+        secs = passage_sections(self.parent([same]))
+        self.assertEqual(len(secs), 1)
+        sec = secs[0]
+        self.assertEqual(sec["runOnMM"], 0.0)
+        self.assertEqual(sec["intoParentMM"], 14.0)
+        vs = [c for e in sec["entities"] for c in (e["a"][1], e["b"][1])]
+        self.assertAlmostEqual(min(vs), -1.0, places=4)
+        self.assertAlmostEqual(max(vs), 52.0, places=4)
+        self.assertEqual(passage_words(same), ", its bore kept open 14 mm into body 0")
+        self.assertIn("14 mm into body 0", passage_caption(sec))
+        # A passage on the JUNCTION end (a mis-sided record) is refused, not cut out through the joint.
+        wrong = dict(same, bores=[dict(same["bores"][0], end="end")])
+        self.assertEqual(passages_of(wrong), [])
+        self.assertEqual(passage_sections(self.parent([wrong])), [])
 
 
 if __name__ == "__main__":

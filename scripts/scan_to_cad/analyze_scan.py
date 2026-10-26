@@ -2509,8 +2509,8 @@ def passage_record(a, bore, scan_samples, parent, debug=False, label=""):
     bore the loop cuts (`depthMM`) only as far as the parent's skin: the
     union into the parent fills it from where the axis enters the parent's
     envelope on (the valve's oblique branch is bored 52 mm by its own faces
-    and its parent's skin is 45 mm in, so the built model's hole stopped at
-    45 and the scan's floor at 51 sat inside the solid). So the depth the
+    and its parent's skin is 38 mm in, so the built model's hole stopped at
+    38 and the scan's floor at 51 sat inside the solid). So the depth the
     record carries is the deeper of the passage walk's and the bore's own
     (never less than `depthMM`), and it is recorded when that exceeds
     min(`depthMM`, the entry depth) by more than a slab.
@@ -2556,8 +2556,12 @@ def passage_record(a, bore, scan_samples, parent, debug=False, label=""):
     depth = max(float(depth), depth_bore)
     if depth <= min(depth_bore, h_enter) + slab:
         return None
+    # `intoParentMM`: how much of the cut lies inside the parent — past the
+    # entry — which is what the union filled and what the build's words say
+    # (a passage no deeper than the bore still runs that far into it).
     return {"depthMM": round(depth, 2), "rMM": round(r_last, 2), "floor": bool(floor_seen),
-            "capped": bool(capped), "seenMM": round(float(seen), 2)}, h_enter
+            "capped": bool(capped), "seenMM": round(float(seen), 2),
+            "intoParentMM": round(max(depth - h_enter, 0.0), 2)}, h_enter
 
 
 def secondary_bodies(mesh, selection, face_labels, name, samples, lump_margin_mm, band_mm=None, epsilon=None, debug=False):
