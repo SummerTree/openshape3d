@@ -29,6 +29,11 @@ The recipe (`analysis/profile.json` from `analyze_scan.py`):
    so the accuracy report compares them in place, no registration.
 2. A vertical sketch on the fitted axis: the radial profile as a closed
    polyline, revolved 360°. That is the barrel, flanges, bonnet and nut.
+   Then each body of revolution on its own axis (a valve's branches),
+   unioned in; the polygonal bands (a hex nut) extruded and unioned; and
+   last, every passage — a branch's bore the scan shows running on into
+   its parent — revolved on the branch's axis and subtracted, after every
+   union that could have filled it.
 3. Each detected boss (a hose nozzle, the pumper): a circle on a sketch
    perpendicular to its direction, extruded from inside the body out to
    its reach and unioned; the cap as a second, wider extrude.
@@ -390,10 +395,10 @@ def secondary_sections(analysis, shift=None):
                     "note": section["note"], "index": body["index"], "parent": body.get("parent"),
                     "junction": body.get("junction"), "radiusMM": body["bodyRadiusMM"], "lengthMM": body["heightMM"],
                     "bores": section["bores"],
-                    "label": "body %d: radius ~%.0f mm over %.0f mm on its own axis%s%s" % (
+                    "label": "body %d: radius ~%.0f mm over %.0f mm on its own axis%s%s%s" % (
                         body["index"], body["bodyRadiusMM"], body["heightMM"],
                         "" if body.get("parent") is None else ", into body %s" % body["parent"],
-                        bore_words(section["bores"]))})
+                        bore_words(section["bores"]), passage_words(body))})
     return out
 
 
@@ -408,6 +413,90 @@ def revolve_secondary(mcp, sec, cad_id, note=True):
                                         "axisDirection": [0, 1], "angleDegrees": 360,
                                         "boolean": "union", "booleanTargets": [cad_id]},
                     note="revolved about its own axis and unioned into the body" if note else None)
+
+
+def passages_of(body):
+    """The passages recorded behind a secondary body's bores
+    (`bores[j]["passage"]`, from the analysis): [(bore, passage), …] for
+    the bores that have one. A main-body record (no "index") has none."""
+    if "index" not in body:
+        return []
+    return [(bore, bore["passage"]) for bore in body.get("bores") or []
+            if bore.get("passage") and bore.get("end") in ("start", "end")]
+
+
+def passage_run_on(bore, passage):
+    """How far the passage runs past the bore the loop cuts, mm."""
+    return max(float(passage["depthMM"]) - float(bore["depthMM"]), 0.0)
+
+
+def passage_words(body):
+    """", its bore running on 14 mm into body 0" — for the body's label."""
+    return "".join(", its bore running on %.0f mm into body %s" % (passage_run_on(bore, passage), body.get("parent"))
+                   for bore, passage in passages_of(body))
+
+
+def passage_sections(analysis, shift=None):
+    """Each passage the analysis read behind a secondary body's bore
+    (`bodies[k]["bores"][j]["passage"]`: the bore's last radius carried on
+    along the branch's axis past the parent's skin, as deep as the scan
+    shows interior surface) as a sketch on the body's own axis plane — the
+    plane `secondary_sections` builds: origin = axisOrigin + shift, x =
+    azimuthZero, y = axis — with the rectangle to revolve 360° and SUBTRACT
+    from the whole model: u from 0 to the passage's radius, v from a
+    millimetre OUTSIDE the free end (so the cut opens the mouth cleanly) to
+    the passage's far end, `depthMM` in from the free end plane. A bore at
+    the body's "end" is cut from heightMM + 1 down to heightMM − depthMM;
+    one at its "start" from −1 up to depthMM. Returns [{plane, entities,
+    seed, note, label, index, parent, end, rMM, depthMM, runOnMM, floor,
+    capped}] in the bodies' order. The build cuts these AFTER every union
+    (the branches, the nuts): a union into the parent fills a bore wherever
+    the parent is solid, and a nut's prism would refill one too."""
+    out = []
+    delta = np.zeros(3) if shift is None else np.asarray(shift, dtype=float)
+    for body in analysis.get("bodies", []):
+        for bore, passage in passages_of(body):
+            r, depth, height = float(passage["rMM"]), float(passage["depthMM"]), float(body["heightMM"])
+            if r < 1.0 or depth < 1.0:
+                continue
+            end = bore["end"]
+            v0, v1 = (height + 1.0, height - depth) if end == "end" else (-1.0, depth)
+            pts = [[0.0, v0], [r, v0], [r, v1], [0.0, v1]]
+            origin = np.asarray(body["axisOrigin"], dtype=float) + delta
+            plane = {"origin": [float(x) for x in origin], "xAxis": [float(x) for x in unit(body["azimuthZero"])],
+                     "yAxis": [float(x) for x in unit(body["axisDirection"])], "name": "Body %d passage" % body["index"]}
+            run_on = passage_run_on(bore, passage)
+            parent = body.get("parent")
+            why = (" to the floor the scan shows" if passage.get("floor")
+                   else " and stopped short of body %s's far skin" % parent if passage.get("capped")
+                   else " as deep as the scan shows surface inside it (%.0f mm)" % float(passage.get("seenMM", depth)))
+            out.append({"plane": plane, "entities": lines_for(pts), "seed": [r / 2.0, (v0 + v1) / 2.0],
+                        "index": body["index"], "parent": parent, "end": end, "rMM": round(r, 2), "depthMM": round(depth, 2),
+                        "runOnMM": round(run_on, 2), "floor": bool(passage.get("floor")), "capped": bool(passage.get("capped")),
+                        "label": "body %d's bore runs on %.0f mm into body %s" % (body["index"], run_on, parent),
+                        "note": "the passage: the bore's last radius r %.1f mm carried on along body %d's axis from its %s, "
+                                "%.0f mm deep in all (%.0f past the bore the loop cut)%s, revolved 360° and subtracted" % (
+                                    r, body["index"], end, depth, run_on, why)})
+    return out
+
+
+def cut_passage(mcp, sec, cad_id, note=True):
+    """Sketch and revolve one passage (`passage_sections`) 360° about the
+    body's own axis, subtracted from `cad_id`. Returns the app's reply."""
+    sk = mcp.os3d("sketch.create", sec["plane"],
+                  note="the passage's sketch, on body %d's axis plane" % sec["index"] if note else None)["sketchID"]
+    mcp.os3d("sketch.addEntities", {"sketchID": sk, "entities": sec["entities"]}, note=sec["note"] if note else None)
+    return mcp.os3d("feature.revolve", {"sketchID": sk, "seedPoint": sec["seed"], "axisPoint": [0, 0],
+                                        "axisDirection": [0, 1], "angleDegrees": 360,
+                                        "boolean": "subtract", "booleanTargets": [cad_id]},
+                    note="revolved about the branch's axis and subtracted: the bore runs on into the parent" if note else None)
+
+
+def passage_caption(sec):
+    """The film's caption for a passage: "The bore runs on · body 3's
+    passage, 14 mm into body 0, revolved and subtracted"."""
+    return "The bore runs on · body %d's passage, %.0f mm into body %s, revolved and subtracted" % (
+        sec["index"], sec["runOnMM"], sec["parent"])
 
 
 def nut_polygon(nut):
@@ -669,6 +758,32 @@ def build(args):
             mcp.os3d("item.setHidden", {"allSketches": True})
             s.shot("02-nut-%d-iso" % n, "isometric")
             s.stage("stage-1-nut-%d" % n, cad_id)
+
+        # The passages — a branch's bore the scan shows running on into its
+        # parent — cut LAST among the unions' company: the branch's union
+        # filled its bore where the parent is solid, and a nut's prism (or
+        # any later union) would fill it again. The bosses come after; they
+        # stand on the main body's skin, away from the branches' axes.
+        passages = passage_sections(analysis)
+        for n, pas in enumerate(passages, 1):
+            s.step("Passage %d of %d: %s" % (n, len(passages), pas["label"]))
+            reply = cut_passage(mcp, pas, cad_id)
+            if reply.get("failed"):
+                print("   not cut:", reply.get("message"))
+                mcp.os3d("command.run", {"id": "edit.undo"}, note="the refused cut undone")
+                s.summary.setdefault("passages", []).append({"label": pas["label"], "ok": False, "message": reply.get("message"),
+                                                             "body": pas["index"], "parent": pas["parent"]})
+                continue
+            vol = next(b for b in reply["bodies"] if b["id"] == cad_id)["volumeMM3"]
+            print("   r %.1f mm, %.0f mm deep from the %s (%.0f past the bore); volume → %.0f mm³" % (
+                pas["rMM"], pas["depthMM"], pas["end"], pas["runOnMM"], vol))
+            s.summary.setdefault("passages", []).append({"label": pas["label"], "ok": True, "volumeMM3": vol,
+                                                         "body": pas["index"], "parent": pas["parent"], "end": pas["end"],
+                                                         "rMM": pas["rMM"], "depthMM": pas["depthMM"], "runOnMM": pas["runOnMM"],
+                                                         "floor": pas["floor"], "capped": pas["capped"]})
+            mcp.os3d("item.setHidden", {"allSketches": True})
+            s.shot("02-passage-%d-iso" % n, "isometric")
+            s.stage("stage-1-passage-%d" % n, cad_id)
 
         bosses = [b for b in analysis["bosses"] if b["reachMM"] - b["bodyRadiusMM"] > 15]
         for n, boss in enumerate(bosses, 1):

@@ -9,7 +9,7 @@ turned part: {"label": "Fire extinguisher", "color": [r, g, b] or "scan"
 (the scan's own colour from the analysis, the default), "title":
 "…|…", "subtitle", "titleSay", "name", "credit": "Scan: CC-BY grafi on
 Sketchfab", "captions": {"import", "revolve", "boss" (with {n}), "lug",
-"check"}, "say": {beat: line, with {iou} {calls} {mean} {label}}}. Every
+"check", "nut", "passage", "feature"}, "say": {beat: line, with {iou} {calls} {mean} {label}}}. Every
 key is optional; without the file the words are the fire hydrant's.
 
 `take` records the iPad simulator (`simctl io recordVideo`) while the model
@@ -116,7 +116,7 @@ def modelling_calls(calls):
 def take(args):
     with open(os.path.join(args.analysis, "profile.json")) as f:
         analysis = json.load(f)
-    from build_hydrant import body_section, boss_section, unit, world, secondary_sections, revolve_secondary, window_sections, cut_window, model_color, nut_sections, extrude_nut
+    from build_hydrant import body_section, boss_section, unit, world, secondary_sections, revolve_secondary, window_sections, cut_window, model_color, nut_sections, extrude_nut, passage_sections, cut_passage, passage_caption
     from build_features import build_feature, feature_caption, shift_feature, nut_caption
     from mcp_client import MCPError
     spec = args.spec or {}
@@ -259,6 +259,20 @@ def take(args):
                 try:
                     reply = extrude_nut(mcp, nut, cad_id, label, note=False)
                     if reply.get("failed"):
+                        mcp.os3d("command.run", {"id": "edit.undo"})
+                except MCPError:
+                    pass
+                mcp.os3d("item.setHidden", {"allSketches": True})
+                turn(1.6)
+
+            # A branch's bore the scan shows running on into its parent —
+            # the passage — cut after every union that could fill it (the
+            # branches, the nuts), as the build cuts it, under its own
+            # caption; a beat without a narration line plays its own length.
+            for n, pas in enumerate(passage_sections(analysis, shift=-np.array(analysis["axisOrigin"], dtype=float)), 1):
+                beat("passage%d" % n, captions.get("passage") or passage_caption(pas))
+                try:
+                    if cut_passage(mcp, pas, cad_id, note=False).get("failed"):
                         mcp.os3d("command.run", {"id": "edit.undo"})
                 except MCPError:
                     pass
