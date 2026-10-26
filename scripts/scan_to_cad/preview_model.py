@@ -11,8 +11,8 @@ without the simulator.
 
 Reads `<part>/analysis/profile.json` (the body, its cavity when it is an
 open container, the other bodies of revolution traced on their own axes
-under `bodies` — a valve's pipe and branches, a hydrant's nozzles — and
-its bosses) and `<part>/features/features.json` (the residual features),
+under `bodies` — a valve's pipe and branches, a hydrant's nozzles — their
+nuts and the passages behind their bores, and its bosses) and `<part>/features/features.json` (the residual features),
 keeping only the features `<part>/run/summary.json` says the app built,
 when that file exists. Measures the model against `<part>/run/scan.stl`
 (the app's export of the scan it compared against) or, failing that,
@@ -58,7 +58,7 @@ import trimesh
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
-from build_hydrant import body_section, boss_section, secondary_sections, nut_sections, world, unit  # noqa: E402
+from build_hydrant import body_section, boss_section, secondary_sections, nut_sections, passage_sections, world, unit  # noqa: E402
 from build_features import sweep_sketch, bore_profile  # noqa: E402
 from build_recipe import revolve_region, radial_frame, seed_inside  # noqa: E402
 from fit_primitives import sketch_entities  # noqa: E402
@@ -451,6 +451,16 @@ def nut_mesh(nut):
     return extrude_loop(loop, plane["origin"], plane["xAxis"], plane["yAxis"], float(nut["distance"]))
 
 
+def passage_cut_mesh(sec, sections=96):
+    """One passage (`build_hydrant.passage_sections`): the rectangle from a
+    millimetre outside the branch's free end to the passage's far end,
+    revolved about the branch's axis, as the app's `cut_passage` cuts it.
+    `build_preview` subtracts it from the whole model after the nuts."""
+    plane = sec["plane"]
+    loop = pick_loop(loops_of_entities(sec["entities"]), sec["seed"])
+    return revolve_loop(loop, plane["origin"], plane["xAxis"], plane["yAxis"], sections)
+
+
 def feature_mesh(feature, sections=96):
     kind = feature["kind"]
     if kind == "sweep":
@@ -517,7 +527,8 @@ def build_preview(analysis, features=(), sections=96, bosses=True, secondaries=T
     """The whole model as the app would hold it after the build and the
     features: (mesh, notes, parts) — `parts` says what went in, in the
     build's order: the revolve, its cavity, the bodies on their own axes,
-    the nuts (polygon prisms on the axes), the bosses, the features. A
+    the nuts (polygon prisms on the axes), the passages (a branch's bore
+    run on into its parent, subtracted), the bosses, the features. A
     secondary body's row carries its own mesh under `_mesh` (for a
     placement check; not for the JSON)."""
     notes, parts = [], []
@@ -561,6 +572,19 @@ def build_preview(analysis, features=(), sections=96, bosses=True, secondaries=T
             parts.append({"what": "nut", "label": nut["label"], "sides": nut["sides"], "acrossFlatsMM": nut["acrossFlatsMM"],
                           "h0": nut["h0"], "h1": nut["h1"], "body": nut["body"],
                           "volumeMM3": float(tool.volume) if tool.is_watertight else None})
+    if secondaries:
+        # The passages — a branch's bore running on into its parent — cut
+        # after the branches and the nuts, as the build cuts them: a union
+        # fills a bore wherever the parent is solid.
+        for pas in passage_sections(analysis):
+            try:
+                tool = passage_cut_mesh(pas, sections)
+            except Exception as error:  # noqa: BLE001
+                notes.append("%s could not be drawn: %s" % (pas["label"], str(error)[:120]))
+                continue
+            model = combine(model, tool, "subtract", pas["label"], notes)
+            parts.append({"what": "passage", "body": pas["index"], "parent": pas["parent"], "end": pas["end"],
+                          "rMM": pas["rMM"], "depthMM": pas["depthMM"], "runOnMM": pas["runOnMM"]})
     if bosses:
         for n, boss in enumerate([b for b in analysis.get("bosses", []) if b["reachMM"] - b["bodyRadiusMM"] > 15], 1):
             if not boss.get("profile"):
