@@ -1623,5 +1623,381 @@ class ScanColorTests(unittest.TestCase):
             model_color({"color": "red"}, analysis)
 
 
+class PassageDetectTests(unittest.TestCase):
+    """`analyze_scan.passage_depth` and the `passage` record on a secondary
+    body's bore: a branch's bore carried on into the body it joins, read
+    over the whole scan, to a floor or as far as the scan shows interior
+    surface, never out through the parent's far skin."""
+
+    MOUTH_X = -50.0
+
+    @staticmethod
+    def tee(parent_inner=19.0, bore_to_x=50.0, parent_outer=25.0):
+        """A parent body along y (outer `parent_outer`, 240 long, axis at
+        x = 50) with a closed chamber of radius `parent_inner` inside it
+        (solid when None — a scanner sees a valve's chamber only through
+        its branches, so the chamber's ends are closed), and a branch pipe
+        along x (outer r 15, bore r 11) entering it at 90° at y = 100: the
+        branch's mouth at x = −50, its bore cut from there to `bore_to_x`
+        (past the far skin at x = 75, the bore drills right through the
+        parent). The walls are the valve's proportions (a bore 3–4 mm
+        inside the pipe, a chamber 6 mm inside the body): the axis finder's
+        ring test takes a bore within two tolerances of the outer radius as
+        the same ring, and a hollow part whose inner skin lies farther in
+        than that reads as no body of revolution at all (roundness 0.6,
+        under its 0.7)."""
+        import trimesh
+        rot_y = trimesh.transformations.rotation_matrix(math.pi / 2, [1, 0, 0])
+        rot_x = trimesh.transformations.rotation_matrix(math.pi / 2, [0, 1, 0])
+        parent = trimesh.creation.cylinder(radius=parent_outer, height=240.0, sections=64)
+        parent.apply_transform(rot_y)
+        parent.apply_translation([50.0, 100.0, 0.0])
+        branch = trimesh.creation.cylinder(radius=15.0, height=81.0, sections=48)
+        branch.apply_transform(rot_x)
+        branch.apply_translation([-50.0 + 81.0 / 2, 100.0, 0.0])                # x from −50 to 31: into the parent's wall
+        collar = trimesh.creation.cylinder(radius=17.5, height=6.0, sections=48)  # a lip at the mouth: a plain cylinder's
+        collar.apply_transform(rot_x)                                            # two-point profile is "too short to keep"
+        collar.apply_translation([-47.0, 100.0, 0.0])
+        solid = trimesh.boolean.union([parent, branch, collar], engine="manifold")
+        cutters = []
+        if parent_inner is not None:
+            inner = trimesh.creation.cylinder(radius=parent_inner, height=220.0, sections=64)
+            inner.apply_transform(rot_y)
+            inner.apply_translation([50.0, 100.0, 0.0])
+            cutters.append(inner)
+        bore = trimesh.creation.cylinder(radius=11.0, height=bore_to_x + 60.0, sections=48)
+        bore.apply_transform(rot_x)
+        bore.apply_translation([(bore_to_x - 60.0) / 2, 100.0, 0.0])            # x from −60 to bore_to_x
+        cutters.append(bore)
+        return trimesh.boolean.difference([solid] + cutters, engine="manifold")
+
+    @staticmethod
+    def analyse(mesh):
+        import analyze_scan as A
+        # The parent's axis given (the corpus's finder picks it the same
+        # way on the valve); the finder adds the branch.
+        return A.analyze(mesh, out_dir=None, name="tee", samples=30000, axis_choice="0,1,0!", multi=True)
+
+    def branch_bore(self, a):
+        """The one secondary body and its bore at the free end."""
+        self.assertEqual(len(a["bodies"]), 1, [b.get("tag") for b in a["bodies"]])
+        branch = a["bodies"][0]
+        free = "end" if branch["junction"] == "start" else "start"
+        bores = [b for b in branch["bores"] if b["end"] == free]
+        self.assertEqual(len(bores), 1, branch["bores"])
+        return branch, bores[0]
+
+    @staticmethod
+    def mouth_depth_of_x(branch, x):
+        """How deep along the branch's axis, from its free end's plane, the
+        world plane x = `x` lies."""
+        o, d = np.array(branch["axisOrigin"]), np.array(branch["axisDirection"])
+        if branch["junction"] == "start":
+            mouth, d_in = o + d * branch["heightMM"], -d
+        else:
+            mouth, d_in = o, d
+        return (x - mouth[0]) / d_in[0]
+
+    def test_a_branch_bored_into_a_hollow_parent_runs_on_to_the_far_inner_wall(self):
+        a = self.analyse(self.tee())
+        branch, bore = self.branch_bore(a)
+        self.assertIn("passage", bore, bore)
+        p = bore["passage"]
+        self.assertTrue(p["floor"], p)
+        self.assertFalse(p["capped"], p)
+        self.assertAlmostEqual(p["rMM"], 11.0, delta=0.8)
+        self.assertGreaterEqual(p["depthMM"], bore["depthMM"])
+        self.assertGreater(p["depthMM"], bore["depthMM"] + 10.0)                  # well past what the loop cuts
+        self.assertAlmostEqual(p["depthMM"], self.mouth_depth_of_x(branch, 69.0), delta=2.0)   # the far inner wall, x = 50 + 19
+        self.assertEqual(set(p), {"depthMM", "rMM", "floor", "capped", "seenMM", "intoParentMM"})
+        self.assertLessEqual(p["seenMM"], p["depthMM"] + 2.0)
+        self.assertGreater(p["intoParentMM"], 10.0)                                 # most of it lies inside the parent
+        self.assertLess(p["intoParentMM"], p["depthMM"])
+
+    def test_a_socket_onto_a_solid_parent_has_no_passage(self):
+        # The bore ends a millimetre short of the parent's skin: nothing the
+        # union could fill, nothing beyond it.
+        a = self.analyse(self.tee(parent_inner=None, bore_to_x=24.0))
+        branch, bore = self.branch_bore(a)
+        self.assertNotIn("passage", bore, bore)
+        self.assertAlmostEqual(bore["depthMM"], self.mouth_depth_of_x(branch, 24.0), delta=3.0)
+
+    def test_a_bore_into_a_solid_parent_is_recorded_to_its_floor(self):
+        # Bored 25 mm into the solid parent: the branch's own faces show
+        # the bore only to about the parent's skin (the wall inside the
+        # parent is the parent's by the labelling), the union fills it from
+        # the skin on, and the whole scan shows its floor at the parent's
+        # axis — the passage carries the cut there.
+        a = self.analyse(self.tee(parent_inner=None, bore_to_x=50.0))
+        branch, bore = self.branch_bore(a)
+        self.assertIn("passage", bore, bore)
+        p = bore["passage"]
+        self.assertTrue(p["floor"], p)
+        self.assertFalse(p["capped"], p)
+        self.assertAlmostEqual(p["depthMM"], self.mouth_depth_of_x(branch, 50.0), delta=2.5)
+        self.assertGreaterEqual(p["depthMM"], bore["depthMM"])
+
+    def test_a_passage_is_capped_before_the_parents_far_skin(self):
+        # A thin-walled parent drilled right through: the branch's bore
+        # goes in one side and out the other (the far wall is gone where
+        # the axis leaves, and the hole's own wall shows surface out to the
+        # far skin). The passage stops a wall short of that skin.
+        a = self.analyse(self.tee(parent_inner=22.0, bore_to_x=90.0))
+        branch, bore = self.branch_bore(a)
+        self.assertIn("passage", bore, bore)
+        p = bore["passage"]
+        self.assertTrue(p["capped"], p)
+        self.assertFalse(p["floor"], p)
+        far_skin = self.mouth_depth_of_x(branch, 75.0)
+        self.assertLess(p["depthMM"], far_skin - 1.5)
+        self.assertGreater(p["depthMM"], far_skin - 12.0)
+        self.assertGreater(p["seenMM"], p["depthMM"])                              # the hole runs on; the cut does not
+
+    def test_passage_depth_finds_a_floor_or_the_deepest_surface(self):
+        import analyze_scan as A
+        rng = np.random.RandomState(3)
+        c, d_in = np.array([5.0, -2.0, 1.0]), np.array([0.0, 0.0, 1.0])
+
+        def wall(r, z0, z1, n):
+            t = rng.uniform(0, 2 * math.pi, n)
+            z = rng.uniform(z0, z1, n)
+            pts = c + np.stack([r * np.cos(t), r * np.sin(t), z], axis=1)
+            nrm = -np.stack([np.cos(t), np.sin(t), np.zeros(n)], axis=1)       # facing in, toward the axis
+            return pts, nrm
+
+        def disc(r, z, n, facing):
+            rr = r * np.sqrt(rng.uniform(0, 1, n))
+            t = rng.uniform(0, 2 * math.pi, n)
+            pts = c + np.stack([rr * np.cos(t), rr * np.sin(t), np.full(n, z)], axis=1)
+            return pts, np.tile(np.array([0.0, 0.0, facing]), (n, 1))
+
+        w_pts, w_nrm = wall(10.0, 0.0, 60.0, 3000)                                 # ~100 points per 2 mm slab
+        f_pts, f_nrm = disc(10.0, 80.0, 400, -1.0)                                 # a floor facing the mouth
+        # A floor 80 mm in, past the 60 mm of wall the bore showed.
+        depth, floor, seen, capped = A.passage_depth(np.vstack([w_pts, f_pts]), np.vstack([w_nrm, f_nrm]), c, d_in,
+                                                     10.0, 1.5, 2.0, 120.0, 58.0)
+        self.assertTrue(floor)
+        self.assertFalse(capped)
+        self.assertAlmostEqual(depth, 80.0, delta=1.0)
+        self.assertAlmostEqual(seen, 80.0, delta=2.0)
+        # No floor: the deepest slab with surface inside the cylinder.
+        depth, floor, seen, capped = A.passage_depth(w_pts, w_nrm, c, d_in, 10.0, 1.5, 2.0, 120.0, 58.0)
+        self.assertFalse(floor)
+        self.assertFalse(capped)
+        self.assertAlmostEqual(depth, 60.0, delta=2.0)
+        self.assertAlmostEqual(seen, depth)
+        # The far skin, facing away, is no surface and no floor: the same
+        # wall with a disc facing AWAY at 80 reads 60 deep.
+        a_pts, a_nrm = disc(10.0, 80.0, 400, 1.0)
+        depth, floor, seen, capped = A.passage_depth(np.vstack([w_pts, a_pts]), np.vstack([w_nrm, a_nrm]), c, d_in,
+                                                     10.0, 1.5, 2.0, 120.0, 58.0)
+        self.assertFalse(floor)
+        self.assertAlmostEqual(depth, 60.0, delta=2.0)
+        # The cap: a floor at 80 beyond a cap at 70 is not the passage's
+        # floor; the depth is the cap's.
+        depth, floor, seen, capped = A.passage_depth(np.vstack([w_pts, f_pts]), np.vstack([w_nrm, f_nrm]), c, d_in,
+                                                     10.0, 1.5, 2.0, 70.0, 58.0, beyond_mm=15.0)
+        self.assertTrue(capped)
+        self.assertFalse(floor)
+        self.assertAlmostEqual(depth, 70.0)
+        self.assertGreater(seen, 70.0)
+        # Too few points facing the mouth are a stray patch, not a floor.
+        s_pts, s_nrm = disc(10.0, 80.0, 6, -1.0)
+        depth, floor, seen, capped = A.passage_depth(np.vstack([w_pts, s_pts]), np.vstack([w_nrm, s_nrm]), c, d_in,
+                                                     10.0, 1.5, 2.0, 120.0, 58.0)
+        self.assertFalse(floor)
+@unittest.skipUnless(HAVE_DEPS, "needs the scan_to_cad venv (trimesh, numpy, scipy, rtree, pillow)")
+class PassageBuildTests(unittest.TestCase):
+    """The build side of a passage — a secondary body's bore the scan shows
+    running on into its parent (`bores[j]["passage"]`): the sketch
+    `build_hydrant.passage_sections` lays on the branch's axis plane, the
+    cut `preview_model.build_preview` takes out of the whole model after
+    the nuts, and the corpus table's words for it."""
+
+    @staticmethod
+    def branch(index, parent, junction, end, origin, axis, height, r_body, bore_r, bore_depth, passage=None):
+        """A straight branch on its own axis with one bore at `end` (its
+        free end), and the passage record behind it when given."""
+        bore = {"end": end, "rInnerMM": bore_r, "depthMM": bore_depth, "wallMM": r_body - bore_r, "share": 1.0,
+                "through": False, "profile": [[bore_r, 0.0], [bore_r, bore_depth]]}
+        if passage:
+            bore["passage"] = passage
+        ax = np.asarray(axis, dtype=float)
+        u = np.array([1.0, 0.0, 0.0]) if abs(ax[0]) < 0.9 else np.array([0.0, 1.0, 0.0])
+        u = u - (u @ ax) * ax
+        u = u / np.linalg.norm(u)
+        return {"index": index, "parent": parent, "junction": junction, "extendedMM": [0.0, 0.0],
+                "axisOrigin": list(origin), "axisDirection": list(ax), "azimuthZero": u.tolist(),
+                "azimuthNinety": np.cross(ax, u).tolist(), "heightMM": height, "bodyRadiusMM": r_body,
+                "profile": [[r_body, 0.0], [r_body, height]], "profileSegments": None, "openTop": None,
+                "sectionLoop": None, "bores": [bore], "nuts": []}
+
+    @staticmethod
+    def parent(bodies, **extra):
+        a = {"axisOrigin": [0.0, 0.0, 0.0], "axisDirection": [0.0, 1.0, 0.0],
+             "azimuthZero": [0.0, 0.0, 1.0], "azimuthNinety": [-1.0, 0.0, 0.0],
+             "heightMM": 100.0, "bodyRadiusMM": 20.0, "profile": [[20.0, 0.0], [20.0, 100.0]],
+             "profileSegments": None, "openTop": None, "sectionLoop": None, "bosses": [], "bodies": bodies}
+        a.update(extra)
+        return a
+
+    def test_passage_sections_lays_the_rectangle_from_the_free_end_in(self):
+        from build_hydrant import passage_sections, passage_words, passage_caption
+        from preview_model import loops_of_entities, point_in_loop
+        # Body 2: free end "end" (it runs into its parent at its start):
+        # the cut runs from heightMM + 1 down to heightMM − depthMM.
+        down = self.branch(2, 1, "start", "end", [10.0, 50.0, 5.0], [0.0, 0.0, 1.0], 86.0, 18.0, 12.4, 50.0,
+                           passage={"depthMM": 60.0, "rMM": 12.38, "floor": False, "capped": False, "seenMM": 60.0})
+        # Body 3: free end "start" (junction at its end): from −1 up to depthMM.
+        up = self.branch(3, 0, "end", "start", [0.0, 70.0, 0.0], [0.0, 0.0, -1.0], 73.0, 20.0, 13.3, 52.0,
+                         passage={"depthMM": 66.0, "rMM": 13.27, "floor": True, "capped": False, "seenMM": 66.0})
+        # Body 4: a bore without a passage — no cut.
+        plain = self.branch(4, 0, "start", "end", [0.0, 20.0, 0.0], [1.0, 0.0, 0.0], 60.0, 13.0, 10.0, 14.0)
+        analysis = self.parent([down, up, plain])
+        secs = passage_sections(analysis)
+        self.assertEqual([s["index"] for s in secs], [2, 3])
+        self.assertEqual([s["parent"] for s in secs], [1, 0])
+
+        def span(sec):
+            vs = [c for e in sec["entities"] for c in (e["a"][1], e["b"][1])]
+            us = [c for e in sec["entities"] for c in (e["a"][0], e["b"][0])]
+            return min(us), max(us), min(vs), max(vs)
+
+        u0, u1, v0, v1 = span(secs[0])
+        self.assertEqual((u0, u1), (0.0, 12.38))                       # the bore's LAST radius, from the axis
+        self.assertAlmostEqual(v1, 87.0, places=4)                      # a millimetre outside the mouth
+        self.assertAlmostEqual(v0, 26.0, places=4)                      # heightMM − passage.depthMM
+        u0, u1, v0, v1 = span(secs[1])
+        self.assertEqual((u0, u1), (0.0, 13.27))
+        self.assertAlmostEqual(v0, -1.0, places=4)
+        self.assertAlmostEqual(v1, 66.0, places=4)
+        for sec in secs:
+            self.assertEqual(len(sec["entities"]), 4)
+            loops = loops_of_entities(sec["entities"])
+            self.assertEqual(len(loops), 1)
+            self.assertTrue(point_in_loop(sec["seed"], loops[0]), (sec["seed"], loops[0].tolist()))
+            self.assertGreater(sec["seed"][0], 0.0)
+        # The plane is the body's own axis plane: origin + shift, x = azimuthZero, y = axis.
+        shifted = passage_sections(analysis, shift=[0.0, -50.0, 0.0])
+        self.assertEqual(shifted[0]["plane"]["origin"], [10.0, 0.0, 5.0])
+        self.assertEqual(shifted[0]["plane"]["xAxis"], down["azimuthZero"])
+        self.assertEqual(shifted[0]["plane"]["yAxis"], [0.0, 0.0, 1.0])
+        self.assertEqual(shifted[1]["plane"]["name"], "Body 3 passage")
+        # The record's numbers and words.
+        self.assertEqual((secs[0]["rMM"], secs[0]["depthMM"], secs[0]["runOnMM"], secs[0]["end"]), (12.38, 60.0, 10.0, "end"))
+        self.assertEqual((secs[1]["runOnMM"], secs[1]["floor"], secs[1]["capped"]), (14.0, True, False))
+        self.assertEqual(secs[1]["label"], "body 3's bore kept open 14 mm into body 0")
+        self.assertIn("to the floor the scan shows", secs[1]["note"])
+        self.assertIn("as deep as the scan shows surface inside it (60 mm)", secs[0]["note"])
+        self.assertEqual(passage_words(up), ", its bore kept open 14 mm into body 0")   # no intoParentMM: the run-on past the bore
+        self.assertEqual(passage_words(plain), "")
+        self.assertIn("14 mm into body 0", passage_caption(secs[1]))
+        # A main-body bore never gets a passage, even with the key on it.
+        main_bored = self.parent([], bores=[{"end": "start", "rInnerMM": 17.0, "depthMM": 18.0, "through": False,
+                                            "passage": {"depthMM": 40.0, "rMM": 17.0, "floor": False, "capped": False, "seenMM": 40.0}}])
+        self.assertEqual(passage_sections(main_bored), [])
+
+    def test_build_preview_opens_the_passage_after_the_unions(self):
+        """A solid parent along y, a branch along z standing out of it with
+        a bore 30 deep; with a passage 60 deep a probe down the branch's
+        axis from the mouth travels past the bore's floor into the parent,
+        and without one it stops at the bore's floor."""
+        import preview_model as P
+
+        def model_with(passage):
+            # The branch's foot at z = 5 (inside the parent, skin at z = 20),
+            # its mouth at z = 70; the bore's floor at z = 40, the passage's
+            # far end at z = 10 — well inside the parent, 10 mm from its far skin.
+            branch = self.branch(1, 0, "start", "end", [0.0, 50.0, 5.0], [0.0, 0.0, 1.0], 65.0, 8.0, 5.0, 30.0,
+                                 passage=passage)
+            analysis = self.parent([branch])
+            model, notes, parts = P.build_preview(analysis, sections=96)
+            self.assertEqual(notes, [], notes)
+            self.assertTrue(model.is_watertight)
+            return model, parts
+
+        def first_hit(model):
+            """How far a probe from just outside the mouth (z = 71) travels
+            down the axis before it is inside the model."""
+            z = np.arange(71.0, -1.0, -0.25)
+            pts = np.column_stack([np.zeros_like(z), np.full_like(z, 50.0), z])
+            inside = model.contains(pts)
+            hits = np.nonzero(inside)[0]
+            self.assertGreater(len(hits), 0)
+            return 71.0 - float(z[hits[0]])
+
+        plain, parts = model_with(None)
+        self.assertEqual([p["what"] for p in parts], ["revolve", "body"])
+        depth_plain = first_hit(plain)
+        self.assertGreater(depth_plain, 30.0)                            # past the mouth, down to the floor
+        self.assertLess(depth_plain, 32.0)                               # … and no farther: the bore is 30 deep (+1 of air)
+        bored, parts = model_with({"depthMM": 60.0, "rMM": 5.0, "floor": True, "capped": False, "seenMM": 60.0})
+        self.assertEqual([p["what"] for p in parts], ["revolve", "body", "passage"])
+        self.assertEqual(parts[2], {"what": "passage", "body": 1, "parent": 0, "end": "end", "rMM": 5.0, "depthMM": 60.0,
+                                    "runOnMM": 30.0})
+        depth_bored = first_hit(bored)
+        self.assertGreaterEqual(depth_bored, 60.0 - 1.0)                 # at least passage.depthMM − 1
+        self.assertLess(depth_bored, 62.0)                               # and it stops where the passage does
+        # The passage took out the cylinder r 5 from the bore's floor (z = 40)
+        # to its own end (z = 10): 20 mm of the branch past the bore the loop
+        # cut and 10 mm of the parent — the 30 mm it runs on.
+        self.assertAlmostEqual(plain.volume - bored.volume, math.pi * 25 * 30, delta=0.05 * math.pi * 25 * 30)
+        # A point on the branch's axis inside the parent is open with the passage, solid without.
+        probe = [[0.0, 50.0, 15.0]]
+        self.assertTrue(plain.contains(probe)[0])
+        self.assertFalse(bored.contains(probe)[0])
+        # Leaving the bodies out leaves the passage out with them (no branch to run on from).
+        no_bodies, _, parts = P.build_preview(self.parent([self.branch(
+            1, 0, "start", "end", [0.0, 50.0, 5.0], [0.0, 0.0, 1.0], 65.0, 8.0, 5.0, 30.0,
+            passage={"depthMM": 60.0, "rMM": 5.0, "floor": True, "capped": False, "seenMM": 60.0})]), secondaries=False)
+        self.assertEqual([p["what"] for p in parts], ["revolve"])
+        self.assertTrue(no_bodies.contains(probe)[0])
+
+    def test_the_corpus_table_says_the_bore_runs_on(self):
+        import run_corpus
+        profile = {"bores": [{"end": "start", "rInnerMM": 16.98, "depthMM": 18.0, "through": False}],
+                   "bodies": [
+                       {"index": 2, "parent": 1, "bores": [{"end": "end", "rInnerMM": 18.79, "depthMM": 50.0, "through": False,
+                                                           "passage": {"depthMM": 60.0, "rMM": 12.38, "floor": False, "capped": False, "seenMM": 60.0}}]},
+                       {"index": 3, "parent": 0, "bores": [{"end": "start", "rInnerMM": 19.54, "depthMM": 52.0, "through": True,
+                                                           "passage": {"depthMM": 66.0, "rMM": 13.27, "floor": True, "capped": False, "seenMM": 66.0}}]},
+                       {"index": 4, "parent": 0, "bores": [{"end": "end", "rInnerMM": 10.61, "depthMM": 14.0, "through": False}]},
+                       {"index": 5, "parent": 0, "bores": []}]}
+        self.assertEqual(run_corpus.bore_lines(profile), [
+            "body: r 17 mm 18 deep",
+            "body 2: r 19 mm 50 deep +10 on into body 1",
+            "body 3: r 20 mm through +14 on into body 0",
+            "body 4: r 11 mm 14 deep"])
+        self.assertEqual(run_corpus.bore_lines({}), [])
+        # A record that says how much lies inside the parent is quoted as such.
+        into = {"bodies": [{"index": 3, "parent": 0, "bores": [{"end": "start", "rInnerMM": 19.54, "depthMM": 52.0, "through": True,
+                            "passage": {"depthMM": 52.0, "rMM": 13.27, "floor": True, "capped": False, "seenMM": 52.0, "intoParentMM": 14.0}}]}]}
+        self.assertEqual(run_corpus.bore_lines(into), ["body 3: r 20 mm through +14 on into body 0"])
+
+    def test_a_passage_no_deeper_than_its_bore_is_still_cut(self):
+        """The valve's case: the scan's floor IS the bore's own floor, the
+        parent's skin is 14 mm before it, and the union filled that stretch.
+        The record's depthMM equals the bore's; the cut must still be laid,
+        and the words say how far it runs into the parent."""
+        from build_hydrant import passage_sections, passage_words, passage_caption, passages_of
+        same = self.branch(3, 0, "end", "start", [0.0, 70.0, 0.0], [0.0, 0.0, -1.0], 73.0, 20.0, 13.3, 52.0,
+                           passage={"depthMM": 52.0, "rMM": 13.27, "floor": True, "capped": False, "seenMM": 52.0,
+                                    "intoParentMM": 14.0})
+        secs = passage_sections(self.parent([same]))
+        self.assertEqual(len(secs), 1)
+        sec = secs[0]
+        self.assertEqual(sec["runOnMM"], 0.0)
+        self.assertEqual(sec["intoParentMM"], 14.0)
+        vs = [c for e in sec["entities"] for c in (e["a"][1], e["b"][1])]
+        self.assertAlmostEqual(min(vs), -1.0, places=4)
+        self.assertAlmostEqual(max(vs), 52.0, places=4)
+        self.assertEqual(passage_words(same), ", its bore kept open 14 mm into body 0")
+        self.assertIn("14 mm into body 0", passage_caption(sec))
+        # A passage on the JUNCTION end (a mis-sided record) is refused, not cut out through the joint.
+        wrong = dict(same, bores=[dict(same["bores"][0], end="end")])
+        self.assertEqual(passages_of(wrong), [])
+        self.assertEqual(passage_sections(self.parent([wrong])), [])
+
+
 if __name__ == "__main__":
     unittest.main()

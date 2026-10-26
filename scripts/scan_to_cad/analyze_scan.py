@@ -782,6 +782,101 @@ def detect_bores(h, radius, azimuth, n_radial, height, radii_ends, band_mm, nois
     return found
 
 
+def passage_depth(points, normals, c_mouth, d_in, r_last, tol_mm, slab_mm, max_depth_mm, floor_from_mm,
+                  beyond_mm=0.0, debug=False, label=""):
+    """How far a branch's bore runs on into the body it joins — the passage
+    (`detect_bores` reads the bore on the branch's own faces, and the loop
+    that cuts it ends where the branch's own wall ends; the union into the
+    parent fills the hole wherever the parent is solid, while the scanner
+    saw the passage continue through the parent's chamber). Walks slabs of
+    max(`slab_mm`, 2 mm) along the branch's axis (`d_in`, a unit vector
+    pointing into the body from the free end's plane through `c_mouth`)
+    over the WHOLE scan's sampled points (`points`, `normals` — not the
+    body's labelled faces: the chamber's walls are the parent's), inside a
+    cylinder of the bore's last radius `r_last` (plus `tol_mm`).
+
+    - "Surface inside the cylinder": a point within r_last + tol of the axis
+      that does not face away from the mouth (n·d_in < 0.5 — the parent's
+      far skin, where the axis leaves it, faces away, and is no interior).
+    - A floor: a slab with at least N points at radius < 0.6 r_last whose
+      normal faces back toward the mouth (n·d_in < −0.5), looked for from
+      `floor_from_mm` on (the bore's own depth less a slab: the bore's own
+      floor, if it had one, is found again there and nothing is deeper).
+      N = max(10, 0.15 × W), W the most points a slab of the bore's wall
+      (|r − r_last| ≤ tol) holds over the three slabs before `floor_from_mm`
+      — a floor fully seen holds about 0.18 r/slab of a wall slab's
+      points, so 0.15 W asks for a sixth of a full floor, and ten points
+      is the least a patch and not a stray takes. The parent's outer skin,
+      where the branch's cylinder passes through it on the near side, is
+      outside the cylinder (the branch's wall is wider than its bore) and
+      its inner wall round the hole's edge is at the cylinder's radius,
+      not under 0.6 of it; the far skin faces away.
+    - The depth: the floor's depth (the median of that slab's floor points)
+      when one is seen, else the far end of the deepest slab with at least
+      max(5, 0.1 W) points of surface inside the cylinder; both capped at
+      `max_depth_mm` (the caller's: a wall short of where the axis leaves
+      the parent's envelope). The walk looks `beyond_mm` past the cap so a
+      surface beyond it (something behind the part) is seen for what it
+      is; a floor beyond the cap is not the passage's floor.
+
+    Returns (depth, floor_seen, seen_depth, capped): `seen_depth` the far
+    end of the deepest slab with surface inside the cylinder (up to the
+    floor's slab when a floor is seen), `capped` when the cap and not the
+    scan set the depth. All in mm from the mouth plane."""
+    slab = max(float(slab_mm), 2.0)
+    d_in = np.asarray(d_in, dtype=float)
+    d_in = d_in / max(np.linalg.norm(d_in), 1e-12)
+    c_mouth = np.asarray(c_mouth, dtype=float)
+    max_depth = max(float(max_depth_mm), 0.0)
+    walk_end = max_depth + max(float(beyond_mm), 0.0)
+    floor_from = max(float(floor_from_mm), 0.0)
+    pts = np.asarray(points, dtype=float)
+    nrm = np.asarray(normals, dtype=float)
+    rel = pts - c_mouth
+    h = rel @ d_in
+    near = (h >= 0.0) & (h < walk_end + slab)
+    if near.sum() < 10:
+        return (min(floor_from, max_depth), False, 0.0, False)
+    rel, h, nrm = rel[near], h[near], nrm[near]
+    r = np.linalg.norm(rel - np.outer(h, d_in), axis=1)
+    along = nrm @ d_in
+    inside = r <= r_last + tol_mm
+    nb = int(math.ceil((walk_end + slab) / slab)) + 1
+    k_of = np.clip(np.floor(h / slab).astype(int), 0, nb - 1)
+    wall = inside & (np.abs(r - r_last) <= tol_mm)
+    k_from = int(math.floor(floor_from / slab))
+    ref_lo = max(0, k_from - 3)
+    wall_counts = np.bincount(k_of[wall], minlength=nb)
+    W = int(wall_counts[ref_lo:k_from].max()) if k_from > ref_lo else int(wall_counts[:max(k_from, 1)].max())
+    n_floor = max(10, int(round(0.15 * W)))
+    n_seen = max(5, int(round(0.1 * W)))
+    surface = inside & (along < 0.5)
+    on_floor = inside & (r < 0.6 * r_last) & (along < -0.5) & (h >= floor_from)
+    surf_counts = np.bincount(k_of[surface], minlength=nb)
+    floor_counts = np.bincount(k_of[on_floor], minlength=nb)
+    k_end = int(math.floor(walk_end / slab))
+    floor_k, floor_depth = None, None
+    for k in range(k_from, min(k_end, nb - 1) + 1):
+        if floor_counts[k] >= n_floor:
+            floor_k = k
+            floor_depth = float(np.median(h[on_floor & (k_of == k)]))
+            break
+    last_k = floor_k if floor_k is not None else min(k_end, nb - 1)
+    seen = [k for k in range(0, last_k + 1) if surf_counts[k] >= n_seen]
+    seen_depth = float(min((seen[-1] + 1) * slab, walk_end)) if seen else 0.0
+    if debug:
+        print("passage? %s: r %.1f (+%.1f) from %.0f mm, cap %.0f mm, wall ref %d (floor ≥ %d, surface ≥ %d) — surface/floor per %.0f mm slab: %s" % (
+            label, r_last, tol_mm, floor_from, max_depth, W, n_floor, n_seen, slab,
+            " ".join("%d:%d/%d" % (k * slab, surf_counts[k], floor_counts[k]) for k in range(k_from, min(k_end, nb - 1) + 1))))
+    if floor_depth is not None:
+        if floor_depth <= max_depth:
+            return (float(floor_depth), True, seen_depth, False)
+        return (max_depth, False, seen_depth, True)
+    if seen_depth > max_depth:
+        return (max_depth, False, seen_depth, True)
+    return (seen_depth, False, seen_depth, False)
+
+
 def detect_open_top(mesh, origin, axis, u, v, height, radii_ends, bands, radius, h, grid=12, facing=None):
     """Is the part a container open at one end? Rays along the axis from
     just outside each end, over a disc of 0.7 × that end's radius.
@@ -2407,6 +2502,68 @@ def trim_profile(a, start_mm=0.0, end_mm=0.0):
     return a
 
 
+def passage_record(a, bore, scan_samples, parent, debug=False, label=""):
+    """The `passage` record for a secondary body's bore at its FREE end (see
+    `passage_depth`), or None when the hole the scan shows runs no deeper
+    than the hole the model has by more than a slab. The model's hole is the
+    bore the loop cuts (`depthMM`) only as far as the parent's skin: the
+    union into the parent fills it from where the axis enters the parent's
+    envelope on (the valve's oblique branch is bored 52 mm by its own faces
+    and its parent's skin is 38 mm in, so the built model's hole stopped at
+    38 and the scan's floor at 51 sat inside the solid). So the depth the
+    record carries is the deeper of the passage walk's and the bore's own
+    (never less than `depthMM`), and it is recorded when that exceeds
+    min(`depthMM`, the entry depth) by more than a slab.
+
+    `a` is the body in its FINAL frame (after `trim_profile` /
+    `extend_profile`), `scan_samples` (points, normals) over the whole
+    scan, `parent` the axis finder's record of the body it joins (origin,
+    direction, extent, envelope). The cap is where the body's axis,
+    followed inward from the mouth, leaves the parent's envelope
+    (`fit_axes.inside_body`), less max(2 mm, the bore's wall) — the passage
+    never comes out through the parent's far skin."""
+    import fit_axes
+    points, normals = scan_samples
+    origin = np.asarray(a["axisOrigin"], dtype=float)
+    axis = np.asarray(a["axisDirection"], dtype=float)
+    height = float(a["heightMM"])
+    if bore["end"] == "start":
+        c_mouth, d_in = origin, axis
+    else:
+        c_mouth, d_in = origin + axis * height, -axis
+    r_last = float(bore["profile"][-1][0]) if bore.get("profile") else float(bore["rInnerMM"])
+    wall = max(2.0, float(bore.get("wallMM") or 0.0))
+    slab = max(float(a.get("bandMM") or 2.0), 2.0)
+    tol = max(1.5, float(a.get("bandMM") or 0.0))
+    # Along the axis from the mouth, 1 mm at a time: into the parent's
+    # envelope and out of it again.
+    reach = height + 4.0 * float(parent.get("radiusMM") or 0.0) + 20.0
+    hs = np.arange(0.0, reach, 1.0)
+    inside = fit_axes.inside_body(c_mouth + np.outer(hs, d_in), parent, 0.0)
+    if not inside.any():
+        return None
+    k_in = int(np.argmax(inside))
+    h_enter = float(hs[k_in])
+    after = np.where(~inside[k_in:])[0]
+    capped_by = float(hs[k_in + after[0]]) if len(after) else None
+    max_depth = (capped_by - wall) if capped_by is not None else float(hs[-1])
+    depth_bore = float(bore["depthMM"])
+    if max_depth < depth_bore:
+        return None                 # the bore itself runs out past the cap: nothing sane to add
+    depth, floor_seen, seen, capped = passage_depth(points, normals, c_mouth, d_in, r_last, tol, slab, max_depth,
+                                                   max(depth_bore - slab, 0.0), beyond_mm=wall + 2.0 * slab,
+                                                   debug=debug, label=label)
+    depth = max(float(depth), depth_bore)
+    if depth <= min(depth_bore, h_enter) + slab:
+        return None
+    # `intoParentMM`: how much of the cut lies inside the parent — past the
+    # entry — which is what the union filled and what the build's words say
+    # (a passage no deeper than the bore still runs that far into it).
+    return {"depthMM": round(depth, 2), "rMM": round(r_last, 2), "floor": bool(floor_seen),
+            "capped": bool(capped), "seenMM": round(float(seen), 2),
+            "intoParentMM": round(max(depth - h_enter, 0.0), 2)}, h_enter
+
+
 def secondary_bodies(mesh, selection, face_labels, name, samples, lump_margin_mm, band_mm=None, epsilon=None, debug=False):
     """Every body of revolution the axis finder found beyond the main one,
     traced on its own axis — the faces labelled its own, `analyze` again
@@ -2419,6 +2576,7 @@ def secondary_bodies(mesh, selection, face_labels, name, samples, lump_margin_mm
             "extendedMM", "trimmedMM", "nuts", "bores")
     import fit_axes
     jobs = []
+    scan_samples = None            # the whole scan sampled with normals, once, for the passages
     for k, ax in enumerate(selection["axes"][1:], 1):
         faces_k = np.where(face_labels == k)[0]
         if len(faces_k) < 50:
@@ -2504,6 +2662,30 @@ def secondary_bodies(mesh, selection, face_labels, name, samples, lump_margin_mm
             else:
                 end_mm = delta + root
             extend_profile(a, start_mm, end_mm)
+        # The passage: the bore at the free end carried on along the axis
+        # into the parent, as deep as the whole scan shows interior surface
+        # inside it (`passage_depth`), never out through the parent's far
+        # skin. Recorded on the bore only when it runs deeper than the
+        # bore the loop cuts by more than a slab.
+        if ax["junction"] in ("start", "end") and ax["parent"] is not None:
+            free = "end" if ax["junction"] == "start" else "start"
+            for b in a.get("bores", []):
+                if b["end"] != free:
+                    continue
+                if scan_samples is None:
+                    scan_samples = fit_axes.sample_with_normals(
+                        mesh, int(min(1_500_000, max(300_000, 2.0 * float(mesh.area)))), seed=7)[:2]
+                found = passage_record(a, b, scan_samples, selection["axes"][ax["parent"]], debug=debug,
+                                       label="body %s" % tag)
+                if found is not None:
+                    passage, h_enter = found
+                    b["passage"] = passage
+                    print("   body %s: the bore (r %.1f, %.0f mm deep) runs on into body %s, %.0f mm past its skin (%.0f mm in), to %s %.0f mm%s" % (
+                        tag, passage["rMM"], b["depthMM"], ax["parent"], passage["depthMM"] - h_enter, h_enter,
+                        "a floor at" if passage["floor"] else ("a wall short of its far skin at" if passage["capped"]
+                                                               else "as far as the scan shows it,"),
+                        passage["depthMM"],
+                        "" if passage["depthMM"] > b["depthMM"] else " — the bore's own depth; the union must not fill it"))
         body = {key: a[key] for key in keys if key in a}
         body.update({"index": k, "tag": tag, "parent": ax["parent"], "junction": ax["junction"],
                      "shareOfSurface": ax["share"], "finderRadiusMM": ax["radiusMM"], "finderLengthMM": ax["lengthMM"]})

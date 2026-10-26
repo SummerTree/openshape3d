@@ -46,7 +46,7 @@ import numpy as np
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))
 sys.path.insert(0, HERE)
-from build_hydrant import body_section, boss_section, unit, world, secondary_sections, revolve_secondary, window_sections, cut_window, model_color, nut_sections, extrude_nut  # noqa: E402
+from build_hydrant import body_section, boss_section, unit, world, secondary_sections, revolve_secondary, window_sections, cut_window, model_color, nut_sections, extrude_nut, passage_sections, cut_passage  # noqa: E402
 from build_features import build_feature, shift_feature  # noqa: E402
 from demo_video import Recorder, caption, ffmpeg_watched, narrate, scan_on_floor, title_overlay  # noqa: E402
 from mcp_client import MCPClient, MCPError  # noqa: E402
@@ -135,6 +135,14 @@ def build_model(mcp, analysis, label, color, features=None):
         try:
             reply = extrude_nut(mcp, nut, cad, label, note=False)
             if reply.get("failed"):
+                mcp.os3d("command.run", {"id": "edit.undo"})
+        except MCPError:
+            pass
+    # The passages — a branch's bore the scan shows running on into its
+    # parent — cut after every union that could fill them, as the build does.
+    for pas in passage_sections(analysis, shift=delta):
+        try:
+            if cut_passage(mcp, pas, cad, note=False).get("failed"):
                 mcp.os3d("command.run", {"id": "edit.undo"})
         except MCPError:
             pass

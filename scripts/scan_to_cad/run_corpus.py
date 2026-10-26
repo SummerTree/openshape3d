@@ -63,6 +63,26 @@ def nut_lines(profile):
     return lines
 
 
+def bore_lines(profile):
+    """One line per bore the analysis found at a free end, on the main
+    body and on each body: "body 2: r 19 mm 50 deep", with " +10 on into
+    body 1" when the scan shows the bore running on into the body's
+    parent (the bore's `passage` record)."""
+    lines = []
+    for b in [profile] + (profile.get("bodies") or []):
+        for bore in b.get("bores") or []:
+            line = "%s: r %.0f mm %s" % ("body %d" % b["index"] if "index" in b else "body",
+                                         bore["rInnerMM"], "through" if bore.get("through") else "%.0f deep" % bore["depthMM"])
+            passage = bore.get("passage")
+            if passage and "index" in b:
+                into = passage.get("intoParentMM")
+                if into is None:
+                    into = max(float(passage["depthMM"]) - float(bore["depthMM"]), 0.0)
+                line += " +%.0f on into body %s" % (float(into), b.get("parent"))
+            lines.append(line)
+    return lines
+
+
 def patch_lines(patches, top=3):
     """One line per largest patch of each kind: kind, area, where."""
     lines = []
@@ -119,10 +139,9 @@ def main():
         run_dir = os.path.join(part, "run")
         nuts = nut_lines(profile)
         # The bores the analysis found at free ends (the main body's and
-        # each secondary body's), so the row says "bored r 14, 50 deep".
-        bores = ["%s: r %.0f mm %s" % ("body %d" % b["index"] if "index" in b else "body",
-                                        bore["rInnerMM"], "through" if bore.get("through") else "%.0f deep" % bore["depthMM"])
-                 for b in [profile] + profile.get("bodies", []) for bore in b.get("bores", [])]
+        # each secondary body's), so the row says "bored r 14, 50 deep",
+        # and "+10 on into body 1" where a bore's passage runs on.
+        bores = bore_lines(profile)
         print("=== %s: %s, %.0f mm tall, %d bosses, tolerance %.0f mm%s%s" % (
             slug, spec["label"], profile["heightMM"], len(profile["bosses"]), tolerance,
             ("; " + "; ".join(nuts)) if nuts else "",

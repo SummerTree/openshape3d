@@ -1241,8 +1241,11 @@ crown's inner wall) and E2/E3 (its floor and top). The valve's M1
 root) are the branch roots' cast collars, round, with the fitted branch
 axes a few millimetres off the scan's — in body 2's frame the root reads
 r 17–18 in 55 of 72 sectors, no polygon; in body 3's the branch is a
-sinusoid of ±3 mm about its axis — not hexagons. Those are the next
-track (a root fillet, and a branch axis refined on the branch alone).
+sinusoid of ±3 mm about its axis — not hexagons. (What M1/M2 then
+turned out to be, once the far points were tested with `contains()`: the
+INSIDE of each branch's bore, filled by the union where the parent is
+solid — see *Passages*, 2026-10-26. The "root fillet" this paragraph
+first proposed was a misreading of the review sheet.)
 The valve's main body and every other corpus part stay round: no false
 nut on the bollard, the can, either extinguisher, the mug, the pail, the
 barrel or the wheel.
@@ -1401,6 +1404,194 @@ solid cone and a lidded one refused), `bore_profile` from a lengthened
 profile (the floor stays 100 mm below the MEASURED mouth), the horn's cut
 (`feature_cut_mesh`) and `build_preview` taking it out of the whole model
 (a rod in the throat goes with it; one apart does not).
+
+### Passages — a branch's bore runs on into its parent (2026-10-26)
+
+The valve's two largest missing patches after the bores were cut (M1
+1 015 mm², M2 683 mm²) lay wholly INSIDE the built model, on the two
+branches' axes: the oblique branch's (body 3, bored r 19.5 → 13.3, 52 mm,
+through) at branch h 40–56 inside the main body, the lower branch's (body
+2, bored r 18.8 → 12.4, 50 mm) at h 26–43 inside the long pipe. Each
+branch's bore is drawn in its own revolve loop (`bore_chains`), and the
+union into the parent fills the hole wherever the parent is solid — from
+the parent's skin on — while the scanner saw the hole continue to a floor
+inside the body. M1 is exactly that stretch: the bore's last 14 mm (from
+the skin 38 mm in to the floor at 52), 2π·13.3·14 of wall plus the floor's
+disc ≈ 1 000 mm²; M2 the lower branch's last 8 mm (the skin 42 mm in, the
+floor at 50) ≈ 680 mm².
+
+`analyze_scan.passage_depth` reads the passage — the bore's LAST radius
+carried on along the branch's axis — over the WHOLE scan's points (sampled
+once with normals, `fit_axes.sample_with_normals`, min(1.5 M, max(300 k,
+2 per mm²)); the chamber's walls are the parent's faces, not the branch's,
+as with the nut detector's `nut_mesh`), in slabs of max(band, 2 mm) inward
+from the free end's plane:
+
+- **Surface inside the cylinder**: a point within r_last + tol (tol =
+  max(1.5 mm, band)) of the axis that does not face away from the mouth
+  (n·d_in < 0.5). The parent's far skin, where the axis leaves it, faces
+  away and is neither surface nor floor — otherwise a chamber the scanner
+  never saw into would read "seen to the far skin" and be cut to the cap.
+- **A floor**: a slab with at least N points at radius < 0.6 r_last whose
+  normals face back toward the mouth (n·d_in < −0.5), looked for from the
+  bore's own depth less a slab. N = max(10, 0.15 W), W the most points a
+  slab of the bore's own wall (|r − r_last| ≤ tol) holds over the three
+  slabs before that: a floor fully seen holds about 0.18 r/slab of a wall
+  slab's points, so this asks for a sixth of a full floor, and ten points
+  is the least a patch and not a stray takes. The parent's outer skin round
+  the hole is outside the cylinder (the branch's wall is wider than its
+  bore); its inner wall round the hole's edge sits at the cylinder's
+  radius, not under 0.6 of it. The depth is the median of that slab's
+  floor points.
+- **No floor**: the far end of the deepest slab with max(5, 0.1 W) points
+  of surface inside the cylinder — a scanner sees less of a hole the
+  deeper it goes, so this is a lower bound like the bore's own depth.
+- **The cap**: never out through the parent's far skin. The branch's axis
+  is followed from the mouth 1 mm at a time through `fit_axes.inside_body`
+  against the parent's envelope (`selection["axes"][parent]["envelope"]`);
+  where it leaves, less max(2 mm, the bore's wall), is as deep as a passage
+  may go. The walk looks a wall and two slabs past the cap so surface
+  beyond it (a hole drilled right through, a wall behind the part) is seen
+  for what it is: the depth is the cap's, `capped` is set, and a floor
+  beyond the cap is not the passage's floor (`floor` false).
+
+`passage_record` (called from `secondary_bodies` after `trim_profile` /
+`extend_profile`, so the depths are in the body's final frame) attaches to
+the bore at a secondary body's FREE end
+
+    "passage": {"depthMM": <from the free end's plane to the passage's far
+                 end, never less than the bore's depthMM>,
+                "rMM": <the bore's last profile radius>,
+                "floor": <a floor was seen>, "capped": <the cap set it>,
+                "seenMM": <the deepest slab with surface inside the cylinder>,
+                "intoParentMM": <how much of that depth lies inside the parent,
+                 past where the axis enters its envelope — the stretch the
+                 union filled; the build's words quote it>}
+
+only when the hole the scan shows runs deeper than the hole the model has
+by more than a slab. The model's hole is the bore the loop cuts only as far
+as the parent's skin — the union fills the rest — so the comparison is
+against min(depthMM, the depth at which the axis enters the parent's
+envelope), and the record's depth is the deeper of the walk's and the
+bore's own. A bore that ends short of the parent (the valve's side port,
+14 mm deep, the skin 41 mm in) gets no record; main-body bores never do.
+The log says `body 3: the bore (r 13.3, 52 mm deep) runs on into body 0,
+14 mm past its skin (38 mm in), to a floor at 52 mm — the bore's own
+depth; the union must not fill it`.
+
+Measured on the valve (the first mission's rule was "record a passage only
+when it runs deeper than depthMM by a slab"; on the valve that would have
+recorded nothing, and left M1 and M2 where they were):
+
+| body | bore (last r, depth) | parent's skin, from the mouth | floor seen | cap | record |
+|---|---|---|---|---|---|
+| 2 (lower branch) | r 12.4, 50 mm | 42 mm | ~49 mm (173 points facing the mouth in the 48–50 slab, the pipe's inner tube r 15–17 round body 1's axis) | 88 mm | depthMM 50, floor, seenMM 50 |
+| 3 (oblique branch) | r 13.3, 52 mm (through) | 38 mm | ~51 mm (237 points in the 50–52 slab, a surface at main-axis radius 15–17 facing the branch) | 95 mm | depthMM 52, floor, seenMM 52 |
+| 4 (side port) | r 6.0, 14 mm | 41 mm | the bore's own, 14 mm | 89 mm | none |
+
+Neither floor is 14 mm past the bore, as the review sheet's patches had
+suggested; both are the bore's own floor, which `detect_bores` had read
+(body 2) or nearly (body 3, "through" by its own faces at 52, the floor at
+51 is on the parent's faces). What the model lacked was the stretch
+between the parent's skin and that floor — 14 and 8 mm — which only the
+build can give back, by cutting the bore again AFTER the union (or
+subtracting it from the parent too); the record carries the radius and
+depth for that. The scan beyond each floor is empty to the parent's far
+skin (0 points in every slab from 56 to 86 mm on body 2), which faces
+away and is not counted. hydrant-02 (three secondary bodies, none bored)
+and extinguisher-3dhd (no secondary body) re-analyse byte-for-byte as
+before. Tests (`PassageDetectTests`, ~22 s each on the T): a T whose
+parent has a closed chamber (outer r 25, inner r 19) and a branch bored
+r 11 into it — the passage runs on to the far inner wall, floor seen,
+within 2 mm; a socket ending a millimetre short of a solid parent (no
+record); a bore 25 mm into a solid parent (the branch's own faces show the
+bore only to about the skin, the whole scan its floor at the parent's
+axis — recorded to the floor); a bore drilled right through a thin-walled
+parent (capped a wall short of the far skin, `seenMM` deeper); and
+`passage_depth` on synthetic points (a floor; no floor → the deepest
+surface; a disc facing away is neither; a floor beyond the cap is the
+cap's depth, capped; six points are no floor).
+
+A trap for synthetic tests: the axis finder's ring test takes a bore
+within two tolerances (≈ 6.6 mm on a hand-sized T) of the outer radius as
+the same ring, and a hollow part whose inner skin lies farther in than
+that — the spec's r 25 / r 18 tube, a branch r 15 bored r 10 — reads as no
+body of revolution at all (roundness 0.6, under the finder's 0.7): the T
+had no bodies, and so no branch to bore. The valve's walls are 3–6 mm,
+and the T keeps those proportions. And a plain cylinder's two-point
+profile is "too short to keep": the T's branch wears a lip at its mouth.
+
+
+#### The build cuts the passage last
+
+A secondary body's bore is drawn in its own revolve loop
+(`bore_chains`), and the union into the parent fills it wherever the
+parent is solid — so a branch bored "through" is still a solid plug
+from the parent's skin in, and the valve's two largest missing patches
+(M1 1 015 mm² on body 3's axis, M2 683 mm² on body 2's) lay 100 % INSIDE
+the model, where the scanner saw the passage continue into the parent's
+chamber. The analysis records that continuation on the bore
+(`bodies[k]["bores"][j]["passage"]`: `depthMM` from the free end plane,
+`rMM` the bore's last radius, `floor`, `capped`, `seenMM`,
+`intoParentMM` — the part inside the parent, which is what the label,
+the film caption and the corpus row quote: on the valve the passages are
+no deeper than their bores, yet 8 and 14 mm of them lie inside the
+parent), and the build cuts it:
+
+- `build_hydrant.passage_sections(analysis, shift)` lays, for each bore
+  with a passage, a rectangle on the body's own axis plane (the plane
+  `secondary_sections` uses: origin = axisOrigin + shift, x =
+  azimuthZero, y = axis): u from 0 to `rMM`, v from a millimetre OUTSIDE
+  the free end to `depthMM` in from it — a bore at the body's "end" is
+  cut from heightMM + 1 down to heightMM − depthMM, one at its "start"
+  from −1 up to depthMM — with the seed inside the rectangle, a note and
+  a label ("body 3's bore runs on 14 mm into body 0": the run-on is
+  `passage.depthMM − bore.depthMM`). `cut_passage` sketches it and
+  revolves 360° with `boolean: subtract` on the model, as `cut_window`
+  does. A main-body bore never gets one.
+- The cut comes AFTER every union that could fill it: the secondary
+  bodies and the nuts (a nut's prism on the branch would refill the
+  bore), and before the bosses, with a stage `stage-1-passage-N`, a
+  shot, a summary row (`passages`: body, parent, rMM, depthMM, runOnMM,
+  floor, capped, volume) and the words on the body's label. The film
+  (`demo_video.py take`, a `passage{n}` beat captioned by
+  `passage_caption`, no narration line of its own) and the reel cut it at
+  the same point in their rebuilds; `preview_model.passage_cut_mesh` /
+  `build_preview` subtract it after the nuts with a parts row
+  `{"what": "passage", "body", "rMM", "depthMM"}`, and the corpus table's
+  bore string says "r 20 mm through +14 on into body 0"
+  (`run_corpus.bore_lines`).
+
+Measured offline on the valve with the record HAND-WRITTEN (body 3:
+depth 66 r 13.27 to a floor; body 2: depth 60 r 12.38, no floor) before
+the analysis track's detector existed — `preview_model.py` with
+`--all-features` against the corpus run's scan, "before" the corpus's
+own analysis:
+
+| | before | after |
+|---|---|---|
+| IoU | 94.9 % | 94.9 % |
+| model→scan / scan→model mm | 0.71 / 1.08 | 0.81 / 0.97 |
+| missing patches, total | 34, 6 601 mm² | 35, 5 572 mm² |
+| largest missing | **1 015 mm²** on body 3's axis at [68, 147] (FAIL), then 683 on body 2's at [−32, 74] | 552 mm² at the top rim (WARN) — both axis patches gone |
+| excess patches, total | 42, 5 712 mm² | 37, 8 324 mm² |
+| largest excess | 630 mm² at the top rim (WARN) | **2 082 mm²** at [63, 137] on body 3's axis (FAIL), then 1 146 at [−30, 73] on body 2's |
+
+Honestly: the passages open where the scan is open, but at the bore's
+LAST radius, and inside the parent the scanned chamber is wider — the
+cut's own wall stands 8 mm from the scan's and comes back as an excess
+patch the size of that wall (2π · 13.27 · 25 ≈ 2 080 mm²). So the record's
+`rMM` wants the interior radius the scan shows past the parent's skin,
+not the bore's last step, or the passage wants to widen to the chamber;
+that is the analysis track's call, and the build takes whatever `rMM` it
+is handed. Tests (`PassageBuildTests`): `passage_sections` for a free
+end "end" and a free end "start" (v ranges, the overshoot, the seed in
+the loop, the radius, the shifted plane, the words; a main-body bore
+refused), `build_preview` on a solid parent with a bored branch (a probe
+down the branch's axis from the mouth travels ≥ depthMM − 1 with the
+passage and stops at the bore's floor without it; the removed volume;
+`--no-bodies` leaves it out), and the corpus table's words.
+
 
 ### Bent bars and levers (2026-10-26)
 
@@ -1627,7 +1818,7 @@ Built over MCP by `run_corpus.py --analyze`, graded by `inspect_fit.py`;
 | Spray can (wd40-can) | 99.4 → 99.4 % | 0.21 → 0.21 | 0.28 → 0.28 | — | 14 | PASS | unchanged |
 | Beer mug (beer-mug) | 97.2 → 97.2 % | 1.38 → 1.38 | 0.79 → 0.79 | 3 112 | 4 698 | FAIL | unchanged |
 | Truck wheel (truck-wheel) | 94.1 → 94.1 % | 8.15 → 8.15 | 4.80 → 4.80 | 920 952 | 1 172 522 | FAIL | unchanged |
-| Valve (pipe-wheel) | 94.5 → 94.8 % | 0.69 → 0.83 | 1.99 → 1.13 | 1 015 | 635 | FAIL | four bores (r 17 / 18 deep, r 19 / 50 deep, r 20 through, r 11 / 14 deep) and a 26 mm union nut; the branch-root collars M1/M2 are 1 015 and 683 mm² now |
+| Valve (pipe-wheel) | 94.5 → 94.8 % | 0.69 → 0.83 | 1.99 → 1.13 | 1 015 | 635 | FAIL | four bores (r 17 / 18 deep, r 19 / 50 deep, r 20 through, r 11 / 14 deep) and a 26 mm union nut; M1/M2 (1 015 and 683 mm²) are the bores' insides, filled by the union — the passages, next |
 
 Two parts moved, both the ones the tracks aimed at: the valve's pipes are
 open where the scan's are (scan→model 1.99 → 1.13 mm; the largest missing
@@ -1637,8 +1828,29 @@ extinguisher wears one lever and a hollow horn (95.0 → 96.0 %, scan→model
 eight other parts are unchanged to the digit — the rules did not fire
 where they had nothing to say.
 
+### Results — 2026-10-26, the app run (passages)
+
+Built over MCP by `run_corpus.py --analyze` after the passages merged
+(`feat/scan-to-cad-passages`), graded by `inspect_fit.py`; "before" is
+the run above.
+
+| part | overlap | model→scan mm | scan→model mm | largest missing mm² | largest excess mm² | verdict | what changed |
+|---|---|---|---|---|---|---|---|
+| Valve (pipe-wheel) | 94.8 → 94.8 % | 0.83 → 0.73 | 1.13 → 1.00 | 1 015 → 550 | 635 → 649 | FAIL → FAIL (the largest-patch gates WARN now; `depth_front` still FAILs on the hand-wheel) | two passages cut after the unions: body 2's bore kept open 8 mm into body 1, body 3's 14 mm into body 0 (`+8 on into body 1`, `+14 on into body 0` in the corpus row); every remaining patch is on the hand-wheel (M1–M3 its rim, E1–E3 its spokes) |
+| the other nine | unchanged to the digit | | | | | | no secondary body elsewhere has a bore into a parent (the hydrant's nozzles are capped) — the analysis records are byte-identical |
+
+Offline first (preview_model, the same scan, the new analysis): missing
+1 015 → 552 mm², excess 630 → 627 — the shorter cut to the bore's own floor
+adds no excess, where a hand-edited deeper cut (66 / 60 mm) had put a
+2 082 mm² cylinder wall into the wider chamber. Tests 70 → 78.
+
 ## Gotchas
 
+- A branch's bore is only as deep as the parent's skin once unioned
+  (2026-10-26): the loop cuts it to its depth, the union fills it from
+  where the axis enters the parent's envelope on; a passage gated on
+  "deeper than the bore" alone recorded nothing on the valve, whose floors
+  are the bores' own — gate on min(depthMM, the entry depth) instead.
 - A nut is read on the whole scan, not on the body's labelled faces
   (2026-10-26): `fit_axes.assign` gives a face no normal line claims to
   the body whose ring radius it sits just under (≤ 1.15 × the ring +

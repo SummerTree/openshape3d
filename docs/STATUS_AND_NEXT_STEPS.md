@@ -2,7 +2,7 @@
 
 > **Current unfinished-work register:** [Sketch parity open status](SKETCH_PARITY_OPEN_STATUS.md). Maintained at every meaningful checkpoint; older mission logs below are historical.
 
-Last updated: 2026-10-26 (scan-to-CAD, the next pass: open pipe ends are BORED (`detect_bores` on the main body and every secondary body, folded into the revolve loop by `body_section`; a container's cavity and a collar with a nut in it are not bores), hex/octagon/square NUTS on any axis are built as prisms (`find_nuts` / `nut_sections`), a flat bar that bends is one SWEEP of a designed section along two or three legs (`corner_spine` / `bar_along`, a lever), the CO₂ horn is refitted on its own points and cut hollow; valve scan→model 1.99 → 1.13 mm with its four bores, CO₂ extinguisher 95 → 96 %, the other eight unchanged; films and reels re-taken; 70 tests — newest mission log bullet. Before that, 2026-10-25: the model is painted the scan's own colour (`scanColor` from the texture; spec `"color": "scan"`), the inspection gates on the LARGEST unexplained patch and rings it on the review sheet (`largest_missing_patch` / `largest_excess_patch`), and `fit_features.py` fits designed parts instead of blobs — stadium / rectangle / hexagon / circle outlines, one tube per piece with its horn as a cone, hoops, and part names (hose, horn, lever, nut, lug…) in the captions; a wheel's rim dish no longer reads as an open container (the dish test runs before the open end); CO₂ extinguisher 92 → 95 %, bucket 77 → 96 %, films and reels re-taken. Before that, 2026-10-24: every axis of revolution: `fit_axes.py` finds a scan's axes from its normals and the tracer builds each body on its own axis — the valve goes from 65 % to 95 %, the hydrant's nozzles to 1 mm, the wheel's stand as bars, no more spikes to the apex, a hand-wheel's openings cut; `preview_model.py` rebuilds the model offline; all ten films and both reels re-taken — newest mission log bullet under 2026-10-20. Before that, 2026-10-22, the fidelity pass: the scan trace reads the surface finely, containers get a subtracted cavity, dished parts a traced half-section, and `fit_features.py` / `build_features.py` add the handles, hoses, levers and chains a revolve cannot make — can and bollard PASS, the rest 88–97 % except the out-of-round pail and drum and the two-axis valve; the film and the reel revolve the build's own half-section — all ten corpus films and both reels re-taken on the rebuilt models; scan-to-CAD builds are now inspected both ways with depth maps and a review sheet — `inspect_fit.py`, gating the films and the reel; arcs and hollow revolves in the scan pipeline; a C-clamp rebuilt from recipes to 0.05 mm — the newest mission log bullet under 2026-10-20; a corpus of ten Sketchfab scans built over MCP, graded and filmed; CAD import over MCP: STEP and IGES sew loose faces into solids and sheet bodies, exact bounds, DXF units and ellipses, an open-mesh notice, and agents import STEP / IGES / DXF / FCStd; an OCCT oracle, a live MCP runner and offline XCTests behind it; test pack 36 / 36, FreeCAD IDF + NIST corpus 32 / 32, IGES twins 4 / 4 — newest mission log. Also today: Deviation Preview — the Accuracy Report's colours on the part; the scan's profile straightened; `item.select`) — **Accuracy Report** (one body measured against
+Last updated: 2026-10-26, later (scan-to-CAD: PASSAGES — a branch's bore that the union filled where the parent is solid is read over the whole scan (`passage_depth` / `passage_record`, to its floor, capped a wall before the parent's far skin; record `bores[j].passage` {depthMM, rMM, floor, capped, seenMM, intoParentMM}) and cut AFTER every union by the build, the film, the reel and the preview (`passage_sections` / `cut_passage`); the valve's largest missing patch 1 015 → 550 mm², scan→model 1.13 → 1.00 mm, the nine other parts unchanged; films and reels re-taken; 78 tests — newest mission log. Earlier the same day: open pipe ends are BORED (`detect_bores` on the main body and every secondary body, folded into the revolve loop by `body_section`; a container's cavity and a collar with a nut in it are not bores), hex/octagon/square NUTS on any axis are built as prisms (`find_nuts` / `nut_sections`), a flat bar that bends is one SWEEP of a designed section along two or three legs (`corner_spine` / `bar_along`, a lever), the CO₂ horn is refitted on its own points and cut hollow; valve scan→model 1.99 → 1.13 mm with its four bores, CO₂ extinguisher 95 → 96 %, the other eight unchanged; films and reels re-taken; 70 tests — newest mission log bullet. Before that, 2026-10-25: the model is painted the scan's own colour (`scanColor` from the texture; spec `"color": "scan"`), the inspection gates on the LARGEST unexplained patch and rings it on the review sheet (`largest_missing_patch` / `largest_excess_patch`), and `fit_features.py` fits designed parts instead of blobs — stadium / rectangle / hexagon / circle outlines, one tube per piece with its horn as a cone, hoops, and part names (hose, horn, lever, nut, lug…) in the captions; a wheel's rim dish no longer reads as an open container (the dish test runs before the open end); CO₂ extinguisher 92 → 95 %, bucket 77 → 96 %, films and reels re-taken. Before that, 2026-10-24: every axis of revolution: `fit_axes.py` finds a scan's axes from its normals and the tracer builds each body on its own axis — the valve goes from 65 % to 95 %, the hydrant's nozzles to 1 mm, the wheel's stand as bars, no more spikes to the apex, a hand-wheel's openings cut; `preview_model.py` rebuilds the model offline; all ten films and both reels re-taken — newest mission log bullet under 2026-10-20. Before that, 2026-10-22, the fidelity pass: the scan trace reads the surface finely, containers get a subtracted cavity, dished parts a traced half-section, and `fit_features.py` / `build_features.py` add the handles, hoses, levers and chains a revolve cannot make — can and bollard PASS, the rest 88–97 % except the out-of-round pail and drum and the two-axis valve; the film and the reel revolve the build's own half-section — all ten corpus films and both reels re-taken on the rebuilt models; scan-to-CAD builds are now inspected both ways with depth maps and a review sheet — `inspect_fit.py`, gating the films and the reel; arcs and hollow revolves in the scan pipeline; a C-clamp rebuilt from recipes to 0.05 mm — the newest mission log bullet under 2026-10-20; a corpus of ten Sketchfab scans built over MCP, graded and filmed; CAD import over MCP: STEP and IGES sew loose faces into solids and sheet bodies, exact bounds, DXF units and ellipses, an open-mesh notice, and agents import STEP / IGES / DXF / FCStd; an OCCT oracle, a live MCP runner and offline XCTests behind it; test pack 36 / 36, FreeCAD IDF + NIST corpus 32 / 32, IGES twins 4 / 4 — newest mission log. Also today: Deviation Preview — the Accuracy Report's colours on the part; the scan's profile straightened; `item.select`) — **Accuracy Report** (one body measured against
 another: orthographic silhouette overlays per view, outline and surface
 deviation both ways; `Kernel/AccuracyKit.swift`, Views ▸ Accuracy Report…,
 `/v1/accuracy` + `/v1/accuracy/image`, MCP ops `accuracy` /
@@ -75,6 +75,63 @@ passes alone.
   on every call, which a dense STEP import could make slow — cache on the
   body's mesh revision if an agent loop ever feels it.
 
+## Mission log — 2026-10-26, scan-to-CAD: passages — a branch's bore runs on into its parent
+
+The user: "work on the valve branch-root fillets next" (the previous
+log's own next item). Measured first, in the branch frames against the
+built model: the scan's radius at each root was within half a millimetre
+of the model — no collar, no fillet. Clustering the far scan points
+(> 6 mm from the model, `inspect_fit`'s own rule) and testing them with
+`contains()` put the two largest patches 100 % INSIDE the model, on the
+branch axes: M1 (1 015 mm²) on body 3's axis inside the main body's
+chamber, M2 (683 mm²) on body 2's axis inside the long pipe. The review
+sheet's `patches.png` had shown it all along — the circles sit inside the
+mouths. The branch bores are drawn in each body's revolve loop and the
+union into the parent fills them wherever the parent is solid, while the
+scanner saw the passage continue to a floor a few millimetres past the
+parent's skin.
+
+- **Analysis** (`analyze_scan.passage_depth` / `passage_record`, from
+  `secondary_bodies` after the trim and the lengthening, over the WHOLE
+  scan sampled once with normals): from the mouth down the branch axis,
+  slab by slab, surface inside the cylinder of the bore's last radius; a
+  floor is a slab of points under 0.6 r facing back toward the mouth;
+  the walk is capped a wall before the axis leaves the parent's envelope
+  (`fit_axes.inside_body`). What the valve showed, honestly: both floors
+  are the bores' OWN floors (50 and 52 mm; `detect_bores` had read them),
+  the parent's skin is 42 and 38 mm in, and M1/M2 are exactly that
+  stretch — so a passage is recorded when the hole the scan shows runs
+  deeper than the hole the model HAS after the union (the lesser of the
+  bore's depth and the entry depth), not merely deeper than the bore.
+  Record on the bore: `passage` {depthMM, rMM, floor, capped, seenMM,
+  intoParentMM}. Hydrant and CO₂ extinguisher records byte-identical.
+- **Build** (`build_hydrant.passage_sections` / `cut_passage`): the
+  rectangle u 0‥rMM, v from a millimetre outside the mouth to the far
+  end, revolved 360° and SUBTRACTED after the secondaries and the nuts
+  and before the bosses — from `build()`, `demo_video.py take` (a
+  `passage{n}` beat), `reel.py` and `preview_model.build_preview` alike;
+  `run_corpus` rows say "+8 on into body 1". Two tracks in worktrees,
+  four adversarial reviews (both "ship"); the merge added `intoParentMM`
+  so the words never say "runs on 0 mm", refused a passage on the
+  junction end, and tested the valve's own case (a passage no deeper than
+  its bore is still cut).
+- **Offline, then the app**: preview missing 1 015 → 552 mm², excess
+  630 → 627 (a hand-edited deeper cut had cost a 2 082 mm² cylinder wall
+  in the wider chamber — the floor rule is right). The app run: valve
+  scan→model 1.13 → 1.00 mm, model→scan 0.83 → 0.73, largest missing
+  1 015 → 550 mm² (WARN), overlap 94.8 % as before; every remaining patch
+  is on the hand-wheel; the other nine parts unchanged to the digit.
+  Films and reels re-taken. Tests 70 → 78 (~230 s; the four T-shaped
+  analyses cost 22 s each).
+
+Next, for the eye: the hand-wheel's rim and spokes (the valve's M1–M3 /
+E1–E3 now, 460–650 mm² each: the rim's section and the openings' shape);
+a top recess for the hydrant's crown; the valve head of the CO₂
+extinguisher (E1 9 100 mm²: a cap and a pivot); the oval bucket and
+dented barrel (a per-band ellipse, or an honest floor in the gate); a
+vision critic on the review sheet — and always test a patch with
+`contains()` before naming it.
+
 ## Mission log — 2026-10-26, scan-to-CAD: bores, nuts, levers — and the horn refitted
 
 The user: "they look a lot better -- can we work on next improvements".
@@ -117,8 +174,9 @@ levers*, and *The horn refitted on its own points*).
   valve's 26 mm union nut and the hydrant's 55 mm cap nut on nozzle 1b —
   real, small, no measurable change. The brief's targets turned out not
   to be nuts: the hydrant's M1 is a castellated crown with the hexagonal
-  operating nut buried inside it; the valve's M1/M2 are the branch roots'
-  round cast collars with the branch axes a few mm off. No false nut on
+  operating nut buried inside it; the valve's M1/M2 looked like the
+  branch roots' round cast collars — they were the INSIDES of the branch
+  bores, filled by the union (the passages log below). No false nut on
   the other eight parts.
 - **Bent bars and levers.** `fit_features.py`: a flat run of a tube chain
   (section ≥ 1.8× as wide as thick, `FLAT_RATIO`) or a piece on its own
@@ -159,8 +217,8 @@ levers*, and *The horn refitted on its own points*).
   other parts unchanged to the digit. Films and reels re-taken (the
   2026-10-26 results table in docs/SCAN_TO_CAD.md).
 
-Next, for the eye: the branch-root fillets and a branch axis refined on
-the branch alone (the valve's M1/M2); a top recess for the hydrant's
+Next, for the eye (as written at the time; the valve's M1/M2 turned out
+to be passages, not fillets — the next log): a top recess for the hydrant's
 crown; the valve head of the CO₂ extinguisher (E1 9 500 mm²: a cap and
 a pivot the revolve + lever do not make); the oval bucket and dented
 barrel (a per-band ellipse, or an honest floor in the gate); a vision
