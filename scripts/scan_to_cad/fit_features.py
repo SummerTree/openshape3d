@@ -454,6 +454,21 @@ def tube_runs(comp, pts, rows_out, r0, tol, far, model_tree, step, all_pts=None,
         if len(run) < 3 or r < 1.0 or span < max(4.0 * r, 15.0):
             say("tube: run of %d dropped (r %.1f, span %.0f)" % (len(run), r, span))
             continue
+        # The run's own points against its own tube: a lever or a valve body
+        # the geodesic walked through is no tube, whatever its bins' medians.
+        own = np.concatenate([np.abs(x["rho"] - x["r"]) <= max(tol, 0.3 * x["r"]) for x in run])
+        # A radius that grows steadily along the run is a cone — a horn, a
+        # nozzle — and is judged BEFORE the flat bar: a hollow horn's bell,
+        # scanned from one side, reads 53 × 23 across its bins and passed
+        # as a "rectangle bar bent 51°" (the merged 2026-10-26 run); a
+        # bar's section is constant along its run, a cone's is not.
+        cone = cone_run(run, r, tol) if float(own.mean()) >= 0.5 else None
+        if cone is not None:
+            verdict["run"], verdict["kind"] = cone, "cone"
+            verdict["r"] = radius_of(cone)
+            verdict["spine"] = np.array([x["c"] for x in cone])
+            verdict["span"] = float(np.sum(np.linalg.norm(np.diff(verdict["spine"], axis=0), axis=1)))
+            continue
         # A section nearly twice as wide as it is thick is a flat bar, not
         # a tube — a squeeze lever, a strap: a bar of a designed section
         # (a rounded rectangle, a stadium) along a spine of one, two or
@@ -500,29 +515,18 @@ def tube_runs(comp, pts, rows_out, r0, tol, far, model_tree, step, all_pts=None,
             if bar is not None:
                 say("tube: run of %d: a flat section (%.0f × %.0f) but the bar covers only %.0f%% of its points" % (
                     len(run), 2 * a_run, 2 * b_run, bar["coverage"] * 100))
-        # The run's own points against its own tube: a lever or a valve body
-        # the geodesic walked through is no tube, whatever its bins' medians.
-        own = np.concatenate([np.abs(x["rho"] - x["r"]) <= max(tol, 0.3 * x["r"]) for x in run])
         # Half its points on the tube: a corrugated hose's bins carry the
         # valve's and the horn's neighbours and read 53–57 %.
         if float(own.mean()) < 0.5:
             say("tube: run of %d dropped (r %.1f): only %.0f%% of its own points on the tube" % (len(run), r, own.mean() * 100))
             continue
-        # A radius that grows steadily along the run is a cone — a horn, a
-        # nozzle: a revolve about the run's own line, not a tube. The
-        # geodesic can overshoot the horn's mouth and walk a sample or
-        # two down its rim (15.5 → 32.7 → 17.7 on the CO₂ extinguisher's
-        # horn against the app's model, trend 0.63; the same horn against
-        # the offline model stopped at 33 and read 0.98), so the trend is
-        # judged on the run with up to three end samples trimmed, and a
-        # cone is the trimmed run.
-        cone = cone_run(run, r, tol)
-        if cone is not None:
-            verdict["run"], verdict["kind"] = cone, "cone"
-            verdict["r"] = radius_of(cone)
-            verdict["spine"] = np.array([x["c"] for x in cone])
-            verdict["span"] = float(np.sum(np.linalg.norm(np.diff(verdict["spine"], axis=0), axis=1)))
-            continue
+        # (The cone — a radius growing steadily along the run — was judged
+        # above, before the flat bar. The geodesic can overshoot the horn's
+        # mouth and walk a sample or two down its rim (15.5 → 32.7 → 17.7
+        # on the CO₂ extinguisher's horn against the app's model, trend
+        # 0.63; the same horn against the offline model stopped at 33 and
+        # read 0.98), so `cone_run` judges the trend with up to three end
+        # samples trimmed, and a cone is the trimmed run.)
         # A steady run three times fatter than the chords measured is not
         # the tube they measured: a stand's post and beam, walked through
         # by the geodesic, gave a 42 mm "tube" on a piece whose chords
@@ -572,6 +576,17 @@ def tube_runs(comp, pts, rows_out, r0, tol, far, model_tree, step, all_pts=None,
             hs = (spine - c0) @ d
             prof = [[float(x["r"]), float(hh)] for x, hh in zip(run, hs)]
             prof = douglas_peucker_2d(prof, max(tol * 0.5, 0.5))
+            # The axis and profile refitted on the piece's own points
+            # (`refine_cone`): the bins' centreline leans to the scanned
+            # side of a one-sided horn, and an axis 4 mm off leaves the
+            # bell's wall outside tolerance — 12 000 mm² the next pass
+            # boxed in on the CO₂ extinguisher.
+            refined = refine_cone(all_pts, c0, d, prof, tol) if all_pts is not None else None
+            if refined is not None:
+                c0, d, prof = refined
+                hs = np.array([q[1] for q in prof])
+                say("tube: the cone refitted on %d slabs: r %.1f → %.1f over h %.0f…%.0f" % (
+                    len(prof), prof[0][0], prof[-1][0], hs.min(), hs.max()))
             # An open mouth: the inner skin of a hollow horn, read off the
             # whole piece before the ends are lengthened.
             mouth = cone_mouth(all_pts, all_nrm, c0, d, prof, tol) if all_pts is not None else None
@@ -660,6 +675,68 @@ def tube_runs(comp, pts, rows_out, r0, tol, far, model_tree, step, all_pts=None,
         # proved at one.
         covered |= sweep_covered(f, verts, 2.0 * tol if f.get("section") else tol)
     return {"kind": "sweep", "features": features, "covered": covered, "coverage": float(covered.mean())}
+
+
+def refine_cone(pts, c0, d, prof, tol, iterations=3):
+    """A cone's axis and outer profile refitted on the piece's own points:
+    the points within the cone's reach (its height range, a slab either
+    side, inside 1.5 × the fitted radius) are cut into slabs along the
+    axis, a circle is fitted in each (a one-sided scan's arc still gives
+    a centre near the true one, where a slab's MEAN leans to the scanned
+    side), and the axis becomes the line through the slab centres —
+    three times over. The outer profile is each slab's 75th-percentile
+    radius (a hollow horn shows two skins; the outer is the shape), the
+    mouth where the points end. Returns (c, d, [[r, h], …]) or None when
+    fewer than four slabs hold a circle."""
+    pts = np.asarray(pts, dtype=float)
+    P = np.asarray(prof, dtype=float)
+    if len(P) < 2 or len(pts) < 60:
+        return None
+    c, d = np.asarray(c0, dtype=float), unit(d)
+    slab = max(2.0, float(tol))
+    h_lo, h_hi = float(P[:, 1].min()) - slab, float(P[:, 1].max()) + 2.0 * slab
+    r_max = float(P[:, 0].max())
+    out = None
+    for _ in range(iterations):
+        hv = (pts - c) @ d
+        perp = (pts - c) - np.outer(hv, d)
+        rv = np.linalg.norm(perp, axis=1)
+        order = np.argsort(P[:, 1])
+        r_at = np.interp(hv, P[order, 1], P[order, 0])
+        sel = (hv >= h_lo) & (hv <= h_hi) & (rv <= 1.5 * np.maximum(r_at, 0.3 * r_max) + tol)
+        if sel.sum() < 60:
+            return out
+        e1 = unit(np.cross(d, [0, 0, 1.0]) if abs(d[2]) < 0.9 else np.cross(d, [1.0, 0, 0]))
+        e2 = np.cross(d, e1)
+        edges = np.arange(h_lo, h_hi + slab, slab)
+        centres, profile = [], []
+        for i in range(len(edges) - 1):
+            m = sel & (hv >= edges[i]) & (hv < edges[i + 1])
+            if m.sum() < 12:
+                continue
+            xy = np.column_stack([perp[m] @ e1, perp[m] @ e2])
+            cc, R, resid = fit_circle_2d(xy)
+            r_slab = float(np.percentile(rv[m], 75))
+            if R < 0.3 * r_slab or R > 3.0 * r_slab or np.linalg.norm(cc) > max(3.0 * tol, 0.5 * r_slab):
+                continue                                    # a slab that is no ring (the valve the hose leaves)
+            h_mid = float((edges[i] + edges[i + 1]) / 2)
+            centres.append(c + d * h_mid + e1 * cc[0] + e2 * cc[1])
+            profile.append([r_slab, h_mid])
+        if len(centres) < 4:
+            return out
+        centres = np.asarray(centres)
+        cm = centres.mean(axis=0)
+        _, _, vt = np.linalg.svd(centres - cm, full_matrices=False)
+        d_new = unit(vt[0] if vt[0] @ d > 0 else -vt[0])
+        # The profile is re-read about the new axis next time round; the
+        # heights are kept relative to the new origin on the old scale.
+        c, d = cm, d_new
+        h_new = (centres - c) @ d
+        P = np.array([[rr, hh] for (rr, _), hh in zip(profile, h_new)])
+        P = P[np.argsort(P[:, 1])]
+        h_lo, h_hi = float(P[0, 1]) - slab, float(P[-1, 1]) + slab
+        out = (c, d, [[float(rr), float(hh)] for rr, hh in douglas_peucker_2d(P.tolist(), max(tol * 0.5, 0.5))])
+    return out
 
 
 def cone_mouth(pts, nrm, c0, d, prof, tol, sectors=24):
@@ -1463,7 +1540,20 @@ def revolve_covered(feature, verts, tol):
     hv = (verts - c) @ d
     rv = np.linalg.norm((verts - c) - np.outer(hv, d), axis=1)
     r_at = np.interp(hv, prof[:, 1], prof[:, 0])
-    return (np.abs(rv - r_at) <= np.maximum(tol, 0.1 * r_at)) & (hv >= prof[0, 1] - tol) & (hv <= prof[-1, 1] + tol)
+    along = (hv >= prof[0, 1] - tol) & (hv <= prof[-1, 1] + tol)
+    covered = (np.abs(rv - r_at) <= np.maximum(tol, 0.1 * r_at)) & along
+    bore = feature.get("boreProfile")
+    if bore and len(bore) >= 2:
+        # A hollow horn explains its wall: the inner skin the mouth read
+        # (`cone_mouth`) and everything between it and the outer profile.
+        # The outer cone from the bins can run a few millimetres fat
+        # mid-way, which left the horn's own wall as a 12 000 mm² piece
+        # that the next pass boxed in.
+        B = np.array(sorted(bore, key=lambda q: q[1]), dtype=float)
+        r_in = np.interp(hv, B[:, 1], B[:, 0])
+        in_bore = (hv >= B[0, 1] - tol) & (hv <= B[-1, 1] + tol)
+        covered |= along & in_bore & (rv >= r_in - tol) & (rv <= r_at + tol)
+    return covered
 
 
 def revolve_fit(comp, tol, far, model_tree):

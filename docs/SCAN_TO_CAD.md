@@ -1579,6 +1579,38 @@ quarter circle is still one circle sweep and the bent-bar fit stands
 down; `corner_spine` counts one, two and three legs on noisy samples and
 refuses a semicircle.
 
+### The horn refitted on its own points (2026-10-26, the merge)
+
+Merged, the three tracks made the CO₂ extinguisher WORSE offline (95.1 →
+92.9 %): the horn's cone was fitted on the geodesic's centreline samples,
+and on a horn scanned from one side those bins lean to the scanned face
+— the cone's axis sat 4 mm off and its mouth 13 mm short, so the bell's
+own wall fell outside tolerance, came back as a 12 000 mm² leftover,
+and the next pass boxed it in (a 54 × 54 × 272 mm "bar" along the horn;
+15 500 mm² of excess at the mouth). Three rules in `fit_features.py`:
+
+- `refine_cone(pts, c0, d, prof, tol)`: the piece's points within the
+  cone's reach are cut into slabs along the axis, a circle is fitted in
+  each (`fit_circle_2d` — half a ring still gives a centre near the true
+  one, where a slab's mean does not), the axis becomes the line through
+  the slab centres, three times over; the outer profile is each slab's
+  75th-percentile radius (two skins: the outer is the shape) and the
+  mouth is where the points end. From 4 mm off and 3° askew the test
+  lands within 1 mm and 0.5°. `cone_mouth` then reads the bore in the
+  refined frame.
+- A hollow horn explains its wall: `revolve_covered` counts the points
+  between the inner skin the mouth read (`boreProfile`) and the outer
+  profile, a tolerance either side.
+- A run is judged a cone BEFORE a flat bar in `tube_runs`: a bar's
+  section is constant along its run, a cone's is not, and a horn's bins
+  read 53 × 23 mm across (ratio 2.3, past `FLAT_RATIO`).
+
+CO₂ extinguisher offline (preview_model, `--all-features`, same scan and
+stage-1 revolve): 92.9 → **95.9 %**, scan→model 1.76 → 1.19 mm, the
+horn's run covers 89 % of its piece and nothing is left unexplained; the
+valve head's cap (E1 9 500 mm²) is what remains. Beer mug, valve and the
+rusty extinguisher are unchanged to the digit.
+
 ## Gotchas
 
 - A nut is read on the whole scan, not on the body's labelled faces

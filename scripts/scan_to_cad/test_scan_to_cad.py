@@ -537,6 +537,40 @@ class BoreTests(unittest.TestCase):
         del old["boreMouthHMM"]
         self.assertAlmostEqual(BF.bore_profile(old)[0][1], 112.0)        # an older record: the profile's end
 
+    def test_a_one_sided_horn_is_refitted_on_its_own_points_and_its_wall_is_covered(self):
+        """`fit_features.refine_cone` from an axis 4 mm off and 3° askew (what
+        the bins' centreline gives on a horn scanned from one side) lands
+        the axis within 1 mm and 0.5°, and `revolve_covered` counts a
+        hollow horn's inner skin as the horn's own wall."""
+        import fit_features as FF
+        rng = np.random.default_rng(5)
+        n = 7000
+        h = rng.uniform(0, 230, n)
+        r_out = 15.0 + (18.0 / 230.0) * h                               # 15 → 33 mm, the CO₂ horn
+        wall = 3.0
+        t = rng.uniform(-0.5 * math.pi, 0.5 * math.pi, n)                # one side scanned
+        outer = np.column_stack([r_out * np.cos(t), r_out * np.sin(t), h])
+        inner = np.column_stack([(r_out - wall) * np.cos(t), (r_out - wall) * np.sin(t), h])
+        pts = np.vstack([outer, inner])
+        tilt = np.array([math.sin(math.radians(3.0)), 0.0, math.cos(math.radians(3.0))])
+        c_guess = np.array([4.0, 0.0, 115.0])                            # 4 mm toward the scanned side
+        guess_prof = [[15.0, -115.0], [33.0, 115.0]]
+        c, d, prof = FF.refine_cone(pts, c_guess, tilt, guess_prof, tol=3.0)
+        self.assertGreater(float(d @ [0, 0, 1.0]), math.cos(math.radians(0.5)))
+        off = c - np.array([0, 0, 1.0]) * float(c @ [0, 0, 1.0])
+        self.assertLess(float(np.linalg.norm(off)), 1.0)                 # from 4 mm off (two skins, half a circle)
+        for r_fit, h_fit in prof:
+            h_true = float((c + d * h_fit) @ [0, 0, 1.0])
+            self.assertAlmostEqual(r_fit, 15.0 + (18.0 / 230.0) * h_true, delta=1.0)
+        self.assertGreater(prof[-1][1] - prof[0][1], 215.0)              # the mouth is where the points end
+        # The wall rule: the inner skin counts once the horn is bored.
+        feature = {"kind": "revolve", "axis": {"origin": [0.0, 0.0, 0.0], "direction": [0.0, 0.0, 1.0]},
+                   "profile": [[15.0, 0.0], [33.0, 230.0]], "cone": True}
+        solid = FF.revolve_covered(feature, inner, 1.0)
+        bored = FF.revolve_covered(dict(feature, boreProfile=[[12.0, 0.0], [30.0, 230.0]]), inner, 1.0)
+        self.assertLess(float(solid.mean()), 0.2)
+        self.assertGreater(float(bored.mean()), 0.95)
+
     def test_a_hollow_horn_has_an_open_mouth_and_is_cut_hollow(self):
         """`fit_features.cone_mouth` on a thin-walled cone's points, and the
         bored horn built hollow by `build_features.bore_profile` /
