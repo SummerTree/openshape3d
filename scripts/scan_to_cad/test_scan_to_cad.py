@@ -1623,5 +1623,188 @@ class ScanColorTests(unittest.TestCase):
             model_color({"color": "red"}, analysis)
 
 
+class PassageDetectTests(unittest.TestCase):
+    """`analyze_scan.passage_depth` and the `passage` record on a secondary
+    body's bore: a branch's bore carried on into the body it joins, read
+    over the whole scan, to a floor or as far as the scan shows interior
+    surface, never out through the parent's far skin."""
+
+    MOUTH_X = -50.0
+
+    @staticmethod
+    def tee(parent_inner=19.0, bore_to_x=50.0, parent_outer=25.0):
+        """A parent body along y (outer `parent_outer`, 240 long, axis at
+        x = 50) with a closed chamber of radius `parent_inner` inside it
+        (solid when None — a scanner sees a valve's chamber only through
+        its branches, so the chamber's ends are closed), and a branch pipe
+        along x (outer r 15, bore r 11) entering it at 90° at y = 100: the
+        branch's mouth at x = −50, its bore cut from there to `bore_to_x`
+        (past the far skin at x = 75, the bore drills right through the
+        parent). The walls are the valve's proportions (a bore 3–4 mm
+        inside the pipe, a chamber 6 mm inside the body): the axis finder's
+        ring test takes a bore within two tolerances of the outer radius as
+        the same ring, and a hollow part whose inner skin lies farther in
+        than that reads as no body of revolution at all (roundness 0.6,
+        under its 0.7)."""
+        import trimesh
+        rot_y = trimesh.transformations.rotation_matrix(math.pi / 2, [1, 0, 0])
+        rot_x = trimesh.transformations.rotation_matrix(math.pi / 2, [0, 1, 0])
+        parent = trimesh.creation.cylinder(radius=parent_outer, height=240.0, sections=64)
+        parent.apply_transform(rot_y)
+        parent.apply_translation([50.0, 100.0, 0.0])
+        branch = trimesh.creation.cylinder(radius=15.0, height=81.0, sections=48)
+        branch.apply_transform(rot_x)
+        branch.apply_translation([-50.0 + 81.0 / 2, 100.0, 0.0])                # x from −50 to 31: into the parent's wall
+        collar = trimesh.creation.cylinder(radius=17.5, height=6.0, sections=48)  # a lip at the mouth: a plain cylinder's
+        collar.apply_transform(rot_x)                                            # two-point profile is "too short to keep"
+        collar.apply_translation([-47.0, 100.0, 0.0])
+        solid = trimesh.boolean.union([parent, branch, collar], engine="manifold")
+        cutters = []
+        if parent_inner is not None:
+            inner = trimesh.creation.cylinder(radius=parent_inner, height=220.0, sections=64)
+            inner.apply_transform(rot_y)
+            inner.apply_translation([50.0, 100.0, 0.0])
+            cutters.append(inner)
+        bore = trimesh.creation.cylinder(radius=11.0, height=bore_to_x + 60.0, sections=48)
+        bore.apply_transform(rot_x)
+        bore.apply_translation([(bore_to_x - 60.0) / 2, 100.0, 0.0])            # x from −60 to bore_to_x
+        cutters.append(bore)
+        return trimesh.boolean.difference([solid] + cutters, engine="manifold")
+
+    @staticmethod
+    def analyse(mesh):
+        import analyze_scan as A
+        # The parent's axis given (the corpus's finder picks it the same
+        # way on the valve); the finder adds the branch.
+        return A.analyze(mesh, out_dir=None, name="tee", samples=30000, axis_choice="0,1,0!", multi=True)
+
+    def branch_bore(self, a):
+        """The one secondary body and its bore at the free end."""
+        self.assertEqual(len(a["bodies"]), 1, [b.get("tag") for b in a["bodies"]])
+        branch = a["bodies"][0]
+        free = "end" if branch["junction"] == "start" else "start"
+        bores = [b for b in branch["bores"] if b["end"] == free]
+        self.assertEqual(len(bores), 1, branch["bores"])
+        return branch, bores[0]
+
+    @staticmethod
+    def mouth_depth_of_x(branch, x):
+        """How deep along the branch's axis, from its free end's plane, the
+        world plane x = `x` lies."""
+        o, d = np.array(branch["axisOrigin"]), np.array(branch["axisDirection"])
+        if branch["junction"] == "start":
+            mouth, d_in = o + d * branch["heightMM"], -d
+        else:
+            mouth, d_in = o, d
+        return (x - mouth[0]) / d_in[0]
+
+    def test_a_branch_bored_into_a_hollow_parent_runs_on_to_the_far_inner_wall(self):
+        a = self.analyse(self.tee())
+        branch, bore = self.branch_bore(a)
+        self.assertIn("passage", bore, bore)
+        p = bore["passage"]
+        self.assertTrue(p["floor"], p)
+        self.assertFalse(p["capped"], p)
+        self.assertAlmostEqual(p["rMM"], 11.0, delta=0.8)
+        self.assertGreaterEqual(p["depthMM"], bore["depthMM"])
+        self.assertGreater(p["depthMM"], bore["depthMM"] + 10.0)                  # well past what the loop cuts
+        self.assertAlmostEqual(p["depthMM"], self.mouth_depth_of_x(branch, 69.0), delta=2.0)   # the far inner wall, x = 50 + 19
+        self.assertEqual(set(p), {"depthMM", "rMM", "floor", "capped", "seenMM"})
+        self.assertLessEqual(p["seenMM"], p["depthMM"] + 2.0)
+
+    def test_a_socket_onto_a_solid_parent_has_no_passage(self):
+        # The bore ends a millimetre short of the parent's skin: nothing the
+        # union could fill, nothing beyond it.
+        a = self.analyse(self.tee(parent_inner=None, bore_to_x=24.0))
+        branch, bore = self.branch_bore(a)
+        self.assertNotIn("passage", bore, bore)
+        self.assertAlmostEqual(bore["depthMM"], self.mouth_depth_of_x(branch, 24.0), delta=3.0)
+
+    def test_a_bore_into_a_solid_parent_is_recorded_to_its_floor(self):
+        # Bored 25 mm into the solid parent: the branch's own faces show
+        # the bore only to about the parent's skin (the wall inside the
+        # parent is the parent's by the labelling), the union fills it from
+        # the skin on, and the whole scan shows its floor at the parent's
+        # axis — the passage carries the cut there.
+        a = self.analyse(self.tee(parent_inner=None, bore_to_x=50.0))
+        branch, bore = self.branch_bore(a)
+        self.assertIn("passage", bore, bore)
+        p = bore["passage"]
+        self.assertTrue(p["floor"], p)
+        self.assertFalse(p["capped"], p)
+        self.assertAlmostEqual(p["depthMM"], self.mouth_depth_of_x(branch, 50.0), delta=2.5)
+        self.assertGreaterEqual(p["depthMM"], bore["depthMM"])
+
+    def test_a_passage_is_capped_before_the_parents_far_skin(self):
+        # A thin-walled parent drilled right through: the branch's bore
+        # goes in one side and out the other (the far wall is gone where
+        # the axis leaves, and the hole's own wall shows surface out to the
+        # far skin). The passage stops a wall short of that skin.
+        a = self.analyse(self.tee(parent_inner=22.0, bore_to_x=90.0))
+        branch, bore = self.branch_bore(a)
+        self.assertIn("passage", bore, bore)
+        p = bore["passage"]
+        self.assertTrue(p["capped"], p)
+        self.assertFalse(p["floor"], p)
+        far_skin = self.mouth_depth_of_x(branch, 75.0)
+        self.assertLess(p["depthMM"], far_skin - 1.5)
+        self.assertGreater(p["depthMM"], far_skin - 12.0)
+        self.assertGreater(p["seenMM"], p["depthMM"])                              # the hole runs on; the cut does not
+
+    def test_passage_depth_finds_a_floor_or_the_deepest_surface(self):
+        import analyze_scan as A
+        rng = np.random.RandomState(3)
+        c, d_in = np.array([5.0, -2.0, 1.0]), np.array([0.0, 0.0, 1.0])
+
+        def wall(r, z0, z1, n):
+            t = rng.uniform(0, 2 * math.pi, n)
+            z = rng.uniform(z0, z1, n)
+            pts = c + np.stack([r * np.cos(t), r * np.sin(t), z], axis=1)
+            nrm = -np.stack([np.cos(t), np.sin(t), np.zeros(n)], axis=1)       # facing in, toward the axis
+            return pts, nrm
+
+        def disc(r, z, n, facing):
+            rr = r * np.sqrt(rng.uniform(0, 1, n))
+            t = rng.uniform(0, 2 * math.pi, n)
+            pts = c + np.stack([rr * np.cos(t), rr * np.sin(t), np.full(n, z)], axis=1)
+            return pts, np.tile(np.array([0.0, 0.0, facing]), (n, 1))
+
+        w_pts, w_nrm = wall(10.0, 0.0, 60.0, 3000)                                 # ~100 points per 2 mm slab
+        f_pts, f_nrm = disc(10.0, 80.0, 400, -1.0)                                 # a floor facing the mouth
+        # A floor 80 mm in, past the 60 mm of wall the bore showed.
+        depth, floor, seen, capped = A.passage_depth(np.vstack([w_pts, f_pts]), np.vstack([w_nrm, f_nrm]), c, d_in,
+                                                     10.0, 1.5, 2.0, 120.0, 58.0)
+        self.assertTrue(floor)
+        self.assertFalse(capped)
+        self.assertAlmostEqual(depth, 80.0, delta=1.0)
+        self.assertAlmostEqual(seen, 80.0, delta=2.0)
+        # No floor: the deepest slab with surface inside the cylinder.
+        depth, floor, seen, capped = A.passage_depth(w_pts, w_nrm, c, d_in, 10.0, 1.5, 2.0, 120.0, 58.0)
+        self.assertFalse(floor)
+        self.assertFalse(capped)
+        self.assertAlmostEqual(depth, 60.0, delta=2.0)
+        self.assertAlmostEqual(seen, depth)
+        # The far skin, facing away, is no surface and no floor: the same
+        # wall with a disc facing AWAY at 80 reads 60 deep.
+        a_pts, a_nrm = disc(10.0, 80.0, 400, 1.0)
+        depth, floor, seen, capped = A.passage_depth(np.vstack([w_pts, a_pts]), np.vstack([w_nrm, a_nrm]), c, d_in,
+                                                     10.0, 1.5, 2.0, 120.0, 58.0)
+        self.assertFalse(floor)
+        self.assertAlmostEqual(depth, 60.0, delta=2.0)
+        # The cap: a floor at 80 beyond a cap at 70 is not the passage's
+        # floor; the depth is the cap's.
+        depth, floor, seen, capped = A.passage_depth(np.vstack([w_pts, f_pts]), np.vstack([w_nrm, f_nrm]), c, d_in,
+                                                     10.0, 1.5, 2.0, 70.0, 58.0, beyond_mm=15.0)
+        self.assertTrue(capped)
+        self.assertFalse(floor)
+        self.assertAlmostEqual(depth, 70.0)
+        self.assertGreater(seen, 70.0)
+        # Too few points facing the mouth are a stray patch, not a floor.
+        s_pts, s_nrm = disc(10.0, 80.0, 6, -1.0)
+        depth, floor, seen, capped = A.passage_depth(np.vstack([w_pts, s_pts]), np.vstack([w_nrm, s_nrm]), c, d_in,
+                                                     10.0, 1.5, 2.0, 120.0, 58.0)
+        self.assertFalse(floor)
+
+
 if __name__ == "__main__":
     unittest.main()
