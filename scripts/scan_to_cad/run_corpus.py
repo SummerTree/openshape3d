@@ -23,7 +23,7 @@ import urllib.request
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
-from spec_color import model_color  # noqa: E402 — stdlib only; this script runs under any python3
+from spec_color import model_color, nut_words  # noqa: E402 — stdlib only; this script runs under any python3
 
 BUNDLE = "com.laan.labs.openshape3d"
 
@@ -52,6 +52,15 @@ def relaunch(udid, port):
         except Exception:  # noqa: BLE001 — not up yet
             pass
     sys.exit("the app's bridge never answered on port %d" % port)
+
+
+def nut_lines(profile):
+    """One line per polygonal band the analysis found, on the main axis
+    and on each body: "a 26 mm hex nut, 10 mm tall on body 1"."""
+    lines = [nut_words(n) + " on the main axis" for n in profile.get("nuts") or []]
+    for body in profile.get("bodies") or []:
+        lines += [nut_words(n) + " on body %s" % body.get("index") for n in body.get("nuts") or []]
+    return lines
 
 
 def patch_lines(patches, top=3):
@@ -108,11 +117,19 @@ def main():
         # the analysis); the build and the inspection sheet paint it alike.
         color = [str(c) for c in model_color(spec, profile)]
         run_dir = os.path.join(part, "run")
-        print("=== %s: %s, %.0f mm tall, %d bosses, tolerance %.0f mm" % (
-            slug, spec["label"], profile["heightMM"], len(profile["bosses"]), tolerance), flush=True)
+        nuts = nut_lines(profile)
+        # The bores the analysis found at free ends (the main body's and
+        # each secondary body's), so the row says "bored r 14, 50 deep".
+        bores = ["%s: r %.0f mm %s" % ("body %d" % b["index"] if "index" in b else "body",
+                                        bore["rInnerMM"], "through" if bore.get("through") else "%.0f deep" % bore["depthMM"])
+                 for b in [profile] + profile.get("bodies", []) for bore in b.get("bores", [])]
+        print("=== %s: %s, %.0f mm tall, %d bosses, tolerance %.0f mm%s%s" % (
+            slug, spec["label"], profile["heightMM"], len(profile["bosses"]), tolerance,
+            ("; " + "; ".join(nuts)) if nuts else "",
+            ("; bored — " + ", ".join(bores)) if bores else ""), flush=True)
         t0 = time.time()
         row = {"label": spec["label"], "heightMM": profile["heightMM"], "bosses": len(profile["bosses"]),
-               "profilePoints": len(profile["profile"]), "toleranceMM": tolerance}
+               "profilePoints": len(profile["profile"]), "toleranceMM": tolerance, "nuts": nuts, "bores": bores}
         try:
             relaunch(udid, args.port)
             cmd = [args.python, "-I", os.path.join(HERE, "build_hydrant.py"), "--scan", scan, "--analysis", analysis,

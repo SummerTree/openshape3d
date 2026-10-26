@@ -1150,7 +1150,573 @@ against 4.5 allowed) and a round 4 mm wall 120 mm tall on a 216 mm
 diameter are each refused, and that wall cut to 20 mm tall is a band
 again.
 
+### Nuts and collars on an axis (2026-10-26)
+
+A revolve turns a hex nut into a round ring at its mean radius — missing
+at the corners, excess at the flats — and on a branch the nut sits in the
+very root that `secondary_bodies()` cuts off and replaces by a straight
+lengthening. `analyze_scan.py` now looks for polygonal bands on every
+axis and the build extrudes them as the prisms they are:
+
+- **The detector** (`find_nuts`). The scan is sampled about the axis —
+  the whole scan, not the body's labelled faces (`nut_samples`): a nut's
+  flats are faces no normal line through the axis claims, so the
+  labelling may give a body only some of them — at about three points
+  per mm² (a 2 mm window round a 22 mm nut then holds a few points in
+  every 5° sector; 600 000 samples left the hydrant's nut with two per
+  sector and nothing to fit). Over windows of max(2 bands, 2 mm) the
+  outward-facing points are split into the radius levels they cluster
+  at (the modes of a 1 mm histogram, 4 mm apart, a tenth of the points
+  each — a nut inside a crown is two levels in one window), and for each
+  level the radius against azimuth on 72 sectors (the 24-sector grid
+  cannot see a 60° flat) is fitted with a regular n-gon for n = 4, 6, 8:
+  r(θ) = a / cos(((θ − φ + π/n) mod 2π/n) − π/n), the phase φ searched
+  in 1° steps over one period and the apothem a the median of
+  r · cos(angle from the nearest flat's normal), which is a in every
+  sector of a true polygon (`fit_polygon`). The n-gon is taken when 80 %
+  of ALL the sectors lie within max(3 × the scanner's noise, 0.5 mm,
+  2.5 % of a) of it, its median residual is under half the circle's
+  (the same sectors against their median radius — a round collar fits a
+  circle better than any polygon) and the corner stands above the flat
+  by max(1 mm, 2.5 tolerances): an octagon of apothem 22 rises 1.8 mm at
+  its corners and is within a noisy scan's reach, a hexagon of the same
+  size 3.4 mm. Windows that agree on n, a (within max(1 mm, 4 %)) and φ
+  (within 4°) join; a record is at least two windows and 4 mm tall:
+  `"nuts": [{"h0", "h1", "sides", "acrossFlatsMM", "phaseDeg",
+  "share", "contrastMM", "residualMM"}]` on the main record and on each
+  body under `bodies`, h along that body's axis, `phaseDeg` the azimuth
+  of one flat's outward normal from the body's `azimuthZero`. A
+  secondary body's nuts are read on its untrimmed trace, so a nut at the
+  root is seen; `trim_profile` and `extend_profile` carry the span into
+  the trimmed-and-lengthened frame, where it lands over the lengthening
+  — which is where the nut sits.
+- **The revolve stays inside the flats.** The bands over a nut's span
+  are held to its apothem before the profile is traced
+  (`clamp_bands_to_nuts`), but only the bands that sit on the nut's own
+  level: the hydrant's operating nut sits inside a crown of twice its
+  radius, and clamping the crown's bands to the nut would have cut the
+  crown away. The lengthened profile of a branch thus runs at the
+  inscribed radius (or under it) wherever the prism is, and the union
+  is sound.
+- **The build** (`build_hydrant.nut_sections` beside
+  `secondary_sections`): each nut is a sketch on the plane normal to its
+  axis at h0 — origin on the axis, x = `azimuthZero` turned by
+  `phaseDeg`, y = axis × x, so the extrude (along x × y) runs up the
+  axis — with the n-gon as lines (`nut_polygon`: corners at
+  a / cos(π/n), ±π/n from x), `feature.extrude` by h1 − h0 with
+  `boolean: union` (`extrude_nut`), after the bodies on their own axes
+  and before the bosses. `build_hydrant.build`, `demo_video.py take`
+  (its own beat, captioned by `build_features.nut_caption`: "A 46 mm
+  hex nut · a hexagon on the branch's axis, extruded 18 mm and unioned
+  in"), `reel.build_model` and `preview_model.build_preview`
+  (`nut_mesh`, an `extrude_loop` on the same plane; `--no-nuts` leaves
+  them out) all call it; `run_corpus.py` writes `nuts` into the results
+  row in words (`spec_color.nut_words`: "a 26 mm hex nut, 10 mm tall on
+  body 1"); `summary.json` gains `nuts`. The residual fit needs nothing:
+  it measures the scan against the model, and a piece the prism
+  explains is simply no longer far.
+
+What the corpus actually holds, measured offline (`preview_model.py`
+with each part's features, before → after; the sheets' M1/M2 named in
+the track brief turned out not to be nuts, and the numbers say so):
+
+| Part | Found | Overlap | Model→scan / scan→model | M1 / M2 |
+|---|---|---|---|---|
+| Pipe wheel (valve) | a 26 mm hex nut, 10 mm tall on the pipe (body 1, h 73–83, 95 % of the sectors; the union nut behind the nipple) | 94.7 → 94.7 % | 0.64 / 2.09 → 0.64 / 2.09 mm | 5 218 → 5 218 mm², 5 114 → 5 114 mm² |
+| Hydrant 02 | a 55 mm hex nut, 8 mm tall on nozzle 1b's axis (the cap's nut, h 115–123 of the lengthened body, 91 %; its sectors run 28 → 32 → 28 mm six times round, and the revolve there is held from 31 to 27.7 mm) | 98.0 → 98.0 % | 1.03 / 1.46 → 1.03 / 1.46 mm | 3 615 → 3 615 mm² |
+| Rusty extinguisher, WD-40 can, bollard | nothing (`nuts` empty on every record) | unchanged | unchanged | — |
+
+Honestly, then: the two real nuts the detector found are small (a 26 mm
+union nut, a cap's nut) and move nothing the inspection measures; the
+patches the brief pointed at are something else. The hydrant's "bonnet
+nut" (M1, 3 615 mm² in the upper third, centre) is a castellated crown —
+a round ring r 42–46 over h 912–941 with six 35° slots and a hollow
+inside — and the operating nut sits INSIDE it, 46 mm across the flats
+(the detector reads apothem 23.0–23.2 and a steady phase of 23–25° at h
+900–908, but only a quarter to a third of the sectors within tolerance:
+the scan inside the crown is bumpy to a millimetre and partly hidden, so
+it is not recorded). The model fills the crown solid, which is M1 (the
+crown's inner wall) and E2/E3 (its floor and top). The valve's M1
+(5 218 mm², the left branch's root) and M2 (5 114 mm², the right branch's
+root) are the branch roots' cast collars, round, with the fitted branch
+axes a few millimetres off the scan's — in body 2's frame the root reads
+r 17–18 in 55 of 72 sectors, no polygon; in body 3's the branch is a
+sinusoid of ±3 mm about its axis — not hexagons. Those are the next
+track (a root fillet, and a branch axis refined on the branch alone).
+The valve's main body and every other corpus part stay round: no false
+nut on the bollard, the can, either extinguisher, the mug, the pail, the
+barrel or the wheel.
+
+Tests (`NutTests`): a hexagonal prism (46 mm across the flats, phase
+20°, 18 mm tall) on a cylinder → one nut, sides 6, across-flats within
+2 %, phase within 3°, the profile held to 23 mm over its span; a round
+collar of the same size → none, the profile 23 mm; an octagon (60 mm) →
+sides 8; the T of `AxisFinderTests` with a 34 mm hex nut on the pipe
+where it meets the body → recorded on the pipe's body, 34 mm within 2 %,
+its span at x 8–20 in the world, the build's one prism on that axis and
+the preview's union within 4 % of the true volume; `nut_sections`' six
+corners at a / cos 30° at 30°, 90°, … from the flat's normal, the sketch
+x turned by the phase and x × y up the axis, the preview's volume the
+cylinder plus what the prism adds outside it to 1 %; and the band clamp
+that leaves a crown's ring alone.
+
+### Bores at open ends (2026-10-26)
+
+The valve's pipes ended in solid discs. The scan shows open ends — an
+annular end face and an inner wall — at the end of both branches and the
+bottom of the main pipe, a recessed ring on the side port, and the
+inspection sheet marked each as an excess patch 700–1 000 mm² across with
+a matching "missing" patch on the inner wall the model lacked (the
+left branch's 5 200 mm² patch was never the nut: it was the inside of the
+pipe). `analyze_scan.detect_bores` now reads a bore at each FREE end of
+the main body and of every secondary body:
+
+- **An inner wall.** The points that face IN (normal toward the axis,
+  `n_radial < −0.5`) just inside the end plane, between 0.2 of the end's
+  radius and a wall inside it, are the bore's wall: their median radius
+  over the first three slabs (slabs of max(band, 2 mm)) is `rInnerMM`,
+  seen round at least half of 24 sectors (`share`); the wall is the
+  profile's radius at that end less the bore's. Then the walk inward,
+  slab by slab, while the wall keeps its radius (±max(1.5 mm, 3 × noise,
+  8 %)); a new radius held for two slabs is a step (a coupling's socket
+  r 19 for 12 mm, then the pipe's own r 14), two slabs of chamfer or
+  sparse scan are stepped over, and the walk stops where the outer
+  profile comes within a wall of the inner one (a bore cannot be wider
+  than the part). `depthMM` is as far as the wall is seen — a lower bound,
+  since a scanner sees less of a hole the deeper it goes — and the record
+  carries the steps as `profile: [[r, depth], …]`. Seen along 85 % of
+  the body with no floor in sight, or two bores that meet, it is
+  `through` with depth = the length: a branch unioned into its parent is
+  filled where the parent is solid, so a through-bored branch stays open
+  to the parent's skin.
+- **The floor.** The trace leaves out every point on a face that looks
+  along the axis (an end, a shelf, a floor), so the detector is handed
+  them apart (`caps`: the axial-facing samples' h, radius, azimuth and
+  axial normal). Points inside the bore's radius facing back toward the
+  mouth, round 30 % of the circle, are the floor: a hole with a floor is
+  never through, however far its wall is seen (a bucket whose floor is a
+  sixteenth of its height has its wall seen 95 % of the way), and the
+  depth is capped at the floor. The valve's bores all show theirs
+  (18, 50 and 14 mm; the through branch shows none from its free end).
+- **Not a container, not a collar.** `detect_open_top` keeps its say on
+  the main body: no bore is looked for at all where it found an open end,
+  or where the dished-section tracer ran; and on the main body a hole is
+  a bore only when it is shallower than `open_end_depth` (max(15 % of the
+  height, 25 mm) — the depth at which the open-end test would have called
+  it a container) or narrower than 0.6 of the end radius, so one hole is
+  never both. A thin wall is a wall: the main body wants ≥ max(1.5 mm,
+  6 %), a secondary body (no open-end test runs there) ≥ 1 mm — the
+  valve's side port is a 1.4 mm wall round a 10.6 mm recess. And nothing
+  may stand in the hole: points facing OUT inside the bore's radius (a
+  stem in a cup, a nut in a collar), at the mouth or anywhere down to two
+  slabs past the floor the walk found, seen round half the circle, make
+  it a recess round something, not a bore. The hydrant's bonnet is the
+  case that bit: a hollow collar r 36 inside r 45 with the operating nut
+  28 mm down inside it — nothing faces out for 28 mm, then the nut's
+  flanks — and a first version, which looked only at the mouth, cut it
+  28 mm deep to the nut's top, which moved the recess floor's excess patch
+  from 5 085 to 6 420 mm² and the largest-excess gate from 8 925 to
+  9 495 mm². Now the nut refuses the bore and the hydrant's numbers are
+  what they were. The container rule stands on its own too: with the
+  open-end test silent (a rim or a handle can spoil its rays), a bucket's
+  wall is seen almost the whole way, but so is its floor, so the hole is
+  not through, and a 150 mm hole r 54 in a 160 mm body is left to the
+  open-end test (`test_a_bucket_with_a_thin_floor_…`).
+- A secondary body is traced before its junction is known, so both ends
+  are tried; `secondary_bodies` then keeps only the free end's bore (a
+  through bore read from the junction end is turned round, one radius,
+  from the free end), and a small body's own noise estimate (3 mm on a
+  0.03 mm scan) is not trusted: the band says the scanner's noise.
+
+`build_hydrant.body_section` folds the bore into the ONE half-section
+loop (`bore_chains`): from the axis at the bore's floor out to the bore's
+wall, along it — step by step — to the mouth, out along the end face to
+the profile's foot, up the outer profile and back; a bore at the top
+mirrors that; a through bore is an annular loop with no axis segment
+(the arc branch, which closes a domed profile to the axis at the arc's
+own height, keeps that closing point out when a through bore from the
+foot has emptied the suffix — it once re-added it and the loop spiked to
+the axis).
+Every bore radius is kept a wall inside the outer profile over its own
+depth (`outer_min`: a profile that narrows onto the bore would cross it)
+and the seed moves to `section_seed` of the bored outline, so it sits in
+the wall and not in the hole. `secondary_sections` and the film and the
+reel go through `body_section` and inherit it; `preview_model.body_mesh`
+/ `secondary_mesh` do too, so the offline preview shows the same hole.
+The note and the body's label say "bored r 19 mm 50 deep at its end".
+
+The CO₂ extinguisher's horn is hollow in the scan and was a solid cone.
+`fit_features.cone_mouth` reads the wide end of a cone fitted by
+`tube_fit` the same way — the inner skin facing in, a wall inside the
+fitted outer profile, round half the circle, nothing across the mouth —
+and records `boreRadiusMM`, `boreDepthMM`, `wallMM`, `boreMouth`
+("end"/"start": the profile's high or low end), `boreMouthHMM` (the
+mouth plane's height along the axis as measured — `tube_fit` lengthens
+the profile's end by far + 4 mm into what it meets afterwards, and the
+cut is laid from the measured mouth, not the lengthened end),
+`boreShare` and `boreProfile` (the inner skin's radius per slab, where it was seen: the
+fitted outer cone runs fat mid-way, and "outer less a wall" sat 7 mm off
+it). The walk inward stops where the medians stop tracking: the hose
+running up the horn's throat faces the axis too. `build_features.
+bore_profile` turns that into the inner cone — the seen skin, clamped a
+millimetre inside the outer profile, from 5 mm past the mouth to the
+floor — and `build_feature` revolves it on the same plane with
+`boolean: subtract` right after the horn's union (a refused cut is
+undone there, so the horn stays). The cut's target is the whole body,
+not the horn, so `preview_model.build_preview` does the same: the horn
+unioned (`feature_mesh`), then `feature_cut_mesh` — the inner cone —
+subtracted from the whole model with manifold, and a rod standing in the
+throat goes with it. `part_caption` says "A horn · a cone on the hose's
+end, revolved and unioned in, bored 59 mm, 69 deep".
+
+Measured offline (`preview_model.py` with every feature of the file; the
+"before" is the corpus's own analysis):
+
+| part | IoU | model→scan mm | scan→model mm | missing total mm² | excess total mm² | the patches |
+|---|---|---|---|---|---|---|
+| pipe-wheel | 94.7 → 94.7 | 0.64 → 0.73 | 2.09 → 1.29 | 17 916 → 9 508 | 7 994 → 7 471 | left branch mouth E 732 → gone, right branch mouth E 795 → 646, bottom disc E 659 → 634 (the floor); the inner walls M 5 218 → gone, M 5 114 → 2 924 (the hex nut), M 2 241 → 933 |
+| extinguisher-3dhd | 95.1 → 95.1 | 3.85 → 3.62 | 1.59 → 1.55 | 22 560 → 21 620 | 40 728 → 40 266 | the horn's inside M 2 715 → 1 871 (the throat beyond the 69 mm the scanner saw into stays solid) |
+| hydrant-02 | 98.0 → 98.0 | 1.03 → 1.03 | 1.46 → 1.46 | 24 180 → 24 180 | 26 310 → 26 310 | no bore fires: the bonnet's collar has the nut standing in it, the nozzles have caps |
+| beer-mug | 97.2 → 97.2 | 1.69 → 1.69 | 0.77 → 0.77 | same | same | no bore fires |
+
+Honestly: the bores are found and cut, the scan→model means fall, and
+model→scan rises a little on the valve (0.64 → 0.73) — a bore's floor
+and the deep part of its wall are surfaces the scanner never saw, so
+they count against the model wherever the scan stops short of them. The
+valve's E1 (an 850 mm² wedge where the right branch's root meets the
+body) is not a bore and is unchanged; the hex nut on that branch is
+still the largest missing patch. Tests (`BoreTests`): a pipe with a
+20 mm bore (bored, not open), a solid pipe (nothing), a bucket (open top,
+no bore), a bucket with a thin floor and the open-end test silenced (its
+floor is seen: no through bore; the same walls on a branch keep a 150 mm
+bore with its floor), a through tube (one through bore), a 60 mm bore in
+a secondary body, a collar with and without a nut in it (a bore 28 deep;
+nothing); `body_section` with a bore at the top, a stepped bore under a
+dome (one simple loop, the arc kept, the seed in the wall, the volume by
+Pappus), a through bore (an annulus), a through bore from the foot under
+an arc (four lines, none on the axis, the same volume read from either
+end) and a bore wider than its profile (pulled in); a hollow cone's mouth
+(`cone_mouth` wall, radius, depth, mouth height and inner profile; a
+solid cone and a lidded one refused), `bore_profile` from a lengthened
+profile (the floor stays 100 mm below the MEASURED mouth), the horn's cut
+(`feature_cut_mesh`) and `build_preview` taking it out of the whole model
+(a rod in the throat goes with it; one apart does not).
+
+### Bent bars and levers (2026-10-26)
+
+The CO₂ extinguisher's valve head carries a squeeze lever under a carry
+handle: two flat steel strips the scan fuses into one bar about 50 mm
+wide and 22 thick that leaves the valve head, bends about 50° and runs
+down beside the hose. `tube_fit` read it as an oval tube (52 × 23 mm,
+an eleven-point spine) because the lever is the first run of the
+piece's chain — lever, valve head, hose, horn — and nothing in the parts
+library was a bar that bends. Now there is one.
+
+- **A flat run is a bar, not a tube.** In `tube_runs` (the second half
+  of `tube_fit`, split out so the centreline tracer — `trace_centreline`
+  — and the chord reader can be shared) a run whose section is at least
+  1.8 times as wide as it is thick (`FLAT_RATIO`; a stein's handle at 1.6
+  is still an oval tube, the lever reads 2.3) is handed to `bar_along`
+  with its own points and its centreline samples, and becomes a flat bar
+  in the chain when the bar covers half its points; a flat oval thinner
+  than one and a half tolerances is a torn skin and is dropped (the app
+  had refused a 17.8 × 4.2 mm one on the horn, a 15 × 1 mm one followed
+  it). The chain's story is unchanged: lever + hose + horn, each end
+  reaching into the next.
+- **The spine** (`corner_spine`): the centreline samples are split into
+  runs, a line fitted to each, the split (or the two splits) chosen for
+  the least orthogonal residual, each leg refitted on the samples clear
+  of the corner by half a section (the bins round a corner hold both
+  legs and lean a short leg by ten degrees). One leg when the samples'
+  RMS distance to it is within max(tol, 15 % of the width); else two
+  when they fit, bend ≥ 15° (`MIN_BEND_DEG`), both legs at least a
+  section long and the residual under three quarters of one leg's; else
+  three on the same terms against two; else none. (A strap along a WIDE
+  curve is not none: a 20 × 5 strap on a 120 mm quarter circle reads as
+  two or three gentle legs that the bend radius then rounds back toward
+  the arc, 82–86 mm; only a semicircle has no spine and stays the oval
+  sweep it was — see the Gotcha.) Then `refine_legs` refits each leg
+  on the bar's own surface points as the line through the centres of
+  quarter-section slices across it — each centre the middle of the
+  slice's lateral extent, not its mean (a scan is denser on the face it
+  saw best and the bin means lean to it), and a slice whose spread is
+  under 70 % of the median left out (the geodesic's bins cut a free end
+  at a slant and the last bins hold half a ring; the L-bar test read 79°
+  from the samples, 98° from the means, 90.0° from the slice centres).
+- **The section** (`bar_along`): the longest leg's points within a
+  quarter section of its middle, projected on the plane across it, go
+  through `regularise_outline` with no free-form baseline — the designed
+  outline (a rounded rectangle, a stadium, a disc, an oval) that covers
+  the most of the bar's points within `tol` of the prism it makes along
+  EVERY leg (`prism_covered`, leg by leg, the frame carried round the
+  corners by `sweep_frames` with the same minimal rotation
+  `preview_model.sweep_section` and the app's sweep use). Read at the
+  middle because a lever tapers (the extinguisher's from 49 to 42 mm
+  over its long leg): the hull of a whole leg is its fattest end,
+  tilted, and the rectangle it gave sat 3 mm off the bar and 2 mm too
+  thick (64 % of the lever's points on it; 75 % read at the middle). A
+  run that measured flat but whose section reads round at the middle
+  (a disc, a hexagon) is not a bar — the horn's torn sliver.
+- **The bends** are arcs: of radii ½, 1, 1½, 2, 3 and 4 sections, the
+  one whose arcs put the most of the bend's points (within 1.5 sections
+  of a corner) on the prism, a sharp corner unless an arc wins by a
+  point (`fillet_spine`, points every 7.5°, an arc may take no more than
+  45 % of either leg). A real bar is bent round a former; a sharp mitre
+  stood 8 mm proud of the lever's bend outside and short of it inside.
+  **The radius is bounded below by the section's reach toward the
+  bend's centre** (`section_reach`: the outline's extent, in the frame
+  the sweep carries to the leg before the corner, along that leg's
+  inward normal) plus max(tol, 10 % of the width); `R_min` itself is the
+  first candidate and the fixed radii below it are not tried. A bar bent
+  EDGEWISE — in the plane of its width, as a lever is — reaches half its
+  width toward the centre: the extinguisher's 51 mm lever on the 26 mm
+  arc (half a section) the first version chose had an inner edge of
+  0.5 mm, a knife-edge pleat, not a bend, and its sweep's rings folded
+  back on two legs; it now gets 31 mm (reach 26.2 + 5.1). `sweep_folds`
+  is the test: the section's rings drawn as the preview and the kernel
+  draw them, a leg on which any ring vertex advances backwards is a
+  fold. A sharp spine that folds (a leg shorter than its mitre) is no
+  bar; a filleted one that folds is skipped; `bar_feature` tests once
+  more after the ends are carried into the body (`reach_body` can turn
+  an end leg) and falls back to sharp corners, then to no feature. A
+  folded sweep's mesh still closes at a plausible volume, so
+  watertightness alone would pass it: `preview_model.sweep_section` now
+  refuses a folding spine with a ValueError and the preview notes the
+  feature as not drawn — which is exactly what it says of the corpus's
+  17.8 × 4.2 mm oval on the horn (folds 6.3 mm on leg 6 of 10), the one
+  feature the app's kernel refused.
+- **The feature** is a `sweep` with `"section": {"shape", "widthMM",
+  "thicknessMM", "cornerMM", "segments", "seed"}` (the outline as the
+  same lines and arcs an extrude's is drawn with, in the sketch frame
+  `xAxis`, t₀ × `xAxis` at the spine's start), `"profile": {"shape":
+  "section", …}` so nothing that reads a sweep's profile breaks, a
+  `spine` of the legs with the arcs drawn in, `corners` (the sharp
+  corners the legs meet at), `bendRadiusMM`, `bendReachMM` (the reach
+  the radius clears, 0 for a straight bar), `bendsDeg`, `legsMM`,
+  `lengthMM`, `bent`, and `attached` / `joins` / `intoHorn` as a tube's.
+  The app's `feature.sweep` takes any closed sketch region and a world
+  polyline, so `build_features.sweep_sketch` draws the section's
+  entities instead of a circle and the build is one sketch and one op
+  as before; `preview_model.feature_mesh` goes through the same
+  `sweep_sketch`, so it mirrors the app's build without a change of its
+  own (a 20 × 5 bar, 130 mm long, previews to 13 200 mm³ with its free
+  ends run on a tolerance each). No per-segment extrudes were needed.
+- **Names and captions**: `name_part` calls a section sweep a `lever`
+  when it is flat (width ≥ 1.5 × thickness) and hangs from the body or
+  the run it joins at one end, a `handle` when it comes back at both, a
+  `bar` otherwise; `build_features.bar_words` says "a 51 × 22 mm flat,
+  rounded-edged bar bent 51° on a 31 mm radius, 211 mm long", and the
+  caption "A lever · …, swept along its legs and unioned in".
+- **`bent_bar_fit`** is the same machinery for a piece on its own, a
+  sixth candidate in `explain()` (+0.05, proved at half the piece like a
+  revolve): the centreline traced as for a tube, a straight spine left
+  to `bar_fit`, a round section left to the sweep (a quarter circle
+  reads as three gentle legs; the tube follows its true curve).
+- **Leftovers**: a flat bar's chain accounting counts points within TWO
+  tolerances of its prism as its own (the bar's fit is proved at one).
+  What a constant section leaves of a tapered lever is the lever's own
+  skin; at one tolerance the pass after it piled a 24 mm slab on the
+  bend.
+
+What this gave, measured offline with `preview_model.py` against the
+same pre-feature model (`run/stages/stage-1-revolve.stl`) and the same
+scan the corpus run used, every row with `--all-features` (the app's
+build of the corpus features left one out — the 17.8 × 4.2 mm oval on
+the horn, which the kernel refused — so the corpus's own as-built figure
+is the "fold-refusing preview" row: the preview now refuses that oval
+for the same reason the kernel did):
+
+| extinguisher-3dhd | overlap | model → scan / scan → model | M1 | E1 |
+|---|---|---|---|---|
+| corpus features, the earlier preview (draws the folded oval) | 95.1 % | 3.85 / 1.59 mm | 6 517 mm², the lever | 9 529 mm², the cap |
+| corpus features, fold-refusing preview (= as built, 7 of 8) | 94.8 % | 3.83 / 1.65 mm | 6 517 mm² | 9 564 mm² |
+| the corpus features with only the oval lever swapped for the bent bar (51 × 22 mm, bent 51° on a 31 mm radius, 211 mm long, `lever`) | 94.6 % | 4.06 / 1.70 mm | 6 991 mm², 100 × 72, the lever's root | 9 643 mm², the cap |
+| the whole new fit | 92.9 % | 4.00 / 1.78 mm | 15 603 mm², 107 × 72, the horn | 15 193 mm², 127 × 98, the horn |
+
+The lever row is the track's own measure: the same 94.6 % the first
+version's 26 mm lever scored in the same swap (two tenths under the
+oval), with a sound bend instead of a pleat; against the as-built
+corpus it halves nothing and loses nothing of note (M1 6 517 → 6 991,
+the oval's M1 and the bar's are both the lever's root, where the two
+strips part). The whole-fit row is worse, and not because of the lever:
+the horn's bell wall — a 12 200 mm² leftover, a 3.5 mm double skin by
+its chords, which neither the oval nor the bar explains and which
+`bent_bar_fit` and `tube_fit` both refuse as a skin — is handed to the
+solid fits, and on it `extrude_fit` (50.4 %) and `bar_fit` (51 %) are a
+coin toss between two boxes: the first version's run put a 54 × 54 ×
+106 mm "bar" there (60 % that time; its sheet read 94.8 % with M1
+3 638 mm² at the lever's root and E1 the cap at 9 358), this run a
+65.7 mm thick plate, rotated, which is both M1 and E1 above. The toss
+turns on single faces: the same 5 752-point piece gives 2 156 inward
+ray hits one run and 2 167 the next, a 232 mm geodesic over 104 path
+points or 236 over 112, and the bar's seeds land elsewhere. That is the
+horn's problem (the cone revolve is too thin, so its wall is left over)
+and the solid fits' (no skin rule, no measure of what a feature adds
+that the scan has not got), and it is left for its own track; the
+numbers are quoted as they came. The beer mug and the valve are
+unchanged to the digit (97.2 % · 1.69 / 0.77 mm; 94.7 % · 0.64 /
+2.09 mm; the mug's handle, at 1.6, stays an oval tube; the valve's one
+flat run reads as a hexagon at its middle and is refused as a bar).
+None of this has been built in the app yet: the sweep of a rectangle
+with 10 mm corners along a ten-point polyline is the same call as the
+hose's, and the arcs now clear the section by construction, so what the
+next corpus run has to say is only whether the kernel sweeps it.
+
+Tests (`PartsLibraryTests`): an L-shaped flat bar (legs 80 and 50 mm,
+20 × 5 mm, 90°) is one sweep of a 20 × 5 rectangle with its bend within
+5° (90.0° measured), its reach 10 mm and its radius 0 or at least the
+reach plus a tolerance, no ring folded, the sketch one closed loop of
+100 mm², the preview one closed solid of 13 200 mm³, a `lever` when
+attached at one end, and `tube_fit` reads it the same way; a bend never
+folds the section — arcs of 8 and 10 mm round the edgewise 20 × 5 L are
+folds to `sweep_folds` and a ValueError to the preview, 12 and 20 are
+not, the same L bent 30° and 60° (a sharp mitre in the input) is fitted
+with 12 mm arcs (it once got 10.2 and 10.5), a 150° hairpin is no bar to
+either fit, and a sweep whose `xAxis` lies along its first leg gets the
+build's fallback frame; a straight 20 × 5 × 130 bar is refused by the
+bent-bar fit and is one `bar` to `bar_fit`; the 6 mm tube along a
+quarter circle is still one circle sweep and the bent-bar fit stands
+down; `corner_spine` counts one, two and three legs on noisy samples and
+refuses a semicircle.
+
+### The horn refitted on its own points (2026-10-26, the merge)
+
+Merged, the three tracks made the CO₂ extinguisher WORSE offline (95.1 →
+92.9 %): the horn's cone was fitted on the geodesic's centreline samples,
+and on a horn scanned from one side those bins lean to the scanned face
+— the cone's axis sat 4 mm off and its mouth 13 mm short, so the bell's
+own wall fell outside tolerance, came back as a 12 000 mm² leftover,
+and the next pass boxed it in (a 54 × 54 × 272 mm "bar" along the horn;
+15 500 mm² of excess at the mouth). Three rules in `fit_features.py`:
+
+- `refine_cone(pts, c0, d, prof, tol)`: the piece's points within the
+  cone's reach are cut into slabs along the axis, a circle is fitted in
+  each (`fit_circle_2d` — half a ring still gives a centre near the true
+  one, where a slab's mean does not), the axis becomes the line through
+  the slab centres, three times over; the outer profile is each slab's
+  75th-percentile radius (two skins: the outer is the shape) and the
+  mouth is where the points end. From 4 mm off and 3° askew the test
+  lands within 1 mm and 0.5°. `cone_mouth` then reads the bore in the
+  refined frame.
+- A hollow horn explains its wall: `revolve_covered` counts the points
+  between the inner skin the mouth read (`boreProfile`) and the outer
+  profile, a tolerance either side.
+- A run is judged a cone BEFORE a flat bar in `tube_runs`: a bar's
+  section is constant along its run, a cone's is not, and a horn's bins
+  read 53 × 23 mm across (ratio 2.3, past `FLAT_RATIO`).
+
+CO₂ extinguisher offline (preview_model, `--all-features`, same scan and
+stage-1 revolve): 92.9 → **95.9 %**, scan→model 1.76 → 1.19 mm, the
+horn's run covers 89 % of its piece and nothing is left unexplained; the
+valve head's cap (E1 9 500 mm²) is what remains. Beer mug, valve and the
+rusty extinguisher are unchanged to the digit.
+
+### Results — 2026-10-26, the app run (bores, nuts, levers, the horn refitted)
+
+Built over MCP by `run_corpus.py --analyze`, graded by `inspect_fit.py`;
+"before" is the 2026-10-25 run.
+
+| part | overlap before → after | model→scan mm | scan→model mm | largest missing mm² | largest excess mm² | verdict | what changed |
+|---|---|---|---|---|---|---|---|
+| Fire extinguisher (extinguisher-rusty) | 97.8 → 97.8 % | 0.81 → 0.81 | 0.86 → 0.86 | 1 983 | 3 883 | WARN | unchanged |
+| Fire extinguisher (extinguisher-3dhd) | 95.0 → 96.0 % | 3.45 → 3.42 | 1.71 → 1.24 | 3 638 | 9 100 | FAIL | the horn refitted and bored, one lever; the valve head's cap (E1 9 100 mm²) is what remains |
+| Hydrant (hydrant-02) | 97.9 → 97.9 % | 1.08 → 1.09 | 1.79 → 1.78 | 3 615 | 9 825 | FAIL | a 55 mm hex nut on nozzle 1b; the bonnet collar is NOT bored (a nut stands in it) — unchanged |
+| Bollard (bollard) | 99.5 → 99.5 % | 1.44 → 1.44 | 0.56 → 0.56 | — | — | PASS | unchanged |
+| Bucket (pail-bucket) | 95.9 → 95.9 % | 1.58 → 1.58 | 2.12 → 2.12 | 72 720 | 270 992 | FAIL | unchanged (an oval scan) |
+| Barrel (tin-barrel) | 96.5 → 96.5 % | 5.02 → 5.02 | 7.14 → 7.14 | 538 003 | 513 726 | FAIL | unchanged (a dented scan) |
+| Spray can (wd40-can) | 99.4 → 99.4 % | 0.21 → 0.21 | 0.28 → 0.28 | — | 14 | PASS | unchanged |
+| Beer mug (beer-mug) | 97.2 → 97.2 % | 1.38 → 1.38 | 0.79 → 0.79 | 3 112 | 4 698 | FAIL | unchanged |
+| Truck wheel (truck-wheel) | 94.1 → 94.1 % | 8.15 → 8.15 | 4.80 → 4.80 | 920 952 | 1 172 522 | FAIL | unchanged |
+| Valve (pipe-wheel) | 94.5 → 94.8 % | 0.69 → 0.83 | 1.99 → 1.13 | 1 015 | 635 | FAIL | four bores (r 17 / 18 deep, r 19 / 50 deep, r 20 through, r 11 / 14 deep) and a 26 mm union nut; the branch-root collars M1/M2 are 1 015 and 683 mm² now |
+
+Two parts moved, both the ones the tracks aimed at: the valve's pipes are
+open where the scan's are (scan→model 1.99 → 1.13 mm; the largest missing
+patch 5 218 → 1 015 mm², just over the 1 000 mm² FAIL line) and the CO₂
+extinguisher wears one lever and a hollow horn (95.0 → 96.0 %, scan→model
+1.71 → 1.24 mm). The nuts the detector found are real and small. The
+eight other parts are unchanged to the digit — the rules did not fire
+where they had nothing to say.
+
 ## Gotchas
+
+- A nut is read on the whole scan, not on the body's labelled faces
+  (2026-10-26): `fit_axes.assign` gives a face no normal line claims to
+  the body whose ring radius it sits just under (≤ 1.15 × the ring +
+  tolerance), and a hex nut's corners at 1.155 × its apothem fall
+  outside that for a nut wider than the pipe — the branch's sub-mesh
+  then holds some flats and no corners. `nut_samples` projects the full
+  mesh into the body's frame (its final one, 0 ≤ h ≤ height) instead.
+- The hydrant's operating nut (2026-10-26): its apothem and phase are
+  steady from window to window (23 mm, 23–25°), its sector radii are
+  not — a quarter within tolerance. Loosening the tolerance until it
+  passes also passes the off-centre round collars (the hydrant's crown
+  reads ±1.5 mm round its sectors). Leave it out rather than tune for
+  one part; it is buried in the solid crown anyway.
+- A collar with a nut in it is not a bore (2026-10-26): the hydrant's
+  bonnet has a hollow ring r 36 inside r 45 with the operating nut 28 mm
+  down inside it, and the first bore detector read a 50 mm bore there
+  (the ring's inner wall runs on past the nut); a second looked for
+  something standing only in the mouth's first three slabs, found the
+  nut's top 28 mm down instead, and cut the collar to it — the excess
+  round the nut grew and the largest-excess gate moved 8 925 → 9 495 mm²
+  (a control with the bore stripped reproduced the old numbers exactly:
+  it was the bore, not sampling jitter). Points facing OUT inside the
+  bore's radius anywhere down to two slabs past the floor refuse a bore;
+  the walk stops where the outer profile comes within a wall of the inner
+  one.
+- The trace's points hold no floors (2026-10-26): every sample on a face
+  that looks along the axis is left out before the profile is traced (a
+  band through a flat end would read the disc's radii as the wall's), so
+  a bore detector working from those points can never see a hole's floor
+  — a bucket with the open-end test silent read as a floorless tube. The
+  axial-facing samples are kept apart and handed to `detect_bores` as
+  `caps`.
+- A small secondary body's own noise estimate is not the scanner's
+  (3 mm on a 0.03 mm scan: a branch 80 mm long has few clean cylinder
+  cells); a wall tolerance scaled by it threw away the real r 19 wall of
+  the valve's coupling and read the bore from the r 14 pipe behind it.
+  The band width (3 × the main trace's noise) is the bound.
+- A quarter circle reads as three gentle legs (2026-10-26): a 120 mm
+  radius arc sampled as centreline points fits a three-leg spine of 32°
+  bends to 1.4 mm RMS, within the 15 %-of-width allowance of any bar
+  over 10 mm wide, so `corner_spine` alone cannot tell a wide curve from
+  a Z; the bent-bar fit stands down on a round section (the tube's), and
+  on a flat strap along a curve the bend radius (up to four sections)
+  rounds the legs back toward the arc. A semicircle is refused.
+- A bar's spine from bin means leans to the scanned face and, at a free
+  end, to the inner edge: the geodesic's bins cut a flat bar's end at a
+  slant (the outer edge is farther along the surface than the inner),
+  so the last bins hold half a ring. Fit leg directions on slice box
+  centres with partial slices left out, never on bin means or PCA of
+  the raw points (79°, 98° and 90° for the same 90° L).
+- A constant section must be read at a leg's middle, not from the hull
+  of the leg: a tapered lever's hull is its fat end, and the tightest
+  box round a trapezoid is tilted — the rectangle sat 3 mm off the bar.
+- A watertight sweep can still be a folded one (2026-10-26): a bend arc
+  of half the width round a bar bent edgewise has an inner radius of
+  nothing, the rings of the sweep advance backwards along the arc's
+  legs, and the mesh `preview_model.sweep_section` built of it still
+  closed at the right volume — so `is_watertight` + volume is no test of
+  a sweep. Test the rings (`fit_features.sweep_folds`); keep a bend's
+  radius above the section's reach toward the bend's centre
+  (`section_reach`) plus a tolerance; and let the preview refuse a fold
+  rather than draw it (it refuses the corpus's 17.8 × 4.2 oval on the
+  horn, the one feature the kernel refused).
+- A flat run's bar is gated on the PIECE's chords (`r0`), not the run's
+  own bins: the extinguisher's piece1.2 is a 2.7–3.5 mm skin by its
+  chords (`bent_bar_fit` refuses it so) whose oval bins read 4–6 mm
+  across; gated on the bins alone it became a 23 × 4 stadium "lever"
+  73 mm long. And a run's bar must be the run's: a hairpin's bins, which
+  the geodesic cannot order, gave a 36 mm "bar bent 62° and 85°" on a
+  20 mm strap — refused when the section reads half again wider than
+  the run's ovals.
+- The extinguisher's horn cascade is a coin toss (2026-10-26): the
+  horn's bell wall is a 12 200 mm² double skin the solid fits box in,
+  `extrude_fit` at 50.4 % against `bar_fit` at 51 %, and which box wins
+  turns on single faces of the leftover (ray hits 2 156 vs 2 167 on the
+  same points). Judge a change to the lever by swapping the lever alone
+  into the corpus features (94.6 %), not by the whole fit's overlap
+  (94.8 or 92.9 % depending on the toss).
 
 - A dished wheel is tested for BEFORE the open end (2026-10-25): from the
   hub side a rim's dish reads as an open container (rays fall 260 mm into

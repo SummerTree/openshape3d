@@ -323,6 +323,329 @@ class TracerHelperTests(unittest.TestCase):
 
 
 @unittest.skipUnless(HAVE_DEPS, "needs the scan_to_cad venv (trimesh, numpy, scipy, rtree, pillow)")
+class BoreTests(unittest.TestCase):
+    """`analyze_scan.detect_bores` on synthetic pipes, and `body_section`
+    folding a bore into the one half-section loop."""
+
+    @staticmethod
+    def pipe(radius, height, bore=None, depth=None, through=False):
+        """A cylinder along z from z = 0 to `height`; with `bore`, a hole of
+        that radius `depth` deep from the top (or right through)."""
+        import trimesh
+        outer = trimesh.creation.cylinder(radius=radius, height=height, sections=96)
+        outer.apply_translation([0, 0, height / 2])
+        if bore is None:
+            return outer
+        d = height + 10.0 if through else depth
+        inner = trimesh.creation.cylinder(radius=bore, height=d + 10.0, sections=96)
+        inner.apply_translation([0, 0, height - d / 2 + 5.0])            # from the top face down to `depth`
+        return trimesh.boolean.difference([outer, inner], engine="manifold")
+
+    def analyse(self, mesh, **kw):
+        import analyze_scan as A
+        with tempfile.TemporaryDirectory() as out:
+            return A.analyze(mesh, out_dir=out, name="pipe", samples=30000, axis_choice="0,0,1!", multi=False, **kw)
+
+    def test_a_pipe_with_a_bored_end_is_bored(self):
+        a = self.analyse(self.pipe(20.0, 150.0, bore=12.0, depth=20.0))
+        self.assertIsNone(a["openTop"])                                    # 20 mm in is no container
+        self.assertEqual(len(a["bores"]), 1, a["bores"])
+        b = a["bores"][0]
+        self.assertEqual(b["end"], "end")
+        self.assertAlmostEqual(b["rInnerMM"], 12.0, delta=0.8)
+        self.assertAlmostEqual(b["depthMM"], 20.0, delta=3.0)
+        self.assertAlmostEqual(b["wallMM"], 8.0, delta=1.0)
+        self.assertGreaterEqual(b["share"], 0.9)
+        self.assertFalse(b["through"])
+        self.assertEqual(b["profile"][0][1], 0.0)
+        self.assertAlmostEqual(b["profile"][-1][1], b["depthMM"])
+
+    def test_a_pipe_with_a_solid_end_has_no_bore(self):
+        a = self.analyse(self.pipe(20.0, 150.0))
+        self.assertEqual(a["bores"], [])
+        self.assertIsNone(a["openTop"])
+
+    def test_a_bucket_is_an_open_container_and_not_a_bore(self):
+        a = self.analyse(self.pipe(60.0, 160.0, bore=57.0, depth=150.0))
+        self.assertIsNotNone(a["openTop"])                                 # (the floor's disc makes the closed end read narrower: it is the "bottom" either way up)
+        self.assertAlmostEqual(a["openTop"]["depthMM"], 150.0, delta=5.0)
+        self.assertEqual(a["bores"], [])
+
+    def test_a_through_pipe_is_one_through_bore(self):
+        a = self.analyse(self.pipe(20.0, 100.0, bore=14.0, through=True), secondary=True)
+        self.assertEqual(len(a["bores"]), 1, a["bores"])
+        b = a["bores"][0]
+        self.assertTrue(b["through"])
+        self.assertAlmostEqual(b["depthMM"], a["heightMM"], delta=0.1)
+        self.assertAlmostEqual(b["rInnerMM"], 14.0, delta=0.8)
+
+    def test_a_branch_keeps_a_deep_bore_at_its_free_end(self):
+        # A secondary body never runs the open-end test: a 60 mm bore in a
+        # 150 mm branch is a bore, not a cavity.
+        a = self.analyse(self.pipe(20.0, 150.0, bore=14.0, depth=60.0), secondary=True)
+        self.assertEqual(len(a["bores"]), 1, a["bores"])
+        self.assertAlmostEqual(a["bores"][0]["depthMM"], 60.0, delta=3.0)
+        self.assertFalse(a["bores"][0]["through"])
+
+    def test_body_section_folds_a_bore_into_one_simple_loop(self):
+        import build_hydrant as B
+        import preview_model as P
+        bore = {"end": "end", "rInnerMM": 12.0, "depthMM": 20.0, "wallMM": 8.0, "share": 1.0, "through": False,
+                "profile": [[12.0, 0.0], [12.0, 20.0]]}
+        analysis = {"axisOrigin": [0.0, 0.0, 0.0], "axisDirection": [0.0, 0.0, 1.0], "azimuthZero": [1.0, 0.0, 0.0],
+                    "azimuthNinety": [0.0, 1.0, 0.0], "heightMM": 150.0, "bodyRadiusMM": 20.0,
+                    "profile": [[20.0, 0.0], [20.0, 150.0]], "bores": [bore]}
+        sec = B.body_section(analysis)
+        self.assertEqual(sec["outline"], [[0.0, 0.0], [20.0, 0.0], [20.0, 150.0], [12.0, 150.0], [12.0, 130.0], [0.0, 130.0]])
+        self.assertEqual(len(sec["entities"]), 6)
+        self.assertIn("bored r 12 mm 20 deep at its end", sec["note"])
+        self.assertEqual(sec["bores"][0]["depthMM"], 20.0)
+        loops = P.loops_of_entities(sec["entities"])
+        self.assertEqual(len(loops), 1)
+        self.assertTrue(P.point_in_loop(sec["seed"], loops[0]), sec["seed"])
+        self.assertFalse(F.loop_self_intersects([{"kind": "line", "a": e["a"], "b": e["b"]} for e in sec["entities"]]))
+        body, cavity, _ = P.body_mesh(analysis, sections=128)
+        self.assertIsNone(cavity)
+        expect = math.pi * 400 * 150 - math.pi * 144 * 20
+        self.assertAlmostEqual(body.volume, expect, delta=0.01 * expect)
+        # A bore at the foot with a step, under a domed top: still one loop,
+        # the arc kept, the seed in the wall.
+        segments = [{"kind": "line", "a": [60.0, 0.0], "b": [60.0, 100.0]},
+                    {"kind": "arc", "center": [0.0, 100.0], "radius": 60.0, "start": 0.0, "end": math.pi / 2,
+                     "ccw": True, "a": [60.0, 100.0], "b": [0.0, 160.0]}]
+        stepped = {"end": "start", "rInnerMM": 40.0, "depthMM": 50.0, "wallMM": 20.0, "share": 1.0, "through": False,
+                   "profile": [[40.0, 0.0], [40.0, 20.0], [25.0, 20.0], [25.0, 50.0]]}
+        dome = {"profile": [[60.0, 0.0], [60.0, 100.0], [0.0, 160.0]], "heightMM": 160.0, "bodyRadiusMM": 60.0,
+                "profileSegments": segments, "bores": [stepped]}
+        sec = B.body_section(dome)
+        self.assertEqual(sum(e["kind"] == "arc" for e in sec["entities"]), 1)
+        self.assertEqual(sec["entities"][0]["a"], [0.0, 50.0])
+        self.assertEqual(sec["entities"][-1]["b"], [0.0, 50.0])
+        loops = P.loops_of_entities(sec["entities"])
+        self.assertEqual(len(loops), 1)
+        self.assertTrue(P.point_in_loop(sec["seed"], loops[0]), sec["seed"])
+        self.assertEqual([round(v, 1) for v in sec["entities"][0]["b"]], [25.0, 50.0])
+        self.assertEqual([round(v, 1) for v in sec["entities"][2]["b"]], [40.0, 20.0])
+        # Through: an annulus, no axis segment; and a bore wider than the
+        # profile it sits in is pulled a wall inside it.
+        through = {"end": "start", "rInnerMM": 14.0, "depthMM": 100.0, "wallMM": 6.0, "share": 1.0, "through": True,
+                   "profile": [[14.0, 0.0], [14.0, 100.0]]}
+        tube = {"profile": [[20.0, 0.0], [20.0, 100.0]], "heightMM": 100.0, "bodyRadiusMM": 20.0, "bores": [through]}
+        sec = B.body_section(tube)
+        self.assertEqual(sec["outline"], [[14.0, 100.0], [14.0, 0.0], [20.0, 0.0], [20.0, 100.0]])
+        self.assertTrue(all(abs(e["a"][0]) > 1e-9 for e in sec["entities"]))
+        self.assertIn("right through", sec["note"])
+        wide = dict(bore, rInnerMM=19.5, profile=[[19.5, 0.0], [19.5, 20.0]])
+        sec = B.body_section(dict(analysis, bores=[wide], profile=[[20.0, 0.0], [20.0, 100.0], [15.0, 100.0], [15.0, 150.0]]))
+        self.assertLessEqual(sec["bores"][0]["rInnerMM"], 15.0 - 1.5 + 1e-6)
+        self.assertEqual(B.body_section(dict(analysis, bores=[]))["outline"], [[0.0, 0.0], [20.0, 0.0], [20.0, 150.0], [0.0, 150.0]])
+
+    def test_a_through_bore_from_the_foot_under_an_arc_is_an_annulus(self):
+        # A through bore read from the START of a body whose profile ends in
+        # an arc: the loop closes along the top face to the bore's wall, and
+        # never spikes to the axis (the arc branch once re-added the axis
+        # point a through bore had taken away).
+        import build_hydrant as B
+        import preview_model as P
+        segments = [{"kind": "line", "a": [20.0, 0.0], "b": [20.0, 90.0]},
+                    {"kind": "arc", "center": [10.0, 90.0], "radius": 10.0, "start": 0.0, "end": math.pi / 2,
+                     "ccw": True, "a": [20.0, 90.0], "b": [10.0, 100.0]}]
+        through = {"end": "start", "rInnerMM": 6.0, "depthMM": 100.0, "wallMM": 14.0, "share": 1.0, "through": True,
+                   "profile": [[6.0, 0.0], [6.0, 100.0]]}
+        base = {"axisOrigin": [0.0, 0.0, 0.0], "axisDirection": [0.0, 0.0, 1.0], "azimuthZero": [1.0, 0.0, 0.0],
+                "azimuthNinety": [0.0, 1.0, 0.0], "profile": [[20.0, 0.0], [20.0, 90.0], [10.0, 100.0]],
+                "heightMM": 100.0, "bodyRadiusMM": 20.0, "profileSegments": segments}
+        volumes = []
+        for bore in (through, dict(through, end="end")):
+            sec = B.body_section(dict(base, bores=[bore]))
+            lines = [e for e in sec["entities"] if e["kind"] == "line"]
+            self.assertEqual(sum(e["kind"] == "arc" for e in sec["entities"]), 1)
+            self.assertEqual(len(lines), 4, lines)
+            self.assertTrue(all(abs(e["a"][0]) > 1e-9 and abs(e["b"][0]) > 1e-9 for e in lines), lines)   # no axis point
+            self.assertIn({"kind": "line", "a": [10.0, 100.0], "b": [6.0, 100.0]}, lines)                 # the top face, in to the wall
+            self.assertIn({"kind": "line", "a": [6.0, 100.0], "b": [6.0, 0.0]}, lines)                    # the wall
+            self.assertFalse(F.loop_self_intersects(lines))
+            loops = P.loops_of_entities(sec["entities"])
+            self.assertEqual(len(loops), 1)
+            self.assertTrue(P.point_in_loop(sec["seed"], loops[0]), sec["seed"])
+            body, cavity, _ = P.body_mesh(dict(base, bores=[bore]), sections=128)
+            self.assertTrue(body.is_watertight)
+            volumes.append(body.volume)
+        self.assertAlmostEqual(volumes[0], volumes[1], delta=1.0)                                          # the same solid either way round
+        # Without the bore the arc branch still closes down the axis.
+        sec = B.body_section(dict(base, bores=[]))
+        self.assertEqual(sec["entities"][-1]["b"], [0.0, 0.0])
+        self.assertEqual(sec["entities"][-1]["a"], [0.0, 100.0])
+
+    def test_a_bucket_with_a_thin_floor_is_no_through_bore_without_the_open_end_test(self):
+        # The container rule stands on its own: with the open-end test
+        # silent (a rim or a handle can spoil its rays) a bucket whose floor
+        # is a sixteenth of its height has its inner wall seen almost the
+        # whole way — but its FLOOR is seen too, so the hole is not through,
+        # and a 150 mm hole r 54 in a 160 mm body is a cavity, not a bore.
+        import analyze_scan as A
+        kept = A.detect_open_top
+        A.detect_open_top = lambda *args, **kw: None
+        try:
+            a = self.analyse(self.pipe(60.0, 160.0, bore=54.0, depth=150.0))
+        finally:
+            A.detect_open_top = kept
+        self.assertIsNone(a["openTop"])
+        self.assertEqual(a["bores"], [])
+        # The same walls on a branch (no open-end test ever) keep the bore,
+        # with its floor: 150 deep, not through.
+        a = self.analyse(self.pipe(60.0, 160.0, bore=54.0, depth=150.0), secondary=True)
+        self.assertEqual(len(a["bores"]), 1, a["bores"])
+        self.assertFalse(a["bores"][0]["through"])
+        self.assertAlmostEqual(a["bores"][0]["depthMM"], 150.0, delta=5.0)
+
+    def test_a_recess_round_a_nut_is_no_bore(self):
+        # A hydrant's bonnet: a raised ring r 45 with its operating nut 10 mm
+        # down inside it, the recess floor 28 mm down. The ring's inner wall
+        # reads like a bore's, but the nut's flanks face OUT inside it over
+        # the depth — a recess round a nut, left to the residual fit.
+        import trimesh
+        body = trimesh.creation.cylinder(radius=45.0, height=200.0, sections=96)
+        body.apply_translation([0, 0, 100.0])
+        recess = trimesh.creation.cylinder(radius=36.0, height=40.0, sections=96)
+        recess.apply_translation([0, 0, 172.0 + 20.0])
+        ring = trimesh.boolean.difference([body, recess], engine="manifold")
+        a = self.analyse(ring)
+        self.assertIsNone(a["openTop"])
+        self.assertEqual(len(a["bores"]), 1, a["bores"])                   # the empty ring IS a bore, 28 deep
+        self.assertAlmostEqual(a["bores"][0]["rInnerMM"], 36.0, delta=0.8)
+        self.assertAlmostEqual(a["bores"][0]["depthMM"], 28.0, delta=3.0)
+        nut = trimesh.creation.cylinder(radius=12.0, height=18.0, sections=48)
+        nut.apply_translation([0, 0, 172.0 + 9.0])
+        a = self.analyse(trimesh.boolean.union([ring, nut], engine="manifold"))
+        self.assertIsNone(a["openTop"])
+        self.assertEqual(a["bores"], [])
+
+    def test_bore_profile_keeps_the_measured_mouth_when_the_profile_is_lengthened(self):
+        # `tube_fit` lengthens a cone's end by far + 4 mm into what it meets
+        # AFTER `cone_mouth` measured the mouth; the cut is laid from the
+        # measured mouth plane (`boreMouthHMM`), not the lengthened end.
+        import build_features as BF
+        feature = {"kind": "revolve", "axis": {"origin": [0.0, 0.0, 0.0], "direction": [0.0, 0.0, 1.0]},
+                   "profile": [[10.0, 0.0], [30.0, 200.0], [30.0, 212.0]], "cone": True,
+                   "boreRadiusMM": 27.5, "boreDepthMM": 100.0, "wallMM": 2.5, "boreMouth": "end", "boreMouthHMM": 200.0}
+        inner = BF.bore_profile(feature)
+        self.assertAlmostEqual(inner[0][1], 100.0)                       # the floor, 100 below the MEASURED mouth
+        self.assertAlmostEqual(inner[-1][1], 205.0)                      # 5 mm past it
+        self.assertAlmostEqual(inner[-1][0], 27.5, delta=0.6)
+        old = dict(feature)
+        del old["boreMouthHMM"]
+        self.assertAlmostEqual(BF.bore_profile(old)[0][1], 112.0)        # an older record: the profile's end
+
+    def test_a_one_sided_horn_is_refitted_on_its_own_points_and_its_wall_is_covered(self):
+        """`fit_features.refine_cone` from an axis 4 mm off and 3° askew (what
+        the bins' centreline gives on a horn scanned from one side) lands
+        the axis within 1 mm and 0.5°, and `revolve_covered` counts a
+        hollow horn's inner skin as the horn's own wall."""
+        import fit_features as FF
+        rng = np.random.default_rng(5)
+        n = 7000
+        h = rng.uniform(0, 230, n)
+        r_out = 15.0 + (18.0 / 230.0) * h                               # 15 → 33 mm, the CO₂ horn
+        wall = 3.0
+        t = rng.uniform(-0.5 * math.pi, 0.5 * math.pi, n)                # one side scanned
+        outer = np.column_stack([r_out * np.cos(t), r_out * np.sin(t), h])
+        inner = np.column_stack([(r_out - wall) * np.cos(t), (r_out - wall) * np.sin(t), h])
+        pts = np.vstack([outer, inner])
+        tilt = np.array([math.sin(math.radians(3.0)), 0.0, math.cos(math.radians(3.0))])
+        c_guess = np.array([4.0, 0.0, 115.0])                            # 4 mm toward the scanned side
+        guess_prof = [[15.0, -115.0], [33.0, 115.0]]
+        c, d, prof = FF.refine_cone(pts, c_guess, tilt, guess_prof, tol=3.0)
+        self.assertGreater(float(d @ [0, 0, 1.0]), math.cos(math.radians(0.5)))
+        off = c - np.array([0, 0, 1.0]) * float(c @ [0, 0, 1.0])
+        self.assertLess(float(np.linalg.norm(off)), 1.0)                 # from 4 mm off (two skins, half a circle)
+        for r_fit, h_fit in prof:
+            h_true = float((c + d * h_fit) @ [0, 0, 1.0])
+            self.assertAlmostEqual(r_fit, 15.0 + (18.0 / 230.0) * h_true, delta=1.0)
+        self.assertGreater(prof[-1][1] - prof[0][1], 215.0)              # the mouth is where the points end
+        # The wall rule: the inner skin counts once the horn is bored.
+        feature = {"kind": "revolve", "axis": {"origin": [0.0, 0.0, 0.0], "direction": [0.0, 0.0, 1.0]},
+                   "profile": [[15.0, 0.0], [33.0, 230.0]], "cone": True}
+        solid = FF.revolve_covered(feature, inner, 1.0)
+        bored = FF.revolve_covered(dict(feature, boreProfile=[[12.0, 0.0], [30.0, 230.0]]), inner, 1.0)
+        self.assertLess(float(solid.mean()), 0.2)
+        self.assertGreater(float(bored.mean()), 0.95)
+
+    def test_a_hollow_horn_has_an_open_mouth_and_is_cut_hollow(self):
+        """`fit_features.cone_mouth` on a thin-walled cone's points, and the
+        bored horn built hollow by `build_features.bore_profile` /
+        `preview_model.feature_mesh`; a solid cone is left alone."""
+        import trimesh
+        import fit_features as FF
+        import build_features as BF
+        import preview_model as P
+        rng = np.random.default_rng(3)
+        n = 6000
+        h = rng.uniform(0, 200, n)
+        r_out = 10.0 + 0.1 * h                                          # 10 → 30 mm over 200
+        wall = 2.5
+        t = rng.uniform(0, 2 * math.pi, n)
+        # Outer skin (normals out) and inner skin (normals in) along +z.
+        outer = np.column_stack([r_out * np.cos(t), r_out * np.sin(t), h])
+        inner = np.column_stack([(r_out - wall) * np.cos(t), (r_out - wall) * np.sin(t), h])
+        n_out = np.column_stack([np.cos(t), np.sin(t), np.full(n, -0.1)])
+        pts = np.vstack([outer, inner])
+        nrm = np.vstack([n_out, -n_out])
+        prof = [[10.0, 0.0], [30.0, 200.0]]
+        mouth = FF.cone_mouth(pts, nrm, np.zeros(3), np.array([0.0, 0.0, 1.0]), prof, tol=3.0)
+        self.assertIsNotNone(mouth)
+        self.assertEqual(mouth["boreMouth"], "end")
+        self.assertAlmostEqual(mouth["wallMM"], wall, delta=0.6)
+        self.assertAlmostEqual(mouth["boreRadiusMM"], 30.0 - wall, delta=0.8)
+        self.assertGreater(mouth["boreDepthMM"], 150.0)                 # the inner skin is seen the whole way
+        self.assertGreaterEqual(mouth["boreShare"], 0.9)
+        for r_seen, h_seen in mouth["boreProfile"]:                      # the inner skin, where the scanner saw it
+            self.assertAlmostEqual(r_seen, 10.0 + 0.1 * h_seen - wall, delta=0.8)
+        # The same cone with only its outer skin: solid, no bore.
+        self.assertIsNone(FF.cone_mouth(outer, n_out, np.zeros(3), np.array([0.0, 0.0, 1.0]), prof, tol=3.0))
+        # A disc across the mouth: covered, no bore.
+        lid = np.column_stack([rng.uniform(0, 15, 800) * np.cos(t[:800]), rng.uniform(0, 15, 800) * np.sin(t[:800]),
+                               np.full(800, 199.5)])
+        self.assertIsNone(FF.cone_mouth(np.vstack([pts, lid]), np.vstack([nrm, np.tile([0, 0, 1.0], (800, 1))]),
+                                        np.zeros(3), np.array([0.0, 0.0, 1.0]), prof, tol=3.0))
+        feature = {"kind": "revolve", "axis": {"origin": [5.0, -3.0, 2.0], "direction": [0.0, 0.0, 1.0]},
+                   "profile": prof, "cone": True, "part": "horn", "radiusMM": 20.0, "lengthMM": 200.0}
+        self.assertIsNone(BF.bore_profile(feature))
+        bored = dict(feature, **mouth)
+        bored["boreDepthMM"] = 100.0
+        inner_prof = BF.bore_profile(bored)
+        self.assertAlmostEqual(inner_prof[-1][1], 205.0)                 # 5 mm past the mouth
+        self.assertAlmostEqual(inner_prof[0][1], 100.0)                  # the floor
+        self.assertAlmostEqual(inner_prof[0][0], 20.0 - mouth["wallMM"], delta=0.7)
+        self.assertEqual(mouth["boreMouthHMM"], 200.0)
+        solid = P.feature_mesh(feature, sections=128)
+        self.assertIsNone(P.feature_cut_mesh(feature, sections=128))
+        cut_mesh = P.feature_cut_mesh(bored, sections=128)
+        self.assertTrue(cut_mesh.is_watertight)
+        hollow = trimesh.boolean.difference([solid, cut_mesh], engine="manifold")
+        self.assertTrue(hollow.is_watertight)
+        cut = math.pi * 100 * ((30 - wall) ** 2 + (30 - wall) * (20 - wall) + (20 - wall) ** 2) / 3   # the inner frustum, 100 tall
+        self.assertAlmostEqual(solid.volume - hollow.volume, cut, delta=0.06 * cut)
+        # The preview takes the cut out of the WHOLE model after the horn's
+        # union, as `build_feature` does (its target is the body): a rod
+        # standing in the horn's throat goes with it.
+        frame = {"axisDirection": [0.0, 0.0, 1.0], "azimuthZero": [1.0, 0.0, 0.0], "azimuthNinety": [0.0, 1.0, 0.0],
+                 "bores": [], "bosses": [], "bodies": []}
+        rod = dict(frame, axisOrigin=[5.0, -3.0, 2.0 + 152.0], heightMM=40.0, bodyRadiusMM=8.0,
+                   profile=[[8.0, 0.0], [8.0, 40.0]])
+        model, notes, parts = P.build_preview(rod, [bored], sections=128)
+        self.assertTrue(parts[-1].get("bored"), parts[-1])
+        self.assertTrue(model.is_watertight, notes)
+        self.assertAlmostEqual(model.volume, hollow.volume, delta=0.01 * hollow.volume)             # the rod is cut away
+        apart = dict(rod, axisOrigin=[200.0, 0.0, 0.0])
+        model, notes, parts = P.build_preview(apart, [bored], sections=128)
+        self.assertAlmostEqual(model.volume, hollow.volume + math.pi * 64 * 40, delta=0.01 * hollow.volume)
+        self.assertIn("bored 55 mm, 100 deep", BF.part_caption(bored))
+        self.assertIn("bored", BF.feature_caption(dict(bored, part=None)))
+        self.assertNotIn("bored", BF.part_caption(feature))
+
+
+@unittest.skipUnless(HAVE_DEPS, "needs the scan_to_cad venv (trimesh, numpy, scipy, rtree, pillow)")
 class FeatureBuilderTests(unittest.TestCase):
     def test_oval_is_four_tangent_arcs_spanning_the_axes(self):
         import build_features as BF
@@ -483,12 +806,193 @@ class PartsLibraryTests(unittest.TestCase):
         self.assertEqual(len(res["features"]), 1, [f["kind"] for f in res["features"]])
         self.assertEqual(len(sweeps), 1)
         self.assertEqual(sweeps[0]["profile"]["shape"], "circle", sweeps[0]["profile"])
+        self.assertNotIn("section", sweeps[0])                            # a tube is still a tube, not a bent bar
         self.assertAlmostEqual(sweeps[0]["profile"]["radius"], 6.0, delta=1.0)
         self.assertGreater(res["coverage"], 0.8)
         self.assertEqual(sweeps[0]["attached"], [False, False])
         self.assertIsNone(FF.name_part(sweeps[0]))                       # no body to hang from, no horn: the rules do not know
         self.assertEqual(FF.name_part(dict(sweeps[0], attached=[True, True])), "handle")
         self.assertEqual(FF.name_part(dict(sweeps[0], intoHorn=True)), "hose")
+        # A bent round bar is the tube's: the bent-bar fit stands down (its
+        # section is not flat), whatever legs it could lay through the arch.
+        self.assertIsNone(FF.bent_bar_fit(tube, 1.0, 4.0, self._far_plate()))
+
+    @staticmethod
+    def _flat_bar(width=20.0, thick=5.0, legs=(80.0, 50.0), bend_deg=90.0):
+        """A flat bar `width` × `thick` whose first leg runs along +x from
+        the origin and whose second turns by `bend_deg` in the x/y plane
+        (the wide face normal is z: an L bent edgewise, like a lever); a
+        straight bar when `bend_deg` is 0. Subdivided so the sampler sees
+        a scan's worth of points."""
+        import preview_model as P
+        sec = np.array([[-width / 2, -thick / 2], [width / 2, -thick / 2], [width / 2, thick / 2], [-width / 2, thick / 2]])
+        a = math.radians(bend_deg)
+        d2 = np.array([math.cos(a), math.sin(a), 0.0])
+        corner = np.array([legs[0], 0.0, 0.0])
+        spine = [[0, 0, 0], corner.tolist(), (corner + d2 * legs[1]).tolist()] if bend_deg else [[0, 0, 0], [legs[0] + legs[1], 0, 0]]
+        mesh = P.sweep_section(sec, spine, [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]).subdivide().subdivide().subdivide()
+        mesh.apply_translation([30.0, -20.0, 100.0])
+        return mesh
+
+    def test_an_l_shaped_flat_bar_is_one_bent_bar(self):
+        """Two legs of 80 and 50 mm, a 20 × 5 mm section, a 90° bend: ONE
+        sweep of a 20 × 5 rectangle along a three-point spine, the bend
+        within 5°, the section within 10 %; the preview rebuilds it to
+        its volume; the sketch is the designed section; it is a lever
+        when it hangs from a body at one end."""
+        import fit_features as FF
+        import preview_model as P
+        from build_features import sweep_sketch, feature_caption, part_caption
+        from fit_primitives import sketch_entities
+        bar = self._flat_bar()
+        res = FF.bent_bar_fit(bar, 1.0, 4.0, self._far_plate())
+        self.assertIsNotNone(res)
+        self.assertEqual(res["kind"], "bentbar")
+        self.assertEqual(len(res["features"]), 1)
+        f = res["features"][0]
+        self.assertEqual(f["kind"], "sweep")
+        self.assertTrue(f["bent"])
+        self.assertEqual(len(f["bendsDeg"]), 1)
+        self.assertAlmostEqual(f["bendsDeg"][0], 90.0, delta=5.0)
+        self.assertAlmostEqual(f["section"]["widthMM"], 20.0, delta=2.0)
+        self.assertAlmostEqual(f["section"]["thicknessMM"], 5.0, delta=0.5)
+        self.assertIn(f["section"]["shape"], ("rectangle", "stadium"))
+        # The spine: three points for a sharp corner, the arc's points drawn
+        # in otherwise; an arc clears the section's reach toward the bend's
+        # centre (half the width, 10 mm, for a bar bent edgewise) by a
+        # tolerance at least, and no ring of the sweep folds back.
+        self.assertAlmostEqual(f["bendReachMM"], 10.0, delta=1.0)
+        if f["bendRadiusMM"] == 0:
+            self.assertEqual(len(f["spine"]), 3)
+        else:
+            self.assertGreater(len(f["spine"]), 3)
+            self.assertGreaterEqual(f["bendRadiusMM"], f["bendReachMM"] + 1.0)
+        self.assertEqual(FF.sweep_folds(FF.segments_polyline(f["section"]["segments"], 1.0), f["spine"], f["xAxis"]), [])
+        self.assertEqual(len(f["corners"]), 1)
+        self.assertAlmostEqual(sorted(f["legsMM"])[0], 50.0, delta=5.0)
+        self.assertAlmostEqual(sorted(f["legsMM"])[1], 80.0, delta=8.0)
+        self.assertGreater(res["coverage"], 0.85)
+        # The sketch the app gets: the designed section, closed, of the bar's area.
+        plane, entities, seed = sweep_sketch(f)
+        loops = P.loops_of_entities(entities)
+        self.assertEqual(len(loops), 1)
+        self.assertAlmostEqual(abs(P.signed_area(loops[0])), 100.0, delta=12.0)
+        self.assertTrue(P.point_in_loop(seed, loops[0]))
+        self.assertEqual(entities, sketch_entities(f["section"]["segments"]))
+        # The preview mirrors it: one closed solid of the bar's volume (its
+        # free ends run on a tolerance each).
+        mesh = P.feature_mesh(f)
+        self.assertTrue(mesh.is_watertight)
+        self.assertAlmostEqual(mesh.volume, 20 * 5 * 132, delta=0.06 * 20 * 5 * 132)
+        # Named by where it hangs; captioned with its sizes and its bend.
+        self.assertEqual(FF.name_part(f), "bar")
+        self.assertEqual(FF.name_part(dict(f, attached=[True, False])), "lever")
+        self.assertEqual(FF.name_part(dict(f, joins=[False, True])), "lever")
+        self.assertEqual(FF.name_part(dict(f, attached=[True, True])), "handle")
+        caption = part_caption(dict(f, part="lever"))
+        self.assertTrue(caption.startswith("A lever · a 20 × 5 mm"), caption)
+        self.assertIn("bent 9", caption)
+        self.assertIn("mm long", feature_caption(f))
+        # `tube_fit` on the same bar reads its flat run the same way: one sweep of a flat section.
+        tube = FF.tube_fit(bar, 1.0, 4.0, self._far_plate())
+        self.assertIsNotNone(tube)
+        self.assertEqual(len(tube["features"]), 1)
+        self.assertIn("section", tube["features"][0])
+        self.assertAlmostEqual(tube["features"][0]["bendsDeg"][0], 90.0, delta=5.0)
+        self.assertAlmostEqual(tube["features"][0]["section"]["widthMM"], 20.0, delta=2.0)
+
+    def test_a_bend_never_folds_the_section(self):
+        """An arc of half the width round a bar bent edgewise has no inside
+        — the sweep's rings fold back on themselves, yet the mesh still
+        closes at a plausible volume. `sweep_folds` sees the fold and the
+        preview refuses it; the fit keeps the bend's radius clear of the
+        section's reach (or the corner sharp): a 20 × 5 bar bent 30° and
+        60° edgewise gets arcs of 12 mm (reach 10 + 10 % of the width),
+        not the 10 it once got; a 150° hairpin, whose bins the geodesic
+        cannot order, is no bar at all; and a sweep whose xAxis lies
+        along its first leg gets the build's fallback frame, not a zero
+        one."""
+        import fit_features as FF
+        import preview_model as P
+        from build_features import sweep_sketch
+        sec = np.array([[-10.0, -2.5], [10.0, -2.5], [10.0, 2.5], [-10.0, 2.5]])
+        corner = [np.array([0.0, 0, 0]), np.array([80.0, 0, 0]), np.array([80.0, 50.0, 0])]
+        for R, folds in ((0.0, False), (8.0, True), (10.0, True), (12.0, False), (20.0, False)):
+            poly, _ = FF.fillet_spine(corner, R)
+            legs = FF.sweep_folds(sec, poly, [0.0, 1.0, 0.0])
+            self.assertEqual(bool(legs), folds, (R, legs))
+            if folds:
+                with self.assertRaises(ValueError):
+                    P.sweep_section(sec, poly, [0.0, 1.0, 0.0], None)
+            else:
+                mesh = P.sweep_section(sec, poly, [0.0, 1.0, 0.0], None)
+                self.assertTrue(mesh.is_watertight)
+        for deg in (30.0, 60.0):
+            res = FF.bent_bar_fit(self._flat_bar(bend_deg=deg), 1.0, 4.0, self._far_plate())
+            self.assertIsNotNone(res, deg)
+            f = res["features"][0]
+            self.assertAlmostEqual(f["bendsDeg"][0], deg, delta=5.0)
+            self.assertAlmostEqual(f["bendReachMM"], 10.0, delta=1.0)
+            self.assertTrue(f["bendRadiusMM"] == 0 or f["bendRadiusMM"] >= 12.0 - 0.1, f["bendRadiusMM"])
+            self.assertEqual(FF.sweep_folds(FF.segments_polyline(f["section"]["segments"], 1.0), f["spine"], f["xAxis"]), [])
+            self.assertTrue(P.feature_mesh(f).is_watertight)
+        hairpin = self._flat_bar(bend_deg=150.0)
+        self.assertIsNone(FF.tube_fit(hairpin, 1.0, 4.0, self._far_plate()))
+        self.assertIsNone(FF.bent_bar_fit(hairpin, 1.0, 4.0, self._far_plate()))
+        frames = FF.sweep_frames([[0, 0, 0], [100, 0, 0], [100, 100, 0]], [1.0, 0, 0])
+        plane, _, _ = sweep_sketch({"spine": [[0, 0, 0], [100, 0, 0], [100, 100, 0]], "xAxis": [1.0, 0, 0],
+                                    "profile": {"shape": "circle", "radius": 1.0}})
+        np.testing.assert_allclose(frames[0][3], plane["xAxis"], atol=1e-9)
+        self.assertAlmostEqual(float(np.linalg.norm(frames[1][3])), 1.0, places=9)
+
+    def test_a_straight_bar_is_still_a_bar(self):
+        """A straight 20 × 5 × 130 bar: the bent-bar fit stands down (its
+        spine is one leg) and `bar_fit` reads it as one bar of that section."""
+        import fit_features as FF
+        bar = self._flat_bar(bend_deg=0.0)
+        self.assertIsNone(FF.bent_bar_fit(bar, 1.0, 4.0, self._far_plate()))
+        res = FF.bar_fit(bar, 1.0, 4.0, self._far_plate())
+        self.assertIsNotNone(res)
+        self.assertEqual(res["kind"], "bar")
+        self.assertEqual(len(res["features"]), 1)
+        f = res["features"][0]
+        self.assertTrue(f["bar"])
+        self.assertAlmostEqual(f["lengthMM"], 130.0, delta=8.0)
+        self.assertAlmostEqual(f["sectionMM"], 20.0, delta=2.0)
+        self.assertEqual(FF.name_part(f), "bar")
+
+    def test_corner_spine_counts_the_legs(self):
+        """The spine fitter on centreline samples: a straight run is one
+        leg, a 60° elbow two, a Z three; a quarter circle of ten widths'
+        radius reads as three gentle legs (which the bend radius then
+        rounds), a semicircle as none — a curve, left to the sweep."""
+        import fit_features as FF
+        rng = np.random.default_rng(7)
+
+        def run(points, n):
+            P = np.asarray(points, dtype=float)
+            seg = np.linalg.norm(np.diff(P, axis=0), axis=1)
+            s = np.concatenate([[0.0], np.cumsum(seg)])
+            t = np.linspace(0, s[-1], n)
+            C = np.column_stack([np.interp(t, s, P[:, k]) for k in range(3)])
+            return C + rng.normal(0, 0.3, C.shape)
+        straight = FF.corner_spine(run([[0, 0, 0], [100, 0, 0]], 20), 1.0, 20.0)
+        self.assertEqual(straight["legs"], 1)
+        elbow = FF.corner_spine(run([[0, 0, 0], [80, 0, 0], [80 + 60 * math.cos(math.radians(60)), 60 * math.sin(math.radians(60)), 0]], 28), 1.0, 20.0)
+        self.assertEqual(elbow["legs"], 2)
+        self.assertAlmostEqual(elbow["bendsDeg"][0], 60.0, delta=4.0)
+        self.assertLess(np.linalg.norm(np.asarray(elbow["points"][1]) - [80, 0, 0]), 3.0)
+        zee = FF.corner_spine(run([[0, 0, 0], [70, 0, 0], [70, 60, 0], [140, 60, 0]], 40), 1.0, 20.0)
+        self.assertEqual(zee["legs"], 3)
+        self.assertEqual(len(zee["bendsDeg"]), 2)
+        a = np.linspace(0, math.pi / 2, 30)
+        arc = np.column_stack([120 * np.cos(a), 120 * np.sin(a), np.zeros_like(a)])
+        quarter = FF.corner_spine(arc, 1.0, 12.0)
+        self.assertEqual(quarter["legs"], 3)
+        self.assertLess(quarter["residualMM"], 1.8)
+        a = np.linspace(0, math.pi, 60)
+        half = np.column_stack([120 * np.cos(a), 120 * np.sin(a), np.zeros_like(a)])
+        self.assertIsNone(FF.corner_spine(half, 1.0, 12.0))
 
     def test_a_ring_round_the_body_axis_is_a_hoop(self):
         import fit_features as FF
@@ -825,6 +1329,159 @@ class AxisFinderTests(unittest.TestCase):
         # barrel keep the barrel's radius.
         meds = ([150.0] * 5 + [80.0] * 7) * 3
         self.assertAlmostEqual(self.A.agreed_radius(meds, previous=80.0, sector_medians=meds), 80.0)
+
+
+@unittest.skipUnless(HAVE_DEPS, "needs the scan_to_cad venv (trimesh, numpy, scipy, rtree, pillow)")
+class NutTests(unittest.TestCase):
+    """analyze_scan.find_nuts and build_hydrant.nut_sections: a hexagonal
+    prism on a cylinder is a hex nut (its sides, across-flats and phase
+    read back), a round collar is not, an octagon is eight-sided, a
+    hexagon at a branch's root is recorded on that body, and the polygon
+    the build extrudes has the corners where the scan had them."""
+
+    @staticmethod
+    def prism(n, apothem, phase_deg, z0, z1):
+        import preview_model as P
+        R = apothem / math.cos(math.pi / n)
+        phi = math.radians(phase_deg)
+        loop = np.array([[R * math.cos(phi + math.pi / n + 2 * math.pi * k / n),
+                          R * math.sin(phi + math.pi / n + 2 * math.pi * k / n)] for k in range(n)])
+        return P.extrude_loop(loop, [0, 0, z0], [1, 0, 0], [0, 1, 0], z1 - z0)
+
+    @classmethod
+    def on_a_cylinder(cls, tool):
+        body = trimesh.creation.cylinder(radius=15.0, height=200.0, sections=128)
+        body.apply_translation([0, 0, 100.0])
+        return trimesh.boolean.union([body, tool], engine="manifold")
+
+    @staticmethod
+    def analyse(mesh):
+        import analyze_scan as A
+        return A.analyze(mesh, out_dir=None, name="nut", samples=20000, axis_choice="0,0,1!", multi=False)
+
+    def test_a_hexagonal_prism_on_a_cylinder_is_a_hex_nut(self):
+        a = self.analyse(self.on_a_cylinder(self.prism(6, 23.0, 20.0, 100.0, 118.0)))
+        self.assertEqual(len(a["nuts"]), 1, a["nuts"])
+        nut = a["nuts"][0]
+        self.assertEqual(nut["sides"], 6)
+        self.assertAlmostEqual(nut["acrossFlatsMM"], 46.0, delta=0.02 * 46.0)
+        self.assertLess(abs((nut["phaseDeg"] - 20.0 + 30.0) % 60.0 - 30.0), 3.0)
+        self.assertAlmostEqual(nut["h0"], 100.0, delta=3.0)
+        self.assertAlmostEqual(nut["h1"], 118.0, delta=3.0)
+        self.assertGreaterEqual(nut["share"], 0.8)
+        # The revolve runs inside the flats over the nut's span: nothing
+        # round pokes out of them, the prism carries the corners.
+        inside = [r for r, h in a["profile"] if 100.0 <= h <= 118.0 and r > 16.0]
+        self.assertTrue(inside and max(inside) <= 23.0 + 0.3, a["profile"])
+
+    def test_a_round_collar_is_not_a_nut(self):
+        collar = trimesh.creation.cylinder(radius=23.0, height=18.0, sections=128)
+        collar.apply_translation([0, 0, 109.0])
+        a = self.analyse(self.on_a_cylinder(collar))
+        self.assertEqual(a["nuts"], [])
+        self.assertAlmostEqual(max(r for r, h in a["profile"] if 100.0 <= h <= 118.0), 23.0, delta=0.3)
+
+    def test_an_octagon_is_an_eight_sided_nut(self):
+        a = self.analyse(self.on_a_cylinder(self.prism(8, 30.0, 10.0, 60.0, 84.0)))
+        self.assertEqual([n["sides"] for n in a["nuts"]], [8])
+        self.assertAlmostEqual(a["nuts"][0]["acrossFlatsMM"], 60.0, delta=0.02 * 60.0)
+        self.assertLess(abs((a["nuts"][0]["phaseDeg"] - 10.0 + 22.5) % 45.0 - 22.5), 3.0)
+
+    def test_a_hexagon_at_a_branch_root_is_the_branch_body_s_nut(self):
+        """The T of AxisFinderTests (a body r 30 on y, a pipe r 15 on x
+        running into it at x = 20) with a 34 mm hex nut on the pipe where
+        it meets the body (x 8–20, a flat facing +z). The nut is read on
+        the pipe's own axis before its root is trimmed, recorded on that
+        body, and the build's prism sits where the scan's nut is."""
+        import analyze_scan as A
+        import build_hydrant as B
+        import preview_model as P
+        body = trimesh.creation.cylinder(radius=30.0, height=240.0, sections=96)
+        body.apply_transform(trimesh.transformations.rotation_matrix(math.pi / 2, [1, 0, 0]))
+        body.apply_translation([50.0, 120.0, 0.0])
+        pipe = trimesh.creation.cylinder(radius=15.0, height=160.0, sections=64)
+        pipe.apply_transform(trimesh.transformations.rotation_matrix(math.pi / 2, [0, 1, 0]))
+        pipe.apply_translation([-50.0, 60.0, 0.0])
+        nut = self.prism(6, 17.0, 90.0, 8.0, 20.0)                        # on z; a flat's normal along +y…
+        nut.apply_transform(trimesh.transformations.rotation_matrix(math.pi / 2, [0, 1, 0]))   # …now on x, that flat facing +z? no: (y stays y)
+        nut.apply_translation([0.0, 60.0, 0.0])
+        # After the turn about y the prism's axis is +x and the flat that
+        # faced +y still faces +y; the pipe's azimuth zero is +z, so that
+        # flat's normal sits at ±90° — a corner at 0°, a flat at 30°.
+        mesh = trimesh.boolean.union([trimesh.boolean.union([body, pipe], engine="manifold"), nut], engine="manifold")
+        self.assertTrue(mesh.is_watertight)
+        # The main axis as the corpus gets it: the finder's strongest body
+        # (a refined "0,1,0" is dragged onto the diagonal by the pipe).
+        a = A.analyze(mesh, out_dir=None, name="tee", samples=40000, axis_choice="auto", multi=True)
+        self.assertEqual(len(a["bodies"]), 1, [b.get("tag") for b in a["bodies"]])
+        branch = a["bodies"][0]
+        self.assertEqual(len(branch["nuts"]), 1, branch["nuts"])
+        found = branch["nuts"][0]
+        self.assertEqual(found["sides"], 6)
+        self.assertAlmostEqual(found["acrossFlatsMM"], 34.0, delta=0.02 * 34.0)
+        self.assertLess(abs((found["phaseDeg"] - 30.0 + 30.0) % 60.0 - 30.0), 3.0)
+        self.assertEqual(a["nuts"], [])                                   # nothing polygonal on the body's own axis
+        # In the world: the nut's span along the pipe's axis is x 8–20.
+        o, d = np.array(branch["axisOrigin"]), np.array(branch["axisDirection"])
+        ends = sorted(float((o + d * h)[0]) for h in (found["h0"], found["h1"]))
+        self.assertAlmostEqual(ends[0], 8.0, delta=3.0)
+        self.assertAlmostEqual(ends[1], 20.0, delta=3.0)
+        # The build: one prism on the branch's axis, 34 mm across the
+        # flats, placed where the nut is; the preview unions it in.
+        sections = B.nut_sections(a)
+        self.assertEqual(len(sections), 1)
+        sec = sections[0]
+        self.assertEqual(sec["body"], branch["index"])
+        self.assertEqual(len(sec["entities"]), 6)
+        self.assertAlmostEqual(abs(np.cross(sec["plane"]["xAxis"], sec["plane"]["yAxis"])[0]), 1.0, places=3)
+        self.assertAlmostEqual(min(sec["plane"]["origin"][0], sec["plane"]["origin"][0] + sec["distance"] * np.sign(d[0])), 8.0, delta=3.0)
+        model, notes, parts = P.build_preview(a, sections=64)
+        self.assertIn("nut", [p["what"] for p in parts])
+        self.assertTrue(model.is_watertight, notes)
+        self.assertLess(abs(model.volume - mesh.volume) / mesh.volume, 0.04)
+
+    def test_nut_sections_polygon_has_the_corners_where_the_record_says(self):
+        import build_hydrant as B
+        import preview_model as P
+        analysis = {"axisOrigin": [10.0, -5.0, 2.0], "axisDirection": [0.0, 1.0, 0.0],
+                    "azimuthZero": [0.0, 0.0, 1.0], "azimuthNinety": [-1.0, 0.0, 0.0],
+                    "heightMM": 100.0, "bodyRadiusMM": 15.0, "profile": [[15.0, 0.0], [15.0, 100.0]],
+                    "profileSegments": None, "openTop": None, "sectionLoop": None, "bosses": [], "bodies": [],
+                    "nuts": [{"h0": 40.0, "h1": 58.0, "sides": 6, "acrossFlatsMM": 46.0, "phaseDeg": 20.0, "share": 1.0}]}
+        secs = B.nut_sections(analysis)
+        self.assertEqual(len(secs), 1)
+        sec = secs[0]
+        self.assertEqual(sec["distance"], 18.0)
+        self.assertEqual(sec["plane"]["origin"], [10.0, 35.0, 2.0])
+        x, y = np.array(sec["plane"]["xAxis"]), np.array(sec["plane"]["yAxis"])
+        # x is azimuth zero (+z) turned 20° toward azimuth ninety (−x); the extrude (x × y) runs up the axis.
+        self.assertTrue(np.allclose(x, [-math.sin(math.radians(20.0)), 0.0, math.cos(math.radians(20.0))], atol=1e-6))
+        self.assertTrue(np.allclose(np.cross(x, y), [0.0, 1.0, 0.0], atol=1e-6))
+        # Six corners at the corner radius, the first pair ±30° from the flat's normal (+x of the sketch).
+        pts = [e["a"] for e in sec["entities"]]
+        self.assertEqual(len(pts), 6)
+        R = 23.0 / math.cos(math.pi / 6)
+        for p in pts:
+            self.assertAlmostEqual(math.hypot(*p), R, places=3)
+        angles = sorted(round(math.degrees(math.atan2(p[1], p[0])) % 360.0) for p in pts)
+        self.assertEqual(angles, [30, 90, 150, 210, 270, 330])
+        self.assertEqual(B.nut_words(analysis["nuts"][0]), "a 46 mm hex nut, 18 mm tall")
+        import build_features as BF
+        self.assertEqual(BF.nut_caption(sec), "A 46 mm hex nut · a hexagon on the body's axis, extruded 18 mm and unioned in")
+        # The preview: the cylinder plus what the prism adds outside it.
+        model, notes, parts = P.build_preview(analysis, sections=128)
+        self.assertEqual(notes, [])
+        self.assertEqual([p["what"] for p in parts], ["revolve", "nut"])
+        expected = math.pi * 225.0 * 100.0 + (2 * math.sqrt(3) * 23.0 ** 2 - math.pi * 225.0) * 18.0
+        self.assertAlmostEqual(model.volume, expected, delta=0.01 * expected)
+        self.assertAlmostEqual(float(model.bounds[1][1]), 95.0, places=3)                 # the axis origin sits at y = −5
+
+    def test_the_bands_over_a_nut_are_clamped_but_a_crown_round_it_is_not(self):
+        import analyze_scan as A
+        nut = {"h0": 10.0, "h1": 20.0, "sides": 6, "acrossFlatsMM": 46.0, "phaseDeg": 0.0, "share": 1.0}
+        bands = [{"h": 5.0, "median": 25.0}, {"h": 12.0, "median": 25.0}, {"h": 15.0, "median": 42.0}, {"h": 18.0, "median": 23.5}]
+        self.assertEqual(A.clamp_bands_to_nuts(bands, [nut], 0.1), 2)
+        self.assertEqual([b["median"] for b in bands], [25.0, 23.0, 42.0, 23.0])
 
 
 @unittest.skipUnless(HAVE_DEPS, "needs the scan_to_cad venv (trimesh, numpy, scipy, rtree, pillow)")

@@ -58,8 +58,8 @@ import trimesh
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
-from build_hydrant import body_section, boss_section, secondary_sections, world, unit  # noqa: E402
-from build_features import sweep_sketch  # noqa: E402
+from build_hydrant import body_section, boss_section, secondary_sections, nut_sections, world, unit  # noqa: E402
+from build_features import sweep_sketch, bore_profile  # noqa: E402
 from build_recipe import revolve_region, radial_frame, seed_inside  # noqa: E402
 from fit_primitives import sketch_entities  # noqa: E402
 
@@ -343,7 +343,12 @@ def sweep_section(section, spine, x_axis, y_axis):
     leg) swept along the polyline spine: the section rides a rotation-
     minimising frame, and at each corner the ring is the previous leg's
     prism cut by the corner's bisector plane (a mitre), so neighbouring
-    legs meet without a gap or a fold."""
+    legs meet without a gap. A sweep whose ring folds back — a vertex of
+    the section advancing backwards along a leg, because a bend is
+    tighter than the section's reach toward its centre or a leg shorter
+    than its mitre — is refused (ValueError): its mesh would still close
+    with a plausible volume, so watertightness alone would pass a sweep
+    the kernel cannot make (`fit_features.sweep_folds` is the same test)."""
     section = ccw(np.asarray(section, dtype=float))
     P = np.asarray(spine, dtype=float)
     keep = np.ones(len(P), dtype=bool)
@@ -375,6 +380,11 @@ def sweep_section(section, spine, x_axis, y_axis):
         if i < m - 1:
             R = rotation_between(t_prev, T[i])
             X, Y = R @ X, R @ Y
+    for i in range(m - 1):
+        advance = (rings[i + 1] - rings[i]) @ T[i]
+        if (advance < -1e-6).any():
+            raise ValueError("the sweep folds back on itself on leg %d of %d (a section vertex advances %.1f mm backwards): "
+                             "the bend is tighter than the section's reach toward its centre" % (i + 1, m - 1, -float(advance.min())))
     verts = np.vstack(rings)
     faces = []
     cap = triangulate(section)
@@ -432,6 +442,15 @@ def secondary_mesh(sec, sections=96):
     return revolve_loop(loop, plane["origin"], plane["xAxis"], plane["yAxis"], sections)
 
 
+def nut_mesh(nut):
+    """One polygonal band (`build_hydrant.nut_sections`): its n-gon
+    extruded up the axis from the sketch plane, as the app's
+    `extrude_nut` builds it."""
+    plane = nut["plane"]
+    loop = pick_loop(loops_of_entities(nut["entities"]), nut["seed"])
+    return extrude_loop(loop, plane["origin"], plane["xAxis"], plane["yAxis"], float(nut["distance"]))
+
+
 def feature_mesh(feature, sections=96):
     kind = feature["kind"]
     if kind == "sweep":
@@ -452,6 +471,24 @@ def feature_mesh(feature, sections=96):
         return extrude_loop(loop, pl["origin"], pl["xAxis"], pl["yAxis"], float(feature["distance"]),
                             bool(feature.get("symmetric")))
     raise ValueError("unknown feature kind %r" % kind)
+
+
+def feature_cut_mesh(feature, sections=96):
+    """The cut a feature takes out of the model AFTER its own union — a
+    hollow horn's inner cone (`build_features.bore_profile`) revolved on
+    the feature's axis — or None. `build_features.build_feature` subtracts
+    it from the whole body (its booleanTargets is the model, not the horn),
+    so anything else inside the cone goes with it; `build_preview` does the
+    same, after the feature's union."""
+    if feature["kind"] != "revolve":
+        return None
+    bore = bore_profile(feature)
+    if not bore:
+        return None
+    ax = feature["axis"]
+    u, d = radial_frame(ax["direction"])
+    ents_in, seed_in = revolve_region(bore)
+    return revolve_loop(pick_loop(loops_of_entities(ents_in), seed_in), ax["origin"], u, d, sections)
 
 
 def combine(acc, tool, op, label, notes):
@@ -476,12 +513,13 @@ def combine(acc, tool, op, label, notes):
         return trimesh.util.concatenate([acc, tool])
 
 
-def build_preview(analysis, features=(), sections=96, bosses=True, secondaries=True):
+def build_preview(analysis, features=(), sections=96, bosses=True, secondaries=True, nuts=True):
     """The whole model as the app would hold it after the build and the
     features: (mesh, notes, parts) — `parts` says what went in, in the
     build's order: the revolve, its cavity, the bodies on their own axes,
-    the bosses, the features. A secondary body's row carries its own mesh
-    under `_mesh` (for a placement check; not for the JSON)."""
+    the nuts (polygon prisms on the axes), the bosses, the features. A
+    secondary body's row carries its own mesh under `_mesh` (for a
+    placement check; not for the JSON)."""
     notes, parts = [], []
     body, cavity, section = body_mesh(analysis, sections)
     bad = unresolved(section["entities"], "the body's profile")
@@ -512,6 +550,17 @@ def build_preview(analysis, features=(), sections=96, bosses=True, secondaries=T
                           "extendedMM": body.get("extendedMM") or [0.0, 0.0],
                           "volumeMM3": float(tool.volume) if tool.is_watertight else None,
                           "_mesh": tool, "_plane": sec["plane"], "_before": before})
+    if nuts:
+        for nut in nut_sections(analysis):
+            try:
+                tool = nut_mesh(nut)
+            except Exception as error:  # noqa: BLE001
+                notes.append("%s could not be drawn: %s" % (nut["label"], str(error)[:120]))
+                continue
+            model = combine(model, tool, "union", nut["label"], notes)
+            parts.append({"what": "nut", "label": nut["label"], "sides": nut["sides"], "acrossFlatsMM": nut["acrossFlatsMM"],
+                          "h0": nut["h0"], "h1": nut["h1"], "body": nut["body"],
+                          "volumeMM3": float(tool.volume) if tool.is_watertight else None})
     if bosses:
         for n, boss in enumerate([b for b in analysis.get("bosses", []) if b["reachMM"] - b["bodyRadiusMM"] > 15], 1):
             if not boss.get("profile"):
@@ -527,7 +576,17 @@ def build_preview(analysis, features=(), sections=96, bosses=True, secondaries=T
             notes.append("feature %s could not be drawn: %s" % (label, str(error)[:120]))
             continue
         model = combine(model, tool, "union", label, notes)
-        parts.append({"what": "feature", "name": label, "kind": feature["kind"]})
+        row = {"what": "feature", "name": label, "kind": feature["kind"]}
+        try:
+            cut = feature_cut_mesh(feature, sections)
+        except Exception as error:  # noqa: BLE001 — the horn stays solid, as in the build
+            notes.append("feature %s: its bore could not be drawn: %s" % (label, str(error)[:120]))
+            cut = None
+        if cut is not None:
+            # The bore, subtracted from the WHOLE model as the build does.
+            model = combine(model, cut, "subtract", label + " bore", notes)
+            row["bored"] = True
+        parts.append(row)
     return model, notes, parts
 
 
@@ -683,6 +742,7 @@ def main():
     ap.add_argument("--no-features", action="store_true")
     ap.add_argument("--no-bosses", action="store_true")
     ap.add_argument("--no-bodies", action="store_true", help="leave out the bodies traced on their own axes (analysis bodies)")
+    ap.add_argument("--no-nuts", action="store_true", help="leave out the polygonal bands on the axes (analysis nuts)")
     ap.add_argument("--scan", default=None, help="the scan to measure against (an STL, or a glTF in metres) instead of the part's")
     ap.add_argument("--all-features", action="store_true", help="every feature in the file, not only those the app built")
     ap.add_argument("--sections", type=int, default=96, help="facets round a revolve")
@@ -702,7 +762,7 @@ def main():
     features = [] if args.no_features else built_features(part, args.features, None if args.all_features else summary)
 
     model, notes, parts = build_preview(analysis, features, args.sections, bosses=not args.no_bosses,
-                                        secondaries=not args.no_bodies)
+                                        secondaries=not args.no_bodies, nuts=not args.no_nuts)
     stl = os.path.join(out, "preview.stl")
     model.export(stl)
     scan, scan_path = load_scan(part, args.scan)

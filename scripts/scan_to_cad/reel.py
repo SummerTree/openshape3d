@@ -46,7 +46,7 @@ import numpy as np
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))
 sys.path.insert(0, HERE)
-from build_hydrant import body_section, boss_section, unit, world, secondary_sections, revolve_secondary, window_sections, cut_window, model_color  # noqa: E402
+from build_hydrant import body_section, boss_section, unit, world, secondary_sections, revolve_secondary, window_sections, cut_window, model_color, nut_sections, extrude_nut  # noqa: E402
 from build_features import build_feature, shift_feature  # noqa: E402
 from demo_video import Recorder, caption, ffmpeg_watched, narrate, scan_on_floor, title_overlay  # noqa: E402
 from mcp_client import MCPClient, MCPError  # noqa: E402
@@ -125,6 +125,15 @@ def build_model(mcp, analysis, label, color, features=None):
     for sec in secondary_sections(analysis, shift=delta):
         try:
             reply = revolve_secondary(mcp, sec, cad, note=False)
+            if reply.get("failed"):
+                mcp.os3d("command.run", {"id": "edit.undo"})
+        except MCPError:
+            pass
+    # The polygonal bands on the axes (a hex nut, a square collar), as
+    # the build extruded them.
+    for nut in nut_sections(analysis, shift=delta):
+        try:
+            reply = extrude_nut(mcp, nut, cad, label, note=False)
             if reply.get("failed"):
                 mcp.os3d("command.run", {"id": "edit.undo"})
         except MCPError:
