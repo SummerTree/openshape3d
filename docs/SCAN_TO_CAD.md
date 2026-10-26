@@ -1241,8 +1241,11 @@ crown's inner wall) and E2/E3 (its floor and top). The valve's M1
 root) are the branch roots' cast collars, round, with the fitted branch
 axes a few millimetres off the scan's — in body 2's frame the root reads
 r 17–18 in 55 of 72 sectors, no polygon; in body 3's the branch is a
-sinusoid of ±3 mm about its axis — not hexagons. Those are the next
-track (a root fillet, and a branch axis refined on the branch alone).
+sinusoid of ±3 mm about its axis — not hexagons. (What M1/M2 then
+turned out to be, once the far points were tested with `contains()`: the
+INSIDE of each branch's bore, filled by the union where the parent is
+solid — see *Passages*, 2026-10-26. The "root fillet" this paragraph
+first proposed was a misreading of the review sheet.)
 The valve's main body and every other corpus part stay round: no false
 nut on the bollard, the can, either extinguisher, the mug, the pail, the
 barrel or the wheel.
@@ -1815,7 +1818,7 @@ Built over MCP by `run_corpus.py --analyze`, graded by `inspect_fit.py`;
 | Spray can (wd40-can) | 99.4 → 99.4 % | 0.21 → 0.21 | 0.28 → 0.28 | — | 14 | PASS | unchanged |
 | Beer mug (beer-mug) | 97.2 → 97.2 % | 1.38 → 1.38 | 0.79 → 0.79 | 3 112 | 4 698 | FAIL | unchanged |
 | Truck wheel (truck-wheel) | 94.1 → 94.1 % | 8.15 → 8.15 | 4.80 → 4.80 | 920 952 | 1 172 522 | FAIL | unchanged |
-| Valve (pipe-wheel) | 94.5 → 94.8 % | 0.69 → 0.83 | 1.99 → 1.13 | 1 015 | 635 | FAIL | four bores (r 17 / 18 deep, r 19 / 50 deep, r 20 through, r 11 / 14 deep) and a 26 mm union nut; the branch-root collars M1/M2 are 1 015 and 683 mm² now |
+| Valve (pipe-wheel) | 94.5 → 94.8 % | 0.69 → 0.83 | 1.99 → 1.13 | 1 015 | 635 | FAIL | four bores (r 17 / 18 deep, r 19 / 50 deep, r 20 through, r 11 / 14 deep) and a 26 mm union nut; M1/M2 (1 015 and 683 mm²) are the bores' insides, filled by the union — the passages, next |
 
 Two parts moved, both the ones the tracks aimed at: the valve's pipes are
 open where the scan's are (scan→model 1.99 → 1.13 mm; the largest missing
@@ -1824,6 +1827,22 @@ extinguisher wears one lever and a hollow horn (95.0 → 96.0 %, scan→model
 1.71 → 1.24 mm). The nuts the detector found are real and small. The
 eight other parts are unchanged to the digit — the rules did not fire
 where they had nothing to say.
+
+### Results — 2026-10-26, the app run (passages)
+
+Built over MCP by `run_corpus.py --analyze` after the passages merged
+(`feat/scan-to-cad-passages`), graded by `inspect_fit.py`; "before" is
+the run above.
+
+| part | overlap | model→scan mm | scan→model mm | largest missing mm² | largest excess mm² | verdict | what changed |
+|---|---|---|---|---|---|---|---|
+| Valve (pipe-wheel) | 94.8 → 94.8 % | 0.83 → 0.73 | 1.13 → 1.00 | 1 015 → 550 | 635 → 649 | FAIL → FAIL (the largest-patch gates WARN now; `depth_front` still FAILs on the hand-wheel) | two passages cut after the unions: body 2's bore kept open 8 mm into body 1, body 3's 14 mm into body 0 (`+8 on into body 1`, `+14 on into body 0` in the corpus row); every remaining patch is on the hand-wheel (M1–M3 its rim, E1–E3 its spokes) |
+| the other nine | unchanged to the digit | | | | | | no secondary body elsewhere has a bore into a parent (the hydrant's nozzles are capped) — the analysis records are byte-identical |
+
+Offline first (preview_model, the same scan, the new analysis): missing
+1 015 → 552 mm², excess 630 → 627 — the shorter cut to the bore's own floor
+adds no excess, where a hand-edited deeper cut (66 / 60 mm) had put a
+2 082 mm² cylinder wall into the wider chamber. Tests 70 → 78.
 
 ## Gotchas
 
