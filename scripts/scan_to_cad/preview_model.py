@@ -58,7 +58,7 @@ import trimesh
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
-from build_hydrant import body_section, boss_section, secondary_sections, nut_sections, passage_sections, world, unit  # noqa: E402
+from build_hydrant import body_section, boss_section, secondary_sections, nut_sections, passage_sections, world, unit, loft_body  # noqa: E402
 from build_features import sweep_sketch, bore_profile  # noqa: E402
 from build_recipe import revolve_region, radial_frame, seed_inside  # noqa: E402
 from fit_primitives import sketch_entities  # noqa: E402
@@ -501,6 +501,69 @@ def feature_cut_mesh(feature, sections=96):
     return revolve_loop(pick_loop(loops_of_entities(ents_in), seed_in), ax["origin"], u, d, sections)
 
 
+def ring_points(ring, n=96):
+    """An ellipse section (`build_hydrant.ellipse_rings`) as `n` points in
+    its plane's (x, y), from its major axis round counter-clockwise — the
+    same parameter on every section, so ring k of one section and ring k of
+    the next are the points a loft joins."""
+    t = np.linspace(0.0, 2 * math.pi, n, endpoint=False)
+    c, s = math.cos(ring["rotation"]), math.sin(ring["rotation"])
+    x = ring["radiusX"] * np.cos(t)
+    y = ring["radiusY"] * np.sin(t)
+    return np.column_stack([ring["center"][0] + c * x - s * y, ring["center"][1] + s * x + c * y])
+
+
+def loft_mesh(piece, origin, axis, u, v, n=96):
+    """A loft piece (`build_hydrant.loft_body`) as a closed mesh: its
+    sections' rings, the same number of points each, joined ring to ring
+    (straight between sections — the app's loft is a smooth surface
+    through them, which on sections this close agrees to the field's
+    tolerance) and capped at both ends; `n` points round each ring, as
+    many as the revolve's facets (`--sections`), so the vertex-sampled
+    deviations weigh a loft as they weigh a revolve."""
+    rings = piece["rings"]
+    origin, axis, u, v = (np.asarray(x, dtype=float) for x in (origin, axis, u, v))
+    verts = []
+    for ring in rings:
+        pts = ring_points(ring, n)
+        verts.append(origin + axis * ring["h"] + np.outer(pts[:, 0], u) + np.outer(pts[:, 1], v))
+    m = len(rings)
+    centres = [origin + axis * rings[0]["h"] + rings[0]["center"][0] * u + rings[0]["center"][1] * v,
+               origin + axis * rings[-1]["h"] + rings[-1]["center"][0] * u + rings[-1]["center"][1] * v]
+    V = np.vstack(verts + [np.array(centres)])
+    bottom, top = m * n, m * n + 1
+    faces = []
+    for i in range(m - 1):
+        a, b = i * n, (i + 1) * n
+        for j in range(n):
+            jn = (j + 1) % n
+            faces += [[a + j, a + jn, b + jn], [a + j, b + jn, b + j]]
+    for j in range(n):
+        jn = (j + 1) % n
+        faces.append([bottom, jn, j])
+        faces.append([top, (m - 1) * n + j, (m - 1) * n + jn])
+    return finish(trimesh.Trimesh(vertices=V, faces=np.array(faces, dtype=int), process=False))
+
+
+def loft_body_mesh(loft, analysis, notes, sections=96):
+    """The lofted body as `build_hydrant.build_loft` builds it: the outer
+    pieces unioned, the cavity's pieces and the bores subtracted."""
+    origin = np.asarray(analysis["axisOrigin"], dtype=float)
+    axis = unit(analysis["axisDirection"])
+    u, v = unit(analysis["azimuthZero"]), unit(analysis["azimuthNinety"])
+    model = None
+    for k, piece in enumerate(loft["pieces"], 1):
+        model = combine(model, loft_mesh(piece, origin, axis, u, v, sections), "union", "loft piece %d" % k, notes)
+    for k, piece in enumerate((loft.get("cavity") or {}).get("pieces", []), 1):
+        model = combine(model, loft_mesh(piece, origin, axis, u, v, sections), "subtract", "cavity piece %d" % k, notes)
+    for bore in loft.get("bores", []):
+        plane = bore["plane"]
+        loop = pick_loop(loops_of_entities(bore["entities"]), bore["seed"])
+        model = combine(model, revolve_loop(loop, plane["origin"], plane["xAxis"], plane["yAxis"], sections),
+                        "subtract", plane["name"], notes)
+    return model
+
+
 def combine(acc, tool, op, label, notes):
     """`acc` ∪ `tool` (or minus it) with manifold; on refusal the plain
     concatenation, noted."""
@@ -532,15 +595,32 @@ def build_preview(analysis, features=(), sections=96, bosses=True, secondaries=T
     secondary body's row carries its own mesh under `_mesh` (for a
     placement check; not for the JSON)."""
     notes, parts = [], []
-    body, cavity, section = body_mesh(analysis, sections)
-    bad = unresolved(section["entities"], "the body's profile")
-    if bad:
-        notes.append(bad)
-    model = body
-    parts.append({"what": "revolve", "note": section["note"], "volumeMM3": float(body.volume) if body.is_watertight else None})
-    if cavity is not None:
-        model = combine(model, cavity, "subtract", "the cavity", notes)
-        parts.append({"what": "cavity", "note": section["inner"]["note"]})
+    # A body the sections say is out of round (`roundness.build == "loft"`)
+    # is lofted through them, as the build lofts it; every other is the
+    # revolve it always was.
+    try:
+        loft = loft_body(analysis)
+    except ValueError as error:
+        loft = None
+        notes.append("the loft could not be drawn (%s): revolved instead, as the build would" % str(error)[:120])
+    if loft is not None:
+        model = loft_body_mesh(loft, analysis, notes, sections)
+        parts.append({"what": "loft", "note": loft["note"], "pieces": len(loft["pieces"]),
+                      "sections": sum(len(p["rings"]) for p in loft["pieces"]),
+                      "volumeMM3": float(model.volume) if model.is_watertight else None})
+        if loft.get("cavity"):
+            parts.append({"what": "cavity", "note": "lofted, %d pieces, a %.1f mm wall in" % (
+                len(loft["cavity"]["pieces"]), loft["cavity"]["wallMM"])})
+    else:
+        body, cavity, section = body_mesh(analysis, sections)
+        bad = unresolved(section["entities"], "the body's profile")
+        if bad:
+            notes.append(bad)
+        model = body
+        parts.append({"what": "revolve", "note": section["note"], "volumeMM3": float(body.volume) if body.is_watertight else None})
+        if cavity is not None:
+            model = combine(model, cavity, "subtract", "the cavity", notes)
+            parts.append({"what": "cavity", "note": section["inner"]["note"]})
     if secondaries:
         by_index = {b.get("index"): b for b in analysis.get("bodies", [])}
         for sec in secondary_sections(analysis):

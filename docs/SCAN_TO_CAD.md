@@ -1844,8 +1844,197 @@ Offline first (preview_model, the same scan, the new analysis): missing
 adds no excess, where a hand-edited deeper cut (66 / 60 mm) had put a
 2 082 mm² cylinder wall into the wider chamber. Tests 70 → 78.
 
+### Sections — sampling round every height, lofting what isn't round (2026-10-26)
+
+The user: "you are just taking one profile for the revolve — you need to
+do multiple samples on cylinders". True: `analyze` bins the scan into
+height bands × 36 sectors, takes each sector's median radius, and then
+collapses the 36 to ONE radius per band (`agreed_radius`, widened to the
+"mean circle" for an out-of-round body); the build revolves that one
+profile about one straight axis. Whatever the sectors disagree on was
+thrown away.
+
+**What the sectors say.** Per band, the kept sector medians fitted as
+r(θ) = c0 + c1 cos θ + s1 sin θ + c2 cos 2θ + s2 sin 2θ — the first
+harmonic is the ring's centre off the axis (a circle of radius R centred
+at (cx, cy) reads R + cx cos θ + cy sin θ to first order), the second an
+oval (an ellipse a × b at angle φ reads (a+b)/2 + (a−b)/2 · cos 2(θ−φ)).
+Rms over the fitted bands, weighted by radius, against the band's one
+radius (what the revolve has), then after the smoothed centre, after
+centre and oval (what a loft through the sections leaves), and after a
+straight-line drift of the centre (what a re-fitted, tilted axis leaves):
+
+| part | sectors vs the revolve | after centre | after centre + oval | after a re-fitted axis | scanner noise | build |
+|---|---|---|---|---|---|---|
+| tin-barrel | 6.51 mm | 5.46 | 2.02 | 6.26 | 2.17 | **loft** |
+| pail-bucket | 3.68 | 3.35 | 1.34 | 3.37 | 0.95 | **loft** |
+| truck-wheel | 4.86 | 3.02 | 2.33 | 4.86 | 0.30 | revolve — a traced half-section (dished), left alone |
+| hydrant-02 | 0.92 | 0.63 | 0.47 | 0.85 | 0.09 | revolve |
+| bollard | 0.62 | 0.55 | 0.45 | 0.61 | 0.16 | revolve |
+| extinguisher-rusty | 0.52 | 0.48 | 0.40 | 0.52 | 0.09 | revolve |
+| pipe-wheel (valve) | 0.45 | 0.32 | 0.28 | 0.40 | 0.04 | revolve |
+| beer-mug | 0.42 | 0.30 | 0.27 | 0.36 | 0.28 | revolve |
+| extinguisher-3dhd | 0.19 | 0.17 | 0.14 | 0.19 | 0.04 | revolve |
+| wd40-can | 0.10 | 0.09 | 0.09 | 0.10 | 0.07 | revolve |
+
+The barrel's centre walks from (−7, +7) at its chime to (+12, −11) at its
+rim and it is oval by up to 11 mm, its major axis steady at −45…−58°; the
+pail is an oval growing linearly from 0.7 mm at the foot to 6.9 mm at the
+rim, at a steady 62° (a flexible pail squashed in one direction). The
+first probe (every outward-facing point within ±max(15 mm, r/4)) read the
+hydrant at 1.19 and the clean extinguisher at 2.72: the hydrant's nozzle
+roots and the extinguisher's valve and handle above its neck were in the
+fit. Two rules took them out (`fit_section`): only the sectors the band
+loop's body cluster reached (its ±3·MAD window), refitted while any kept
+sector strays more than max(1 mm, 3× noise, 3× the residual's MAD) from
+the ring; and a band whose two harmonics leave more than max(1.5 mm, 4×
+noise, 3 % of r), or whose centre or oval exceeds 12 % of r, is no
+slightly-out-of-round ring and votes for nothing (the extinguisher's
+"oval" of 22 mm on a 39 mm neck). A band needs 24 of its 36 sectors and
+no empty arc over 90°. A third correction mattered on the barrel: the
+band radius is the MEDIAN of the sector medians, and the median of a ring
+that is both off-centre and oval is not its mean — up to 8 mm on the
+barrel's rim — so each section carries its mean radius against the band
+radius (`drMM`) and the loft uses it (the barrel's 6.51 mm came down to 3.87 without it, 2.02 with).
+
+**Smoothing** (`section_field`): the five numbers (dr, c1, s1, c2, s2 —
+linear in the fit, so they average without the wrap of an angle) through
+a running median then a running mean about 15 mm wide, inside the runs
+between the profile's steps (`profile_steps`: a level edge, or one that
+runs out three times more than it rises) — a lip's centre is never
+averaged with the wall's. A band with no fit, or a run with fewer than
+three fitted bands (the pail's 3 mm foot ring read 7 mm off the axis its
+whole wall shares to half a millimetre), takes the run's neighbours' field
+or the nearest band's.
+
+**The record**: `profile["sections"]` per band {h, cxMM, cyMM, drMM, aMM,
+bMM, angleDeg, residualMM, sectors, fitted} (centre in the azimuthZero /
+azimuthNinety frame; a ≥ b about the band radius + dr; the major axis
+angleDeg from azimuthZero toward azimuthNinety), `profile["roundness"]`
+{sectorRmsMM, afterCentreMM, afterOvalMM, afterAxisMM, tiltDeg,
+axisShiftMM, axisLine, bandsFitted, bands, steps, build, why}, and one
+log line: `out of round: the sectors stray 3.68 mm rms from the revolve;
+3.35 after the centre, 1.34 after the oval, 3.37 after a re-fitted axis
+(tilt 0.95°), 92 of 94 bands fitted — loft: …`. Secondary bodies carry
+`roundness` too, always "revolve" (their roots are trimmed and lengthened
+into the parent, which the sections do not follow; none passes the gate
+anyway — the most out of round is the valve's body 3 at 1.45 mm on 14
+fitted bands, where a re-fitted axis would take most of it).
+
+**The gate** (`section_gate`, constants `LOFT_MIN_RMS_MM`,
+`LOFT_MIN_SHARE`, `AXIS_DOMINANT_SHARE`): a loft only when the sectors
+stray more than max(1.5 mm, 2× the scanner's noise) AND the sections take
+at least 40 % of it away. 1.5 mm is three quarters of the app's tightest
+tolerance (2 mm) and sits in the gap the table shows: 0.6 mm over the
+least round revolve (the hydrant, 0.92) and 2.2 mm under the least out-of-
+round loft (the pail, 3.68); twice the noise because a noisy scan's
+sectors stray by the noise alone (the barrel's 2.17 mm would ask for 4.3).
+40 %: the pail's sections take 64 %, the barrel's 69 %; a part whose stray
+is dents, ribs or lumps keeps its revolve. **The cheaper answer first**:
+when the straight line through the centres takes ≥ 75 % of what the full
+sections take, the axis is what is wrong — the whole trace runs again on
+the re-fitted axis (origin moved to the line at h = 0, direction leaned
+by its slope; `_axis_refit`, once only, `roundness.axisRefitted`) and the
+revolve is kept; only what is left after it may ask for a loft. On the
+corpus the line takes 6 % of the barrel's and 13 % of the pail's — theirs
+is an oval and a wandering centre, not a tilt — so no part re-fits; a
+synthetic can traced about an axis leaning 2° off its own does
+(`test_a_straight_drift_of_the_centre_re_fits_the_axis_and_keeps_the_revolve`).
+
+**The build** (`build_hydrant.loft_body` / `build_loft`, from `build()`,
+`demo_video.py take` — a `loft` beat and narration line in the revolve's
+place — and `reel.py`): the outer profile as an (r, h) polyline (arcs
+sampled to 0.2 mm of sagitta) cut into pieces (`loft_pieces`) at every
+level step (the two pieces meet on its plane, so a lip stays a flat face,
+not a cone smeared between sections), at every edge that runs out three
+times more than it rises (a piece of its own, two sections — exactly the
+frustum) and at every turn over 10° (a loft is a smooth surface through
+its sections and rounds a corner off). Each piece's sections sit at its
+vertices, then greedily where the smoothed field strays more than 0.5 mm
+from its interpolation, then where a gap is more than three times its
+neighbour (≤ 24 per piece). Each section is a sketch on the plane normal
+to the axis at its height (x = azimuthZero, y = azimuthNinety: normal =
+the axis, and the sketch's (x, y) are the record's (cx, cy)) holding ONE
+`ellipse` entity {center, radiusX, radiusY, rotation (radians)} — radiusX
+= R(h) + dr + m ≥ radiusY = R(h) + dr − m, R the profile's radius, m half
+the oval — seeded at its centre; `feature.loft {sections: [{sketchID,
+seedPoint}], boolean, booleanTargets}` (AgentExec `parseLoft`). The
+first piece is the new body, every other unioned in. The major axis's
+angle is unwrapped section to section and held when a ring is round (m <
+0.05 mm) — an ellipse turned half a turn is the same curve but not the
+same seam, and a seam that jumped would twist the loft into a waist; and
+radiusX stays a hair (1 µm) over radiusY, since an exact circle's seam is
+the kernel's choice. An open container's cavity (`cavity_section`, the
+outer profile eroded a wall in) is lofted through the same field and each
+piece subtracted — the wall keeps its thickness all round, which a
+revolved cavity inside an off-centre loft would not (the app's shell is
+not used: it refused the barrel's revolve at every thickness, which is
+why the cavity cut exists). A bore at a free end is a revolve about the
+end section's own centre, subtracted. Windows, secondaries, nuts,
+passages, bosses, features and the scan colour follow on `cad_id` as
+before; `summary["revolve"]` names the body for `build_features` either
+way (`kind: "loft"`).
+
+Two lofts that meet on a plane share a face, and a boolean between solids
+that share a face is what kernels get wrong: manifold left a membrane
+across the pail's cavity at every junction, and `inspect_fit` read it as
+a lid (excess 459 000 mm², model→scan 7.1 mm). So neighbours overlap
+(`overlap_pieces`): at a step the narrower piece's end section moves
+0.2 mm on into the wider one; at a turn the upper piece's first section
+moves 0.2 mm down inside the lower one, onto the lower one's own section
+there pulled in by 0.05 mm. The section MOVES — no section is added: a
+cubic through a section a fifth of a millimetre from its neighbour swung
+14 mm on the pail (`overshoot` check in the mission log).
+
+**Offline** (`preview_model.build_preview` → `loft_body_mesh`: each
+piece's rings joined ring to ring with the same 96 points each, capped,
+unioned and subtracted with manifold), the corpus scans re-analysed with
+the corpus flags, OLD code (main) against NEW on the same inputs, the
+corpus `features.json` with `--all-features`:
+
+| part | build | overlap | scan→model mm | model→scan mm | area-weighted s→m / m→s mm | largest missing mm² | largest excess mm² |
+|---|---|---|---|---|---|---|---|
+| tin-barrel | revolve → **loft** (22 + 30 pieces, 87 + 111 sections) | 96.5 → 98.0 % | 7.20 → 3.18 | 5.18 → 2.16 | 5.11 / 4.91 → 2.07 / 2.00 | 539 793 → 95 296 | 516 263 → 120 191 |
+| pail-bucket | revolve → **loft** (10 + 10 pieces, 26 + 25 sections) | 95.9 → 96.8 % | 2.01 → 1.55 | 1.21 → 1.69 | 1.87 / 2.76 → 1.24 / 2.09 | 72 720 → 34 095 | 242 224 → 304 488 |
+| the other eight | revolve | unchanged | | | | | |
+
+The eight round parts' analysis records are identical but for the two new
+keys, and their preview meshes byte-identical. On the outer wall alone
+(points facing out, between 5 % and 95 % of the height), both ways: the
+pail 2.00 / 1.98 → **0.25 / 0.33 mm**, the barrel 4.43 / 5.36 → **1.36 /
+1.72 mm**. The pail's vertex-sampled model→scan rises (1.21 → 1.69) and
+its largest excess grows (242 → 304 cm², but 5.5 → 3.9 mm from the scan
+on average, 15.3 → 11.6 at most): both are the inner wall, which sits
+3.8 mm off the scan's either way — the measured 5.0 mm wall
+(`detect_open_top`) is thicker than the pail's — and the lofts' rings put
+more vertices near the rim and foot than the revolve's profile did. The
+barrel's remaining patches are its chime and floor and its dents.
+
+**What the app run has to show** (not run here — the build was checked
+against a recorded fake MCP and the offline preview only): OCCT's
+ThruSections is a SMOOTH loft (`ruled: false` — the MCP does not expose
+ruled), the preview is ruled between sections; a not-a-knot cubic through
+each piece's section radii, against the straight interpolation, stays
+within 1.0 mm on the barrel (its chime) and 0.54 mm on the pail. Whether
+ThruSections lines up the seams of single-edge ellipse wires the way the
+unwrapped angle intends (`CheckCompatibility` should) is unverified. The
+barrel's body is ~450 MCP calls (each section a sketch.create and an
+addEntities), the pail's ~120. The app's union of overlapping lofts and
+subtraction of overlapping cavity lofts is unverified on Euclid's mesh
+path.
+
 ## Gotchas
 
+- Two solids that share a face (2026-10-26): manifold's union and
+  difference leave a zero-thickness membrane where they touch — the
+  pail's stacked cavity lofts left one at every junction, and
+  `inspect_fit` read it as a lid over the bucket. Pieces that meet must
+  overlap (`build_hydrant.overlap_pieces`), and the overlap must MOVE a
+  section, not add one: a loft is a smooth surface through its sections,
+  and a section 0.2 mm from its neighbour swings it.
+- The band radius is a median (2026-10-26): of a ring that is both off
+  the axis and oval it is not the ring's mean — 8 mm under it on the
+  barrel's rim. The sections carry the difference (`drMM`).
 - A branch's bore is only as deep as the parent's skin once unioned
   (2026-10-26): the loop cuts it to its depth, the union fills it from
   where the axis enters the parent's envelope on; a passage gated on

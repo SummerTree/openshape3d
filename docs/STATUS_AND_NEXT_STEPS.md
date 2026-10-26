@@ -75,6 +75,66 @@ passes alone.
   on every call, which a dense STEP import could make slow — cache on the
   body's mesh revision if an agent loop ever feels it.
 
+## Mission log — 2026-10-26, scan-to-CAD: sections — sampling round every height, lofting what isn't round
+
+The user: "i feel like you are just taking one profile for the revolve —
+you need to do multiple samples on cylinders etc". Right: the tracer bins
+every band into 36 sectors and then keeps ONE radius per band; the build
+revolves that one profile about one straight axis. Measured first (the
+kept sector medians against the band radius, rms over the fitted bands,
+weighted by radius): the barrel 6.51 mm, the pail 3.68, the round parts
+0.10–0.92 (the hydrant highest, its nozzles' roots in it). Fitting each
+band's ring as centre-off-axis + oval (the first two harmonics) takes the
+barrel to 2.02 and the pail to 1.34; a straight-line drift of the centre
+(a tilted axis) takes them only to 6.26 and 3.37 — the barrel's centre
+wanders 20 mm and it is 11 mm oval, the pail is an oval growing to 6.9 mm
+at its rim. `docs/SCAN_TO_CAD.md`, "Sections", has the method and the
+tables.
+
+- **Analysis** (`analyze_scan.fit_section` / `section_field` /
+  `section_gate` / `trace_sections`): each band's sector medians fitted
+  robustly (the body cluster's reach, refitted without strays; a band the
+  two harmonics cannot describe votes for nothing — the extinguisher's
+  valve read as a 22 mm oval on its neck until then), the five numbers
+  (mean-radius offset, centre, oval) smoothed about 15 mm inside the runs
+  between profile steps, recorded as `sections` per band and `roundness`
+  on the body (and "revolve" on every secondary body). The gate: loft when
+  the sectors stray more than max(1.5 mm, 2× noise) and the sections take
+  40 % of it; a re-fitted, tilted axis instead (the trace runs once more
+  on it) when the straight drift takes 75 % of what the sections would —
+  no corpus part, a synthetic leaning can does. The band radius is a
+  median, and on the barrel's rim 8 mm under the ring's mean: the sections
+  carry the difference.
+- **Build** (`build_hydrant.loft_body` / `build_loft`, from `build()`,
+  the film's new `loft` beat and the reel): the profile cut into pieces at
+  its steps (flat faces stay flat), its run-out edges (exact frustums) and
+  its turns over 10°; each section a sketch normal to the axis holding one
+  `ellipse`, `feature.loft` through them (AgentExec `parseLoft`), pieces
+  unioned, the cavity lofted a wall in and subtracted, end bores revolved
+  about the end section's centre. Neighbouring pieces overlap by moving a
+  section 0.2 mm (manifold left a membrane at every touching junction —
+  read as a lid — and an ADDED section swung the smooth surface 14 mm).
+  `run_corpus` rows say "lofted — the sectors stray 3.7 mm from the
+  revolve, 1.3 after the sections" or "round (0.4 mm)".
+- **Offline** (preview, the same scans, old code vs new): barrel overlap
+  96.5 → 98.0 %, scan→model 7.20 → 3.18 mm, model→scan 5.18 → 2.16,
+  largest missing 539 793 → 95 296 mm², largest excess 516 263 →
+  120 191; pail overlap 95.9 → 96.8 %, scan→model 2.01 → 1.55, area-
+  weighted model→scan 2.76 → 2.09, largest missing 72 720 → 34 095; its
+  outer wall 2.0 → 0.25 mm both ways (its inner wall sits 3.8 mm off
+  either way: the 5 mm measured wall is too thick — next). The other eight
+  parts' preview meshes byte-identical. Tests: 92 (13 new, ~230 s).
+
+Not done here, for the app run: the build is unverified in the app (a
+recorded fake MCP and the preview only). ThruSections is a smooth loft
+and the preview ruled (a cubic through the sections stays within 1.0 mm
+of straight on the barrel, 0.54 on the pail); the seams of single-edge
+ellipse wires are left to ThruSections' compatibility pass; the barrel's
+body is ~450 MCP calls. Next: the pail's wall thickness; the valve's
+body 3 (1.45 mm, a re-fitted axis would take most of it) once secondary
+bodies may re-fit; harmonics beyond the second for dents, if a part ever
+needs them.
+
 ## Mission log — 2026-10-26, scan-to-CAD: passages — a branch's bore runs on into its parent
 
 The user: "work on the valve branch-root fillets next" (the previous

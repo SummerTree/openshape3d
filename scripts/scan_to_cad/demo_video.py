@@ -8,7 +8,7 @@
 turned part: {"label": "Fire extinguisher", "color": [r, g, b] or "scan"
 (the scan's own colour from the analysis, the default), "title":
 "…|…", "subtitle", "titleSay", "name", "credit": "Scan: CC-BY grafi on
-Sketchfab", "captions": {"import", "revolve", "boss" (with {n}), "lug",
+Sketchfab", "captions": {"import", "revolve", "loft", "boss" (with {n}), "lug",
 "check", "nut", "passage", "feature"}, "say": {beat: line, with {iou} {calls} {mean} {label}}}. Every
 key is optional; without the file the words are the fire hydrant's.
 
@@ -116,13 +116,14 @@ def modelling_calls(calls):
 def take(args):
     with open(os.path.join(args.analysis, "profile.json")) as f:
         analysis = json.load(f)
-    from build_hydrant import body_section, boss_section, unit, world, secondary_sections, revolve_secondary, window_sections, cut_window, model_color, nut_sections, extrude_nut, passage_sections, cut_passage, passage_caption
+    from build_hydrant import body_section, boss_section, unit, world, secondary_sections, revolve_secondary, window_sections, cut_window, model_color, nut_sections, extrude_nut, passage_sections, cut_passage, passage_caption, loft_body, build_loft
     from build_features import build_feature, feature_caption, shift_feature, nut_caption
     from mcp_client import MCPError
     spec = args.spec or {}
     label = spec.get("label", "Hydrant")
     color = model_color(spec, analysis)
     captions = {"import": "Import the iPhone scan", "revolve": "One sketch on the scan's own axis, one revolve",
+                "loft": "Sections round every height · lofted through them",
                 "boss": "Nozzle {n} · its own profile, revolved and unioned in", "lug": "A lug on the bonnet · the same way",
                 "body": "A second axis · its own profile, revolved and unioned in",
                 "check": "A valid solid, every step in the history"}
@@ -206,26 +207,39 @@ def take(args):
             mcp.os3d("body.setMaterial", {"bodyIDs": [scan_id], "color": [0.55, 0.62, 0.72, 0.42], "roughness": 0.9})
             turn(0.8)
 
-            beat("revolve", captions["revolve"])
-            plane = {"origin": world(axis_origin, axis, u, v, 0, 0), "xAxis": [float(x) for x in u],
-                     "yAxis": [float(x) for x in axis], "name": label + " profile"}
-            sketch = mcp.os3d("sketch.create", plane)["sketchID"]
-            # The half-section the build revolved — arcs for a dome, a hollow
-            # section for a container — so the film shows the model the
-            # inspection graded, not a solid traced from the straight profile.
-            section = body_section(analysis)
-            mcp.os3d("sketch.addEntities", {"sketchID": sketch, "entities": section["entities"]})
-            turn(1.2)
-            reply = mcp.os3d("feature.revolve", {"sketchID": sketch, "seedPoint": section["seed"],
-                                                 "axisPoint": [0, 0], "axisDirection": [0, 1], "angleDegrees": 360})
-            cad_id = reply["producedBodyIDs"][0]
-            if section.get("inner"):
-                # A container: the cavity revolved and subtracted, as the build did.
-                sk_in = mcp.os3d("sketch.create", dict(plane, name=label + " cavity"))["sketchID"]
-                mcp.os3d("sketch.addEntities", {"sketchID": sk_in, "entities": section["inner"]["entities"]})
-                mcp.os3d("feature.revolve", {"sketchID": sk_in, "seedPoint": section["inner"]["seed"],
-                                             "axisPoint": [0, 0], "axisDirection": [0, 1], "angleDegrees": 360,
-                                             "boolean": "subtract", "booleanTargets": [cad_id]})
+            # A body the analysis found out of round is lofted through its
+            # sections, as the build lofted it (`build_loft`): one beat of
+            # its own in the revolve's place; every other body revolves.
+            try:
+                loft = loft_body(analysis, shift=-np.array(analysis["axisOrigin"], dtype=float))
+            except ValueError:
+                loft = None
+            cad_id = None
+            if loft is not None:
+                beat("loft", captions["loft"])
+                cad_id, _ = build_loft(mcp, loft, label, note=False, log=lambda *a: None)
+                turn(1.2)
+            if cad_id is None:
+                beat("revolve", captions["revolve"])
+                plane = {"origin": world(axis_origin, axis, u, v, 0, 0), "xAxis": [float(x) for x in u],
+                         "yAxis": [float(x) for x in axis], "name": label + " profile"}
+                sketch = mcp.os3d("sketch.create", plane)["sketchID"]
+                # The half-section the build revolved — arcs for a dome, a hollow
+                # section for a container — so the film shows the model the
+                # inspection graded, not a solid traced from the straight profile.
+                section = body_section(analysis)
+                mcp.os3d("sketch.addEntities", {"sketchID": sketch, "entities": section["entities"]})
+                turn(1.2)
+                reply = mcp.os3d("feature.revolve", {"sketchID": sketch, "seedPoint": section["seed"],
+                                                     "axisPoint": [0, 0], "axisDirection": [0, 1], "angleDegrees": 360})
+                cad_id = reply["producedBodyIDs"][0]
+                if section.get("inner"):
+                    # A container: the cavity revolved and subtracted, as the build did.
+                    sk_in = mcp.os3d("sketch.create", dict(plane, name=label + " cavity"))["sketchID"]
+                    mcp.os3d("sketch.addEntities", {"sketchID": sk_in, "entities": section["inner"]["entities"]})
+                    mcp.os3d("feature.revolve", {"sketchID": sk_in, "seedPoint": section["inner"]["seed"],
+                                                 "axisPoint": [0, 0], "axisDirection": [0, 1], "angleDegrees": 360,
+                                                 "boolean": "subtract", "booleanTargets": [cad_id]})
             for win in window_sections(analysis, shift=-np.array(analysis["axisOrigin"], dtype=float)):
                 try:
                     if cut_window(mcp, win, cad_id, label, note=False).get("failed"):
@@ -477,6 +491,8 @@ def script_for(timeline, title_say, scan_name, spec=None):
         "title": title_say,
         "import": "The scan comes straight into OpenShape 3D as a mesh, texture and all.",
         "revolve": "One sketch on the scan's own axis, one revolve — the barrel, the flanges, the bonnet.",
+        "loft": "The scan is sampled all the way round at every height, and this %s is not round — oval, and off "
+                "its axis — so the body is lofted through those sections instead of revolved." % numbers["label"],
         "boss1": "Each nozzle is read off the scan as a profile of its own, revolved, and unioned into the body.",
         "body1": "Every other body of revolution is found on its own axis from the scan's normals — read off the scan "
                  "on that axis, revolved, and unioned in.",

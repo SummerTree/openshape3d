@@ -46,7 +46,7 @@ import numpy as np
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))
 sys.path.insert(0, HERE)
-from build_hydrant import body_section, boss_section, unit, world, secondary_sections, revolve_secondary, window_sections, cut_window, model_color, nut_sections, extrude_nut, passage_sections, cut_passage  # noqa: E402
+from build_hydrant import body_section, boss_section, unit, world, secondary_sections, revolve_secondary, window_sections, cut_window, model_color, nut_sections, extrude_nut, passage_sections, cut_passage, loft_body, build_loft  # noqa: E402
 from build_features import build_feature, shift_feature  # noqa: E402
 from demo_video import Recorder, caption, ffmpeg_watched, narrate, scan_on_floor, title_overlay  # noqa: E402
 from mcp_client import MCPClient, MCPError  # noqa: E402
@@ -99,20 +99,28 @@ def build_model(mcp, analysis, label, color, features=None):
     axis, u, v = unit(analysis["axisDirection"]), unit(analysis["azimuthZero"]), unit(analysis["azimuthNinety"])
     plane = {"origin": world(origin, axis, u, v, 0, 0), "xAxis": [float(x) for x in u],
              "yAxis": [float(x) for x in axis], "name": label + " profile"}
-    sketch = mcp.os3d("sketch.create", plane)["sketchID"]
-    # The half-section the build revolved (arcs, a hollow section for a
-    # container): the reel shows the model the inspection graded.
-    section = body_section(analysis)
-    mcp.os3d("sketch.addEntities", {"sketchID": sketch, "entities": section["entities"]})
-    cad = mcp.os3d("feature.revolve", {"sketchID": sketch, "seedPoint": section["seed"],
-                                       "axisPoint": [0, 0], "axisDirection": [0, 1], "angleDegrees": 360})["producedBodyIDs"][0]
-    if section.get("inner"):
-        # A container: the cavity revolved and subtracted, as the build did.
-        sk_in = mcp.os3d("sketch.create", dict(plane, name=label + " cavity"))["sketchID"]
-        mcp.os3d("sketch.addEntities", {"sketchID": sk_in, "entities": section["inner"]["entities"]})
-        mcp.os3d("feature.revolve", {"sketchID": sk_in, "seedPoint": section["inner"]["seed"],
-                                     "axisPoint": [0, 0], "axisDirection": [0, 1], "angleDegrees": 360,
-                                     "boolean": "subtract", "booleanTargets": [cad]})
+    # A body the analysis found out of round: lofted through its sections,
+    # as the build lofted it; every other body revolves.
+    try:
+        loft = loft_body(analysis, shift=-np.array(analysis["axisOrigin"], dtype=float))
+    except ValueError:
+        loft = None
+    cad = build_loft(mcp, loft, label, note=False, log=lambda *a: None)[0] if loft is not None else None
+    if cad is None:
+        sketch = mcp.os3d("sketch.create", plane)["sketchID"]
+        # The half-section the build revolved (arcs, a hollow section for a
+        # container): the reel shows the model the inspection graded.
+        section = body_section(analysis)
+        mcp.os3d("sketch.addEntities", {"sketchID": sketch, "entities": section["entities"]})
+        cad = mcp.os3d("feature.revolve", {"sketchID": sketch, "seedPoint": section["seed"],
+                                           "axisPoint": [0, 0], "axisDirection": [0, 1], "angleDegrees": 360})["producedBodyIDs"][0]
+        if section.get("inner"):
+            # A container: the cavity revolved and subtracted, as the build did.
+            sk_in = mcp.os3d("sketch.create", dict(plane, name=label + " cavity"))["sketchID"]
+            mcp.os3d("sketch.addEntities", {"sketchID": sk_in, "entities": section["inner"]["entities"]})
+            mcp.os3d("feature.revolve", {"sketchID": sk_in, "seedPoint": section["inner"]["seed"],
+                                         "axisPoint": [0, 0], "axisDirection": [0, 1], "angleDegrees": 360,
+                                         "boolean": "subtract", "booleanTargets": [cad]})
     for win in window_sections(analysis, shift=-np.array(analysis["axisOrigin"], dtype=float)):
         try:
             if cut_window(mcp, win, cad, label, note=False).get("failed"):
