@@ -1611,6 +1611,32 @@ horn's run covers 89 % of its piece and nothing is left unexplained; the
 valve head's cap (E1 9 500 mm²) is what remains. Beer mug, valve and the
 rusty extinguisher are unchanged to the digit.
 
+### Results — 2026-10-26, the app run (bores, nuts, levers, the horn refitted)
+
+Built over MCP by `run_corpus.py --analyze`, graded by `inspect_fit.py`;
+"before" is the 2026-10-25 run.
+
+| part | overlap before → after | model→scan mm | scan→model mm | largest missing mm² | largest excess mm² | verdict | what changed |
+|---|---|---|---|---|---|---|---|
+| Fire extinguisher (extinguisher-rusty) | 97.8 → 97.8 % | 0.81 → 0.81 | 0.86 → 0.86 | 1 983 | 3 883 | WARN | unchanged |
+| Fire extinguisher (extinguisher-3dhd) | 95.0 → 96.0 % | 3.45 → 3.42 | 1.71 → 1.24 | 3 638 | 9 100 | FAIL | the horn refitted and bored, one lever; the valve head's cap (E1 9 100 mm²) is what remains |
+| Hydrant (hydrant-02) | 97.9 → 97.9 % | 1.08 → 1.09 | 1.79 → 1.78 | 3 615 | 9 825 | FAIL | a 55 mm hex nut on nozzle 1b; the bonnet collar is NOT bored (a nut stands in it) — unchanged |
+| Bollard (bollard) | 99.5 → 99.5 % | 1.44 → 1.44 | 0.56 → 0.56 | — | — | PASS | unchanged |
+| Bucket (pail-bucket) | 95.9 → 95.9 % | 1.58 → 1.58 | 2.12 → 2.12 | 72 720 | 270 992 | FAIL | unchanged (an oval scan) |
+| Barrel (tin-barrel) | 96.5 → 96.5 % | 5.02 → 5.02 | 7.14 → 7.14 | 538 003 | 513 726 | FAIL | unchanged (a dented scan) |
+| Spray can (wd40-can) | 99.4 → 99.4 % | 0.21 → 0.21 | 0.28 → 0.28 | — | 14 | PASS | unchanged |
+| Beer mug (beer-mug) | 97.2 → 97.2 % | 1.38 → 1.38 | 0.79 → 0.79 | 3 112 | 4 698 | FAIL | unchanged |
+| Truck wheel (truck-wheel) | 94.1 → 94.1 % | 8.15 → 8.15 | 4.80 → 4.80 | 920 952 | 1 172 522 | FAIL | unchanged |
+| Valve (pipe-wheel) | 94.5 → 94.8 % | 0.69 → 0.83 | 1.99 → 1.13 | 1 015 | 635 | FAIL | four bores (r 17 / 18 deep, r 19 / 50 deep, r 20 through, r 11 / 14 deep) and a 26 mm union nut; the branch-root collars M1/M2 are 1 015 and 683 mm² now |
+
+Two parts moved, both the ones the tracks aimed at: the valve's pipes are
+open where the scan's are (scan→model 1.99 → 1.13 mm; the largest missing
+patch 5 218 → 1 015 mm², just over the 1 000 mm² FAIL line) and the CO₂
+extinguisher wears one lever and a hollow horn (95.0 → 96.0 %, scan→model
+1.71 → 1.24 mm). The nuts the detector found are real and small. The
+eight other parts are unchanged to the digit — the rules did not fire
+where they had nothing to say.
+
 ## Gotchas
 
 - A nut is read on the whole scan, not on the body's labelled faces

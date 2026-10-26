@@ -2,7 +2,7 @@
 
 > **Current unfinished-work register:** [Sketch parity open status](SKETCH_PARITY_OPEN_STATUS.md). Maintained at every meaningful checkpoint; older mission logs below are historical.
 
-Last updated: 2026-10-25 (scan-to-CAD, three things a person sees: the model is painted the scan's own colour (`scanColor` from the texture; spec `"color": "scan"`), the inspection gates on the LARGEST unexplained patch and rings it on the review sheet (`largest_missing_patch` / `largest_excess_patch`), and `fit_features.py` fits designed parts instead of blobs — stadium / rectangle / hexagon / circle outlines, one tube per piece with its horn as a cone, hoops, and part names (hose, horn, lever, nut, lug…) in the captions; a wheel's rim dish no longer reads as an open container (the dish test runs before the open end); CO₂ extinguisher 92 → 95 %, bucket 77 → 96 %, films and reels re-taken — newest mission log bullet. Before that, 2026-10-24: every axis of revolution: `fit_axes.py` finds a scan's axes from its normals and the tracer builds each body on its own axis — the valve goes from 65 % to 95 %, the hydrant's nozzles to 1 mm, the wheel's stand as bars, no more spikes to the apex, a hand-wheel's openings cut; `preview_model.py` rebuilds the model offline; all ten films and both reels re-taken — newest mission log bullet under 2026-10-20. Before that, 2026-10-22, the fidelity pass: the scan trace reads the surface finely, containers get a subtracted cavity, dished parts a traced half-section, and `fit_features.py` / `build_features.py` add the handles, hoses, levers and chains a revolve cannot make — can and bollard PASS, the rest 88–97 % except the out-of-round pail and drum and the two-axis valve; the film and the reel revolve the build's own half-section — all ten corpus films and both reels re-taken on the rebuilt models; scan-to-CAD builds are now inspected both ways with depth maps and a review sheet — `inspect_fit.py`, gating the films and the reel; arcs and hollow revolves in the scan pipeline; a C-clamp rebuilt from recipes to 0.05 mm — the newest mission log bullet under 2026-10-20; a corpus of ten Sketchfab scans built over MCP, graded and filmed; CAD import over MCP: STEP and IGES sew loose faces into solids and sheet bodies, exact bounds, DXF units and ellipses, an open-mesh notice, and agents import STEP / IGES / DXF / FCStd; an OCCT oracle, a live MCP runner and offline XCTests behind it; test pack 36 / 36, FreeCAD IDF + NIST corpus 32 / 32, IGES twins 4 / 4 — newest mission log. Also today: Deviation Preview — the Accuracy Report's colours on the part; the scan's profile straightened; `item.select`) — **Accuracy Report** (one body measured against
+Last updated: 2026-10-26 (scan-to-CAD, the next pass: open pipe ends are BORED (`detect_bores` on the main body and every secondary body, folded into the revolve loop by `body_section`; a container's cavity and a collar with a nut in it are not bores), hex/octagon/square NUTS on any axis are built as prisms (`find_nuts` / `nut_sections`), a flat bar that bends is one SWEEP of a designed section along two or three legs (`corner_spine` / `bar_along`, a lever), the CO₂ horn is refitted on its own points and cut hollow; valve scan→model 1.99 → 1.13 mm with its four bores, CO₂ extinguisher 95 → 96 %, the other eight unchanged; films and reels re-taken; 70 tests — newest mission log bullet. Before that, 2026-10-25: the model is painted the scan's own colour (`scanColor` from the texture; spec `"color": "scan"`), the inspection gates on the LARGEST unexplained patch and rings it on the review sheet (`largest_missing_patch` / `largest_excess_patch`), and `fit_features.py` fits designed parts instead of blobs — stadium / rectangle / hexagon / circle outlines, one tube per piece with its horn as a cone, hoops, and part names (hose, horn, lever, nut, lug…) in the captions; a wheel's rim dish no longer reads as an open container (the dish test runs before the open end); CO₂ extinguisher 92 → 95 %, bucket 77 → 96 %, films and reels re-taken. Before that, 2026-10-24: every axis of revolution: `fit_axes.py` finds a scan's axes from its normals and the tracer builds each body on its own axis — the valve goes from 65 % to 95 %, the hydrant's nozzles to 1 mm, the wheel's stand as bars, no more spikes to the apex, a hand-wheel's openings cut; `preview_model.py` rebuilds the model offline; all ten films and both reels re-taken — newest mission log bullet under 2026-10-20. Before that, 2026-10-22, the fidelity pass: the scan trace reads the surface finely, containers get a subtracted cavity, dished parts a traced half-section, and `fit_features.py` / `build_features.py` add the handles, hoses, levers and chains a revolve cannot make — can and bollard PASS, the rest 88–97 % except the out-of-round pail and drum and the two-axis valve; the film and the reel revolve the build's own half-section — all ten corpus films and both reels re-taken on the rebuilt models; scan-to-CAD builds are now inspected both ways with depth maps and a review sheet — `inspect_fit.py`, gating the films and the reel; arcs and hollow revolves in the scan pipeline; a C-clamp rebuilt from recipes to 0.05 mm — the newest mission log bullet under 2026-10-20; a corpus of ten Sketchfab scans built over MCP, graded and filmed; CAD import over MCP: STEP and IGES sew loose faces into solids and sheet bodies, exact bounds, DXF units and ellipses, an open-mesh notice, and agents import STEP / IGES / DXF / FCStd; an OCCT oracle, a live MCP runner and offline XCTests behind it; test pack 36 / 36, FreeCAD IDF + NIST corpus 32 / 32, IGES twins 4 / 4 — newest mission log. Also today: Deviation Preview — the Accuracy Report's colours on the part; the scan's profile straightened; `item.select`) — **Accuracy Report** (one body measured against
 another: orthographic silhouette overlays per view, outline and surface
 deviation both ways; `Kernel/AccuracyKit.swift`, Views ▸ Accuracy Report…,
 `/v1/accuracy` + `/v1/accuracy/image`, MCP ops `accuracy` /
@@ -75,83 +75,96 @@ passes alone.
   on every call, which a dense STEP import could make slow — cache on the
   body's mesh revision if an agent loop ever feels it.
 
-## Mission log — 2026-10-26, scan-to-CAD: nuts and polygonal collars on an axis
+## Mission log — 2026-10-26, scan-to-CAD: bores, nuts, levers — and the horn refitted
 
 The user: "they look a lot better -- can we work on next improvements".
-One track of several, in its own worktree: polygonal bands on a body's
-axis (docs/SCAN_TO_CAD.md, *Nuts and collars on an axis*).
+Three tracks, each in its own worktree and adversarially reviewed, merged
+on `feat/scan-to-cad-bores-nuts-levers` (docs/SCAN_TO_CAD.md has a section
+each: *Bores at open ends*, *Nuts and collars on an axis*, *Bent bars and
+levers*, and *The horn refitted on its own points*).
 
-- `analyze_scan.find_nuts` fits a regular 4-, 6- or 8-gon to the radius
-  against azimuth (72 sectors, per radius level, per 2 mm window) of the
-  whole scan about every axis — the main one and each secondary body's,
-  on its untrimmed trace — and records `nuts` [{h0, h1, sides,
-  acrossFlatsMM, phaseDeg, share, …}] on the body; the bands over a nut
-  are held to its apothem so the revolve stays inside the flats.
-  `build_hydrant.nut_sections` / `extrude_nut` build each as a prism on
-  a plane normal to the axis, unioned; the build, the film, the reel and
-  `preview_model.py` all call it; `run_corpus.py` rows carry `nuts` in
-  words; `build_features.nut_caption` names it.
-- What the corpus holds: the valve's 26 mm union nut on its pipe and the
-  hydrant's 55 mm cap nut on nozzle 1b — both real, both small, no
-  measurable change (valve 94.7 % · 0.64 / 2.09 mm; hydrant 98.0 % ·
-  1.03 / 1.46 mm). The brief's targets are not nuts: the hydrant's M1 is
-  a castellated crown with the (46 mm, hexagonal) operating nut inside
-  it, too bumpy and hidden to pass; the valve's M1/M2 are the branch
-  roots' round cast collars and branch axes a few mm off. No false nut on
-  any of the other eight parts. Tests 48 → 54.
+- **Bores at open ends.** `analyze_scan.detect_bores` reads a hole at each
+  FREE end of the main body and of every secondary body — the inner wall's
+  radius from inward-facing points just inside the end, walked in slab by
+  slab with its steps, stopped at a floor (the axial-facing samples the
+  trace drops are kept apart as `caps` so a floor can be seen) or where
+  the outer profile comes within a wall; ≥ 85 % of the length or two
+  reads meeting is `through`. Record `bores` [{end, rInnerMM, depthMM,
+  wallMM, share, through, profile}] on the body. A container's cavity
+  stays `detect_open_top`'s (`open_end_depth` is the one rule both use),
+  and a collar with a nut standing in it is no bore (the hydrant's bonnet
+  — the first version cut it and moved the largest-excess gate 8 925 →
+  9 495 mm²; now hydrant-02 is exactly its before). `build_hydrant.body_section`
+  folds the bore into the one revolve loop (lines and arcs; a through bore
+  from the foot under a dome is an annulus, not a spike to the axis), so
+  the build, the film, the reel and the preview inherit it. The CO₂
+  horn's open mouth: `fit_features.cone_mouth` reads the inner skin
+  (`boreRadiusMM`, `boreDepthMM`, `boreProfile`, `boreMouthHMM`),
+  `build_features` subtracts an inner revolve from the whole body,
+  `preview_model.feature_cut_mesh` mirrors it. Review found and the fix
+  round closed: `run_corpus.py` used `bores` before assigning it (the
+  driver could not run), the arc-branch spike, the through rule bypassing
+  the container guard.
+- **Nuts and collars on an axis.** `analyze_scan.find_nuts` fits a regular
+  4-, 6- or 8-gon to radius against azimuth (72 sectors, per radius level,
+  per 2 mm window) of the whole scan about every axis — a nut's corners
+  fall outside the faces the labelling gives a branch — and records
+  `nuts` [{h0, h1, sides, acrossFlatsMM, phaseDeg, share, …}]; the bands
+  over a nut are held to its apothem. `build_hydrant.nut_sections` /
+  `extrude_nut` build each as a prism on a plane normal to the axis,
+  unioned, from the build, the film, the reel and the preview alike;
+  `build_features.nut_caption` names it. What the corpus holds: the
+  valve's 26 mm union nut and the hydrant's 55 mm cap nut on nozzle 1b —
+  real, small, no measurable change. The brief's targets turned out not
+  to be nuts: the hydrant's M1 is a castellated crown with the hexagonal
+  operating nut buried inside it; the valve's M1/M2 are the branch roots'
+  round cast collars with the branch axes a few mm off. No false nut on
+  the other eight parts.
+- **Bent bars and levers.** `fit_features.py`: a flat run of a tube chain
+  (section ≥ 1.8× as wide as thick, `FLAT_RATIO`) or a piece on its own
+  (`bent_bar_fit`, a sixth candidate in `explain()`) gets a spine of two
+  or three straight legs (`corner_spine`, refitted on slice box centres by
+  `refine_legs`), one designed section read across its longest leg's
+  middle (`bar_along`), bends rounded to the radius the points ask for
+  (`fillet_spine`, bounded below by the section's reach toward the bend's
+  centre — the first version's 26 mm arc folded its sweep; `sweep_folds`
+  and `preview_model.sweep_section` refuse a folding spine), built as ONE
+  `feature.sweep` of the section along the polyline (`section` {shape,
+  widthMM, thicknessMM, cornerMM, segments, seed}, `corners`,
+  `bendRadiusMM`, `bendsDeg`, `legsMM`, `bent`). The CO₂ extinguisher's
+  squeeze lever is "a 51 × 22 mm flat, rounded-edged bar bent 51° on a
+  31 mm radius, 211 mm long"; the lever assembly tapers 49 → 42 mm and a
+  constant section cannot follow it.
+- **The horn refitted (the merge).** Merged, the three made the CO₂
+  extinguisher worse offline (95.1 → 92.9 %): the horn's cone came from
+  the geodesic's bins, which lean to the scanned face of a one-sided horn
+  — the axis 4 mm off, the mouth 13 mm short, the bell's wall a
+  12 000 mm² leftover that the next pass boxed in. `refine_cone` refits
+  the axis through per-slab circle centres and the profile from the
+  slabs' 75th-percentile radii, `revolve_covered` counts a bored horn's
+  wall, and `tube_runs` judges a cone before a flat bar. Offline: CO₂
+  extinguisher 92.9 → 95.9 %, scan→model 1.19 mm, nothing unexplained;
+  mug, valve, rusty extinguisher, hydrant and wheel unchanged to the
+  digit on the same inputs.
+- Offline (preview_model.py) before the app run: valve missing 17 916 →
+  9 508 mm² (the three mouths and the side port bored; M1 5 218 gone,
+  M2 5 114 → 2 924), scan→model 2.09 → 1.29 mm. Tests 48 → 70.
+- The app run (`run_corpus.py --analyze`, all ten built): the valve's
+  four bores were built by the kernel (main pipe r 17 / 18 deep, left
+  branch r 19 / 50 deep, right branch r 20 through, side port r 11 / 14
+  deep) — scan→model 1.99 → 1.13 mm, overlap 94.5 → 94.8 %, the largest
+  missing patch 5 218 → 1 015 mm²; the CO₂ extinguisher 95.0 → 96.0 %,
+  scan→model 1.71 → 1.24 mm, its largest missing patch 6 517 → 3 638 mm²;
+  the hydrant's and valve's nuts built, no measurable change; the eight
+  other parts unchanged to the digit. Films and reels re-taken (the
+  2026-10-26 results table in docs/SCAN_TO_CAD.md).
 
 Next, for the eye: the branch-root fillets and a branch axis refined on
 the branch alone (the valve's M1/M2); a top recess for the hydrant's
-crown; the open bores.
-## Mission log — 2026-10-26, scan-to-CAD: bent bars and levers
-
-The user: "they look a lot better -- can we work on next improvements" →
-the bent-bar track (docs/SCAN_TO_CAD.md, "Bent bars and levers"). The CO₂
-extinguisher's squeeze lever — a flat bar off the valve head that bends
-50° and runs down the hose side — had been an oval tube; `fit_features.py`
-now has a bent bar: a flat run of a tube chain (section ≥ 1.8× as wide as
-thick, `FLAT_RATIO`) or a piece on its own (`bent_bar_fit`, a sixth
-candidate in `explain()`) gets a spine of two or three straight legs
-(`corner_spine`, refitted on slice box centres by `refine_legs`), one
-designed section from the parts library read across its longest leg's
-middle (`bar_along`, proved leg by leg with `prism_covered`), bends
-rounded to the radius the points ask for (`fillet_spine`), and is built as
-ONE `feature.sweep` of that section along the polyline — the feature is a
-`sweep` with a `section` {shape, widthMM, thicknessMM, cornerMM,
-segments, seed}, `corners`, `bendRadiusMM`, `bendsDeg`, `legsMM`, `bent`;
-`build_features.sweep_sketch` draws the section's entities,
-`preview_model.feature_mesh` mirrors it through the same call, captions
-say "A lever · a 51 × 22 mm flat, rounded-edged bar bent 51° on a 31 mm
-radius, 211 mm long". The bend's radius is bounded below by the
-section's reach toward the bend's centre plus a tolerance
-(`section_reach`; a lever bent edgewise reaches half its width — the
-first version's 26 mm arc had an inner edge of 0.5 mm and its sweep
-folded), `sweep_folds` tests the sweep's rings for a fold in the fit,
-and `preview_model.sweep_section` refuses a folding spine instead of
-drawing it (a folded sweep's mesh still closes at a plausible volume; it
-refuses the corpus's 17.8 × 4.2 oval, the one feature the kernel had
-refused). Offline, same model and scan as the corpus run, all rows
-`--all-features`: the corpus features score 95.1 % on the earlier
-preview and 94.8 % on the fold-refusing one (= as built); the corpus
-features with only the oval swapped for the bent bar 94.6 % (4.06 /
-1.70 mm, the lever's root M1 6 517 → 6 991 mm²) — the lever assembly
-tapers (49 → 42 mm) and a constant section cannot follow it; two tenths
-under the oval, a lever by name and shape with a sound bend. The whole
-new fit scores 92.9 %, not for the lever: the horn's bell wall (a
-12 200 mm² skin, the cone revolve's leftover) is a coin toss between a
-box from `extrude_fit` (50.4 %) and one from `bar_fit` (51 %) that turns
-on single faces, and this run's box is a 65.7 mm plate (M1 / E1 15 k mm²
-on the horn) where the first version's was a 54 × 54 × 106 "bar"
-(94.8 %) — the horn's own track, noted in the docs' Gotchas. The beer
-mug and the valve are unchanged to the digit. Not built in the app yet
-(no simulator in this session): the sweep of a rounded rectangle along a
-ten-point polyline is the hose's call, and the arcs clear the section by
-construction. Tests: `PartsLibraryTests` gains an L-shaped flat bar
-(90.0° measured, 20 × 5 section, reach 10, previewed to 13 200 mm³), a
-bend that never folds the section (fold detection, 12 mm arcs on the 30°
-and 60° L, a hairpin refused, the xAxis fallback), a straight bar that is
-still a bar, a tube that is still a tube, and `corner_spine`'s leg counts
-(52 tests).
+crown; the valve head of the CO₂ extinguisher (E1 9 500 mm²: a cap and
+a pivot the revolve + lever do not make); the oval bucket and dented
+barrel (a per-band ellipse, or an honest floor in the gate); a vision
+critic on the review sheet.
 
 ## Mission log — 2026-10-25, scan-to-CAD: colour, the largest patch, a parts library
 
