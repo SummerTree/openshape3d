@@ -172,8 +172,11 @@ def main():
             cmd = [args.python, "-I", os.path.join(HERE, "build_hydrant.py"), "--scan", scan, "--analysis", analysis,
                    "--out", run_dir, "--port", str(args.port), "--name", slug, "--label", spec["label"],
                    "--tolerance", str(tolerance), "--color"] + color
+            # An hour: a lofted body is a few hundred calls (the barrel's
+            # outer wall alone is 101 lofts at ~4 s each, every union into
+            # a growing body), where a revolve is a dozen.
             with open(os.path.join(part, "build.log"), "w") as log:
-                build = subprocess.run(cmd, stdout=log, stderr=subprocess.STDOUT, timeout=1500)
+                build = subprocess.run(cmd, stdout=log, stderr=subprocess.STDOUT, timeout=3600)
             if build.returncode != 0:
                 tail = open(os.path.join(part, "build.log")).read().splitlines()[-6:]
                 raise RuntimeError("build_hydrant.py exit %d: %s" % (build.returncode, " | ".join(tail)))

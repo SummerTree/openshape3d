@@ -92,7 +92,7 @@ def main():
                        "--out", demo, "--port", str(args.port), "--simulator", args.simulator, "--ui",
                        "--derived-data", args.derived_data, "--spec", spec,
                        "--tolerance", str(results[slug]["toleranceMM"]), "--hook-background"] + list(args.hook_background)
-                run_logged(cmd, os.path.join(part, "take.log"), 1800, "take")
+                run_logged(cmd, os.path.join(part, "take.log"), 3600, "take")   # a lofted body's take replays its hundreds of lofts
                 row["take"] = os.path.join(demo, "take.mov")
             if not args.skip_compose:
                 print("== %s: compose" % slug, flush=True)

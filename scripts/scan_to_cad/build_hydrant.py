@@ -820,8 +820,13 @@ def loft_piece(mcp, piece, label, sketches, note=True):
 
 def build_loft(mcp, loft, label, note=True, log=print):
     """The lofted body (`loft_body`) in the app: the first gap of the first
-    outer piece a new body, every other gap unioned into it, then each of
-    the cavity's gaps and each bore subtracted. Every loft is checked
+    outer piece a new body, every other gap unioned into it; the cavity's
+    gaps lofted into a body of their own the same way and subtracted from
+    it once (`feature.boolean`); then each bore subtracted. The cavity is
+    not cut a gap at a time: every cut into a body of a few hundred faces
+    took the app 5 s at the first gap and 11 s by the fiftieth, and the
+    barrel's 55 put its build past the corpus's 25 minutes, where a union
+    into a cavity of plain rings stays cheap. Every loft is checked
     against its own volume (`frustum_volume`): a union must grow the body
     by the loft's volume, and a kernel that "succeeds" by dropping the
     tool (it did, on shared faces offset by a fifth of a millimetre) is a
@@ -833,14 +838,14 @@ def build_loft(mcp, loft, label, note=True, log=print):
     revolves the profile instead, as it would have without the sections.
     A refused bore is undone and skipped. Returns (body id or None, [{what,
     ok, message?, volumeMM3?}])."""
-    cad_id, rows, sketches, volume = None, [], {}, 0.0
+    cad_id, cavity_id, rows, sketches, volume = None, None, [], {}, 0.0
 
     def send(args, what, words):
         """One feature call: (reply, None) or (None, why), a recorded but
         unbuilt feature undone. An MCPError for the call itself (the
         server or the parser refused it: op "os3d feature.loft") recorded
         nothing, so nothing is undone."""
-        op = "feature.revolve" if "sketchID" in args else "feature.loft"
+        op = "feature.revolve" if "sketchID" in args else "feature.boolean" if "kind" in args else "feature.loft"
         try:
             return mcp.os3d(op, args, note=words), None
         except MCPError as error:
@@ -854,15 +859,17 @@ def build_loft(mcp, loft, label, note=True, log=print):
     def give_up(what, why):
         log("   %s did not build (%s): the lofted body is abandoned and the profile revolved instead" % (what, why))
         rows.append({"what": what, "ok": False, "message": why})
-        if cad_id is not None:
+        unfinished = [b for b in (cad_id, cavity_id) if b is not None]
+        if unfinished:
             try:
-                mcp.os3d("item.setHidden", {"ids": [cad_id]}, note="the unfinished loft hidden" if note else None)
+                mcp.os3d("item.setHidden", {"ids": unfinished}, note="the unfinished loft hidden" if note else None)
             except MCPError:
                 pass
         return None, rows
 
-    def body_volume(reply):
-        return next((b.get("volumeMM3") for b in (reply or {}).get("bodies", []) if b.get("id") == cad_id), None)
+    def body_volume(reply, body=None):
+        body = cad_id if body is None else body
+        return next((b.get("volumeMM3") for b in (reply or {}).get("bodies", []) if b.get("id") == body), None)
 
     for k, piece in enumerate(loft["pieces"], 1):
         for j, lo, hi, pair in loft_piece(mcp, piece, label, sketches, note=note):
@@ -889,24 +896,46 @@ def build_loft(mcp, loft, label, note=True, log=print):
         rows.append({"what": "piece %d" % k, "ok": True, "volumeMM3": volume, "sections": len(piece["sections"])})
     if cad_id is None:
         return None, rows
+    cavity_volume = 0.0
     for k, piece in enumerate((loft.get("cavity") or {}).get("pieces", []), 1):
         for j, lo, hi, pair in loft_piece(mcp, piece, label, sketches, note=note):
             what = "cavity %d gap %d (h %.1f–%.1f)" % (k, j + 1, lo["h"], hi["h"])
-            words = "lofted between the sections at h %.1f and %.1f, the cavity subtracted" % (lo["h"], hi["h"]) if note else None
-            reply, why = send({"sections": pair, "boolean": "subtract", "booleanTargets": [cad_id]}, "cut", words)
+            args = {"sections": pair}
+            if cavity_id is not None:
+                args.update(boolean="union", booleanTargets=[cavity_id])
+            words = "lofted between the sections at h %.1f and %.1f, %s" % (
+                lo["h"], hi["h"], "the cavity's first slab" if cavity_id is None else "unioned into the cavity") if note else None
+            reply, why = send(args, "loft", words)
             if reply is None:
                 return give_up(what, why)
-            vol = body_volume(reply)
+            if cavity_id is None:
+                if not reply.get("producedBodyIDs"):
+                    return give_up(what, "no body produced")
+                cavity_id = reply["producedBodyIDs"][0]
+            expect = frustum_volume(lo, hi)
+            vol = body_volume(reply, cavity_id)
             if vol is not None:
-                # A cavity loft may run out past the rim (its last piece
-                # does), so it takes at most its own volume, not exactly it;
-                # one that took nothing inside the body was dropped.
-                took, expect = volume - vol, frustum_volume(lo, hi)
-                inside = lo["h"] >= 0.0 and hi["h"] <= loft["outline"][-1][1]
-                if took > 1.05 * expect + 1e-4 * volume or (inside and took < 0.05 * expect):
-                    return give_up(what, "the cut took %.0f mm³ where the loft holds %.0f" % (took, expect))
-                volume = vol
-        rows.append({"what": "cavity %d" % k, "ok": True, "volumeMM3": volume})
+                grew = vol - cavity_volume
+                if abs(grew - expect) > max(0.05 * expect, 1e-4 * max(cavity_volume, expect)):
+                    return give_up(what, "the cavity grew %.0f mm³ where the loft holds %.0f" % (grew, expect))
+                cavity_volume = vol
+    if cavity_id is not None:
+        words = "the cavity subtracted from the body: the container is hollow" if note else None
+        reply, why = send({"kind": "subtract", "targetBodyID": cad_id, "toolBodyIDs": [cavity_id]}, "cut", words)
+        if reply is None:
+            return give_up("the cavity's cut", why)
+        cavity_id = None    # consumed by the boolean
+        vol = body_volume(reply)
+        if vol is not None:
+            # The cavity runs out past the rim (its last piece does), so it
+            # takes at most its own volume, not exactly it; one that took
+            # less than half was dropped or cut a floor in.
+            took = volume - vol
+            if took > 1.05 * cavity_volume + 1e-4 * volume or took < 0.5 * cavity_volume:
+                return give_up("the cavity's cut", "the cut took %.0f mm³ where the cavity holds %.0f" % (took, cavity_volume))
+            volume = vol
+        rows.append({"what": "cavity", "ok": True, "volumeMM3": volume, "cavityMM3": cavity_volume,
+                     "gaps": sum(len(p["sections"]) - 1 for p in loft["cavity"]["pieces"])})
     for bore in loft.get("bores", []):
         sk = mcp.os3d("sketch.create", dict(bore["plane"], name=label + " " + bore["plane"]["name"]),
                       note="the bore's sketch, through the end section's centre" if note else None)["sketchID"]
