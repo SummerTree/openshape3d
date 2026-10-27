@@ -1000,6 +1000,51 @@ def section_basis(theta):
     return np.column_stack([np.ones(len(theta)), np.cos(theta), np.sin(theta), np.cos(2 * theta), np.sin(2 * theta)])
 
 
+def ellipse_radius(theta, cx, cy, mean, mx, my):
+    """How far from the axis, along the ray at azimuth θ, an ellipse lies:
+    centred at (cx, cy), semi-axes mean ± m with (mx, my) = m (cos 2φ,
+    sin 2φ), the major axis at φ — exactly what a sector median measures,
+    where `section_basis` is its first-order expansion. The two part ways
+    when a ring is off the axis AND oval: a circle 15 mm off a 300 mm
+    axis reads its mean radius 0.19 mm short and an oval it does not have
+    of the same size (d²/4R), which the harmonics take for the ring's —
+    the barrel's sections strayed up to 0.69 mm from their true ellipses."""
+    theta = np.asarray(theta, dtype=float)
+    m = math.hypot(mx, my)
+    phi = 0.5 * math.atan2(my, mx)
+    a2, b2 = (mean + m) ** 2, (mean - m) ** 2
+    c, s = math.cos(phi), math.sin(phi)
+    # The axis and the ray in the ellipse's own frame.
+    ox, oy = -(c * cx + s * cy), s * cx - c * cy
+    ux, uy = c * np.cos(theta) + s * np.sin(theta), -s * np.cos(theta) + c * np.sin(theta)
+    A = ux * ux / a2 + uy * uy / b2
+    B = 2.0 * (ox * ux / a2 + oy * uy / b2)
+    C = ox * ox / a2 + oy * oy / b2 - 1.0
+    return (-B + np.sqrt(np.maximum(B * B - 4.0 * A * C, 0.0))) / (2.0 * A)
+
+
+def refine_ring(theta, radii, coef, iterations=6):
+    """The two-harmonic fit (`section_basis`: c0, c1, s1, c2, s2) moved onto
+    the ellipse itself (`ellipse_radius`: mean, cx, cy, mx, my — the same
+    five numbers, read exactly): a few Gauss-Newton steps against the
+    sector medians, from the harmonic solution. Returns the coefficients."""
+    p = np.array(coef, dtype=float)
+    if p[0] <= 0.0:
+        return p
+    for _ in range(iterations):
+        f = ellipse_radius(theta, p[1], p[2], p[0], p[3], p[4])
+        J = np.empty((len(theta), 5))
+        for k in range(5):
+            q = p.copy()
+            q[k] += 1e-4
+            J[:, k] = (ellipse_radius(theta, q[1], q[2], q[0], q[3], q[4]) - f) / 1e-4
+        step, *_ = np.linalg.lstsq(J, np.asarray(radii, dtype=float) - f, rcond=None)
+        p = p + step
+        if float(np.max(np.abs(step))) < 1e-6:
+            break
+    return p
+
+
 def widest_empty_deg(keep):
     """The widest run of sectors NOT in `keep` (wrapping round), degrees."""
     n = len(keep)
@@ -1024,9 +1069,10 @@ def fit_section(medians, body, reach, point_noise, min_sectors=24, max_gap_deg=9
     ring is fitted again on the rest. Returns None when fewer than
     `min_sectors` of the 36 stay, or when they leave an empty arc wider
     than `max_gap_deg` (two harmonics fitted on half a circle are a guess,
-    not a measurement); else {coef [c0, c1, s1, c2, s2], keep (bool per
-    sector), residualMM (rms of what the two harmonics leave, on the kept
-    sectors)}."""
+    not a measurement); else {coef [c0, c1, s1, c2, s2] — the harmonics'
+    sectors chosen, the five numbers then read off the ellipse itself
+    (`refine_ring`: mean radius, centre, oval) — keep (bool per sector),
+    residualMM (rms of what the ellipse leaves, on the kept sectors)}."""
     medians = np.asarray(medians, dtype=float)
     n = len(medians)
     theta = sector_angles(n)
@@ -1049,15 +1095,22 @@ def fit_section(medians, body, reach, point_noise, min_sectors=24, max_gap_deg=9
     if keep.sum() < min_sectors or widest_empty_deg(keep) > max_gap_deg:
         return None
     coef, *_ = np.linalg.lstsq(A[keep], medians[keep], rcond=None)
-    res = medians[keep] - A[keep] @ coef
+    coef = refine_ring(theta[keep], medians[keep], coef)
+    res = medians[keep] - ellipse_radius(theta[keep], coef[1], coef[2], coef[0], coef[3], coef[4])
     residual = float(np.sqrt(np.mean(res ** 2)))
     # A ring the two harmonics describe: what they leave is the scanner's
     # noise (a dented barrel's dents, a cast surface's ripple), and the
     # centre and the oval are a few hundredths of the radius. A band that
     # leaves more is no slightly-out-of-round ring — an extinguisher's
     # valve and handle above its neck fit an "oval" of 22 mm on a 39 mm
-    # radius, 10 mm of residual — and votes for nothing.
-    if residual > max(1.5, 4.0 * point_noise, 0.03 * body):
+    # radius, 10 mm of residual — and votes for nothing. The limit is the
+    # noise's, not the radius's: 3 % of the pail's 180 mm let its rim
+    # bands through at 4–5.5 mm (the lip's sector medians jump ±8 mm from
+    # one sector to the next, on 0.95 mm of noise) and they pulled the
+    # top sections 1.4 mm off the wall's own trend; every barrel band
+    # (1.1–1.9 mm on 2.2 mm of noise) and every pail wall band (≤ 0.54)
+    # still passes.
+    if residual > max(1.5, 4.0 * point_noise):
         return None
     if math.hypot(coef[1], coef[2]) > 0.12 * body or math.hypot(coef[3], coef[4]) > 0.12 * body:
         return None
@@ -1196,13 +1249,15 @@ def roundness_of(bands, grid_med, rows, point_noise):
         keep = row["keep"]
         theta = sector_angles(len(med))[keep]
         dev = np.asarray(med, dtype=float)[keep] - b["median"]
-        centre = row["dr"] + row["c1"] * np.cos(theta) + row["s1"] * np.sin(theta)
-        oval = row["c2"] * np.cos(2 * theta) + row["s2"] * np.sin(2 * theta)
-        ax = (line_x[0] + line_x[1] * row["h"]) * np.cos(theta) + (line_y[0] + line_y[1] * row["h"]) * np.sin(theta)
+        mean = float(b["median"]) + row["dr"]
+        centre = ellipse_radius(theta, row["c1"], row["s1"], mean, 0.0, 0.0) - b["median"]
+        oval = ellipse_radius(theta, row["c1"], row["s1"], mean, row["c2"], row["s2"]) - b["median"]
+        ax = ellipse_radius(theta, line_x[0] + line_x[1] * row["h"], line_y[0] + line_y[1] * row["h"],
+                            float(b["median"]), 0.0, 0.0) - b["median"]
         w = float(b["median"])
         sse["sector"] += w * float(np.sum(dev ** 2))
         sse["centre"] += w * float(np.sum((dev - centre) ** 2))
-        sse["oval"] += w * float(np.sum((dev - centre - oval) ** 2))
+        sse["oval"] += w * float(np.sum((dev - oval) ** 2))
         sse["axis"] += w * float(np.sum((dev - ax) ** 2))
         weight += w * len(dev)
     rms = {k: math.sqrt(v / weight) for k, v in sse.items()}
@@ -1223,24 +1278,24 @@ def section_gate(rms, point_noise):
 
     The thresholds are read off the corpus (2026-10-26; sector medians
     against the band's one radius, rms over the fitted bands): the parts
-    that are round sit at 0.11 (the spray can), 0.19 (the clean
-    extinguisher), 0.42 (the mug), 0.45 (the valve), 0.52 (the rusty
-    extinguisher), 0.62 (the bollard) and 0.92 mm (the hydrant, its
+    that are round sit at 0.10 (the spray can), 0.20 (the clean
+    extinguisher), 0.42 (the mug), 0.45 (the valve), 0.51 (the rusty
+    extinguisher), 0.60 (the bollard) and 0.89 mm (the hydrant, its
     nozzles' roots and the bonnet's lobes in it); the two that are not
-    sit at 3.68 (the pail, an oval growing from 0.7 to 6.9 mm up to its
+    sit at 3.21 (the pail, an oval growing from 0.7 to 6.9 mm up to its
     rim) and 6.51 mm (the barrel, its centre walking 20 mm and an oval of
-    up to 11). 1.5 mm — three quarters of the app's tightest tolerance
-    (2 mm), with a margin of 0.6 mm over the least round revolve and 2.2
+    up to 12). 1.5 mm — three quarters of the app's tightest tolerance
+    (2 mm), with a margin of 0.6 mm over the least round revolve and 1.7
     mm under the least out-of-round loft — and twice the scanner's noise
     (a noisy scan's sectors stray by the noise alone: the barrel's 2.2 mm
     would ask for 4.3). Then the sections must take away 40 % of it: the
-    pail's take 64 %, the barrel's 69 %; a part whose stray is dents,
+    pail's take 89 %, the barrel's 69 %; a part whose stray is dents,
     ribs or lumps (what two harmonics cannot say) keeps its revolve. And
     the cheaper answer first: when a straight-line drift of the centre
     along the axis takes away three quarters of what the full sections
     do, the axis is what is wrong — a tilted, re-fitted axis keeps the
     revolve, and only what is left after it can ask for a loft (on the
-    corpus the line takes 6 % of it on the barrel and 13 % on the pail:
+    corpus the line takes 3 % of it on the barrel and 9 % on the pail:
     theirs is an oval and a wandering centre, not a tilt)."""
     s, l, a = rms["sector"], rms["oval"], rms["axis"]
     floor = max(LOFT_MIN_RMS_MM, 2.0 * point_noise)

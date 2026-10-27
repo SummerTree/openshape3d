@@ -340,7 +340,8 @@ def body_section(analysis):
 
 LOFT_KINK_DEG = 10.0           # a turn sharper than this between profile edges ends a loft piece
 LOFT_MAX_SECTIONS = 24         # sections per piece, at most
-LOFT_FIELD_TOL_MM = 0.5        # how closely the sections follow the smoothed centre / oval between them
+LOFT_RING_TOL_MM = 0.3         # how far the loft between two sections may stray from the ring the field draws there
+LOFT_ROUND_MM = 0.15           # a ring with half its oval under this keeps its neighbour's angle (`field_ring`)
 
 
 def outline_points(analysis):
@@ -380,8 +381,9 @@ def loft_pieces(points, epsilon=0.4):
     face, not a cone smeared between the sections either side; an edge that
     runs out far more than it rises (a chime's floor) is a piece of its own
     (two sections: exactly the frustum); and a turn sharper than
-    LOFT_KINK_DEG ends a piece too, since a loft through sections is a
-    smooth surface and would round the corner off. Returns the pieces as
+    LOFT_KINK_DEG ends a piece too: the corner is a section either way
+    (every gap is lofted on its own, `loft_piece`), and each piece reads
+    the field only from the bands beside it. Returns the pieces as
     lists of [r, h], or None when the outline doubles back down the axis
     (a dished part's loop: no loft)."""
     pts = dedupe([[float(r), float(hh)] for r, hh in points])
@@ -439,52 +441,6 @@ def section_rows(analysis):
     return hs, field.reshape(len(rows), 5)
 
 
-def piece_heights(piece, hs, field, band_mm, tol=LOFT_FIELD_TOL_MM, limit=LOFT_MAX_SECTIONS):
-    """Where to put a piece's sections: its own vertices (thinned when there
-    are more than `limit`), then, greedily, the band where the smoothed
-    field strays farthest from its interpolation between the sections so
-    far, until it strays less than `tol` everywhere or the piece has
-    `limit` sections. Returns (heights, the field's bands inside the
-    piece, their field)."""
-    h0, h1 = piece[0][1], piece[-1][1]
-    inside = (hs >= h0 - 0.5 * band_mm) & (hs <= h1 + 0.5 * band_mm)
-    if not inside.any():
-        nearest = int(np.argmin(np.minimum(np.abs(hs - h0), np.abs(hs - h1))))
-        inside = np.zeros(len(hs), dtype=bool)
-        inside[nearest] = True
-    bh, bf = hs[inside], field[inside]
-    verts = [p[1] for p in piece]
-    if len(verts) > limit:
-        keep = douglas_peucker_rh(piece, limit)
-        verts = [p[1] for p in keep]
-    heights = sorted(set(round(v, 6) for v in verts))
-    while len(heights) < limit and len(bh) > 1:
-        H = np.array(heights)
-        err = np.zeros(len(bh))
-        for k in range(5):
-            at = np.interp(H, bh, bf[:, k])
-            err = np.maximum(err, np.abs(bf[:, k] - np.interp(bh, H, at)))
-        err[(bh <= h0) | (bh >= h1)] = 0.0
-        worst = int(np.argmax(err))
-        if err[worst] < tol:
-            break
-        heights = sorted(set(heights + [round(float(bh[worst]), 6)]))
-    # Even enough: no gap more than three times its neighbour. A smooth
-    # surface through sections a millimetre apart and then two hundred
-    # swings between them (a cubic through the pail's foot and wall swung
-    # 8 mm); the gap that is too long is halved, where the profile is
-    # straight (a straight line through more points is still the line).
-    while len(heights) < limit:
-        gaps = np.diff(heights)
-        bad = [i for i in range(len(gaps) - 1) if max(gaps[i], gaps[i + 1]) > 3.0 * min(gaps[i], gaps[i + 1])]
-        if not bad:
-            break
-        i = max(bad, key=lambda i: max(gaps[i], gaps[i + 1]))
-        j = i if gaps[i] > gaps[i + 1] else i + 1
-        heights = sorted(heights + [round(0.5 * (heights[j] + heights[j + 1]), 6)])
-    return heights, bh, bf
-
-
 def douglas_peucker_rh(piece, limit):
     """The piece's vertices thinned to `limit` (its ends always kept): the
     vertex farthest from the chord between the kept ones is added next."""
@@ -510,41 +466,144 @@ def douglas_peucker_rh(piece, limit):
     return [list(pts[i]) for i in sorted(kept)]
 
 
-def ellipse_rings(piece, heights, bh, bf, inset=0.0):
-    """Each section of a piece: the profile's radius at that height (less
-    `inset`: a cavity's wall) moved by the field's mean-radius offset, the
-    centre, and the oval as the semi-axes either side of it, the major
-    axis's angle unwrapped from one section to the next (an ellipse is the
-    same turned half a turn, but the curve's seam is not: a seam that
-    jumped 180° between two sections would twist the loft into a waist).
-    Returns [{h, center [cx, cy], radiusX ≥ radiusY, rotation (radians)}]
-    or raises ValueError when a section would close onto the axis."""
+def field_ring(h, piece, bh, bf, inset=0.0, previous=None):
+    """The ring the smoothed field draws at height `h` on a piece: the
+    profile's radius there (less `inset`: a cavity's wall) moved by the
+    field's mean-radius offset, the centre, and the oval as the semi-axes
+    either side of it. With `previous` (the angle of the section below, in
+    radians) the major axis's angle is unwrapped onto it — an ellipse is
+    the same turned half a turn, but its seam is not, and a seam that
+    jumped 180° between two sections would twist the loft into a waist —
+    and a ring this nearly round (half its oval under LOFT_ROUND_MM) keeps
+    the neighbour's angle, its oval projected onto that direction: the
+    angle of a tenth of a millimetre of oval is the scanner's noise, and on
+    the barrel's 295 mm radius a seam that wandered with it moved the start
+    point centimetres between sections. Holding it costs at most the
+    oval's own size. Returns {h, center [cx, cy], radiusX ≥ radiusY,
+    rotation (radians)}."""
     rs = [p[0] for p in piece]
     hp = [p[1] for p in piece]
-    out = []
-    previous = None
-    for h in heights:
-        f = [float(np.interp(h, bh, bf[:, k])) for k in range(5)]
-        r0 = float(np.interp(h, hp, rs)) - inset + f[2]
-        m = math.hypot(f[3], f[4])
-        phi = 0.5 * math.atan2(f[4], f[3])
-        if previous is not None:
-            while phi - previous > math.pi / 2:
-                phi -= math.pi
-            while phi - previous < -math.pi / 2:
-                phi += math.pi
-        # A ring this round has no direction of its own: it keeps the
-        # neighbour's, and its seam with it.
-        if m < 0.05 and previous is not None:
+    f = [float(np.interp(h, bh, bf[:, k])) for k in range(5)]
+    r0 = float(np.interp(h, hp, rs)) - inset + f[2]
+    m = math.hypot(f[3], f[4])
+    phi = 0.5 * math.atan2(f[4], f[3])
+    if previous is not None:
+        while phi - previous > math.pi / 2:
+            phi -= math.pi
+        while phi - previous < -math.pi / 2:
+            phi += math.pi
+        if m < LOFT_ROUND_MM:
+            m = m * math.cos(2.0 * (phi - previous))
             phi = previous
-        previous = phi
-        # radiusX a hair over radiusY even when round: an exact circle's
-        # seam is the kernel's choice, an ellipse's is its major axis.
-        m = max(m, 1e-3)
-        if r0 - m < 0.5:
-            raise ValueError("the section at h %.1f would be %.2f mm across its minor axis" % (h, 2 * (r0 - m)))
-        out.append({"h": float(h), "center": [round(f[0], 4), round(f[1], 4)], "radiusX": round(r0 + m, 4),
-                    "radiusY": round(r0 - m, 4), "rotation": round(phi, 6)})
+    # radiusX a hair over radiusY even when round: an exact circle's seam
+    # is the kernel's choice, an ellipse's is its major axis.
+    m = max(m, 1e-3)
+    return {"h": float(h), "center": [f[0], f[1]], "radiusX": r0 + m, "radiusY": r0 - m, "rotation": phi}
+
+
+def ring_xy(ring, t):
+    """Points of an ellipse section at parameters `t` (radians from its
+    major axis, counter-clockwise) in its plane's (x, y): the parameter a
+    loft joins by — point t of one section meets point t of the next."""
+    t = np.asarray(t, dtype=float)
+    c, s = math.cos(ring["rotation"]), math.sin(ring["rotation"])
+    x, y = ring["radiusX"] * np.cos(t), ring["radiusY"] * np.sin(t)
+    return np.column_stack([ring["center"][0] + c * x - s * y, ring["center"][1] + s * x + c * y])
+
+
+def ring_error(lo, hi, ideal, samples=48):
+    """How far the loft between two sections strays, at the height of
+    `ideal` between them, from the ring `ideal` the field draws there: the
+    loft joins point t of `lo` to point t of `hi` straight (each gap is a
+    loft through just those two sections, `loft_piece`), and each such
+    point is measured along its ray from the ideal ring's centre to that
+    ring. This is the surface's own error — a centre or an oval that bends
+    between the sections, the major axis turning between them (its start
+    point travels round the ring and the straight joins cut the corner:
+    16.9° between two of the barrel's sections sagged 3 mm on its 295 mm
+    radius), a turning oval shrinking as its two coefficients are
+    interpolated — not the field's coefficients', which saw none of the
+    last two. Returns mm."""
+    t = np.linspace(0.0, 2 * math.pi, samples, endpoint=False)
+    w = (ideal["h"] - lo["h"]) / (hi["h"] - lo["h"]) if hi["h"] > lo["h"] else 0.0
+    p = (1.0 - w) * ring_xy(lo, t) + w * ring_xy(hi, t)
+    c, s = math.cos(ideal["rotation"]), math.sin(ideal["rotation"])
+    dx, dy = p[:, 0] - ideal["center"][0], p[:, 1] - ideal["center"][1]
+    qx, qy = c * dx + s * dy, -s * dx + c * dy
+    rho = np.hypot(qx, qy)
+    alpha = np.arctan2(qy, qx)
+    a, b = ideal["radiusX"], ideal["radiusY"]
+    rho_e = a * b / np.sqrt((b * np.cos(alpha)) ** 2 + (a * np.sin(alpha)) ** 2)
+    return float(np.max(np.abs(rho - rho_e)))
+
+
+def piece_rings(piece, hs, field, band_mm, inset=0.0, previous=None, tol=LOFT_RING_TOL_MM, limit=LOFT_MAX_SECTIONS):
+    """A piece's sections: at its own vertices (thinned when there are more
+    than `limit`), then, greedily, at the band where the loft between the
+    sections so far strays farthest from the ring the field draws there
+    (`ring_error`), until it strays less than `tol` everywhere or the piece
+    has `limit` sections. A band within a millimetre (or half a band) of a
+    section is no candidate: two sections a hair apart are a sliver of a
+    loft, and the surface there is the section's own. Returns (rings, the
+    worst error left, mm)."""
+    h0, h1 = piece[0][1], piece[-1][1]
+    inside = (hs >= h0 - 0.5 * band_mm) & (hs <= h1 + 0.5 * band_mm)
+    if not inside.any():
+        nearest = int(np.argmin(np.minimum(np.abs(hs - h0), np.abs(hs - h1))))
+        inside = np.zeros(len(hs), dtype=bool)
+        inside[nearest] = True
+    bh, bf = hs[inside], field[inside]
+    verts = [p[1] for p in piece]
+    if len(verts) > limit:
+        keep = douglas_peucker_rh(piece, limit)
+        verts = [p[1] for p in keep]
+    heights = sorted(set(round(v, 6) for v in verts))
+    probe = [h for h in bh if h0 < h < h1]
+    ideals = [field_ring(h, piece, bh, bf, inset=inset) for h in probe]
+    while True:
+        rings = ellipse_rings(piece, heights, bh, bf, inset=inset, previous=previous)
+        worst, where = 0.0, None
+        H = np.array(heights)
+        for h, ideal in zip(probe, ideals):
+            j = int(np.clip(np.searchsorted(H, h) - 1, 0, len(rings) - 2))
+            err = ring_error(rings[j], rings[j + 1], ideal)
+            if err > worst and np.min(np.abs(H - h)) >= min(1.0, 0.5 * band_mm):
+                worst, where = err, h
+            elif err > worst and where is None:
+                worst = err
+        if where is None or worst < tol or len(heights) >= limit:
+            return rings, worst
+        heights = sorted(set(heights + [round(float(where), 6)]))
+
+
+def frustum_volume(lo, hi, n=720):
+    """The volume of the loft between two sections (`ring_xy`, point t
+    joined to point t): its cross-section's area is quadratic in the height
+    between them, so Simpson's rule on three of them is exact. mm³."""
+    t = np.linspace(0.0, 2 * math.pi, n, endpoint=False)
+    a, b = ring_xy(lo, t), ring_xy(hi, t)
+
+    def area(p):
+        return 0.5 * abs(float(np.sum(p[:, 0] * np.roll(p[:, 1], -1) - np.roll(p[:, 0], -1) * p[:, 1])))
+    return (hi["h"] - lo["h"]) / 6.0 * (area(a) + 4.0 * area(0.5 * (a + b)) + area(b))
+
+
+def ellipse_rings(piece, heights, bh, bf, inset=0.0, previous=None):
+    """Each section of a piece (`field_ring`), bottom to top, the angle
+    unwrapped from `previous` (the last section of the piece below: one
+    angle continuous over the whole body, so a piece that starts on its
+    neighbour's section never starts half a turn from its own second one).
+    Returns the rings (rounded as the app is sent them) or raises
+    ValueError when a section would close onto the axis."""
+    out = []
+    for h in heights:
+        ring = field_ring(h, piece, bh, bf, inset=inset, previous=previous)
+        previous = ring["rotation"]
+        if ring["radiusY"] < 0.5:
+            raise ValueError("the section at h %.1f would be %.2f mm across its minor axis" % (h, 2 * ring["radiusY"]))
+        out.append({"h": float(h), "center": [round(ring["center"][0], 4), round(ring["center"][1], 4)],
+                    "radiusX": round(ring["radiusX"], 4), "radiusY": round(ring["radiusY"], 4),
+                    "rotation": round(ring["rotation"], 6)})
     return out
 
 
@@ -560,23 +619,23 @@ def ring_at(rings, h):
 
 
 def overlap_pieces(pieces, delta=0.2, inset=0.05):
-    """Neighbouring pieces made to overlap instead of touching. Two lofts
-    that meet on a plane share a face there — the narrower one's cap
-    inside the wider one's at a step, the whole section at a turn — and a
-    boolean between solids that share a face is the case kernels get wrong:
-    manifold left a membrane across the pail's cavity at every junction
-    (an inspection read it as a lid), and the app's mesh booleans are no
-    surer. So at a step the narrower piece's end section moves `delta` on
-    into the wider one, level (its cap then sits inside the wider piece);
-    at a turn, where both end on the same section, the upper piece's first
-    section moves `delta` down inside the lower one, onto the lower one's
-    own section there pulled in by `inset` — inside it, but off its skin.
-    The section MOVES, no section is added: a loft is a smooth surface
-    through its sections, and a section a fifth of a millimetre from its
-    neighbour made a cubic through them swing 14 mm on the pail. `delta`
-    is held to a third of either piece. Takes and returns the pieces' ring
-    lists."""
-    out = [list(p) for p in pieces]
+    """Neighbouring pieces made to overlap instead of touching — for the
+    PREVIEW's manifold booleans only. Two lofts that meet on a plane share
+    a face there — the narrower one's cap inside the wider one's at a
+    step, the whole section at a turn — and manifold left a membrane
+    across the pail's cavity at every junction where they touched (an
+    inspection read it as a lid). The app is sent the pieces touching,
+    exactly as `loft_body` makes them: OCCT's fuzzy booleans join shared
+    faces cleanly, and this very overlap broke them (the pail's union of
+    two pieces kept only the first and reported success; the barrel's came
+    out inverted). So at a step the narrower piece's end section moves
+    `delta` on into the wider one, level (its cap then sits inside the
+    wider piece); at a turn, where both end on the same section, the upper
+    piece's first section moves `delta` down inside the lower one, onto
+    the lower one's own section there pulled in by `inset` — inside it,
+    but off its skin. `delta` is held to a third of either piece's first
+    gap. Takes and returns the pieces' ring lists (copies)."""
+    out = [[dict(r) for r in p] for p in pieces]
     for k in range(len(out) - 1):
         lower, upper = out[k], out[k + 1]
         a, b = lower[-1], upper[0]
@@ -604,6 +663,12 @@ def overlap_pieces(pieces, delta=0.2, inset=0.05):
     return out
 
 
+def section_key(ring):
+    """A section's geometry as a key: two pieces meeting at a turn end on
+    the same section, which is sketched once."""
+    return (round(ring["h"], 6), tuple(ring["center"]), ring["radiusX"], ring["radiusY"], ring["rotation"])
+
+
 def loft_section_sketch(ring, origin, axis, u, v, name):
     """One section as the app draws it: a sketch on the plane normal to the
     axis at the section's height (x = azimuthZero, y = azimuthNinety, so
@@ -621,21 +686,28 @@ def loft_body(analysis, shift=None):
     """The main body as lofts through its sections, when the analysis says
     one revolved profile cannot carry it (`roundness.build == "loft"`):
     {pieces, cavity, bores, note, outline} or None for a revolve. Each
-    piece is a list of section sketches (`loft_section_sketch`) to loft
-    through in order: the outer profile cut at its steps and sharp turns
+    piece is a list of section sketches (`loft_section_sketch`) with their
+    rings: the outer profile cut at its steps and sharp turns
     (`loft_pieces`), every section an ellipse at the profile's radius
     moved by the analysis's smoothed field — off the axis by the centre,
-    out by the mean-radius offset, oval by the second harmonic. The
-    pieces are unioned (the first is the new body), so a lip or a
-    flange's shelf stays a flat face. An open container's cavity
-    (`cavity_section`, the outer profile eroded a wall in) is lofted the
-    same way through the same field — the wall keeps its thickness all
+    out by the mean-radius offset, oval by the second harmonic — placed
+    where the loft would otherwise stray from the field (`piece_rings`).
+    The build lofts every gap between two neighbouring sections on its own
+    (`build_loft`) and unions them (the first is the new body), so a lip or
+    a flange's shelf stays a flat face. Pieces that meet at a turn of the
+    profile share ONE section, and pieces at a step meet on its plane: the
+    app is sent exactly that (the kernel's fuzzy booleans join solids that
+    share a face; a 0.2 mm overlap broke them — the pail's union silently
+    dropped a piece, the barrel's came out inverted). The preview overlaps
+    them itself (`overlap_pieces`), for manifold. An open container's
+    cavity (`cavity_section`, the outer profile eroded a wall in) is lofted
+    the same way through the same field — the wall keeps its thickness all
     round, which a revolved cavity inside an off-centre loft would not —
-    and each of its pieces subtracted. A bore at a free end (`bore_chains`)
-    is a revolve about the end section's own centre, subtracted. `shift`
-    is added to the origin (the film stands the scan on the floor).
-    Raises ValueError when a section cannot be drawn (it would close onto
-    the axis); the build then revolves."""
+    and subtracted. A bore at a free end (`bore_chains`) is a revolve about
+    the end section's own centre, subtracted. `shift` is added to the
+    origin (the film stands the scan on the floor). Raises ValueError when
+    a section cannot be drawn (it would close onto the axis); the build
+    then revolves."""
     roundness = analysis.get("roundness") or {}
     if roundness.get("build") != "loft" or analysis.get("sectionLoop") or not analysis.get("sections"):
         return None
@@ -650,23 +722,25 @@ def loft_body(analysis, shift=None):
         raise ValueError("the outline doubles back down the axis")
 
     def lofts(pieces_rh, label, inset=0.0):
-        rings = []
-        for piece in pieces_rh:
-            heights, bh, bf = piece_heights(piece, hs, field, band_mm)
-            rings.append(ellipse_rings(piece, heights, bh, bf, inset=inset))
-        # Pieces that meet at a turn of the profile (not a level step) meet
-        # on ONE section: each reads the field from its own bands, and the
-        # two readings at the shared height may differ by a hundredth.
-        for k in range(len(pieces_rh) - 1):
-            if pieces_rh[k][-1] == pieces_rh[k + 1][0]:
-                rings[k + 1][0] = dict(rings[k][-1])
-        rings = overlap_pieces(rings)
+        rings, worst, previous = [], 0.0, None
+        for k, piece in enumerate(pieces_rh):
+            rr, err = piece_rings(piece, hs, field, band_mm, inset=inset, previous=previous)
+            # Pieces that meet at a turn of the profile (not a level step)
+            # meet on ONE section: each reads the field from its own bands,
+            # and the two readings at the shared height may differ by a
+            # hundredth. The angle was unwrapped from the section below, so
+            # the copy and the piece's own second section agree on it.
+            if k and pieces_rh[k - 1][-1] == piece[0]:
+                rr[0] = dict(rings[-1][-1])
+            rings.append(rr)
+            worst = max(worst, err)
+            previous = rr[-1]["rotation"]
         return [{"h0": float(piece[0][1]), "h1": float(piece[-1][1]), "rings": rr,
                  "sections": [loft_section_sketch(r, origin, axis, u, v, "%s %d.%d" % (label, k, j))
                               for j, r in enumerate(rr, 1)]}
-                for k, (piece, rr) in enumerate(zip(pieces_rh, rings), 1)]
+                for k, (piece, rr) in enumerate(zip(pieces_rh, rings), 1)], worst
 
-    outer = lofts(pieces, "Section")
+    outer, worst = lofts(pieces, "Section")
     cavity = None
     open_top = analysis.get("openTop")
     segments = analysis.get("profileSegments")
@@ -680,8 +754,9 @@ def loft_body(analysis, shift=None):
                        key=lambda p: (p[1], -p[0] if end == "bottom" else p[0]))
         cav_pieces = loft_pieces([list(p) for p in inner], analysis.get("epsilonMM", 0.4)) if len(inner) >= 2 else None
         if cav_pieces:
-            cavity = {"wallMM": wall, "measuredWallMM": open_top["wallMM"], "openEnd": end,
-                      "pieces": lofts(cav_pieces, "Cavity")}
+            cav, cav_worst = lofts(cav_pieces, "Cavity", inset=0.0)
+            worst = max(worst, cav_worst)
+            cavity = {"wallMM": wall, "measuredWallMM": open_top["wallMM"], "openEnd": end, "pieces": cav}
     # A bore at a free end: its stepped radii, revolved about the axis moved
     # onto the end section's centre, a millimetre past the end face.
     bores = []
@@ -701,79 +776,147 @@ def loft_body(analysis, shift=None):
                           "entities": lines_for(pts), "seed": [r / 2.0, (lo + hi) / 2.0],
                           "note": "the bore at the %s: r %.1f over h %.0f–%.0f, revolved about the end section's centre and subtracted" % (
                               bore["end"], r, lo, hi)})
-    n_sec = sum(len(p["sections"]) for p in outer)
-    note = "%d lofts through %d sections (ellipses round the axis, off it by up to %.1f mm, oval by up to %.1f mm)%s%s" % (
-        len(outer), n_sec,
+    every = outer + ((cavity or {}).get("pieces") or [])
+    n_gap = sum(len(p["sections"]) - 1 for p in every)
+    n_sec = len({section_key(r) for p in every for r in p["rings"]})
+    note = "%d lofts, one per gap, through %d sections in %d pieces (ellipses round the axis, off it by up to %.1f mm, oval by up to %.1f mm; the lofts stray ≤ %.2f mm from the field)%s%s" % (
+        n_gap, n_sec, len(every),
         max(math.hypot(r["center"][0], r["center"][1]) for p in outer for r in p["rings"]),
-        max(r["radiusX"] - r["radiusY"] for p in outer for r in p["rings"]) / 2.0,
-        "" if not cavity else ", the cavity %d more, a %.1f mm wall in" % (len(cavity["pieces"]), cavity["wallMM"]),
+        max(r["radiusX"] - r["radiusY"] for p in outer for r in p["rings"]) / 2.0, worst,
+        "" if not cavity else ", %d of them the cavity, a %.1f mm wall in" % (len(cavity["pieces"]), cavity["wallMM"]),
         bore_words(bored))
     return {"pieces": outer, "cavity": cavity, "bores": bores, "bored": bored, "note": note, "outline": outline,
-            "why": roundness.get("why", "")}
+            "why": roundness.get("why", ""), "worstMM": worst}
 
 
-def loft_piece(mcp, piece, label, boolean=None, target=None, note=True, words=""):
-    """Sketch a piece's sections and loft through them — a new body, or
-    `boolean` ("union", "subtract") into `target`. Returns the app's reply."""
-    sections = []
+def loft_piece(mcp, piece, label, sketches, note=True):
+    """A piece in the app: each of its sections sketched (once — `sketches`
+    maps a section's geometry to the sketch already drawn for it, so two
+    pieces meeting at a turn share theirs), then every gap between two
+    neighbouring sections lofted on its own, through just those two. Through two
+    sections the kernel's smooth loft IS the straight one, the preview's:
+    through more, ThruSections' smooth surface swung far off the sections
+    on the barrel (2.5 m on one piece of nine sections, its volume 83 %
+    short) and inverted a cavity piece, while every two-section loft came
+    out the same smooth or ruled. Yields (gap index, the section below,
+    the section above, the gap's two `feature.loft` sections) for
+    `build_loft` to send, with the boolean it decides."""
+    ids = []
     for sec, ring in zip(piece["sections"], piece["rings"]):
-        sk = mcp.os3d("sketch.create", dict(sec["plane"], name=label + " " + sec["plane"]["name"]),
-                      note="a sketch normal to the axis at h %.1f" % ring["h"] if note else None)["sketchID"]
-        mcp.os3d("sketch.addEntities", {"sketchID": sk, "entities": sec["entities"]},
-                 note=("an ellipse: centre (%.1f, %.1f), semi-axes %.1f × %.1f at %.0f°" % (
-                     sec["entities"][0]["center"][0], sec["entities"][0]["center"][1], sec["entities"][0]["radiusX"],
-                     sec["entities"][0]["radiusY"], math.degrees(sec["entities"][0]["rotation"]))) if note else None)
-        sections.append({"sketchID": sk, "seedPoint": sec["seed"]})
-    args = {"sections": sections}
-    if boolean:
-        args["boolean"], args["booleanTargets"] = boolean, [target]
-    return mcp.os3d("feature.loft", args,
-                    note=("lofted through %d sections over h %.0f–%.0f%s" % (len(sections), piece["h0"], piece["h1"], words))
-                    if note else None)
+        key = section_key(ring)
+        if key not in sketches:
+            sk = mcp.os3d("sketch.create", dict(sec["plane"], name=label + " " + sec["plane"]["name"]),
+                          note="a sketch normal to the axis at h %.1f" % ring["h"] if note else None)["sketchID"]
+            e = sec["entities"][0]
+            mcp.os3d("sketch.addEntities", {"sketchID": sk, "entities": sec["entities"]},
+                     note=("an ellipse: centre (%.1f, %.1f), semi-axes %.1f × %.1f at %.0f°" % (
+                         e["center"][0], e["center"][1], e["radiusX"], e["radiusY"], math.degrees(e["rotation"])))
+                     if note else None)
+            sketches[key] = {"sketchID": sk, "seedPoint": sec["seed"]}
+        ids.append(sketches[key])
+    for j in range(len(ids) - 1):
+        yield j, piece["rings"][j], piece["rings"][j + 1], [ids[j], ids[j + 1]]
 
 
 def build_loft(mcp, loft, label, note=True, log=print):
-    """The lofted body (`loft_body`) in the app: the first outer piece a new
-    body, every other unioned into it, then each cavity piece and each bore
-    subtracted. A piece the app refuses is undone and noted (the rest still
-    build). Returns (body id or None, [{what, ok, message?, volumeMM3?}])."""
-    cad_id, rows = None, []
+    """The lofted body (`loft_body`) in the app: the first gap of the first
+    outer piece a new body, every other gap unioned into it, then each of
+    the cavity's gaps and each bore subtracted. Every loft is checked
+    against its own volume (`frustum_volume`): a union must grow the body
+    by the loft's volume, and a kernel that "succeeds" by dropping the
+    tool (it did, on shared faces offset by a fifth of a millimetre) is a
+    failure like a refusal. A refused loft (`MCPClient.os3d` raises
+    MCPError on a reply with "failed": true — recorded but not built — so
+    it is caught here, and undone) or a dropped one leaves a body with a
+    slab missing or a cavity with a floor in it, which no later step
+    mends: the partial body is hidden and None returned, and the caller
+    revolves the profile instead, as it would have without the sections.
+    A refused bore is undone and skipped. Returns (body id or None, [{what,
+    ok, message?, volumeMM3?}])."""
+    cad_id, rows, sketches, volume = None, [], {}, 0.0
+
+    def send(args, what, words):
+        """One feature call: (reply, None) or (None, why), a recorded but
+        unbuilt feature undone. An MCPError for the call itself (the
+        server or the parser refused it: op "os3d feature.loft") recorded
+        nothing, so nothing is undone."""
+        op = "feature.revolve" if "sketchID" in args else "feature.loft"
+        try:
+            return mcp.os3d(op, args, note=words), None
+        except MCPError as error:
+            if getattr(error, "op", op) == op:
+                try:
+                    mcp.os3d("command.run", {"id": "edit.undo"}, note="the refused %s undone" % what if note else None)
+                except MCPError:
+                    pass
+            return None, str(error)[:300]
+
+    def give_up(what, why):
+        log("   %s did not build (%s): the lofted body is abandoned and the profile revolved instead" % (what, why))
+        rows.append({"what": what, "ok": False, "message": why})
+        if cad_id is not None:
+            try:
+                mcp.os3d("item.setHidden", {"ids": [cad_id]}, note="the unfinished loft hidden" if note else None)
+            except MCPError:
+                pass
+        return None, rows
+
+    def body_volume(reply):
+        return next((b.get("volumeMM3") for b in (reply or {}).get("bodies", []) if b.get("id") == cad_id), None)
+
     for k, piece in enumerate(loft["pieces"], 1):
-        reply = loft_piece(mcp, piece, label, boolean=None if cad_id is None else "union", target=cad_id, note=note,
-                           words="" if cad_id is None else ", unioned into the body")
-        ok = not reply.get("failed") and (cad_id is not None or reply.get("producedBodyIDs"))
-        if not ok:
-            log("   loft piece %d (h %.0f–%.0f) did not build: %s" % (k, piece["h0"], piece["h1"], reply.get("message")))
-            mcp.os3d("command.run", {"id": "edit.undo"}, note="the refused loft undone" if note else None)
-            rows.append({"what": "piece %d" % k, "ok": False, "message": reply.get("message")})
-            continue
-        if cad_id is None:
-            cad_id = reply["producedBodyIDs"][0]
-        vol = next((b["volumeMM3"] for b in reply.get("bodies", []) if b["id"] == cad_id), None)
-        rows.append({"what": "piece %d" % k, "ok": True, "volumeMM3": vol, "sections": len(piece["sections"])})
+        for j, lo, hi, pair in loft_piece(mcp, piece, label, sketches, note=note):
+            what = "piece %d gap %d (h %.1f–%.1f)" % (k, j + 1, lo["h"], hi["h"])
+            args = {"sections": pair}
+            if cad_id is not None:
+                args.update(boolean="union", booleanTargets=[cad_id])
+            words = "lofted between the sections at h %.1f and %.1f%s" % (
+                lo["h"], hi["h"], "" if cad_id is None else ", unioned into the body") if note else None
+            reply, why = send(args, "loft", words)
+            if reply is None:
+                return give_up(what, why)
+            if cad_id is None:
+                if not reply.get("producedBodyIDs"):
+                    return give_up(what, "no body produced")
+                cad_id = reply["producedBodyIDs"][0]
+            expect = frustum_volume(lo, hi)
+            vol = body_volume(reply)
+            if vol is not None:
+                grew = vol - volume
+                if abs(grew - expect) > max(0.05 * expect, 1e-4 * max(volume, expect)):
+                    return give_up(what, "the body grew %.0f mm³ where the loft holds %.0f" % (grew, expect))
+                volume = vol
+        rows.append({"what": "piece %d" % k, "ok": True, "volumeMM3": volume, "sections": len(piece["sections"])})
     if cad_id is None:
         return None, rows
     for k, piece in enumerate((loft.get("cavity") or {}).get("pieces", []), 1):
-        reply = loft_piece(mcp, piece, label, boolean="subtract", target=cad_id, note=note,
-                           words=", the cavity subtracted")
-        if reply.get("failed"):
-            log("   cavity piece %d did not build: %s" % (k, reply.get("message")))
-            mcp.os3d("command.run", {"id": "edit.undo"}, note="the refused cut undone" if note else None)
-            rows.append({"what": "cavity %d" % k, "ok": False, "message": reply.get("message")})
-            continue
-        vol = next((b["volumeMM3"] for b in reply.get("bodies", []) if b["id"] == cad_id), None)
-        rows.append({"what": "cavity %d" % k, "ok": True, "volumeMM3": vol})
+        for j, lo, hi, pair in loft_piece(mcp, piece, label, sketches, note=note):
+            what = "cavity %d gap %d (h %.1f–%.1f)" % (k, j + 1, lo["h"], hi["h"])
+            words = "lofted between the sections at h %.1f and %.1f, the cavity subtracted" % (lo["h"], hi["h"]) if note else None
+            reply, why = send({"sections": pair, "boolean": "subtract", "booleanTargets": [cad_id]}, "cut", words)
+            if reply is None:
+                return give_up(what, why)
+            vol = body_volume(reply)
+            if vol is not None:
+                # A cavity loft may run out past the rim (its last piece
+                # does), so it takes at most its own volume, not exactly it;
+                # one that took nothing inside the body was dropped.
+                took, expect = volume - vol, frustum_volume(lo, hi)
+                inside = lo["h"] >= 0.0 and hi["h"] <= loft["outline"][-1][1]
+                if took > 1.05 * expect + 1e-4 * volume or (inside and took < 0.05 * expect):
+                    return give_up(what, "the cut took %.0f mm³ where the loft holds %.0f" % (took, expect))
+                volume = vol
+        rows.append({"what": "cavity %d" % k, "ok": True, "volumeMM3": volume})
     for bore in loft.get("bores", []):
         sk = mcp.os3d("sketch.create", dict(bore["plane"], name=label + " " + bore["plane"]["name"]),
                       note="the bore's sketch, through the end section's centre" if note else None)["sketchID"]
         mcp.os3d("sketch.addEntities", {"sketchID": sk, "entities": bore["entities"]}, note=bore["note"] if note else None)
-        reply = mcp.os3d("feature.revolve", {"sketchID": sk, "seedPoint": bore["seed"], "axisPoint": [0, 0],
-                                             "axisDirection": [0, 1], "angleDegrees": 360,
-                                             "boolean": "subtract", "booleanTargets": [cad_id]},
-                         note="revolved and subtracted" if note else None)
-        if reply.get("failed"):
-            mcp.os3d("command.run", {"id": "edit.undo"}, note="the refused cut undone" if note else None)
-        rows.append({"what": bore["plane"]["name"], "ok": not reply.get("failed"), "message": reply.get("message")})
+        reply, why = send({"sketchID": sk, "seedPoint": bore["seed"], "axisPoint": [0, 0], "axisDirection": [0, 1],
+                           "angleDegrees": 360, "boolean": "subtract", "booleanTargets": [cad_id]}, "cut",
+                          "revolved and subtracted" if note else None)
+        if reply is None:
+            log("   %s did not build: %s" % (bore["plane"]["name"], why))
+        rows.append({"what": bore["plane"]["name"], "ok": reply is not None, "message": why})
     return cad_id, rows
 
 
@@ -1127,15 +1270,18 @@ def build(args):
             print("   out of round: " + loft["why"])
             print("   " + loft["note"])
             cad_id, rows = build_loft(mcp, loft, args.label)
-            if cad_id is None:
-                raise MCPError("no loft piece built: %s" % "; ".join(str(r.get("message")) for r in rows))
-            cad = next(b for b in mcp.os3d("state")["bodies"] if b["id"] == cad_id)
             s.summary["loft"] = {"pieces": len(loft["pieces"]), "sections": sum(len(p["sections"]) for p in loft["pieces"]),
-                                 "rows": rows, "note": loft["note"], "why": loft["why"]}
-            if loft.get("cavity"):
-                s.summary["hollow"] = {k: loft["cavity"][k] for k in ("wallMM", "measuredWallMM", "openEnd")}
-            print("   %d of %d pieces built; volume %.0f mm³" % (sum(1 for r in rows if r["ok"]), len(rows), cad["volumeMM3"]))
-        else:
+                                 "rows": rows, "note": loft["note"], "why": loft["why"], "built": cad_id is not None}
+            if cad_id is None:
+                # A refused or dropped loft (`build_loft` hid what it had
+                # built): the profile is revolved, as it was before sections.
+                loft = None
+            else:
+                cad = next(b for b in mcp.os3d("state")["bodies"] if b["id"] == cad_id)
+                if loft.get("cavity"):
+                    s.summary["hollow"] = {k: loft["cavity"][k] for k in ("wallMM", "measuredWallMM", "openEnd")}
+                print("   %d pieces built; volume %.0f mm³" % (sum(1 for r in rows if r["ok"]), cad["volumeMM3"]))
+        if loft is None:
             s.step("Revolve the profile")
             sketch = mcp.os3d("sketch.create", plane, note="a vertical sketch on the scan's own axis")["sketchID"]
             # The half-section (`body_section`): lines, arcs for a dome or a

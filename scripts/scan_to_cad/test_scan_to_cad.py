@@ -2057,7 +2057,9 @@ class SectionTests(unittest.TestCase):
     def test_fit_section_reads_centre_and_oval_and_drops_a_lump(self):
         import analyze_scan as A
         theta = A.sector_angles(36)
-        r = 100.0 + 3.0 * np.cos(theta) - 2.0 * np.sin(theta) + 4.0 * np.cos(2 * (theta - math.radians(30.0)))
+        # A true ellipse 104 × 96 at 30°, its centre (3, −2) off the axis, as
+        # the sector medians read it along their rays.
+        r = A.ellipse_radius(theta, 3.0, -2.0, 100.0, 4.0 * math.cos(math.radians(60.0)), 4.0 * math.sin(math.radians(60.0)))
         r = r + 0.05 * np.sin(7 * theta)                                    # a ripple two harmonics cannot say
         lumpy = r.copy()
         lumpy[5:9] += 25.0                                                  # a nozzle's root in four sectors
@@ -2079,6 +2081,31 @@ class SectionTests(unittest.TestCase):
         # seen round its neck) votes for nothing.
         wild = 40.0 + 12.0 * np.sign(np.sin(3 * theta))
         self.assertIsNone(A.fit_section(wild, 40.0, 30.0, 0.1))
+        # Nor does a rim whose sectors jump ±4 mm on a 180 mm radius: the
+        # residual is held to the noise (here 0.25 mm: 1.5 mm), not to 3 %
+        # of the radius (5.4 mm), which let the pail's lip bands through.
+        jumpy = 180.0 + 4.0 * np.where(np.arange(36) % 2, 1.0, -1.0)
+        self.assertIsNone(A.fit_section(jumpy, 180.0, 10.0, 0.25))
+
+    def test_fit_section_reads_an_off_centre_oval_exactly(self):
+        # The barrel's case: 12.7 mm off the axis and 5 mm oval on a 295 mm
+        # radius. The harmonics alone read the mean radius 0.2 mm short and
+        # leak the offset into the oval; the ellipse itself (`refine_ring`)
+        # comes back to a hundredth.
+        import analyze_scan as A
+        theta = A.sector_angles(36)
+        phi = math.radians(-70.0)
+        r = A.ellipse_radius(theta, 12.7, -8.0, 295.0, 5.0 * math.cos(2 * phi), 5.0 * math.sin(2 * phi))
+        fit = A.fit_section(r, float(np.median(r)), 20.0, 0.1)
+        c0, c1, s1, c2, s2 = fit["coef"]
+        self.assertAlmostEqual(c0, 295.0, delta=0.01)
+        self.assertAlmostEqual(c1, 12.7, delta=0.01)
+        self.assertAlmostEqual(s1, -8.0, delta=0.01)
+        self.assertAlmostEqual(math.hypot(c2, s2), 5.0, delta=0.01)
+        self.assertAlmostEqual(math.degrees(0.5 * math.atan2(s2, c2)), -70.0, delta=0.1)
+        self.assertLess(fit["residualMM"], 0.01)
+        first, *_ = np.linalg.lstsq(A.section_basis(theta), r, rcond=None)
+        self.assertGreater(abs(first[0] - 295.0), 0.1)                      # what the harmonics alone said
 
     def test_the_field_is_smoothed_inside_runs_but_not_across_a_step(self):
         import analyze_scan as A
@@ -2168,7 +2195,7 @@ class SectionTests(unittest.TestCase):
                          "residualMM": 0.1, "sectors": 36, "fitted": True})
         return rows
 
-    def test_a_step_is_two_lofts_meeting_on_its_plane_and_overlapping(self):
+    def test_a_step_is_two_lofts_meeting_on_its_plane(self):
         import build_hydrant as B
         # A 100 mm drum with a 120 mm lip over its top 20 mm; the oval is
         # the field's, about the profile's radius.
@@ -2178,10 +2205,17 @@ class SectionTests(unittest.TestCase):
         self.assertEqual(len(loft["pieces"]), 2)
         low, high = loft["pieces"]
         self.assertEqual((low["h0"], low["h1"], high["h0"], high["h1"]), (0.0, 80.0, 80.0, 100.0))
-        # The narrower piece runs on into the wider one: its last section a
-        # fifth of a millimetre past the step, the same ellipse.
-        self.assertAlmostEqual(low["rings"][-1]["h"], 80.2, places=6)
+        # The app is sent the two touching on the step's plane (its fuzzy
+        # booleans join shared faces; an overlap broke them); the preview
+        # runs the narrower piece on a fifth of a millimetre into the wider
+        # one, the same ellipse, for manifold.
+        self.assertEqual(low["rings"][-1]["h"], 80.0)
         self.assertEqual(high["rings"][0]["h"], 80.0)
+        lapped = B.overlap_pieces([low["rings"], high["rings"]])
+        self.assertAlmostEqual(lapped[0][-1]["h"], 80.2, places=6)
+        self.assertEqual(lapped[0][-1]["radiusX"], low["rings"][-1]["radiusX"])
+        self.assertEqual(lapped[1][0]["h"], 80.0)
+        self.assertEqual(low["rings"][-1]["h"], 80.0)                       # a copy: the build's rings untouched
         ring = low["rings"][0]
         self.assertAlmostEqual(ring["radiusX"], 52.0, places=3)               # 50 + (55 − 51)/2
         self.assertAlmostEqual(ring["radiusY"], 48.0, places=3)
@@ -2195,20 +2229,73 @@ class SectionTests(unittest.TestCase):
         self.assertEqual(sk["entities"][0]["kind"], "ellipse")
         self.assertEqual(set(sk["entities"][0]), {"kind", "center", "radiusX", "radiusY", "rotation"})
         self.assertEqual(sk["seed"], sk["entities"][0]["center"])
-        self.assertAlmostEqual(low["sections"][-1]["plane"]["origin"][2], 80.2, places=6)
+        self.assertAlmostEqual(low["sections"][-1]["plane"]["origin"][2], 80.0, places=6)
 
-    def test_a_turn_is_two_lofts_on_one_section_moved_inside(self):
+    def test_a_turn_is_two_lofts_on_one_section(self):
         import build_hydrant as B
-        # A cylinder, then a cone narrowing 30° off it: the upper piece's
-        # first section moves down inside the cylinder, pulled in a hair.
+        # A cylinder, then a cone narrowing 30° off it: both pieces end on
+        # the same section (the app is sent one sketch for it); in the
+        # preview the upper piece's first section moves down inside the
+        # cylinder, pulled in a hair.
         profile = [[50.0, 0.0], [50.0, 60.0], [40.0, 77.32]]
         a = self.record(profile, self.oval_rows(0.0, 78.0, 51.0, 49.0))
         lofts = B.loft_body(a)["pieces"]
         self.assertEqual(len(lofts), 2)
-        first = lofts[1]["rings"][0]
+        self.assertEqual(lofts[1]["rings"][0], lofts[0]["rings"][-1])
+        self.assertEqual(lofts[0]["rings"][-1]["h"], 60.0)
+        first = B.overlap_pieces([p["rings"] for p in lofts])[1][0]
         self.assertAlmostEqual(first["h"], 59.8, places=6)
         self.assertAlmostEqual(first["radiusX"], 51.0 - 0.05, places=3)
-        self.assertEqual(lofts[0]["rings"][-1]["h"], 60.0)
+
+    def test_the_seam_stays_continuous_across_a_turn_where_the_angle_wraps(self):
+        import build_hydrant as B
+        import preview_model as P
+        # An oval cylinder, then a cone, the oval's major axis turning from
+        # 80° to 100° (read as −80°: past the wrap) on the way up. The upper
+        # piece starts on the lower one's last section, whose angle was
+        # unwrapped past 90°; its own sections must follow on from it, not
+        # start afresh half a turn away (a waist: the loft pinched to a
+        # fifth of its radius).
+        profile = [[80.0, 0.0], [80.0, 110.0], [60.0, 180.0]]
+        rows = self.oval_rows(0.0, 181.0, 84.0, 76.0)
+        for r in rows:
+            r["angleDeg"] = ((80.0 + 20.0 * r["h"] / 180.0) + 90.0) % 180.0 - 90.0
+        a = self.record(profile, rows)
+        lofts = B.loft_body(a)["pieces"]
+        self.assertEqual(len(lofts), 2)
+        rot = np.degrees([r["rotation"] for p in lofts for r in p["rings"]])
+        self.assertLess(np.abs(np.diff(rot)).max(), 20.0, rot)
+        self.assertGreater(rot[-1], 90.0)
+        model, notes, _ = P.build_preview(a, sections=96)
+        self.assertTrue(model.is_watertight)
+        cyl = math.pi * 84.0 * 76.0 * 110.0
+        cone = math.pi / 3.0 * 70.0 * (84.0 * 76.0 + 64.0 * 56.0 + math.sqrt(84.0 * 76.0 * 64.0 * 56.0))
+        self.assertAlmostEqual(model.volume, cyl + cone, delta=0.01 * (cyl + cone))
+
+    def test_sections_bound_the_twist_where_the_oval_turns(self):
+        import build_hydrant as B
+        # The barrel's case: a 295 mm drum whose 3 mm half-oval turns 17° in
+        # 8 mm. Joined point to point the start point travels 87 mm round
+        # the ring and the straight joins cut inside it; the sections are
+        # placed until the loft stays within LOFT_RING_TOL_MM of the ring
+        # the field draws at every band.
+        profile = [[295.0, 0.0], [295.0, 60.0]]
+        rows = self.oval_rows(0.0, 61.0, 298.0, 292.0)
+        for r in rows:
+            r["angleDeg"] = -82.0 + 17.0 * min(max((r["h"] - 26.0) / 8.0, 0.0), 1.0)
+        a = self.record(profile, rows)
+        rings = B.loft_body(a)["pieces"][0]["rings"]
+        hs_, field = B.section_rows(a)
+        piece = [[295.0, 0.0], [295.0, 60.0]]
+        worst = 0.0
+        for h in hs_[(hs_ > 0.0) & (hs_ < 60.0)]:
+            j = max(k for k in range(len(rings) - 1) if rings[k]["h"] <= h)
+            worst = max(worst, B.ring_error(rings[j], rings[j + 1], B.field_ring(h, piece, hs_, field)))
+        self.assertLess(worst, B.LOFT_RING_TOL_MM + 1e-6)
+        self.assertGreater(len(rings), 4)
+        # Between its two end sections alone the loft would sag a few mm.
+        mid = B.field_ring(30.0, piece, hs_, field)
+        self.assertGreater(B.ring_error(rings[0], rings[-1], mid), 1.0)
 
     def test_sections_follow_the_field_and_the_seam_never_jumps(self):
         import build_hydrant as B
@@ -2270,25 +2357,43 @@ class SectionTests(unittest.TestCase):
         (`parseCreateSketch`: origin / xAxis / yAxis; `entity` "ellipse":
         center, radiusX, radiusY, rotation in radians; `parseLoft`:
         sections [{sketchID, seedPoint}] ≥ 2, boolean + booleanTargets):
-        the first piece a new body, the next unioned into it, the cavity
-        subtracted; a refused piece is undone and the rest still build."""
+        every gap between two sections a loft of its own through just those
+        two (a two-section loft is the same smooth or ruled), each section
+        sketched once; the first gap a new body, the rest unioned into it,
+        the cavity's subtracted. The fake replies as `MCPClient.os3d` does —
+        a feature that was recorded but did not build RAISES MCPError — and
+        keeps the body's volume from the sections it was sent. A refused
+        loft is undone, and so is the lofted body: hidden, None returned,
+        and the build revolves instead; so is one the kernel "built" by
+        dropping it (the body did not grow)."""
         import build_hydrant as B
+        from mcp_client import MCPError
 
         class FakeMCP:
-            def __init__(self, refuse=()):
-                self.calls, self.n, self.refuse = [], 0, set(refuse)
+            def __init__(self, refuse=(), drop=()):
+                self.calls, self.n, self.refuse, self.drop = [], 0, set(refuse), set(drop)
+                self.rings, self.volume = {}, 0.0
 
             def os3d(self, op, args=None, note=None):
                 self.calls.append((op, args))
                 if op == "sketch.create":
                     self.n += 1
+                    self.rings["sk-%d" % self.n] = {"h": args["origin"][2]}
                     return {"sketchID": "sk-%d" % self.n}
+                if op == "sketch.addEntities":
+                    e = args["entities"][0]
+                    self.rings[args["sketchID"]].update(center=e["center"], radiusX=e["radiusX"], radiusY=e["radiusY"],
+                                                        rotation=e["rotation"])
+                    return {}
                 if op == "feature.loft":
                     k = sum(1 for o, _ in self.calls if o == "feature.loft")
                     if k in self.refuse:
-                        return {"failed": True, "message": "refused"}
+                        raise MCPError(op, "ThruSections refused")
+                    lo, hi = (self.rings[sec["sketchID"]] for sec in args["sections"])
+                    v = 0.0 if k in self.drop else B.frustum_volume(lo, hi)
+                    self.volume += -v if args.get("boolean") == "subtract" else v
                     produced = [] if args.get("boolean") else ["body-1"]
-                    return {"producedBodyIDs": produced, "bodies": [{"id": "body-1", "volumeMM3": 1000.0 * k}]}
+                    return {"producedBodyIDs": produced, "bodies": [{"id": "body-1", "volumeMM3": self.volume}]}
                 return {}
 
         segs = [{"kind": "line", "a": [60.0, 0.0], "b": [60.0, 100.0]}, {"kind": "line", "a": [60.0, 100.0], "b": [70.0, 100.0]},
@@ -2299,27 +2404,39 @@ class SectionTests(unittest.TestCase):
         mcp = FakeMCP()
         cad, rows = B.build_loft(mcp, loft, "Pail", note=False, log=lambda *x: None)
         self.assertEqual(cad, "body-1")
+        self.assertTrue(all(r["ok"] for r in rows), rows)
         lofts = [args for op, args in mcp.calls if op == "feature.loft"]
-        self.assertEqual(len(lofts), len(loft["pieces"]) + len(loft["cavity"]["pieces"]))
+        gaps = sum(len(p["sections"]) - 1 for p in loft["pieces"] + loft["cavity"]["pieces"])
+        self.assertEqual(len(lofts), gaps)
         self.assertNotIn("boolean", lofts[0])
         self.assertEqual(lofts[1]["boolean"], "union")
         self.assertEqual(lofts[1]["booleanTargets"], ["body-1"])
         self.assertEqual(lofts[-1]["boolean"], "subtract")
         for args in lofts:
-            self.assertGreaterEqual(len(args["sections"]), 2)
+            self.assertEqual(len(args["sections"]), 2)
             for sec in args["sections"]:
                 self.assertEqual(set(sec), {"sketchID", "seedPoint"})
                 self.assertEqual(len(sec["seedPoint"]), 2)
+        # Each section sketched once: neighbouring gaps share theirs.
         creates = [args for op, args in mcp.calls if op == "sketch.create"]
+        self.assertEqual(len(creates), len({(r["h"], tuple(r["center"]), r["radiusX"], r["radiusY"], r["rotation"])
+                                            for p in loft["pieces"] + loft["cavity"]["pieces"] for r in p["rings"]}))
         self.assertTrue(all(set(c) >= {"origin", "xAxis", "yAxis", "name"} for c in creates))
         ents = [args["entities"][0] for op, args in mcp.calls if op == "sketch.addEntities"]
         self.assertTrue(all(e["kind"] == "ellipse" and e["radiusX"] >= e["radiusY"] > 0 for e in ents))
-        # One refused piece: undone, the rest still built.
-        mcp = FakeMCP(refuse={2})
-        cad, rows = B.build_loft(mcp, loft, "Pail", note=False, log=lambda *x: None)
-        self.assertEqual(cad, "body-1")
-        self.assertEqual([r["ok"] for r in rows].count(False), 1)
-        self.assertIn(("command.run", {"id": "edit.undo"}), mcp.calls)
+        # One refused loft: undone, the lofted body hidden, None — revolve.
+        for fake in (FakeMCP(refuse={2}), FakeMCP(drop={2})):
+            cad, rows = B.build_loft(fake, loft, "Pail", note=False, log=lambda *x: None)
+            self.assertIsNone(cad)
+            self.assertFalse(rows[-1]["ok"])
+            self.assertIn(("item.setHidden", {"ids": ["body-1"]}), fake.calls)
+            self.assertEqual(sum(1 for o, _ in fake.calls if o == "feature.loft"), 2)
+        fake = FakeMCP(refuse={3})
+        B.build_loft(fake, loft, "Pail", note=False, log=lambda *x: None)
+        self.assertIn(("command.run", {"id": "edit.undo"}), fake.calls)
+        fake = FakeMCP(drop={2})
+        B.build_loft(fake, loft, "Pail", note=False, log=lambda *x: None)
+        self.assertNotIn(("command.run", {"id": "edit.undo"}), fake.calls)   # it built: nothing to undo
 
     def test_the_corpus_table_says_lofted_or_round(self):
         import run_corpus as R

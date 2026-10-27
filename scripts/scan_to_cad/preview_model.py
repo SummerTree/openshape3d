@@ -58,7 +58,7 @@ import trimesh
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
-from build_hydrant import body_section, boss_section, secondary_sections, nut_sections, passage_sections, world, unit, loft_body  # noqa: E402
+from build_hydrant import body_section, boss_section, secondary_sections, nut_sections, passage_sections, world, unit, loft_body, overlap_pieces, ring_xy  # noqa: E402
 from build_features import sweep_sketch, bore_profile  # noqa: E402
 from build_recipe import revolve_region, radial_frame, seed_inside  # noqa: E402
 from fit_primitives import sketch_entities  # noqa: E402
@@ -506,19 +506,16 @@ def ring_points(ring, n=96):
     its plane's (x, y), from its major axis round counter-clockwise — the
     same parameter on every section, so ring k of one section and ring k of
     the next are the points a loft joins."""
-    t = np.linspace(0.0, 2 * math.pi, n, endpoint=False)
-    c, s = math.cos(ring["rotation"]), math.sin(ring["rotation"])
-    x = ring["radiusX"] * np.cos(t)
-    y = ring["radiusY"] * np.sin(t)
-    return np.column_stack([ring["center"][0] + c * x - s * y, ring["center"][1] + s * x + c * y])
+    return ring_xy(ring, np.linspace(0.0, 2 * math.pi, n, endpoint=False))
 
 
 def loft_mesh(piece, origin, axis, u, v, n=96):
     """A loft piece (`build_hydrant.loft_body`) as a closed mesh: its
     sections' rings, the same number of points each, joined ring to ring
-    (straight between sections — the app's loft is a smooth surface
-    through them, which on sections this close agrees to the field's
-    tolerance) and capped at both ends; `n` points round each ring, as
+    straight between sections — what the app builds, since the build lofts
+    every gap through just its two sections (`build_hydrant.loft_piece`),
+    and a two-section loft is the same smooth or ruled — and capped at
+    both ends; `n` points round each ring, as
     many as the revolve's facets (`--sections`), so the vertex-sampled
     deviations weigh a loft as they weigh a revolve."""
     rings = piece["rings"]
@@ -547,15 +544,22 @@ def loft_mesh(piece, origin, axis, u, v, n=96):
 
 def loft_body_mesh(loft, analysis, notes, sections=96):
     """The lofted body as `build_hydrant.build_loft` builds it: the outer
-    pieces unioned, the cavity's pieces and the bores subtracted."""
+    pieces unioned, the cavity's pieces and the bores subtracted — each
+    piece's neighbours overlapped a fifth of a millimetre first
+    (`overlap_pieces`): manifold leaves a membrane where two solids only
+    touch, which the app's booleans do not (it is sent them touching)."""
     origin = np.asarray(analysis["axisOrigin"], dtype=float)
     axis = unit(analysis["axisDirection"])
     u, v = unit(analysis["azimuthZero"]), unit(analysis["azimuthNinety"])
     model = None
-    for k, piece in enumerate(loft["pieces"], 1):
-        model = combine(model, loft_mesh(piece, origin, axis, u, v, sections), "union", "loft piece %d" % k, notes)
-    for k, piece in enumerate((loft.get("cavity") or {}).get("pieces", []), 1):
-        model = combine(model, loft_mesh(piece, origin, axis, u, v, sections), "subtract", "cavity piece %d" % k, notes)
+    outer = overlap_pieces([p["rings"] for p in loft["pieces"]])
+    for k, (piece, rings) in enumerate(zip(loft["pieces"], outer), 1):
+        model = combine(model, loft_mesh(dict(piece, rings=rings), origin, axis, u, v, sections), "union",
+                        "loft piece %d" % k, notes)
+    cavity = (loft.get("cavity") or {}).get("pieces", [])
+    for k, (piece, rings) in enumerate(zip(cavity, overlap_pieces([p["rings"] for p in cavity])), 1):
+        model = combine(model, loft_mesh(dict(piece, rings=rings), origin, axis, u, v, sections), "subtract",
+                        "cavity piece %d" % k, notes)
     for bore in loft.get("bores", []):
         plane = bore["plane"]
         loop = pick_loop(loops_of_entities(bore["entities"]), bore["seed"])
