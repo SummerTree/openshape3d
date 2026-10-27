@@ -123,3 +123,22 @@ nonisolated struct EvalFingerprint {
         return f.value
     }
 }
+
+extension Sketch {
+    /// The sketch as the memo sees it: only what evaluation reads. Its name,
+    /// its Items Manager visibility and its presentation-only annotations
+    /// (radius directions, line readouts) are blanked, so hiding a sketch —
+    /// the auto-hide when a feature consumes it, or an agent hiding every
+    /// sketch before a screenshot — does not change the fingerprint of every
+    /// feature that reads it. It did: a scan-to-CAD barrel of 212 lofts hid
+    /// its sketches once, and the next feature re-ran all 212 (over 300 s,
+    /// 2026-10-27).
+    var evalMemoKey: Sketch {
+        var key = self
+        key.name = ""
+        key.isHidden = false
+        key.circleRadiusDirections = [:]
+        key.lineDimensionKinds = [:]
+        return key
+    }
+}

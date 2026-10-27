@@ -450,7 +450,7 @@ nonisolated extension FeatureGraph {
     ) -> EvalResult {
         var state = EvalState(sketches: sketches, planes: planes, naming: naming)
         // Input hashes once per replay, not once per node.
-        let sketchHash = Dictionary(sketches.map { ($0.id, EvalFingerprint.hash($0)) },
+        let sketchHash = Dictionary(sketches.map { ($0.id, EvalFingerprint.hash($0.evalMemoKey)) },
                                     uniquingKeysWith: { first, _ in first })
         let planeHash = Dictionary(planes.map { ($0.id, EvalFingerprint.hash($0)) },
                                    uniquingKeysWith: { first, _ in first })

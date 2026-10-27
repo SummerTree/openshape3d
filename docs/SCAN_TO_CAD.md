@@ -2094,8 +2094,39 @@ it takes: the barrel's body is 644 MCP calls (216 sketches with their
 ellipse, 212 lofts; ~60 s of booleans in the replica), the pail's 87. On
 Euclid's mesh path (no OCCT) the lofts are ruled already.
 
+**The app run (2026-10-26/27).** The pail lofted first time: 27 lofts in
+20 pieces, every one checked against its volume, 177 calls, overlap
+97.1 % — the same as the preview. The barrel's first build ran into
+`run_corpus`'s 25-minute limit with every call accepted (the cavity cut
+a gap at a time; see the Gotchas), and its first take into the UI test's
+20-minute deadline (`TutorialTakeUITests`, now an hour). With the cavity
+lofted into its own body and subtracted once, it built in 28 minutes:
+697 calls, 212 lofts, one `feature.boolean`, the body 1.0953e7 mm³ as the
+OCCT replica said. The other eight parts are unchanged to the digit.
+
+| part (app) | overlap | scan→model mm | model→scan mm | QA fails |
+|---|---|---|---|---|
+| tin-barrel | 96.5 → 98.0 % | 7.14 → 2.98 | 5.02 → 2.03 | 6 → 4 checks (depth_right, depth_iso now pass) |
+| pail-bucket | 95.9 → 97.1 % | 2.12 → 1.62 | 1.58 → 1.47 | 7 → 5 checks (size, depth_iso now pass) |
+
+In the app the pail's model→scan improves (the preview had it 1.21 →
+1.52: the preview's 0.2 mm overlaps and its STL sliver, not the app's
+body). Both still FAIL on their largest patches: the barrel's dents
+finer than a section's ellipse, the pail's over-thick wall.
+
 ## Gotchas
 
+- Hiding the sketches re-ran every loft (2026-10-27): the memo
+  (`FeatureGraph.evaluate`'s cache) fingerprinted each sketch by its whole
+  JSON, `isHidden` and `name` included, so the build's `item.setHidden
+  {"allSketches": true}` changed the key of all 212 of the barrel's lofts
+  and the film's next feature (`feature.transform`, the model stepping
+  aside for the hook) replayed them all: 974 s, past the MCP server's
+  300 s. Sampled live (`sample <pid>` on the simulator app: the main
+  thread in `RebuildPlanner.plan` → `evalLoft` → `SignatureNaming.propagate`).
+  The memo now keys a sketch by `Sketch.evalMemoKey` (name, visibility and
+  the presentation-only annotations blanked). The web app copies the same
+  `Shared/` sources, so it has the fix on its next build.
 - A lofted body's cavity cut a gap at a time (2026-10-26, the first app
   run of the barrel): each `feature.loft` subtracted into the growing
   body took the app 5 s at the first gap and 11 s by the fiftieth (the
