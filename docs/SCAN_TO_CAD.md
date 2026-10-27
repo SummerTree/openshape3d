@@ -2096,6 +2096,15 @@ Euclid's mesh path (no OCCT) the lofts are ruled already.
 
 ## Gotchas
 
+- A lofted body's cavity cut a gap at a time (2026-10-26, the first app
+  run of the barrel): each `feature.loft` subtracted into the growing
+  body took the app 5 s at the first gap and 11 s by the fiftieth (the
+  outer unions ~4 s each), and the barrel's 476 calls ran into
+  `run_corpus`'s 25-minute build limit with every call accepted. The
+  cavity is now lofted into a body of its own (cheap unions of plain
+  rings) and subtracted once with `feature.boolean` {kind, targetBodyID,
+  toolBodyIDs} — the target keeps its id, the tool is consumed — and the
+  build and take limits are an hour.
 - Two solids that share a face (2026-10-26): manifold's union and
   difference leave a zero-thickness membrane where they touch — the
   pail's stacked cavity lofts left one at every junction, and

@@ -2360,7 +2360,8 @@ class SectionTests(unittest.TestCase):
         every gap between two sections a loft of its own through just those
         two (a two-section loft is the same smooth or ruled), each section
         sketched once; the first gap a new body, the rest unioned into it,
-        the cavity's subtracted. The fake replies as `MCPClient.os3d` does —
+        the cavity's gaps a body of their own, subtracted once
+        (`feature.boolean`: kind, targetBodyID, toolBodyIDs). The fake replies as `MCPClient.os3d` does —
         a feature that was recorded but did not build RAISES MCPError — and
         keeps the body's volume from the sections it was sent. A refused
         loft is undone, and so is the lofted body: hidden, None returned,
@@ -2372,7 +2373,7 @@ class SectionTests(unittest.TestCase):
         class FakeMCP:
             def __init__(self, refuse=(), drop=()):
                 self.calls, self.n, self.refuse, self.drop = [], 0, set(refuse), set(drop)
-                self.rings, self.volume = {}, 0.0
+                self.rings, self.volumes = {}, {}
 
             def os3d(self, op, args=None, note=None):
                 self.calls.append((op, args))
@@ -2391,10 +2392,21 @@ class SectionTests(unittest.TestCase):
                         raise MCPError(op, "ThruSections refused")
                     lo, hi = (self.rings[sec["sketchID"]] for sec in args["sections"])
                     v = 0.0 if k in self.drop else B.frustum_volume(lo, hi)
-                    self.volume += -v if args.get("boolean") == "subtract" else v
-                    produced = [] if args.get("boolean") else ["body-1"]
-                    return {"producedBodyIDs": produced, "bodies": [{"id": "body-1", "volumeMM3": self.volume}]}
+                    if args.get("boolean"):
+                        produced, body = [], args["booleanTargets"][0]
+                        self.volumes[body] += -v if args["boolean"] == "subtract" else v
+                    else:
+                        body = "body-%d" % (len(self.volumes) + 1)
+                        produced, self.volumes[body] = [body], v
+                    return {"producedBodyIDs": produced, "bodies": self.bodies()}
+                if op == "feature.boolean":
+                    tool = args["toolBodyIDs"][0]
+                    self.volumes[args["targetBodyID"]] -= self.volumes.pop(tool)
+                    return {"bodies": self.bodies()}
                 return {}
+
+            def bodies(self):
+                return [{"id": b, "volumeMM3": v} for b, v in self.volumes.items()]
 
         segs = [{"kind": "line", "a": [60.0, 0.0], "b": [60.0, 100.0]}, {"kind": "line", "a": [60.0, 100.0], "b": [70.0, 100.0]},
                 {"kind": "line", "a": [70.0, 100.0], "b": [70.0, 120.0]}]
@@ -2411,7 +2423,14 @@ class SectionTests(unittest.TestCase):
         self.assertNotIn("boolean", lofts[0])
         self.assertEqual(lofts[1]["boolean"], "union")
         self.assertEqual(lofts[1]["booleanTargets"], ["body-1"])
-        self.assertEqual(lofts[-1]["boolean"], "subtract")
+        # The cavity lofted into a body of its own and subtracted once: a
+        # cut a gap at a time into the growing body took the app 11 s each.
+        self.assertEqual(lofts[-1]["boolean"], "union")
+        self.assertEqual(lofts[-1]["booleanTargets"], ["body-2"])
+        cuts = [args for op, args in mcp.calls if op == "feature.boolean"]
+        self.assertEqual(cuts, [{"kind": "subtract", "targetBodyID": "body-1", "toolBodyIDs": ["body-2"]}])
+        self.assertNotIn("body-2", mcp.volumes)
+        self.assertTrue(any(r["what"] == "cavity" and r["cavityMM3"] > 0 for r in rows), rows)
         for args in lofts:
             self.assertEqual(len(args["sections"]), 2)
             for sec in args["sections"]:
