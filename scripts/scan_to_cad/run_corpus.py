@@ -83,6 +83,20 @@ def bore_lines(profile):
     return lines
 
 
+def roundness_line(profile):
+    """How round the body is and what the build makes of it (the analysis's
+    `roundness`): "lofted — the sectors stray 3.7 mm from the revolve, 1.3
+    after the sections", "round (0.4 mm)", or None for an older analysis."""
+    r = profile.get("roundness") or {}
+    if "sectorRmsMM" not in r:
+        return None
+    if r.get("build") == "loft":
+        return "lofted — the sectors stray %.1f mm from the revolve, %.1f after the sections" % (r["sectorRmsMM"], r["afterOvalMM"])
+    if r.get("axisRefitted"):
+        return "axis re-fitted from the sections, then round (%.1f mm)" % r["sectorRmsMM"]
+    return "round (%.1f mm)" % r["sectorRmsMM"]
+
+
 def patch_lines(patches, top=3):
     """One line per largest patch of each kind: kind, area, where."""
     lines = []
@@ -142,13 +156,17 @@ def main():
         # each secondary body's), so the row says "bored r 14, 50 deep",
         # and "+10 on into body 1" where a bore's passage runs on.
         bores = bore_lines(profile)
-        print("=== %s: %s, %.0f mm tall, %d bosses, tolerance %.0f mm%s%s" % (
+        # Round, or lofted through its sections (the analysis's `roundness`).
+        roundness = roundness_line(profile)
+        print("=== %s: %s, %.0f mm tall, %d bosses, tolerance %.0f mm%s%s%s" % (
             slug, spec["label"], profile["heightMM"], len(profile["bosses"]), tolerance,
             ("; " + "; ".join(nuts)) if nuts else "",
-            ("; bored — " + ", ".join(bores)) if bores else ""), flush=True)
+            ("; bored — " + ", ".join(bores)) if bores else "",
+            ("; " + roundness) if roundness else ""), flush=True)
         t0 = time.time()
         row = {"label": spec["label"], "heightMM": profile["heightMM"], "bosses": len(profile["bosses"]),
-               "profilePoints": len(profile["profile"]), "toleranceMM": tolerance, "nuts": nuts, "bores": bores}
+               "profilePoints": len(profile["profile"]), "toleranceMM": tolerance, "nuts": nuts, "bores": bores,
+               "roundness": roundness}
         try:
             relaunch(udid, args.port)
             cmd = [args.python, "-I", os.path.join(HERE, "build_hydrant.py"), "--scan", scan, "--analysis", analysis,

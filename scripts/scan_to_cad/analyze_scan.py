@@ -38,6 +38,14 @@ Method, in the order it runs:
 6. Colour. The scan's dominant colour, read off its own texture (or vertex
    colours), goes into the JSON as `scanColor` so the model can be painted
    like the scan instead of a hand-picked red (`scan_color`).
+7. Sections. One radius per band throws away everything the band's 36
+   sectors disagree on. Each band's sector medians are fitted as a ring
+   off the axis and oval (`fit_section`: the first two harmonics, the
+   lumps left out), smoothed along the height between the profile's
+   steps (`section_field`) and recorded as `sections`; `roundness` says
+   how far the sectors stray from the revolve and whether the build keeps
+   it, re-fits a tilted axis, or lofts through the sections
+   (`section_gate`).
 """
 import argparse
 import json
@@ -969,6 +977,388 @@ def detect_open_top(mesh, origin, axis, u, v, height, radii_ends, bands, radius,
             "wallMM": round(wall, 2), "innerRadiusMM": round(r_end - wall, 2)}
 
 
+# Sections (`trace_sections`): when a revolve is not enough — see
+# `section_gate` for where these come from.
+LOFT_MIN_RMS_MM = 1.5          # the sectors must stray more than this (and twice the noise) from the revolve
+LOFT_MIN_SHARE = 0.4           # … and the sections must take this share of it away
+AXIS_DOMINANT_SHARE = 0.75     # a straight drift of the centre that does this much of it is a tilted axis
+
+
+def sector_angles(sectors=36):
+    """The centre azimuth of each sector of the band loop's grid, radians
+    (sector j covers −180° + j·360°/sectors onward, as `sector_of`)."""
+    return np.radians(-180.0 + (np.arange(sectors) + 0.5) * 360.0 / sectors)
+
+
+def section_basis(theta):
+    """r(θ) = c0 + c1 cos θ + s1 sin θ + c2 cos 2θ + s2 sin 2θ: the first
+    harmonic is the section's centre off the axis (a circle of radius R
+    centred at (cx, cy) reads R + cx cos θ + cy sin θ to first order), the
+    second an oval (an ellipse a × b at angle φ reads (a + b)/2 +
+    (a − b)/2 · cos 2(θ − φ))."""
+    theta = np.asarray(theta, dtype=float)
+    return np.column_stack([np.ones(len(theta)), np.cos(theta), np.sin(theta), np.cos(2 * theta), np.sin(2 * theta)])
+
+
+def ellipse_radius(theta, cx, cy, mean, mx, my):
+    """How far from the axis, along the ray at azimuth θ, an ellipse lies:
+    centred at (cx, cy), semi-axes mean ± m with (mx, my) = m (cos 2φ,
+    sin 2φ), the major axis at φ — exactly what a sector median measures,
+    where `section_basis` is its first-order expansion. The two part ways
+    when a ring is off the axis AND oval: a circle 15 mm off a 300 mm
+    axis reads its mean radius 0.19 mm short and an oval it does not have
+    of the same size (d²/4R), which the harmonics take for the ring's —
+    the barrel's sections strayed up to 0.69 mm from their true ellipses."""
+    theta = np.asarray(theta, dtype=float)
+    m = math.hypot(mx, my)
+    phi = 0.5 * math.atan2(my, mx)
+    a2, b2 = (mean + m) ** 2, (mean - m) ** 2
+    c, s = math.cos(phi), math.sin(phi)
+    # The axis and the ray in the ellipse's own frame.
+    ox, oy = -(c * cx + s * cy), s * cx - c * cy
+    ux, uy = c * np.cos(theta) + s * np.sin(theta), -s * np.cos(theta) + c * np.sin(theta)
+    A = ux * ux / a2 + uy * uy / b2
+    B = 2.0 * (ox * ux / a2 + oy * uy / b2)
+    C = ox * ox / a2 + oy * oy / b2 - 1.0
+    return (-B + np.sqrt(np.maximum(B * B - 4.0 * A * C, 0.0))) / (2.0 * A)
+
+
+def refine_ring(theta, radii, coef, iterations=6):
+    """The two-harmonic fit (`section_basis`: c0, c1, s1, c2, s2) moved onto
+    the ellipse itself (`ellipse_radius`: mean, cx, cy, mx, my — the same
+    five numbers, read exactly): a few Gauss-Newton steps against the
+    sector medians, from the harmonic solution. Returns the coefficients."""
+    p = np.array(coef, dtype=float)
+    if p[0] <= 0.0:
+        return p
+    for _ in range(iterations):
+        f = ellipse_radius(theta, p[1], p[2], p[0], p[3], p[4])
+        J = np.empty((len(theta), 5))
+        for k in range(5):
+            q = p.copy()
+            q[k] += 1e-4
+            J[:, k] = (ellipse_radius(theta, q[1], q[2], q[0], q[3], q[4]) - f) / 1e-4
+        step, *_ = np.linalg.lstsq(J, np.asarray(radii, dtype=float) - f, rcond=None)
+        p = p + step
+        if float(np.max(np.abs(step))) < 1e-6:
+            break
+    return p
+
+
+def widest_empty_deg(keep):
+    """The widest run of sectors NOT in `keep` (wrapping round), degrees."""
+    n = len(keep)
+    if keep.all():
+        return 0.0
+    if not keep.any():
+        return 360.0
+    present = np.where(keep)[0]
+    runs = np.diff(np.concatenate([present, [present[0] + n]])) - 1
+    return float(runs.max()) * 360.0 / n
+
+
+def fit_section(medians, body, reach, point_noise, min_sectors=24, max_gap_deg=90.0, iterations=6):
+    """One band's section from its sector medians: the band's ring as
+    r(θ) = c0 + the first two harmonics (`section_basis`) — where its
+    centre sits off the axis, how oval it is. Only the sectors on the
+    body count: those the band loop's body cluster reached (`reach`, the
+    same ±3·MAD window that made the mean circle), and of those, after
+    each fit, only the ones within max(1 mm, 3× the noise, 3× the
+    residual's MAD) of the fitted ring — a nozzle's flared root, a
+    handle's foot or a cap's chain leaves the sectors it fills, and the
+    ring is fitted again on the rest. Returns None when fewer than
+    `min_sectors` of the 36 stay, or when they leave an empty arc wider
+    than `max_gap_deg` (two harmonics fitted on half a circle are a guess,
+    not a measurement); else {coef [c0, c1, s1, c2, s2] — the harmonics'
+    sectors chosen, the five numbers then read off the ellipse itself
+    (`refine_ring`: mean radius, centre, oval) — keep (bool per sector),
+    residualMM (rms of what the ellipse leaves, on the kept sectors)}."""
+    medians = np.asarray(medians, dtype=float)
+    n = len(medians)
+    theta = sector_angles(n)
+    A = section_basis(theta)
+    ok = ~np.isnan(medians)
+    ok[ok] = np.abs(medians[ok] - body) <= max(reach, 3.0, 3.0 * point_noise)
+    keep = ok.copy()
+    coef = None
+    for _ in range(iterations):
+        if keep.sum() < min_sectors or widest_empty_deg(keep) > max_gap_deg:
+            return None
+        coef, *_ = np.linalg.lstsq(A[keep], medians[keep], rcond=None)
+        res = np.where(ok, medians - A @ coef, np.inf)
+        mad = float(np.median(np.abs(res[keep])))
+        tol = max(1.0, 3.0 * point_noise, 3.0 * 1.48 * mad)
+        new = ok & (np.abs(res) <= tol)
+        if (new == keep).all():
+            break
+        keep = new
+    if keep.sum() < min_sectors or widest_empty_deg(keep) > max_gap_deg:
+        return None
+    coef, *_ = np.linalg.lstsq(A[keep], medians[keep], rcond=None)
+    coef = refine_ring(theta[keep], medians[keep], coef)
+    res = medians[keep] - ellipse_radius(theta[keep], coef[1], coef[2], coef[0], coef[3], coef[4])
+    residual = float(np.sqrt(np.mean(res ** 2)))
+    # A ring the two harmonics describe: what they leave is the scanner's
+    # noise (a dented barrel's dents, a cast surface's ripple), and the
+    # centre and the oval are a few hundredths of the radius. A band that
+    # leaves more is no slightly-out-of-round ring — an extinguisher's
+    # valve and handle above its neck fit an "oval" of 22 mm on a 39 mm
+    # radius, 10 mm of residual — and votes for nothing. The limit is the
+    # noise's, not the radius's: 3 % of the pail's 180 mm let its rim
+    # bands through at 4–5.5 mm (the lip's sector medians jump ±8 mm from
+    # one sector to the next, on 0.95 mm of noise) and they pulled the
+    # top sections 1.4 mm off the wall's own trend; every barrel band
+    # (1.1–1.9 mm on 2.2 mm of noise) and every pail wall band (≤ 0.54)
+    # still passes.
+    if residual > max(1.5, 4.0 * point_noise):
+        return None
+    if math.hypot(coef[1], coef[2]) > 0.12 * body or math.hypot(coef[3], coef[4]) > 0.12 * body:
+        return None
+    return {"coef": coef, "keep": keep, "residualMM": residual}
+
+
+def running(values, runs, width, how):
+    """`values` (nan where unknown) smoothed along the bands by a running
+    median or mean `width` bands wide, inside each run of bands
+    separately (`runs`: a run id per band) — a profile step bounds the
+    smoothing, so a lip's own centre is never averaged with the wall's."""
+    out = np.array(values, dtype=float)
+    half = width // 2
+    for run in np.unique(runs):
+        idx = np.where(runs == run)[0]
+        v = np.asarray(values, dtype=float)[idx]
+        for k in range(len(idx)):
+            w = v[max(0, k - half): k + half + 1]
+            w = w[~np.isnan(w)]
+            if len(w):
+                out[idx[k]] = float(np.median(w) if how == "median" else np.mean(w))
+    return out
+
+
+def section_field(bands, grid_med, grid_reach, step_heights, point_noise, band_mm, skip=None):
+    """The section of every band as a smooth field along the axis: its mean
+    radius against the band's one radius (`dr`: the band radius is the
+    median of the sector medians, and the median of an oval ring that also
+    sits off the axis is not its mean — up to 8 mm on the barrel's rim), its centre
+    (c1, s1) in the azimuthZero / azimuthNinety frame and its oval (c2,
+    s2: half the difference of the semi-axes is their length, the major
+    axis at half their angle). Each band is fitted on its own
+    (`fit_section`); the five numbers (linear in the fit, so they average
+    without the wrap of an angle) are then run through a median and a
+    mean about 15 mm wide, inside the runs between the profile's steps
+    (`step_heights`): a band reads its centre to about the scanner's
+    noise, the drift of a dented barrel runs over hundreds of
+    millimetres, and a flange is a run of its own. A band with no fit (a
+    filler, a band on a nut's flats, a band a handle half fills, the
+    valve above an extinguisher's neck, every band of a run with fewer
+    than three fitted) takes the field from its run's fitted neighbours,
+    else from the nearest fitted band. Returns (rows,
+    fitted) — rows: per band {h, dr, c1, s1, c2, s2, fitted, residualMM,
+    sectors, keep}; `fitted` the number of bands fitted on their own."""
+    hs = np.array([b["h"] for b in bands], dtype=float)
+    runs = np.searchsorted(np.sort(np.asarray(step_heights, dtype=float)), hs) if len(step_heights) else np.zeros(len(bands), dtype=int)
+    raw = np.full((len(bands), 5), np.nan)
+    rows = []
+    for i, b in enumerate(bands):
+        fit = None
+        if not b.get("filler") and not (skip is not None and skip[i]) and grid_med[i] is not None:
+            fit = fit_section(grid_med[i], b["median"], grid_reach[i], point_noise)
+        if fit is not None:
+            raw[i] = [fit["coef"][0] - b["median"]] + list(fit["coef"][1:])
+        rows.append({"h": float(b["h"]), "fitted": fit is not None,
+                     "residualMM": fit["residualMM"] if fit else None,
+                     "sectors": int(fit["keep"].sum()) if fit else 0,
+                     "keep": fit["keep"] if fit else None})
+    # A run of one or two fitted bands (a pail's 3 mm foot ring under its
+    # first step) is a guess, not a field: one band there read the pail's
+    # base 7 mm off the axis its whole wall shares to half a millimetre.
+    # Such a run takes its neighbours' field like an unfitted one.
+    for run in np.unique(runs):
+        idx = np.where(runs == run)[0]
+        if 0 < int((~np.isnan(raw[idx, 0])).sum()) < 3:
+            raw[idx] = np.nan
+            for i in idx:
+                rows[i].update(fitted=False, keep=None, sectors=0, residualMM=None)
+    fitted = int((~np.isnan(raw[:, 0])).sum())
+    keys = ("dr", "c1", "s1", "c2", "s2")
+    if fitted == 0:
+        for r in rows:
+            r.update({k: 0.0 for k in keys})
+        return rows, 0
+    width = max(3, int(round(15.0 / band_mm)) | 1)
+    smooth = np.empty_like(raw)
+    for k in range(raw.shape[1]):
+        med = running(raw[:, k], runs, width, "median")
+        smooth[:, k] = running(np.where(np.isnan(raw[:, k]), np.nan, med), runs, width, "mean")
+    # Gaps: inside a run, linear between its fitted neighbours (and level
+    # past its ends); a run with nothing fitted carries the nearest band's.
+    have = ~np.isnan(smooth[:, 0])
+    for run in np.unique(runs):
+        idx = np.where(runs == run)[0]
+        got = idx[have[idx]]
+        if len(got):
+            for k in range(raw.shape[1]):
+                smooth[idx, k] = np.interp(hs[idx], hs[got], smooth[got, k])
+    have = ~np.isnan(smooth[:, 0])
+    for i in np.where(~have)[0]:
+        j = np.where(have)[0][np.argmin(np.abs(hs[have] - hs[i]))]
+        smooth[i] = smooth[j]
+    for r, values in zip(rows, smooth):
+        r.update({k: float(x) for k, x in zip(keys, values)})
+    return rows, fitted
+
+
+def profile_steps(profile, epsilon):
+    """The heights of the profile's steps — a level edge (a flange's shelf,
+    a chime's floor) or one that runs out far more than it rises — which
+    bound the section field's smoothing and the build's lofts."""
+    out = []
+    for (r0, h0), (r1, h1) in zip(profile, profile[1:]):
+        dr, dh = abs(r1 - r0), abs(h1 - h0)
+        if dr > max(2.0, 2.0 * epsilon) and dh <= 0.34 * dr:
+            out.append(round(0.5 * (h0 + h1), 4))
+    return out
+
+
+def roundness_of(bands, grid_med, rows, point_noise):
+    """How far the sectors stray from the revolve, and how much of that the
+    sections take away — over the fitted bands, weighted by radius (a
+    millimetre on a 300 mm drum is more surface than on a 20 mm stem):
+    `sector` the kept sector medians against the band's one radius (what
+    a revolve leaves), `centre` against the smoothed section's mean radius
+    and centre, `oval` with its oval as well (what a loft through the
+    smoothed sections leaves), `axis` against the band radius moved by
+    only the straight-line drift of the centre along the axis (what a
+    re-fitted, tilted axis would leave). Returns (rms {sector, centre,
+    oval, axis}, the drift's line {lineX, lineY, shift0, shift1, h0, h1,
+    tiltDeg}) or (None, None) with no band fitted."""
+    sse = {"sector": 0.0, "centre": 0.0, "oval": 0.0, "axis": 0.0}
+    weight = 0.0
+    used = [(b, med, row) for b, med, row in zip(bands, grid_med, rows) if row["fitted"]]
+    if not used:
+        return None, None
+    hs = np.array([row["h"] for _, _, row in used])
+    cxs = np.array([row["c1"] for _, _, row in used])
+    cys = np.array([row["s1"] for _, _, row in used])
+    sw = np.sqrt(np.array([float(b["median"]) for b, _, _ in used]))
+    # The straight line through the centres (weighted least squares).
+    G = np.column_stack([np.ones(len(hs)), hs])
+    line_x, *_ = np.linalg.lstsq(G * sw[:, None], cxs * sw, rcond=None)
+    line_y, *_ = np.linalg.lstsq(G * sw[:, None], cys * sw, rcond=None)
+    for b, med, row in used:
+        keep = row["keep"]
+        theta = sector_angles(len(med))[keep]
+        dev = np.asarray(med, dtype=float)[keep] - b["median"]
+        mean = float(b["median"]) + row["dr"]
+        centre = ellipse_radius(theta, row["c1"], row["s1"], mean, 0.0, 0.0) - b["median"]
+        oval = ellipse_radius(theta, row["c1"], row["s1"], mean, row["c2"], row["s2"]) - b["median"]
+        ax = ellipse_radius(theta, line_x[0] + line_x[1] * row["h"], line_y[0] + line_y[1] * row["h"],
+                            float(b["median"]), 0.0, 0.0) - b["median"]
+        w = float(b["median"])
+        sse["sector"] += w * float(np.sum(dev ** 2))
+        sse["centre"] += w * float(np.sum((dev - centre) ** 2))
+        sse["oval"] += w * float(np.sum((dev - oval) ** 2))
+        sse["axis"] += w * float(np.sum((dev - ax) ** 2))
+        weight += w * len(dev)
+    rms = {k: math.sqrt(v / weight) for k, v in sse.items()}
+    h0, h1 = float(hs.min()), float(hs.max())
+    shift0 = [float(line_x[0] + line_x[1] * h0), float(line_y[0] + line_y[1] * h0)]
+    shift1 = [float(line_x[0] + line_x[1] * h1), float(line_y[0] + line_y[1] * h1)]
+    tilt = math.degrees(math.atan(math.hypot(line_x[1], line_y[1])))
+    return rms, {"lineX": [float(x) for x in line_x], "lineY": [float(y) for y in line_y],
+                 "shift0": shift0, "shift1": shift1, "h0": h0, "h1": h1, "tiltDeg": tilt}
+
+
+def section_gate(rms, point_noise):
+    """Which body the sections ask for: "revolve" (one profile about one
+    straight axis carries it), "axis" (the sections are round but their
+    centres drift along a straight line — the axis is off: re-fit it and
+    keep the revolve) or "loft" (a body through the sections). Returns
+    (build, why).
+
+    The thresholds are read off the corpus (2026-10-26; sector medians
+    against the band's one radius, rms over the fitted bands): the parts
+    that are round sit at 0.10 (the spray can), 0.20 (the clean
+    extinguisher), 0.42 (the mug), 0.45 (the valve), 0.51 (the rusty
+    extinguisher), 0.60 (the bollard) and 0.89 mm (the hydrant, its
+    nozzles' roots and the bonnet's lobes in it); the two that are not
+    sit at 3.21 (the pail, an oval growing from 0.7 to 6.9 mm up to its
+    rim) and 6.51 mm (the barrel, its centre walking 20 mm and an oval of
+    up to 12). 1.5 mm — three quarters of the app's tightest tolerance
+    (2 mm), with a margin of 0.6 mm over the least round revolve and 1.7
+    mm under the least out-of-round loft — and twice the scanner's noise
+    (a noisy scan's sectors stray by the noise alone: the barrel's 2.2 mm
+    would ask for 4.3). Then the sections must take away 40 % of it: the
+    pail's take 89 %, the barrel's 69 %; a part whose stray is dents,
+    ribs or lumps (what two harmonics cannot say) keeps its revolve. And
+    the cheaper answer first: when a straight-line drift of the centre
+    along the axis takes away three quarters of what the full sections
+    do, the axis is what is wrong — a tilted, re-fitted axis keeps the
+    revolve, and only what is left after it can ask for a loft (on the
+    corpus the line takes 3 % of it on the barrel and 9 % on the pail:
+    theirs is an oval and a wandering centre, not a tilt)."""
+    s, l, a = rms["sector"], rms["oval"], rms["axis"]
+    floor = max(LOFT_MIN_RMS_MM, 2.0 * point_noise)
+    if s <= floor:
+        return "revolve", "round: the sectors stray %.2f mm rms, within %.2f mm (max of %.1f mm and twice the %.2f mm noise)" % (
+            s, floor, LOFT_MIN_RMS_MM, point_noise)
+    gain = (s - l) / s if s > 0 else 0.0
+    if gain < LOFT_MIN_SHARE:
+        return "revolve", "the sectors stray %.2f mm rms but centre and oval take only %.0f%% of it (dents, ribs or lumps, not a section)" % (
+            s, 100 * gain)
+    if s - a >= AXIS_DOMINANT_SHARE * (s - l):
+        return "axis", "the centres drift along a straight line: a re-fitted axis takes %.2f of the %.2f mm the sections would" % (
+            s - a, s - l)
+    return "loft", "the sectors stray %.2f mm rms; the sections take %.0f%% of it, to %.2f mm" % (s, 100 * gain, l)
+
+
+def trace_sections(bands, grid_med, grid_reach, profile, epsilon, nuts, point_noise, band_mm, traced=False, secondary=False):
+    """Sections: the ring round every band, not only its one radius — where
+    its centre sits off the axis and how oval it is (`section_field`), and
+    whether a revolve can carry the part or a loft through the sections
+    must (`section_gate`). Returns (sections, roundness): sections per band
+    {h, cxMM, cyMM, drMM, aMM, bMM, angleDeg, residualMM, sectors, fitted}
+    (cx, cy the ring's centre in the azimuthZero / azimuthNinety frame; a
+    and b its semi-axes, about the band radius moved by drMM; the major
+    axis at angleDeg from azimuthZero toward azimuthNinety; residualMM what
+    the two harmonics leave on the band's own fit), roundness
+    {sectorRmsMM, afterCentreMM, afterOvalMM, afterAxisMM, tiltDeg,
+    axisShiftMM, axisLine, bandsFitted, bands, steps, build, why}."""
+    steps = profile_steps(profile, epsilon)
+    skip = np.array([any(n["h0"] - band_mm <= b["h"] <= n["h1"] + band_mm for n in nuts or []) for b in bands], dtype=bool)
+    rows, fitted = section_field(bands, grid_med, grid_reach, steps, point_noise, band_mm, skip=skip)
+    rms, drift = roundness_of(bands, grid_med, rows, point_noise)
+    sections = []
+    for b, row in zip(bands, rows):
+        m = math.hypot(row["c2"], row["s2"])
+        r0 = float(b["median"]) + row["dr"]
+        sections.append({"h": round(row["h"], 3), "cxMM": round(row["c1"], 3), "cyMM": round(row["s1"], 3),
+                         "drMM": round(row["dr"], 3), "aMM": round(r0 + m, 3), "bMM": round(r0 - m, 3),
+                         "angleDeg": round(math.degrees(0.5 * math.atan2(row["s2"], row["c2"])), 2),
+                         "residualMM": None if row["residualMM"] is None else round(row["residualMM"], 3),
+                         "sectors": row["sectors"], "fitted": row["fitted"]})
+    roundness = {"bandsFitted": fitted, "bands": len(bands), "steps": steps, "build": "revolve"}
+    if rms is None:
+        roundness["why"] = "no band has enough of its circle on the body to fit a section"
+        print("out of round: no band fitted (%d bands) — revolved" % len(bands))
+        return sections, roundness
+    build, why = section_gate(rms, point_noise)
+    if traced and build != "revolve":
+        build, why = "revolve", "a traced half-section (a dished part) is revolved as it is; the sections would ask for a %s (%s)" % (build, why)
+    if secondary and build != "revolve":
+        build, why = "revolve", "a body on its own axis is revolved (its root is trimmed and lengthened into its parent, which the sections do not follow); the sections would ask for a %s (%s)" % (build, why)
+    roundness.update({"sectorRmsMM": round(rms["sector"], 3), "afterCentreMM": round(rms["centre"], 3),
+                      "afterOvalMM": round(rms["oval"], 3), "afterAxisMM": round(rms["axis"], 3),
+                      "tiltDeg": round(drift["tiltDeg"], 3),
+                      "axisShiftMM": [[round(x, 2) for x in drift["shift0"]], [round(x, 2) for x in drift["shift1"]]],
+                      "axisLine": {"h0": round(drift["h0"], 3), "h1": round(drift["h1"], 3),
+                                   "x": [round(x, 7) for x in drift["lineX"]], "y": [round(y, 7) for y in drift["lineY"]]},
+                      "build": build, "why": why})
+    print("out of round: the sectors stray %.2f mm rms from the revolve; %.2f after the centre, %.2f after the oval, %.2f after a re-fitted axis (tilt %.2f°), %d of %d bands fitted — %s: %s" % (
+        rms["sector"], rms["centre"], rms["oval"], rms["axis"], drift["tiltDeg"], fitted, len(bands), build, why))
+    return sections, roundness
+
+
 def douglas_peucker(points, epsilon):
     if len(points) < 3:
         return points
@@ -1481,7 +1871,7 @@ def refine_section(points, h, radius, cell):
 
 def analyze(mesh, band_mm=None, lump_margin_mm=6.0, out_dir=None, name="scan", epsilon=None, debug=False,
             axis_choice="auto", flip=False, samples=200000, multi=True, secondary=False, axis_origin=None,
-            up_rule="y", _reflipped=False, source=None, nut_mesh=None):
+            up_rule="y", _reflipped=False, source=None, nut_mesh=None, _axis_refit=False):
     """The scan as a body of revolution: its axis, the profile along it,
     the bosses off it. With `multi`, the axis finder (`fit_axes`) looks for
     more bodies of revolution first — a valve's pipe, branches and side
@@ -1555,7 +1945,10 @@ def analyze(mesh, band_mm=None, lump_margin_mm=6.0, out_dir=None, name="scan", e
         base_at_low = not (low_r < high_r)
     if flip:
         base_at_low = not base_at_low
-    if secondary:
+    if secondary or _axis_refit:
+        # A secondary body keeps the direction it was given; so does the
+        # re-trace on a re-fitted axis (`section_gate`'s "axis"), whose
+        # direction is the first trace's, already standing on its base.
         base_at_low = True
     if not base_at_low:
         axis = -axis
@@ -1692,6 +2085,7 @@ def analyze(mesh, band_mm=None, lump_margin_mm=6.0, out_dir=None, name="scan", e
     bands = []
     grid_max = []      # per band: max radius per 10° sector (nan when empty)
     grid_med = []
+    grid_reach = []    # per band: how far from the body radius the body cluster reached
     previous_body = None
     for i in range(len(edges) - 1):
         sel = (h >= edges[i]) & (h < edges[i + 1])
@@ -1748,6 +2142,7 @@ def analyze(mesh, band_mm=None, lump_margin_mm=6.0, out_dir=None, name="scan", e
                       "sectors": int(len(agreed)), "gapDeg": round(gap_deg, 1)})
         grid_max.append(smax)
         grid_med.append(smed)
+        grid_reach.append(float(reach) if len(agreed) >= 4 else max(3.0, 3.0 * point_noise))
     # A gap in the bands (the stem under a hand-wheel, hidden from the
     # scanner; a bore no ray reached) is not a cone from the band below to
     # the band above: the lower band's radius is carried up to the gap's
@@ -1759,6 +2154,7 @@ def analyze(mesh, band_mm=None, lump_margin_mm=6.0, out_dir=None, name="scan", e
             filled.append(dict(below, h=float(b["h"] - band_mm), count=0, gapDeg=0.0, filler=True))
             grid_max.insert(len(filled) - 1, grid_max[len(filled) - 2])
             grid_med.insert(len(filled) - 1, grid_med[len(filled) - 2])
+            grid_reach.insert(len(filled) - 1, grid_reach[len(filled) - 2])
         filled.append(b)
     bands = filled
     # The part ends where the rings do: a bucket's handle arches on above
@@ -1776,6 +2172,7 @@ def analyze(mesh, band_mm=None, lump_margin_mm=6.0, out_dir=None, name="scan", e
         trimmed_top = height - (bands[full[-1]]["h"] + band_mm / 2)
         bands = bands[: full[-1] + 1]
         grid_max, grid_med = grid_max[: len(bands)], grid_med[: len(bands)]
+        grid_reach = grid_reach[: len(bands)]
         height = bands[-1]["h"] + band_mm / 2
         print("top %.0f mm is not a ring (a handle?): the body ends at %.0f mm" % (trimmed_top, height))
     grid_max = np.array(grid_max) if grid_max else np.zeros((0, sectors))
@@ -2077,6 +2474,7 @@ def analyze(mesh, band_mm=None, lump_margin_mm=6.0, out_dir=None, name="scan", e
     drop_h = 0.0
     if first:
         bands = bands[first:]
+        grid_med, grid_reach = grid_med[first:], grid_reach[first:]
         drop_h = bands[0]["h"] - band_mm / 2
         height -= drop_h
         for b in bands:
@@ -2293,7 +2691,7 @@ def analyze(mesh, band_mm=None, lump_margin_mm=6.0, out_dir=None, name="scan", e
         return analyze(mesh, band_mm=band_mm, lump_margin_mm=lump_margin_mm, out_dir=out_dir, name=name,
                        epsilon=epsilon, debug=debug, axis_choice=axis_choice, flip=flip, samples=samples,
                        multi=multi, secondary=secondary, axis_origin=axis_origin, up_rule="wider", _reflipped=True,
-                       source=source, nut_mesh=nut_mesh)
+                       source=source, nut_mesh=nut_mesh, _axis_refit=_axis_refit)
     # One radius per height cannot describe a dished wheel: a band there
     # holds two full rings far apart (the tyre and the hub) with nothing
     # between. Such a part gets its whole half-section traced instead.
@@ -2345,6 +2743,31 @@ def analyze(mesh, band_mm=None, lump_margin_mm=6.0, out_dir=None, name="scan", e
             " (through)" if b["through"] else "", 100 * b["share"],
             "" if len(b["profile"]) <= 2 else "; steps %s" % " ".join("r %.1f to %.0f" % (r, d) for r, d in b["profile"][1::2])))
 
+    sections, roundness = trace_sections(bands, grid_med, grid_reach, simplified, epsilon, nuts, point_noise, band_mm,
+                                         traced=bool(section_loop), secondary=secondary)
+    if _axis_refit:
+        roundness["axisRefitted"] = True
+    if roundness["build"] == "axis":
+        if _axis_refit:
+            # Once only: a second re-fit asking for a third is a drift the
+            # line cannot settle; the revolve stays on this axis.
+            roundness.update(build="revolve", why=roundness["why"] + " — already re-fitted once; revolved on this axis")
+        else:
+            # The centres' straight line is the axis: through the centre at
+            # h = 0 (this origin's level), along the axis leaned by the
+            # line's slope in u and v. The whole trace runs again on it —
+            # ground, bands, profile, bosses, bores, sections.
+            line = roundness["axisLine"]
+            new_origin = origin + line["x"][0] * u + line["y"][0] * v
+            new_axis = axis + line["x"][1] * u + line["y"][1] * v
+            new_axis = new_axis / np.linalg.norm(new_axis)
+            print("axis re-fitted from the sections: moved %.2f mm at the foot, tilted %.2f°; traced again on it" % (
+                math.hypot(line["x"][0], line["y"][0]), roundness["tiltDeg"]))
+            return analyze(mesh, band_mm=band_mm, lump_margin_mm=lump_margin_mm, out_dir=out_dir, name=name,
+                           epsilon=epsilon, debug=debug, axis_choice="%.9f,%.9f,%.9f!" % tuple(new_axis), flip=False,
+                           samples=samples, multi=multi, secondary=secondary, axis_origin=new_origin, up_rule=up_rule,
+                           _reflipped=_reflipped, source=source, nut_mesh=nut_mesh, _axis_refit=True)
+
     analysis = {
         "name": name,
         "triangles": int(len(mesh.faces)), "vertices": int(len(mesh.vertices)),
@@ -2364,6 +2787,8 @@ def analyze(mesh, band_mm=None, lump_margin_mm=6.0, out_dir=None, name="scan", e
         "openTop": open_top,
         "bores": bores,
         "bosses": bosses,
+        "sections": sections,
+        "roundness": roundness,
         "boundsMM": {"min": [float(x) for x in mesh.bounds[0]], "max": [float(x) for x in mesh.bounds[1]]},
         "bodies": [],
     }
@@ -2573,7 +2998,7 @@ def secondary_bodies(mesh, selection, face_labels, name, samples, lump_margin_mm
     bodies = []
     keys = ("name", "axisOrigin", "axisDirection", "azimuthZero", "azimuthNinety", "heightMM", "profile",
             "profileSegments", "bodyRadiusMM", "maxRadiusMM", "bandMM", "epsilonMM", "noiseMM", "topNotARingMM",
-            "extendedMM", "trimmedMM", "nuts", "bores")
+            "extendedMM", "trimmedMM", "nuts", "bores", "roundness")
     import fit_axes
     jobs = []
     scan_samples = None            # the whole scan sampled with normals, once, for the passages
