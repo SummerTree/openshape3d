@@ -109,6 +109,20 @@ final class IncrementalEvalTests: XCTestCase {
         XCTAssertEqual(cache.lastRan, 2, "A (its sketch changed) and the union downstream")
     }
 
+    /// Hiding or renaming a sketch is not an edit of what it draws: the
+    /// features that read it stay memoised (an agent hid a barrel's 216 loft
+    /// sketches once and the next feature re-ran all 212 lofts).
+    func testHidingOrRenamingASketchRerunsNothing() {
+        let f = Fixture(); var cache = EvalCache()
+        _ = replay(f.graph(), f.sketches(), cache: &cache)
+        var hidden = f.sketches()
+        for i in hidden.indices { hidden[i].isHidden = true; hidden[i].name += " (hidden)" }
+        hidden[0].lineDimensionKinds = [UUID(): .distance]
+        _ = replay(f.graph(), hidden, cache: &cache)
+        XCTAssertEqual(cache.lastRan, 0, "visibility and names are not geometry")
+        XCTAssertEqual(cache.lastSkipped, 3)
+    }
+
     /// The memo must be invisible in the result: a replay that spliced A and
     /// ran B + U is body-for-body what a from-scratch replay produces.
     func testCachedReplayMatchesUncachedBodyForBody() {

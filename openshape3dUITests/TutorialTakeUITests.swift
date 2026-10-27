@@ -68,7 +68,9 @@ final class TutorialTakeUITests: XCTestCase {
             return CGPoint(x: f.minX + f.width * x, y: f.minY + f.height * y)
         }
 
-        let deadline = Date().addingTimeInterval(1200)
+        // An hour: a lofted scan body (the barrel) is a few hundred lofts at
+        // ~4 s each inside the take; 20 minutes closed the app mid-build.
+        let deadline = Date().addingTimeInterval(3600)
         while Date() < deadline {
             guard let raw = get("/next") else { Thread.sleep(forTimeInterval: 0.1); continue }
             if raw.isEmpty { Thread.sleep(forTimeInterval: 0.05); continue }
