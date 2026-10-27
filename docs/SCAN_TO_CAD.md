@@ -2103,6 +2103,9 @@ a gap at a time; see the Gotchas), and its first take into the UI test's
 lofted into its own body and subtracted once, it built in 28 minutes:
 697 calls, 212 lofts, one `feature.boolean`, the body 1.0953e7 mm³ as the
 OCCT replica said. The other eight parts are unchanged to the digit.
+After the memo fix (Gotchas) the barrel's film took 34 minutes and its
+reel clips 56; the full reel (107.7 s, all ten parts) and both contact
+sheets were re-cut from them.
 
 | part (app) | overlap | scan→model mm | model→scan mm | QA fails |
 |---|---|---|---|---|

@@ -161,7 +161,8 @@ build limit, so the cavity is now its own body subtracted once
 (`feature.boolean`), and the take's UI test closed the app at its
 20-minute deadline (now an hour), and its film's move-aside transform took
 974 s because hiding the sketches had changed every loft's memo key (the
-memo now ignores a sketch's name and visibility, `Sketch.evalMemoKey`).
+memo now ignores a sketch's name and visibility, `Sketch.evalMemoKey`;
+with it the barrel's film and reel clips took, and the reel was re-cut with all ten parts).
 Barrel in the app: 98.0 %, scan→model
 2.98 mm, model→scan 2.03 mm (was 96.5 %, 7.14, 5.02); pail 97.1 %, 1.62,
 1.47 (was 95.9 %, 2.12, 1.58). Next: the barrel's dents finer than an
